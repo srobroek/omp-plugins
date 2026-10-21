@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.0.0](https://github.com/srobroek/omp-plugins/compare/session--v1.5.0...session--v2.0.0) (2026-10-21)
+
+
+### ⚠ BREAKING CHANGES
+
+* **session:** session no longer installs task-batch-supervisor; install the supervisor plugin to keep task-batch supervision enabled.
+
+### Features
+
+* **session:** move task-batch supervisor to supervisor plugin ([f3e14e8](https://github.com/srobroek/omp-plugins/commit/f3e14e8a07a4de5e992ed66199e74380b18f2304))
+
 ## [1.5.0](https://github.com/srobroek/omp-plugins/compare/session--v1.4.0...session--v1.5.0) (2026-10-20)
 
 
