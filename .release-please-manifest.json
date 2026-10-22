@@ -2,7 +2,7 @@
   "architecture": "0.6.2",
   "authoring": "2.3.1",
   "aws": "0.2.0",
-  "beads": "4.1.7",
+  "beads": "4.1.8",
   "build": "1.1.0",
   "chezmoi": "0.4.14",
   "debate": "0.5.0",
@@ -25,5 +25,5 @@
   "trunk-dev": "0.2.0",
   "typescript": "0.3.12",
   "whats-new": "0.4.2",
-  "worktrunk": "3.0.1"
+  "worktrunk": "3.0.2"
 }
