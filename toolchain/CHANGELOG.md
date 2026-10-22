@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.3](https://github.com/srobroek/omp-plugins/compare/toolchain--v1.0.2...toolchain--v1.0.3) (2026-10-22)
+
+
+### Bug Fixes
+
+* **toolchain:** own the Cargo target-dir steering ([ee50542](https://github.com/srobroek/omp-plugins/commit/ee50542fdbf2b130334e4e12efdec26f8f080c3d))
+
 ## [1.0.2](https://github.com/srobroek/omp-plugins/compare/toolchain--v1.0.1...toolchain--v1.0.2) (2026-10-09)
 
 
