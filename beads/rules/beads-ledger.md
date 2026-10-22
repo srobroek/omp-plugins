@@ -243,7 +243,8 @@ The two variables:
 Clear an inherited `BEADS_DOLT_SHARED_SERVER` with `env -u BEADS_DOLT_SHARED_SERVER`.
 # DELIVERY
 MUST run `bd dolt pull` before claiming when the read decides assignment, so the
-claim uses fresh ledger state. After delivery, MUST run `bd dolt push`.
+claim uses fresh ledger state. After delivery, MUST run `bd dolt push`. Stealth
+mode is the one exception, below.
 
 `bd dolt pull` and `bd dolt push` are bounded persistence operations, not locks.
 Retry each failed sync up to three attempts with a brief wait, then report the
@@ -252,3 +253,12 @@ or continue as though the remote were current. If the final attempt may have
 applied remotely but its result is unknown, report the sync as UNKNOWN and do
 not claim that the ledger is synchronized. Re-run `bd dolt pull` before trusting
 a read that decides assignment after any retry sequence.
+
+# STEALTH MODE
+Stealth mode is on when `bd config get no-git-ops` prints `true`. `bd prime` then
+prints `Git workflow: stealth mode (no git ops)` and `Git authority: no git
+operations in this context`. This rule outranks those lines. They cover only the
+Dolt sync that `bd` runs through git: in stealth mode, skip `bd dolt pull` and
+`bd dolt push`. Stealth mode never restricts code work. Branches, commits, linked
+worktrees, pull requests, and parallel subagents follow the user's request and the
+delivery rules as usual.
