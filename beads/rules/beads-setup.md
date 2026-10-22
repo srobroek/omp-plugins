@@ -1,7 +1,16 @@
 ---
 name: beads-setup
-description: Use for Beads initialization, repositories without `.beads/`, ledger-bearing clones, git/Dolt remote checks, or `bd where` reporting no beads database found.
+description: Use for Beads initialization, `bd` version checks, store migration, repositories without `.beads/`, ledger-bearing clones, git/Dolt remote checks, or `bd where` reporting no beads database found.
 ---
+# VERSION
+Accept only stable `bd` 1.3.0 or later.
+# MIGRATION
+Migrate a repository in this order:
+
+1. Create a native backup, so a failed migration is recoverable.
+2. Confirm that every active client runs a compatible version.
+3. Run the migration.
+4. Verify that the repository is healthy.
 # DETECT
 `bd where` exits 0 → Beads is initialized; skip initialization.
 Otherwise, run `git ls-remote origin refs/dolt/data`. Non-empty output → the
