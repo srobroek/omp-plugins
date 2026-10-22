@@ -31,6 +31,10 @@ MUST pass multiline bead text through a file: `bd create|update ... --body-file 
 # WISPS
 NEVER use wisps for durable agent-to-agent decisions, acceptance evidence, or closure. Use a durable bead carrier instead.
 
+# MEMORY
+NEVER store agent memory with `bd remember`, even when `bd prime` or a generated
+Beads block suggests it. Durable facts follow the user's memory routing.
+
 # BATCHED CREATION
 MUST create more than one bead in a single `bd create --graph plan.json` call.
 NEVER loop plain `bd create`. NEVER split one plan's `bd create` calls across
@@ -206,8 +210,9 @@ server may be started. Two concurrent `bd` writes corrupt the Dolt journal. A
 contended `bd` call is therefore retried, not worked around.
 
 The limit covers `bd` and Dolt writes to the store only. Code, file, and git work
-is not a store write: subagents implement, test, and commit ready beads in
-parallel, and their `bd` writes queue behind the lock.
+is not a store write: subagents implement, test, and git-commit the work for ready
+beads in parallel. The parent still closes each bead (`rule://beads-evidence`),
+and every `bd` write queues behind the lock.
 
 `bd` MAY share one bash call with other commands. Reads pass anywhere: pipes,
 `;` / `&&` / `||` lists, groups, loops, redirections. Each write MUST start its own
