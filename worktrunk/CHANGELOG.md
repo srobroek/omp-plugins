@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.0.2](https://github.com/srobroek/omp-plugins/compare/worktrunk--v3.0.1...worktrunk--v3.0.2) (2026-10-22)
+
+
+### Bug Fixes
+
+* **worktrunk:** say disabled native isolation does not restrict delegation ([83e3dc7](https://github.com/srobroek/omp-plugins/commit/83e3dc797214efd4e1ccb284ddac86e8d14e8a97))
+
 ## [3.0.1](https://github.com/srobroek/omp-plugins/compare/worktrunk--v3.0.0...worktrunk--v3.0.1) (2026-10-09)
 
 
