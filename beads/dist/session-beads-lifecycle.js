@@ -1653,7 +1653,7 @@ function embeddedWriteTargets(command, cwd, env) {
 function refusal(problem, store) {
   if ("exact" in problem)
     return problem.exact;
-  return `The Beads write lock cannot run this command: ${problem.part}. ${store} is an embedded store, where two concurrent writers corrupt the Dolt journal, so every \`bd\` write to it runs under the lock's serialising runner. ${problem.fix} ${ACCEPTED_SHAPES}`;
+  return `The Beads write lock cannot run this command: ${problem.part}. ${store} is an embedded store, where two concurrent \`bd\` writes corrupt the Dolt journal, so every \`bd\` write to it runs under the lock's serialising runner. ${problem.fix} ${ACCEPTED_SHAPES}`;
 }
 function commandName(word) {
   return word.value.split("/").pop() ?? word.value;

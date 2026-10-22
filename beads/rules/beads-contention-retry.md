@@ -6,9 +6,11 @@ scope: ["text", "thinking"]
 interruptMode: always
 ---
 
-This is contention, not a failure. The embedded store is single-writer by design
-and takes a cooperative gate that ordinary commands share and maintenance takes
-exclusively, so a concurrent writer is the expected case, not a defect.
+This is contention, not a failure. The embedded store accepts one `bd` writer at a
+time by design. Ordinary commands share its cooperative gate, and maintenance takes
+it exclusively. A concurrent `bd` writer is therefore the expected case, not a
+defect. The limit says nothing about code, file, or git work: subagents run that
+in parallel.
 
 MUST wait briefly and retry the same command, up to three attempts, then report
 what still failed. NEVER escalate it, NEVER report the run as blocked on it, and
