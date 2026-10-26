@@ -69,8 +69,8 @@ Only actual dependency consumers wait for an approval; unrelated work can contin
 
 | Guard | Surface | Behavior |
 |---|---|---|
-| `extensions/tasks-guard.ts` | write/edit/ast_edit of `specs/*/tasks.md` | When beads is active (`bd where` decides), blocks writes and edits because task state lives in beads, including hashline headers, `MV` destinations, and rename destinations. Fails open. |
-| `speckit-no-taskstoissues` (rule) | assistant text, `read` | Interrupts a read of the `speckit-taskstoissues` skill; advises on a line-start slash command. |
+| `extensions/tasks-guard.ts` | write/edit/ast_edit of `specs/*/tasks.md` | When beads is active (`bd where` decides), blocks writes and edits because task state lives in beads, including hashline headers, `MV` destinations, and rename destinations. Upstream writers it denies: core `/speckit.tasks` and `/speckit.converge` (which appends a `## Phase N: Convergence` section), plus `bugfix.patch`, `cleanup`, `iterate.apply`, `reconcile.run`, and `refine.propagate`. Fails open. |
+| `speckit-no-taskstoissues` (rule) | assistant text, `read` | Interrupts a read of the `speckit-taskstoissues` or `speckit-github-taskstoissues` skill; advises on a line-start slash command, including the spec-kit 1.2 `/speckit.github.taskstoissues` and `/speckit-github-taskstoissues` forms. |
 | `speckit-implement-deprecated` (rule) | assistant text | Advisory on the slash form `/speckit.implement`. |
 | `speckit-workflow` (rule) | SpecKit or `.specify/` work | The beads workflow contract and command routing table. |
 
