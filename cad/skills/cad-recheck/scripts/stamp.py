@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # /// script
 # requires-python = ">=3.11"
-# dependencies = []
+# dependencies = ["pyyaml>=6.0"]
 # ///
 """Write or verify the CAD design recheck record for the staged index."""
 
@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import importlib.metadata
 import json
 import platform
 import shutil
@@ -18,6 +17,8 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+import yaml
 
 
 STAGES = (
@@ -89,11 +90,6 @@ def tool_versions() -> dict[str, str]:
         version = command_version(command, *args)
         if version:
             versions[name] = version
-    for distribution in ("cadquery", "build123d"):
-        try:
-            versions[distribution] = importlib.metadata.version(distribution)
-        except importlib.metadata.PackageNotFoundError:
-            pass
     return versions
 
 
@@ -155,30 +151,34 @@ def main() -> int:
         start = Path.cwd()
         root = project_root(start)
         if args.verify:
-            record_path = root / "hw" / ".cad" / "recheck.json"
-            try:
-                record_data = json.loads(git("show", ":hw/.cad/recheck.json", cwd=root).decode("utf-8"))
-            except (RuntimeError, UnicodeError, json.JSONDecodeError) as error:
-                raise RuntimeError(f"cannot read staged recheck stamp: {error}") from error
-            if not isinstance(record_data, dict):
-                raise RuntimeError("recheck stamp must be a JSON object")
-            actual_hash = staged_tree_hash(root)
             try:
                 product_data = git("show", ":hw/product.yaml", cwd=root).decode("utf-8")
             except (RuntimeError, UnicodeError) as error:
                 raise RuntimeError(f"cannot read staged hw/product.yaml: {error}") from error
-            current_stage = None
-            in_flow = False
-            for line in product_data.splitlines():
-                if line.strip() == "flow:":
-                    in_flow = True
-                    continue
-                if in_flow and line and not line[0].isspace():
-                    break
-                if in_flow and line.lstrip().startswith("stage:"):
-                    current_stage = line.split(":", 1)[1].split("#", 1)[0].strip().strip("\"'")
-                    break
-            if current_stage is None or record_data.get("stage") != current_stage:
+            try:
+                product = yaml.safe_load(product_data)
+            except yaml.YAMLError as error:
+                raise RuntimeError(f"cannot parse staged hw/product.yaml: {error}") from error
+            flow = product.get("flow") if isinstance(product, dict) else None
+            if not isinstance(flow, dict):
+                raise RuntimeError("staged hw/product.yaml is missing flow")
+            current_stage = flow.get("stage")
+            threshold = flow.get("recheck_from")
+            if not isinstance(current_stage, str) or current_stage not in STAGES:
+                raise RuntimeError("staged hw/product.yaml has a missing or unknown flow.stage")
+            if not isinstance(threshold, str) or threshold not in STAGES:
+                raise RuntimeError("staged hw/product.yaml has a missing or unknown flow.recheck_from")
+            if STAGES.index(current_stage) < STAGES.index(threshold):
+                print(json.dumps({"passed": True, "required": False, "stage": current_stage}))
+                return 0
+            try:
+                record_data = json.loads(git("show", ":hw/.cad/recheck.json", cwd=root).decode("utf-8"))
+            except (RuntimeError, UnicodeError, json.JSONDecodeError) as error:
+                raise RuntimeError(f"no staged hw/.cad/recheck.json exists or cannot read it: {error}") from error
+            if not isinstance(record_data, dict):
+                raise RuntimeError("recheck stamp must be a JSON object")
+            actual_hash = staged_tree_hash(root)
+            if record_data.get("stage") != current_stage:
                 raise RuntimeError("the recheck stamp stage does not match staged hw/product.yaml flow.stage")
             if record_data.get("stage") not in STAGES:
                 raise RuntimeError("recheck stamp has an unknown stage")
