@@ -11,8 +11,10 @@ import json
 import math
 import os
 import re
+import signal
 import subprocess
 import sys
+import time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -28,6 +30,28 @@ FREECADCMD = Path(os.environ.get("FREECADCMD", "/Applications/FreeCAD.app/Conten
 RESOURCES = Path("/Applications/FreeCAD.app/Contents/Resources")
 TEMPLATES = RESOURCES / "share/Mod/TechDraw/Templates"
 
+def _terminate_process_group(process: subprocess.Popen[str]) -> None:
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        process.wait()
+        return
+    deadline=time.monotonic()+2
+    while process.poll() is None and time.monotonic()<deadline:
+        time.sleep(0.05)
+    else:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    try:
+        process.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.wait()
 
 def fail(code: str, message: str) -> dict[str, Any]:
     return {"status": "error", "error": {"code": code, "message": message}}
@@ -130,15 +154,28 @@ except Exception as exc:
         json.dump({{"status":"error", "error":str(exc), "traceback":traceback.format_exc()}},f)
 '''
     job_path.write_text(source, encoding="utf-8")
+    process: subprocess.Popen[str] | None = None
     try:
-        completed = subprocess.run([str(FREECADCMD), str(job_path)], cwd=output,
-                                   capture_output=True, text=True, timeout=timeout)
+        process = subprocess.Popen([str(FREECADCMD), str(job_path)], cwd=output, stdin=subprocess.DEVNULL,
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
+        stdout,stderr=process.communicate(timeout=timeout)
     except FileNotFoundError:
         return None, f"FreeCAD command line application not found: {FREECADCMD}"
     except subprocess.TimeoutExpired:
+        if process is not None:
+            _terminate_process_group(process)
+            process.communicate()
         return None, f"FreeCAD projection exceeded {timeout:g} seconds"
+    except BaseException:
+        if process is not None:
+            _terminate_process_group(process)
+            process.communicate()
+        raise
+    else:
+        _terminate_process_group(process)
+    completed_returncode=process.returncode
     if not result_path.is_file():
-        return None, f"FreeCAD projection wrote no result marker (exit {completed.returncode}): {completed.stderr[-1500:]}"
+        return None, f"FreeCAD projection wrote no result marker (exit {completed_returncode}): {stderr[-1500:]}"
     try:
         result = json.loads(result_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -273,18 +310,25 @@ def make_sheet(data: dict[str, Any], part: dict[str, Any], product: dict[str, An
             template_text=re.sub(rf'(<text id="{field}"[^>]*>).*?(</text>)',rf'\1{text}\2',template_text,flags=re.S)
         for field,value in fields.items(): template_text=set_template_field(template_text,field,value)
     else:
-        template_text=re.sub(rf'<text\b(?=[^>]*\bfreecad:editable="(CompanyName|CompanyAddress|DrawnBy|CheckedBy|Approved1|Approved2|Code|Weight|Sheet|DrawingTitle1|DrawingTitle2|DrawingTitle3|drawing_number|revision_index|scale)")[^>]*>.*?</text>',"",template_text,flags=re.S)
+        template_text=re.sub(r'<text\b(?=[^>]*\bfreecad:editable="(?:CompanyName|CompanyAddress|DrawnBy|CheckedBy|Approved1|Approved2|Code|Weight|Sheet|DrawingTitle1|DrawingTitle2|DrawingTitle3|drawing_number|revision_index|scale)")[^>]*>.*?</text>',"",template_text,flags=re.S)
         template_text=re.sub(r'<text\b(?=[^>]*\bid="BlockJ Size")[^>]*>.*?</text>',"",template_text,flags=re.S)
-        template_text=re.sub(r'<text\b[^>]*><tspan[^>]*>(?:A|B|1|2)</tspan></text>',"",template_text)
-        title_rows=(
-            ("Title:",part["title"],164,172,1.2),
-            ("PN / Rev:",f'{part["PN"]} / {part["rev"]}',164,177,1.2),
-            ("Material:",part["material"],164,181.5,1.1),
-            ("Tolerance:",product["general_tolerance"],164,185,1.1),
-            ("Scale:",f"1 : {1/actual_scale:.4g}",164,190,1.1),
+        title_fields=(
+            ("Title",part["title"]),
+            ("Part number",part["PN"]),
+            ("Revision",part["rev"]),
+            ("Material",part["material"]),
+            ("Tolerance",product["general_tolerance"]),
+            ("Scale",f"1 : {1/actual_scale:.4g}"),
         )
-        for index,(label,value,x,y,size) in enumerate(title_rows):
-            template_text=template_text.replace("</svg>",f'<text id="cad-asme-title-{index}" x="{x}" y="{y}" font-family="sans-serif" font-size="{size * 3:.1f}px">{label} {tex(value)}</text></svg>',1)
+        x,y,width,height=159.85,153.42,99.501,48.216
+        row_height=height/len(title_fields)
+        fields_svg=[f'<rect x="{x}" y="{y}" width="{width}" height="{height}" fill="#fff" stroke="#111" stroke-width="0.25"/>']
+        for index,(label,value) in enumerate(title_fields):
+            row_y=y+index*row_height
+            fields_svg.append(f'<rect id="cad-asme-title-field-{index}" x="{x}" y="{row_y:.3f}" width="{width}" height="{row_height:.3f}" fill="none" stroke="#111" stroke-width="0.25"/>')
+            fields_svg.append(f'<text x="{x+2:.3f}" y="{row_y+3.0:.3f}" font-family="sans-serif" font-size="2.0">{label}:</text>')
+            fields_svg.append(f'<text x="{x+2:.3f}" y="{row_y+6.2:.3f}" font-family="sans-serif" font-size="2.8">{tex(value)}</text>')
+        template_text=template_text.replace("</svg>","".join(fields_svg)+"</svg>",1)
     opening=re.search(r'<svg\b[^>]*>',template_text,re.S)
     if not opening: raise ValueError("invalid shipped SVG drawing template")
     white=f'<rect id="paper-background" x="0" y="0" width="{sheet_width}" height="{sheet_height}" fill="#fff"/>\n'

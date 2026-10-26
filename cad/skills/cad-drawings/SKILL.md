@@ -12,7 +12,7 @@ TRIGGER
 ## Workflow
 
 1. Provide the part STEP file, matching `metrics.json` from its cad-model version, `hw/parts/<PN>/part.yaml`, and `hw/product.yaml` with part identity, title, material, revision, regime, and general tolerance.
-2. Run `scripts/drawing.py <step> --part <part.yaml> --product <product.yaml> --metrics <metrics.json> --output-dir <dir> [--scale <ratio>] [--timeout <seconds>]` with FreeCAD 1.1.4 installed; timeout defaults to 120 seconds.
+2. Run `scripts/drawing.py <step> --part <part.yaml> --product <product.yaml> --metrics <metrics.json> --output-dir <dir> [--scale <ratio>] [--timeout <seconds>]` with FreeCAD 1.1.4 installed; timeout defaults to 120 seconds. Geometry projection uses headless `freecadcmd`; checked SVG/PDF export uses the macOS Swift AppKit/PDFKit helpers, not GUI FreeCAD.
 3. Review the JSON report and rendered raster previews of the PDF and SVG; confirm orthographic views, dimensions, title block, and projection symbol.
 4. Record accepted drawing checks in the hardware project's `verification.csv` after a human reviews both raster previews.
 

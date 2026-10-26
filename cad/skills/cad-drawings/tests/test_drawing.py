@@ -4,10 +4,11 @@
 from __future__ import annotations
 
 import json
-import shutil
+import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -30,14 +31,45 @@ class DrawingContracts(unittest.TestCase):
         self.metrics.write_text(json.dumps({"parts": {"TEST-001": {"holes": []}}}), encoding="utf-8")
 
     def command(self, step: Path, output: Path, part: Path | None = None, product: Path | None = None,
-                metrics: Path | None = None):
+                metrics: Path | None = None, timeout: float = 60):
         metrics = metrics or self.metrics
         return subprocess.run(
             [sys.executable, str(SCRIPT), str(step), "--part", str(part or self.part), "--product", str(product or self.product),
-             "--metrics", str(metrics), "--output-dir", str(output), "--timeout", "60"],
-            capture_output=True, text=True, timeout=90,
+             "--metrics", str(metrics), "--output-dir", str(output), "--timeout", str(timeout)],
+            capture_output=True, text=True, timeout=timeout+30,
         )
-
+    def test_timed_out_projection_kills_process_group(self) -> None:
+        if not hasattr(os,"killpg"):
+            self.skipTest("process groups are unavailable")
+        sys.path.insert(0,str(SCRIPT.parent))
+        try:
+            import drawing
+            fake=self.root/"fake-freecad"
+            child_pid=self.root/"child.pid"
+            fake.write_text(f'#!/bin/sh\nsleep 30 &\necho $! > "{child_pid}"\nwait\n',encoding="utf-8")
+            fake.chmod(0o755)
+            previous_freecadcmd=drawing.FREECADCMD
+            drawing.FREECADCMD=fake
+            try:
+                result,message=drawing.run_freecad_projection(self.root/"part.step",self.root,2.0)
+            finally:
+                drawing.FREECADCMD=previous_freecadcmd
+            self.assertIsNone(result)
+            self.assertIn("exceeded",message)
+            pid=int(child_pid.read_text(encoding="utf-8"))
+            deadline=time.monotonic()+2
+            while time.monotonic()<deadline:
+                try:
+                    os.kill(pid,0)
+                except ProcessLookupError:
+                    break
+                except PermissionError:
+                    self.fail(f"child process {pid} survived projection timeout")
+                time.sleep(0.05)
+            else:
+                self.fail(f"child process {pid} survived projection timeout")
+        finally:
+            sys.path.remove(str(SCRIPT.parent))
     def test_missing_freecad_is_structured_exit_two(self) -> None:
         result = subprocess.run(
             [sys.executable, str(SCRIPT), "unused.step", "--part", str(self.part), "--product", str(self.product), "--metrics", str(self.metrics),
@@ -143,17 +175,16 @@ class DrawingContracts(unittest.TestCase):
         self.assertEqual(report["hole_diameters_mm"], [5.009, 5.009])
         svg = Path(report["svg"]).read_text(encoding="utf-8")
         self.assertIn('id="third_angle_projection_symbol"', svg)
-        self.assertIn("Title: Upper link", svg)
-        self.assertIn("PN / Rev: LMP-0003 / X1", svg)
-        self.assertIn("Material: Aluminum 6061-T6", svg)
-        self.assertIn("Tolerance: ASME Y14.5", svg)
-        self.assertIn("Scale: 1 : 1", svg)
+        for text in ("Upper link","LMP-0003","X1","Aluminum 6061-T6","ASME Y14.5","1 : 1"):
+            self.assertIn(text,svg)
+        self.assertEqual(svg.count('id="cad-asme-title-field-'),6)
         self.assertNotIn("Company Name", svg)
         self.assertNotIn("Drawing Title 1", svg)
         self.assertNotIn("Drawn By", svg)
-        self.assertNotIn("BlockJ Size", svg)
-        self.assertNotIn(">A</tspan>", svg)
+        self.assertNotIn('id="BlockJ Size"',svg)
+        self.assertNotIn('id="tspan3784"',svg)
         self.assertIn("⌀ 5.01", svg)
+        self.assertEqual(svg.count('id="hole-diameter-H'),2)
         front=svg.split('id="view-front" transform="',1)[1].split('"',1)[0]
         top=svg.split('id="view-top" transform="',1)[1].split('"',1)[0]
         right=svg.split('id="view-right" transform="',1)[1].split('"',1)[0]
