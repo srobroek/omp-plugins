@@ -13,77 +13,7 @@ fail() {
 staged_hw=$(git diff --cached --name-only --diff-filter=ACDMRTUXB -- hw/)
 [ -n "$staged_hw" ] || exit 0
 
-product_path=hw/product.yaml
-if ! git cat-file -e :hw/product.yaml 2>/dev/null; then
-    product_changed=$(git diff --cached --name-only --diff-filter=ACDMRTUXB -- hw/product.yaml)
-    [ -n "$product_changed" ] || exit 0
-    fail 'staged hw/product.yaml is missing'
-fi
-
-
-# Parse the scalar flow.stage and flow.recheck_from from staged hw/product.yaml.
-# Stage names are plain scalar strings in the project record.
-read_flow_value() {
-    key=$1
-    awk -v wanted="$key" '
-        /^[[:space:]]*flow:[[:space:]]*([#].*)?$/ { in_flow=1; next }
-        in_flow && /^[^[:space:]#]/ { in_flow=0 }
-        in_flow {
-            line=$0
-            sub(/^[[:space:]]*/, "", line)
-            if (line ~ ("^" wanted ":[[:space:]]*")) {
-                sub("^" wanted ":[[:space:]]*", "", line)
-                sub(/[[:space:]]*#.*/, "", line)
-                gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
-                if (line ~ /^".*"$/) {
-                    line=substr(line, 2, length(line)-2)
-                } else if (line ~ /^\047.*\047$/) {
-                    line=substr(line, 2, length(line)-2)
-                }
-                print line
-                exit
-            }
-        }
-    ' "$product_path"
-}
-
-stage=$(read_flow_value stage)
-threshold=$(read_flow_value recheck_from)
-[ -n "$stage" ] || fail 'hw/product.yaml is missing flow.stage'
-[ -n "$threshold" ] || exit 0
-case "$stage:$threshold" in *'|'*|*'['*|*'{'*|*'&'*|*'*'*|*'!'*) fail 'flow stage values must be plain scalar names' ;; esac
-
-stage_position() {
-    case " $1 " in
-        ' ground ') printf 0 ;;
-        ' intent ') printf 1 ;;
-        ' specify ') printf 2 ;;
-        ' concept ') printf 3 ;;
-        ' layout ') printf 4 ;;
-        ' parts ') printf 5 ;;
-        ' detail ') printf 6 ;;
-        ' bom ') printf 7 ;;
-        ' analysis ') printf 8 ;;
-        ' critique ') printf 9 ;;
-        ' reconcile ') printf 10 ;;
-        ' design_freeze ') printf 11 ;;
-        ' release ') printf 12 ;;
-        *) return 1 ;;
-    esac
-}
-
-stage_position "$stage" >/dev/null 2>&1 || fail "unknown flow.stage '$stage'"
-stage_position "$threshold" >/dev/null 2>&1 || fail "unknown flow.recheck_from '$threshold'"
-current_index=$(stage_position "$stage")
-threshold_index=$(stage_position "$threshold")
-[ "$current_index" -ge "$threshold_index" ] || exit 0
-
-stamp=hw/.cad/recheck.json
-if ! git cat-file -e :hw/.cad/recheck.json 2>/dev/null; then
-    fail 'no staged hw/.cad/recheck.json exists'
-fi
-
-# The installer copies stamp.py beside this hook for project-independent use.
+# stamp.py reads only the staged product and decides whether verification is required.
 hook_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 uv run --script "$hook_dir/cad-recheck-stamp.py" --verify || fail 'stamp verification failed'
 exit 0

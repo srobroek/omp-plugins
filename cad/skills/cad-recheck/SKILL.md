@@ -19,6 +19,10 @@ TRIGGER
 5. Stage the design changes and `hw/.cad/recheck.json`. The pre-commit hook accepts only a passing stamp for the exact staged `hw/` tree.
 6. Install the hook in a hardware project's repository with `uv run --script <path-to-cad-recheck>/scripts/install-hook.py --project <project-directory>`.
 
+The installer refuses to replace a different `core.hooksPath` or ignore non-sample hooks in `.git/hooks/`. Integrate the CAD hook with existing hooks, or explicitly pass `--force` to replace/ignore them. Commit the generated `.githooks/` directory so the hook and its stamp verifier are available to other checkouts.
+
+`stamp.py` parses staged YAML with `yaml.safe_load` and declares `pyyaml>=6.0` for `uv run --script`; keep that PEP 723 dependency declaration when changing its dependencies.
+
 ## Rules
 
 MUST Re-run the checks and stamp after any staged `hw/` file changes.
