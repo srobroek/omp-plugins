@@ -23,8 +23,8 @@ CSV_COLUMNS = {
 }
 
 
-def finding(path: str, message: str) -> dict[str, str]:
-    return {"path": path, "message": message}
+def finding(path: str, message: str, *, severity: str = "error") -> dict[str, str]:
+    return {"path": path, "message": message, "severity": severity}
 
 
 def load_yaml(path: Path, findings: list[dict[str, str]]) -> Any:
@@ -94,7 +94,22 @@ def validate_project(project_dir: Path) -> list[dict[str, str]]:
         data = load_yaml(path, findings)
         documents[filename] = data
         validate_document(data, schema, str(path), findings)
-
+    concept_handoff = hw / "concept" / "handoff.json"
+    if concept_handoff.is_file():
+        concept_schema = Path(__file__).resolve().parents[2] / "cad-concept" / "assets" / "schemas" / "handoff.schema.json"
+        if concept_schema.is_file():
+            schema = load_json(concept_schema, findings)
+            handoff = load_json(concept_handoff, findings)
+            if schema is not None and handoff is not None:
+                errors = sorted(
+                    Draft202012Validator(schema, format_checker=FormatChecker()).iter_errors(handoff),
+                    key=lambda error: list(error.absolute_path),
+                )
+                for error in errors:
+                    location = "/".join(str(part) for part in error.absolute_path)
+                    findings.append(finding(str(concept_handoff), f"{location + ': ' if location else ''}{error.message}"))
+        else:
+            findings.append(finding(str(concept_handoff), f"skipped handoff schema validation; schema not found at {concept_schema}", severity="info"))
     part_records: dict[str, tuple[dict[str, Any], str]] = {}
     parts_dir = hw / "parts"
     if not parts_dir.is_dir():
@@ -225,8 +240,9 @@ def main() -> int:
         print(json.dumps({"ok": False, "findings": [finding(str(args.project_dir), "project directory does not exist")]}))
         return 2
     findings = validate_project(args.project_dir)
-    print(json.dumps({"ok": not findings, "findings": findings}, indent=2))
-    return 1 if findings else 0
+    failures = [item for item in findings if item.get("severity") != "info"]
+    print(json.dumps({"ok": not failures, "findings": findings}, indent=2))
+    return 1 if failures else 0
 
 
 if __name__ == "__main__":

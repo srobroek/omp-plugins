@@ -33,3 +33,30 @@ joints:
     min: -45
     max: 45
     nominal: 0
+  - id: J-004
+    type: fixed
+    parent: LMP-0001
+    child: LMP-0005
+    axis: [0, 0, 1]
+    origin: [0, 0, 40]
+    min: 0
+    max: 0
+    nominal: 0
+  - id: J-005
+    type: fixed
+    parent: LMP-0002
+    child: LMP-0006
+    axis: [0, 1, 0]
+    origin: [160, 0, 40]
+    min: 0
+    max: 0
+    nominal: 0
+  - id: J-006
+    type: fixed
+    parent: LMP-0003
+    child: LMP-0007
+    axis: [0, 1, 0]
+    origin: [360, 0, 40]
+    min: 0
+    max: 0
+    nominal: 0
