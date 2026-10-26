@@ -1,0 +1,213 @@
+# /// script
+# requires-python = "==3.12.*"
+# dependencies = [
+#     "cadquery-ocp-novtk==8.0.1.1.0",
+#     "ocp_viewer==1.2.0",
+#     "playwright==1.64.1",
+#     "pyyaml>=6.0",
+# ]
+# ///
+"""Drive OCP CAD Viewer and the cad-viewer side panel for a cad-model hardware record.
+
+Usage:
+    uv run --script viewer.py serve [--panel-port 0] [--port-a 0] [--port-b 0] [--width 1440] [--height 900]
+    uv run --script viewer.py stop
+    uv run --script viewer.py show HW [--version vN|latest] [--check CHECK.json]
+    uv run --script viewer.py compare vA vB --hw HW [--check-a FILE] [--check-b FILE]
+    uv run --script viewer.py mode single|split [--active A|B]
+    uv run --script viewer.py parts hide|iso|ghost|reset [PN|GROUP]
+    uv run --script viewer.py animate --joint J-002 --from -120 --to 0 [--steps 13] [--seconds 4] [--at 0..1]
+    uv run --script viewer.py studio [--environment studio] [--tone-mapping ACES] [--exposure 1.0] [...]
+    uv run --script viewer.py capture --view iso|front|side|top|exploded|section|current|isolate:<PN>
+        --out PNG [--joint J-002] [--zoom 4] [--crop page|viewer|canvas] [--refit|--no-refit]
+
+`serve` starts (or reuses) one detached host: two OCP viewer servers (slot a, and slot b for the
+A/B side-by-side), the panel page that embeds them, and a headless Chromium "presenter" that keeps
+that page open so captures show exactly the state the commands left. Every other command talks to
+the host through the session file ($CAD_VIEWER_SESSION, default
+~/.local/state/cad-viewer/session.json).
+
+stdout: one JSON object per command. Exit 0 = done; 1 = a joint value outside its limits
+(`animate`, nothing pushed) or a blank capture; 2 = usage, record, viewer, or browser error.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+from typing import Any
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from cadviewer import LimitError, ViewerError, session  # noqa: E402
+
+SCRIPT = Path(__file__).resolve()
+
+
+def view_arg(text: str) -> str:
+    from cadviewer.capture import parse_view
+
+    try:
+        return parse_view(text)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(str(error)) from error
+
+
+def fraction_arg(text: str) -> float:
+    value = float(text)
+    if not 0.0 <= value <= 1.0:
+        raise argparse.ArgumentTypeError("must be within 0..1")
+    return value
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="viewer.py", description=__doc__.splitlines()[0])
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    serve = sub.add_parser("serve", help="start or reuse the viewer host; prints its URL, PID and stop command")
+    for flag in ("--panel-port", "--port-a", "--port-b"):
+        serve.add_argument(flag, type=int, default=0, help="0 picks a free port")
+    serve.add_argument("--width", type=int, default=1440, help="presenter page width (captures)")
+    serve.add_argument("--height", type=int, default=900, help="presenter page height (captures)")
+    sub.add_parser("stop", help="stop the viewer host and both OCP viewers")
+
+    show = sub.add_parser("show", help="push one version; the camera is kept on later pushes")
+    show.add_argument("hw", type=Path, help="hardware record directory (hw/)")
+    show.add_argument("--version", default="latest", help="vN or latest (default)")
+    show.add_argument("--check", type=Path, help="cad-model check JSON for this version (panel findings)")
+
+    compare = sub.add_parser("compare", help="push two versions for the A/B side-by-side with synced camera")
+    compare.add_argument("a", help="version A label")
+    compare.add_argument("b", help="version B label")
+    compare.add_argument("--hw", type=Path, required=True)
+    compare.add_argument("--check-a", type=Path)
+    compare.add_argument("--check-b", type=Path)
+
+    mode = sub.add_parser("mode", help="switch A/B: one version, or side-by-side")
+    mode.add_argument("mode", choices=("single", "split"))
+    mode.add_argument("--active", choices=("A", "B"), default="A")
+
+    parts = sub.add_parser("parts", help="hide, isolate, ghost the rest, or reset, as the panel buttons do")
+    parts.add_argument("action", choices=("hide", "iso", "ghost", "reset"))
+    parts.add_argument("target", nargs="?", help="PN or subassembly id (hide and iso)")
+
+    animate = sub.add_parser("animate", help="animation track for one joint, within its assembly.yaml limits")
+    animate.add_argument("--joint", required=True, help="movable joint id, e.g. J-002")
+    animate.add_argument("--from", dest="start", type=float, required=True, help="start value (deg or mm)")
+    animate.add_argument("--to", dest="end", type=float, required=True, help="end value (deg or mm)")
+    animate.add_argument("--steps", type=int, default=13, help="keyframes, >= 2")
+    animate.add_argument("--seconds", type=float, default=4.0)
+    animate.add_argument("--at", type=fraction_arg, help="hold the playback at this fraction 0..1")
+
+    studio = sub.add_parser("studio", help="Studio mode for look-dev: environment, tone mapping, exposure")
+    studio.add_argument("--environment", help="StudioEnvironment name, e.g. studio, white_studio_05, photo_studio_01")
+    studio.add_argument("--tone-mapping", choices=("neutral", "ACES", "none"))
+    studio.add_argument("--background", choices=("environment", "transparent", "gradient", "gradient-dark",
+                                                 "white", "grey", "darkgrey"))
+    studio.add_argument("--texture-mapping", choices=("triplanar", "parametric"))
+    for flag in ("--exposure", "--env-intensity", "--env-rotation", "--shadow-intensity", "--shadow-softness",
+                 "--ao-intensity"):
+        studio.add_argument(flag, type=float)
+
+    capture = sub.add_parser("capture", help="drive the browser, refit the camera, and write a PNG")
+    capture.add_argument("--view", type=view_arg, required=True)
+    capture.add_argument("--out", type=Path, required=True)
+    capture.add_argument("--joint", help="section plane through this joint's axis (--view section)")
+    capture.add_argument("--zoom", type=float, help="section close-up zoom (default 2.5)")
+    capture.add_argument("--crop", choices=("page", "viewer", "canvas"), default="page")
+    capture.add_argument("--refit", action=argparse.BooleanOptionalAction, default=None,
+                         help="default: refit every view except section and current")
+
+    host = sub.add_parser("host", help=argparse.SUPPRESS)
+    host.add_argument("--session", type=Path, required=True)
+    host.add_argument("--panel-port", type=int, required=True)
+    host.add_argument("--port-a", type=int, required=True)
+    host.add_argument("--port-b", type=int, required=True)
+    host.add_argument("--width", type=int, required=True)
+    host.add_argument("--height", type=int, required=True)
+    return parser
+
+
+def request_body(args: argparse.Namespace) -> tuple[str, str, dict[str, Any]]:
+    """(method, route, body) for the commands that only talk to the host."""
+    def path(p: Path | None) -> str | None:
+        return None if p is None else str(p.resolve())
+
+    if args.command == "show":
+        return "POST", "/api/show", {"hw": path(args.hw), "version": args.version, "check": path(args.check)}
+    if args.command == "compare":
+        return "POST", "/api/compare", {"hw": path(args.hw), "a": args.a, "b": args.b,
+                                        "check_a": path(args.check_a), "check_b": path(args.check_b)}
+    if args.command == "mode":
+        return "POST", "/api/mode", {"mode": args.mode, "active": args.active}
+    if args.command == "parts":
+        if args.action in ("hide", "iso") and not args.target:
+            raise ViewerError(f"parts {args.action} needs a PN or subassembly id")
+        return "POST", "/api/parts", {"action": args.action, "target": args.target}
+    if args.command == "animate":
+        if args.steps < 2:
+            raise ViewerError("--steps must be at least 2")
+        return "POST", "/api/animate", {"joint": args.joint, "from": args.start, "to": args.end,
+                                        "steps": args.steps, "seconds": args.seconds, "at": args.at}
+    if args.command == "capture":
+        return "POST", "/api/capture", {"view": args.view, "out": path(args.out), "crop": args.crop,
+                                        "joint": args.joint, "zoom": args.zoom, "refit": args.refit}
+    if args.command == "studio":
+        keys = ("environment", "tone_mapping", "background", "texture_mapping", "exposure", "env_intensity",
+                "env_rotation", "shadow_intensity", "shadow_softness", "ao_intensity")
+        return "POST", "/api/studio", {key: getattr(args, key) for key in keys}
+    raise ViewerError(f"{args.command} is not a host request")
+
+
+def summarise(command: str, answer: dict[str, Any]) -> dict[str, Any]:
+    """Short stdout for state-returning commands: what each slot shows and the view state."""
+    if "versions" not in answer:
+        return answer
+    return {"status": "pass", "command": command, "mode": answer["mode"], "active": answer["active"],
+            "slots": answer["slots"], "view": answer["view"],
+            "versions": {k: {"label": v["label"], "parts": len(v["parts"]),
+                             "check": (v.get("check") or {}).get("status")} for k, v in answer["versions"].items()}}
+
+
+def run(args: argparse.Namespace) -> int:
+    path = session.session_path()
+    if args.command == "host":
+        from cadviewer import host
+
+        return host.run(args.session, args.panel_port, args.port_a, args.port_b, args.width, args.height)
+    if args.command == "serve":
+        data, reused = session.start(path, SCRIPT, args.panel_port, args.port_a, args.port_b,
+                                     (args.width, args.height))
+        emit(session.describe(data, SCRIPT, reused))
+        return 0
+    if args.command == "stop":
+        emit(session.stop(path))
+        return 0
+    live = session.require_session(path)
+    method, route, body = request_body(args)
+    answer = summarise(args.command, session.call(live, method, route, body))
+    answer.setdefault("status", "pass")
+    emit(answer)
+    return 0 if answer["status"] == "pass" else 1
+
+
+def emit(data: dict[str, Any]) -> None:
+    print(json.dumps(data, indent=2, default=str))
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    try:
+        return run(args)
+    except LimitError as error:
+        emit({"status": "fail", "error": str(error), "findings": error.findings})
+        return 1
+    except ViewerError as error:
+        emit({"status": "error", "error": str(error)})
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())
