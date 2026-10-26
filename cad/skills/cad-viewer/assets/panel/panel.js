@@ -225,14 +225,14 @@ function holeText(hole) {
 function renderHoles(box, version) {
   const drilled = version.parts.filter((p) => p.metrics.holes.length);
   if (!drilled.length) {
-    box.append(el("p", { class: "measure-note", text: "metrics.json lists no holes for this version." }));
+    box.append(el("p", { class: "measure-note", text: "metrics.json lists no cylindrical bores for this version." }));
     return;
   }
-  box.append(el("h3", { class: "list-heading", id: "holes-heading", text: "Holes" }),
+  box.append(el("h3", { class: "list-heading", id: "holes-heading", text: "Cylindrical bores" }),
     el("ul", { class: "hole-list", "aria-labelledby": "holes-heading" }, drilled.map((p) =>
       el("li", { class: "hole-part" },
-        el("p", { class: "hole-pn", text: `${p.pn} · ${p.metrics.holes.length} hole${p.metrics.holes.length === 1 ? "" : "s"}` }),
-        el("ul", { class: "hole-rows", "aria-label": `${p.pn} holes` },
+        el("p", { class: "hole-pn", text: `${p.pn} · ${p.metrics.holes.length} bore${p.metrics.holes.length === 1 ? "" : "s"}` }),
+        el("ul", { class: "hole-rows", "aria-label": `${p.pn} cylindrical bores` },
           p.metrics.holes.map((h) => el("li", {}, el("span", { class: "hole-id", text: h.id }), holeText(h))))))));
 }
 

@@ -74,8 +74,9 @@ NOT Treat the viewer, a render, or a capture as a check result; `skill://cad-mod
 - OCP CAD Viewer does not replay a model to a newly opened page, and serves only the last page that
   connected: the user's tab and the presenter each have their own viewers, and the panel asks the
   host to push again on each viewer load, which restores the camera and a held animation pose.
-- Holes come from metrics.json `parts.<PN>.holes` (diameter, through or blind, depth); a missing
-  or empty field shows "no holes listed".
+- Cylindrical bores come from metrics.json `parts.<PN>.holes` (diameter, through or blind, depth). The
+  list includes every concave full-circle cylinder, so recesses and cavities appear beside drilled
+  holes; a missing or empty field shows "no cylindrical bores".
 
 OUTPUT
 L1 VIEWER <SERVE|SHOW|COMPARE|ANIMATE|CAPTURE|STOP>: <PASS|FAIL>, <version(s)>, <url or PNG>
