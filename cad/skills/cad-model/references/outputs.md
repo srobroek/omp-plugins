@@ -11,13 +11,35 @@ leaves nothing.
 | `assembly.step` | AP242, top product `"<product id> vN"`, each part a component at the nominal pose (cad-motion `pose.write_step`) |
 | `assembly.glb` | binary glTF 2.0 of `assembly.step`: metres, +Y up, node and mesh names = product names, one mesh per part |
 | `part-map.json` | `parts.<PN>`: `product`, `nodes`, `node_indices`, `meshes` in the GLB |
-| `metrics.json` | `parts.<PN>`: `volume_mm3`, `area_mm2`, `bbox_mm` {min, max, size}, `centre_of_volume_mm`, `solids`, `shells`, `faces`, `material`, `density_g_cm3`, `mass_g`, `mass_target_g`; `totals` |
+| `metrics.json` | `parts.<PN>`: `volume_mm3`, `area_mm2`, `bbox_mm` {min, max, size}, `centre_of_volume_mm`, `solids`, `shells`, `faces`, `holes`, `material`, `density_g_cm3`, `mass_g`, `mass_target_g`; `totals` |
 | `manifest.json` | `parts.<PN>`: `kernel`, `model`, `source_sha256`, `params`, `kernel_volume_mm3`, `kernel_solids`, `kernel_valid`, `kernel_errors`; `tools` per environment with `import_s`; `pose` (values, transforms); `joint_pairs`; `ground`; `glb` tessellation; `files` sha256 |
 
 Metrics and bboxes are in assembly coordinates at the zero pose, read back from the per-part STEP.
-Every volume is BRepGProp's adaptive integration to 1e-9 relative (`occ.VOLUME_EPS`); the default
-fixed-order rule is off by up to ~6e-6 on revolved and filleted B-spline faces.
+Every volume is BRepGProp's adaptive integration to 1e-9 relative (cad-motion `pose.VOLUME_EPS`,
+through `pose.volume_properties`, which cad-motion's sweep uses too); the default fixed-order rule
+is off by up to ~6e-6 on revolved and filleted B-spline faces.
 Mass is solid-material mass: `volume_mm3 * density / 1000`, density from `assets/materials.yaml`.
+
+`holes` lists the part's cylindrical bores (`cadmodel/holes.py`), sorted by (`diameter_mm`,
+`position`), `[]` when there are none:
+
+```json
+{"id": "H1", "diameter_mm": 5.0, "axis": [0.0, 0.0, -1.0], "position": [10.0, 15.0, 8.0],
+ "depth_mm": 8.0, "through": true}
+```
+
+- A bore is the concave cylindrical faces of one solid on one axis line with one radius (within
+  1e-4 mm): seam-split faces and coaxial stretches across a slot (a clevis pin bore) are one bore.
+  A convex cylinder (boss, pin) is not a hole; neither is a stretch that covers less than the full
+  circle (slot end, concave fillet, open channel). Slots and non-cylindrical cut-outs are not listed.
+- `diameter_mm` is rounded to 3 decimals. `depth_mm` is the axial length of the cylindrical wall,
+  entry chamfers and drill points excluded, gaps across slots included.
+- `through` is true when the bore opens onto a boundary face at both ends; an end closed by a
+  floor (flat or drill point) makes it blind.
+- `axis` is the unit drilling direction and `position` the axis point at the entry end. A blind
+  bore enters at its open end. A through bore enters so its axis points down: the first non-zero
+  component of z, y, x is negative.
+- Detection reads the STEP read-back, so both kernels list the same holes.
 
 `hw/versions/latest.json` names the newest successful version, every path relative to `hw/`:
 

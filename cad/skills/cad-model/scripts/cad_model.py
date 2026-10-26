@@ -18,7 +18,7 @@ run   executes every hw/parts/<PN>/model.py in its declared kernel's own uv envi
                           joints' nominal pose (cad-motion pose.py)
         assembly.glb      binary glTF of assembly.step, metres, +Y up, node names = products
         part-map.json     PN -> glTF node and mesh names
-        metrics.json      per part: volume, area, bbox, solids, mass from assets/materials.yaml
+        metrics.json      per part: volume, area, bbox, solids, holes, mass from assets/materials.yaml
         manifest.json     per part: kernel, model path, source sha256, params, kernel volume;
                           tool versions per environment; pose; joint pairs; file hashes
       and hw/versions/latest.json pointing at that version (paths relative to hw/).

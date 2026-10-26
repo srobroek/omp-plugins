@@ -11,10 +11,6 @@ from typing import Any, Iterable
 
 # Boolean fuzzy value in mm: the kernel's own precision, so a Boolean never glues distinct faces.
 FUZZY_MM = 1e-7
-# Relative target of the adaptive volume integration. With BRepGProp's default fixed-order Gauss
-# rule the in-memory and STEP read-back volumes of one valid fluted housing (LMP-0004) differed by
-# 5.6e-6 relative, above the 1e-6 read-back bound; the adaptive rule agreed to 1.6e-11.
-VOLUME_EPS = 1e-9
 
 
 class GeometryError(ValueError):
@@ -82,12 +78,9 @@ def count(shape: Any, kind: str) -> int:
 
 
 def _volume_props(shape: Any) -> Any:
-    from OCP.BRepGProp import BRepGProp
-    from OCP.GProp import GProp_GProps
+    from cadmodel.motion import load_pose
 
-    props = GProp_GProps()
-    BRepGProp.VolumeProperties_s(shape, props, VOLUME_EPS, False)
-    return props
+    return load_pose().volume_properties(shape)  # the one volume rule, shared with cad-motion
 
 
 def volume(shape: Any) -> float:

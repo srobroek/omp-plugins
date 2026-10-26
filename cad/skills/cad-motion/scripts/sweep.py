@@ -21,6 +21,8 @@ Pairs: every pair of chain parts except joint-connected parent/child pairs
 (fixed joints and --attach included); `--include-pair A:B` puts an excluded
 pair back. Per pose and pair: the minimum distance (BRepExtrema_DistShapeShape)
 and, when it is within 1e-6 mm, the overlap volume (BRepAlgoAPI_Common).
+Volumes and centres of mass use pose.py's `volume_properties`, the adaptive
+integration cad-model measures every volume with.
 A pair evaluation is cached on the pair's relative transform, so a joint
 sweep recomputes only the pairs that joint moves.
 
@@ -132,12 +134,7 @@ class Geometry:
 
     @staticmethod
     def _centre(shape: Any) -> tuple[float, float, float]:
-        from OCP.BRepGProp import BRepGProp
-        from OCP.GProp import GProp_GProps
-
-        props = GProp_GProps()
-        BRepGProp.VolumeProperties_s(shape, props)
-        point = props.CentreOfMass()
+        point = pose.volume_properties(shape).CentreOfMass()
         return (point.X(), point.Y(), point.Z())
 
     def pair(self, a: str, b: str, relative: Any) -> tuple[float, float]:
@@ -149,8 +146,6 @@ class Geometry:
             return cached
         from OCP.BRepAlgoAPI import BRepAlgoAPI_Common
         from OCP.BRepExtrema import BRepExtrema_DistShapeShape
-        from OCP.BRepGProp import BRepGProp
-        from OCP.GProp import GProp_GProps
 
         self.evaluations += 1
         shape_a = self.parts[a].shape
@@ -164,9 +159,7 @@ class Geometry:
             common = BRepAlgoAPI_Common(shape_a, shape_b)
             if not common.IsDone():
                 raise pose.MotionError(f"interference computation failed for {a} / {b}")
-            props = GProp_GProps()
-            BRepGProp.VolumeProperties_s(common.Shape(), props)
-            volume = max(0.0, props.Mass())
+            volume = max(0.0, pose.volume_properties(common.Shape()).Mass())
         self.cache[key] = (distance, volume)
         return distance, volume
 

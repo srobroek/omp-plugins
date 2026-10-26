@@ -58,6 +58,11 @@ from typing import Any
 PN_PREFIX = re.compile(r"^([A-Z]{2,5}-\d{4})(?![0-9])")
 UNITS = {"revolute": "deg", "prismatic": "mm", "fixed": ""}
 STEP_SUFFIXES = (".step", ".stp")
+# Relative target of the adaptive volume integration, the one volume rule of cad-motion and cad-model.
+# With BRepGProp's default fixed-order Gauss rule the in-memory and STEP read-back volumes of one valid
+# fluted housing (LMP-0004) differed by 5.6e-6 relative, above the 1e-6 read-back bound; the adaptive
+# rule agreed to 1.6e-11.
+VOLUME_EPS = 1e-9
 
 Vec = tuple[float, float, float]
 
@@ -452,6 +457,16 @@ def placed(shape: Any, rigid: Rigid) -> Any:
     from OCP.TopLoc import TopLoc_Location
 
     return shape.Moved(TopLoc_Location(to_trsf(rigid)))
+
+
+def volume_properties(shape: Any) -> Any:
+    """`GProp_GProps` of `shape`'s volume (Mass, CentreOfMass), integrated adaptively to VOLUME_EPS."""
+    from OCP.BRepGProp import BRepGProp
+    from OCP.GProp import GProp_GProps
+
+    props = GProp_GProps()
+    BRepGProp.VolumeProperties_s(shape, props, VOLUME_EPS, False)
+    return props
 
 
 def _part_titles(hw: Path) -> dict[str, str]:
