@@ -1,0 +1,62 @@
+# mol-cad-concept: one additional L0 round before LAYOUT freeze.
+# Bond onto the concept/VARIANT step that needs another user-directed round.
+formula = "mol-cad-concept"
+description = "Another L0 concept round {{round}} for {{product}}: render, refine, merge, or drop three.js variants and obtain selection"
+type = "workflow"
+
+[vars.product]
+required = true
+description = "hardware product id"
+
+[vars.scope]
+required = true
+description = "hardware project paths this concept round may change"
+
+[vars.round]
+default = "2"
+pattern = "^[2-9][0-9]*$"
+description = "additional concept round number"
+
+[vars.kernel]
+default = "cadquery"
+pattern = "^(cadquery|build123d)$"
+description = "selected downstream modeling kernel"
+
+[vars.process_default]
+default = "fdm"
+pattern = "^(fdm|cnc)$"
+description = "default manufacturing process"
+
+[[steps]]
+id = "draft-concept-round"
+title = "DRAFT L0 concept round {{round}}"
+type = "task"
+labels = ["cad", "phase:concept"]
+description = "Read current requirements, concept, and feedback. Draft variants at `hw/concept/<product-id>.scene.json`. Check each edit with `uv run --script skill://cad-concept/scripts/concept.py check <scene>`; serve preview with `uv run --script skill://cad-concept/scripts/serve.py --scene-dir hw/concept --port 8765`. After feedback, refine/merge/drop as directed. On commit, check and save one screenshot per live variant; no engineering checks before LAYOUT freeze. After explicit VARIANT selection, export with `uv run --script skill://cad-concept/scripts/concept.py handoff <scene> --out hw/concept/handoff.json`. Record design entry and bead note."
+
+[steps.metadata]
+skill_hints = "cad-concept, cad-flow, cad-record"
+execution_mode = "interactive"
+
+[[steps]]
+id = "variant-gate"
+title = "VARIANT gate for concept round {{round}}"
+type = "task"
+needs = ["draft-concept-round"]
+labels = ["cad", "phase:gate"]
+description = "Present the round {{round}} variants and the cumulative refine/merge/drop history. Obtain explicit user selection or another direction. Recommendations do not resolve the gate; only bd gate resolve closes it."
+
+[steps.gate]
+type = "human"
+timeout = "72h"
+
+[[steps]]
+id = "record-variant"
+title = "COMMIT selected variant round {{round}}"
+type = "task"
+needs = ["variant-gate"]
+labels = ["cad", "phase:concept"]
+description = "Record the selected concept id, user direction, variant disposition, preview location, and resulting decision in the design record and bead note. Keep LAYOUT unfrozen until its separate human gate; no engineering checks are implied by this concept approval."
+
+[steps.metadata]
+skill_hints = "cad-record, cad-flow"

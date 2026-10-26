@@ -1,0 +1,10 @@
+PN: LMP-0001
+rev: X1
+title: Base plate and pivot boss
+material: PETG
+process: fdm
+finish: Deburr; no sharp edges
+mass_target: 313
+make_buy: make
+supplier: null
+decisions: [DR-002]

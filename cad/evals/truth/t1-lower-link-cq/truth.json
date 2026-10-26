@@ -1,0 +1,19 @@
+{
+  "solids": 1,
+  "volume_mm3": 12441.272,
+  "volume_rel_tol": 0.001,
+  "bbox_mm": [
+    136.0,
+    16.0,
+    6.0
+  ],
+  "bbox_tol_mm": 0.1,
+  "holes": [
+    {
+      "diameter_mm": 5.5,
+      "count": 2
+    }
+  ],
+  "hole_tol_mm": 0.05,
+  "provenance": "Analytic from the prompt: (120*16 + pi*8^2 - 2*pi*2.75^2) * 6 mm3; envelope 120+2*8 by 16 by 6. Not taken from any model output; the oracle in oracle/ is checked against it."
+}

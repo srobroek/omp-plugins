@@ -1,0 +1,154 @@
+[
+  {
+    "argv": [
+      "kiro-cli",
+      "chat",
+      "--no-interactive",
+      "--agent-engine",
+      "v3",
+      "--model",
+      "claude-haiku-5.5",
+      "--output-format",
+      "stream-json",
+      "--trust-tools=fs_read,fs_write,execute_bash,glob,grep",
+      "--trust-workspace",
+      "--agent",
+      "cad-eval",
+      "First, under the heading INSTRUCTIONS, list every instruction file, rule file, steering document and system-prompt section you were given (file path or section heading, one per line), other than skill bodies. Then, under the heading SKILLS, list the names of every skill available to you, one per line. Then, under the heading FILES, list the entries of the current working directory, using your file or directory tool rather than a shell command. Then create a file named hello.txt whose entire content is the word ok. End your reply with the single word DONE."
+    ],
+    "at": "2026-10-26T13:39:22+00:00",
+    "file_written": true,
+    "harness": "kiro",
+    "host": {
+      "shared_temp": {
+        "added_by_other_processes": [
+          "$TMPDIR/opencode/mkdag.py",
+          "$TMPDIR/playwright-artifacts-oSymQd",
+          "$TMPDIR/playwright_chromiumdev_profile-9Ji4YZ",
+          "$TMPDIR/playwright_chromiumdev_profile-9Ji4YZ/Default"
+        ],
+        "added_by_trial": [],
+        "roots": [
+          "/private/tmp",
+          "$TMPDIR"
+        ]
+      },
+      "trial_tmpdir": [
+        "kiro-cli-updates-503",
+        "kiro-log",
+        "kiro-log/kiro-chat.log",
+        "kiro-log/lsp.log",
+        "kiro-log/mcp.log"
+      ],
+      "unchanged": false,
+      "user_stores": {
+        "~/.kiro": {
+          "added": [],
+          "changed": [],
+          "removed": [],
+          "sqlite": {},
+          "trial_counterpart_entries": 12
+        },
+        "~/Library/Application Support/kiro-cli": {
+          "added": [],
+          "changed": [
+            "~/Library/Application Support/kiro-cli/data.sqlite3"
+          ],
+          "removed": [],
+          "sqlite": {
+            "data.sqlite3": {
+              "rows": {
+                "auth_kv": 2,
+                "conversations": 0,
+                "conversations_v2": 417,
+                "extracted_kas_versions": 6,
+                "history": 1877,
+                "migrations": 11,
+                "pinned_bin_versions": 5,
+                "state": 42
+              },
+              "rows_before": {
+                "auth_kv": 2,
+                "conversations": 0,
+                "conversations_v2": 417,
+                "extracted_kas_versions": 6,
+                "history": 1877,
+                "migrations": 11,
+                "pinned_bin_versions": 5,
+                "state": 42
+              },
+              "rows_mentioning_trial": 0
+            }
+          },
+          "trial_counterpart_entries": 12
+        }
+      }
+    },
+    "inventory": {
+      "agents": [
+        "cad-dfm-reviewer",
+        "cad-eval",
+        "cad-mech-reviewer"
+      ],
+      "baseline": {
+        "declared_for": "2.34.0",
+        "loaded": {}
+      },
+      "commands": [],
+      "context": [
+        "file://<trial>/work/cad/skills/cad-bom/SKILL.md",
+        "file://<trial>/work/cad/skills/cad-concept/SKILL.md",
+        "file://<trial>/work/cad/skills/cad-design/SKILL.md",
+        "file://<trial>/work/cad/skills/cad-fits/SKILL.md",
+        "file://<trial>/work/cad/skills/cad-flow/SKILL.md",
+        "file://<trial>/work/cad/skills/cad-model/SKILL.md",
+        "file://<trial>/work/cad/skills/cad-motion/SKILL.md",
+        "file://<trial>/work/cad/skills/cad-recheck/SKILL.md",
+        "file://<trial>/work/cad/skills/cad-record/SKILL.md",
+        "file://<trial>/work/cad/skills/cad-render/SKILL.md",
+        "file://<trial>/work/cad/skills/cad-review-dfm/SKILL.md",
+        "file://<trial>/work/cad/skills/cad-review-mech/SKILL.md"
+      ],
+      "mcp": [],
+      "missing": [],
+      "plugins": [],
+      "skills": [
+        "cad-bom",
+        "cad-concept",
+        "cad-design",
+        "cad-fits",
+        "cad-flow",
+        "cad-model",
+        "cad-motion",
+        "cad-recheck",
+        "cad-record",
+        "cad-render",
+        "cad-review-dfm",
+        "cad-review-mech"
+      ],
+      "version": null
+    },
+    "isolation": "clean",
+    "isolation_mechanism": "HOME, XDG_* and TMPDIR in the trial; a trial-own Kiro database holding a copy of the user's login only; --agent cad-eval (sandbox-local, cad skills only); cad copied to <work>/cad",
+    "latency_s": 22.892,
+    "leaks": [],
+    "ok": true,
+    "requested_model": "claude-haiku-5.5",
+    "served_matches": true,
+    "served_model": "claude-haiku-5.5",
+    "text": "INSTRUCTIONS\nSecurity, trust and safety (system prompt section)\nWork guidelines (system prompt section)\nWork guidelines > Understand before acting (system prompt subsection)\nWork guidelines > Make safe, scoped changes (system prompt subsection)\nCommunication Guide (system prompt section)\nCommunication Guide > Structure and style (system prompt subsection)\nCommunication Guide > Substance and words (system prompt subsection)\nHook output channel handling (system prompt section)\nSystem information and workspace folder (context block)\n\nSKILLS\ncad-bom\ncad-concept\ncad-design\ncad-fits\ncad-flow\ncad-model\ncad-motion\ncad-recheck\ncad-record\ncad-render\ncad-review-dfm\ncad-review-mech\n\nFILES\nNot available. Two directory listing attempts failed with a permission request error, so I could not list the workspace contents.\n\nI created hello.txt in the workspace root with the content \"ok\".\n\nDONE",
+    "tools": [
+      "List Directory",
+      "List Directory",
+      "Write File"
+    ],
+    "transcript_entries": 10,
+    "usage": {
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "credits": 0.027407,
+      "input": 0,
+      "output": 0
+    }
+  }
+]

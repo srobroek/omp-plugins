@@ -1,0 +1,5 @@
+subassemblies:
+  - id: base_sub
+    title: Base subassembly
+    parts: [LSP-0001]
+joints: []

@@ -1,0 +1,10 @@
+PN: LMP-0002
+rev: X1
+title: Lower link
+material: Aluminum 6061-T6
+process: cnc
+finish: Bead-blast and clear anodize
+mass_target: 153
+make_buy: make
+supplier: null
+decisions: [DR-002]

@@ -1,0 +1,92 @@
+{
+  "argv": [
+    "~/.cache/.bun/bin/opencode",
+    "run",
+    "--standalone",
+    "--model",
+    "amazon-bedrock/global.anthropic.claude-haiku-5-5",
+    "--format",
+    "json",
+    "--auto",
+    "First, under the heading INSTRUCTIONS, list every instruction file, rule file, steering document and system-prompt section you were given (file path or section heading, one per line), other than skill bodies. Then, under the heading SKILLS, list the names of every skill available to you, one per line. Then, under the heading FILES, list the entries of the current working directory, using your file or directory tool rather than a shell command. Then create a file named hello.txt whose entire content is the word ok. End your reply with the single word DONE."
+  ],
+  "at": "2026-10-26T13:45:42+00:00",
+  "file_written": true,
+  "harness": "opencode",
+  "host": {
+    "shared_temp": {
+      "added_by_other_processes": [
+        "/private/tmp/rr4",
+        "/private/tmp/rr4/apps",
+        "/private/tmp/rr4/rr4-probe.mjs",
+        "$TMPDIR/pyright-29902-ysinWeSmfK2b",
+        "$TMPDIR/tmp.aZelpkGT5M",
+        "$TMPDIR/toolbox-telemetry-emf900239464"
+      ],
+      "added_by_trial": [],
+      "roots": [
+        "/private/tmp",
+        "$TMPDIR"
+      ]
+    },
+    "trial_tmpdir": [
+      ".bun-503-295fc1275a70d982.dylib",
+      ".bun-503-609700808f56cdf.dylib",
+      ".bun-503-c22f2ef692948d9e.node",
+      "opencode"
+    ],
+    "unchanged": true,
+    "user_stores": {}
+  },
+  "inventory": {
+    "agents": [
+      "cad-dfm-reviewer",
+      "cad-mech-reviewer"
+    ],
+    "baseline": {
+      "declared_for": "2.1.4",
+      "loaded": {}
+    },
+    "commands": [],
+    "context": [],
+    "mcp": [],
+    "missing": [],
+    "plugins": [],
+    "skills": [
+      "cad-bom",
+      "cad-concept",
+      "cad-design",
+      "cad-fits",
+      "cad-flow",
+      "cad-model",
+      "cad-motion",
+      "cad-recheck",
+      "cad-record",
+      "cad-render",
+      "cad-review-dfm",
+      "cad-review-mech"
+    ],
+    "version": null
+  },
+  "isolation": "clean",
+  "isolation_mechanism": "HOME, XDG_* and TMPDIR in the trial (temp OpenCode config/data/state); --standalone private server; cad skills and agents in <work>/.opencode; AWS credentials exported to env",
+  "latency_s": 17.303,
+  "leaks": [],
+  "ok": true,
+  "requested_model": "amazon-bedrock/global.anthropic.claude-haiku-5-5",
+  "served_matches": true,
+  "served_model": "amazon-bedrock/global.anthropic.claude-haiku-5-5",
+  "text": "INSTRUCTIONS\nHarness\nCommunication\nWorking in codebases\nCode comments\nYour Model\nCode Mode\nEnvironment block (working directory, platform, temp directory note)\nSkills block (available_skills list and usage rules)\n\nNo instruction files such as AGENTS.md, CLAUDE.md, or rule files were loaded into my context.\n\nSKILLS\ncad-bom\ncad-concept\ncad-design\ncad-fits\ncad-flow\ncad-model\ncad-motion\ncad-recheck\ncad-record\ncad-render\ncad-review-dfm\ncad-review-mech\nOpenCode\nReport\n\nFILES\n.git/\n.opencode/\n\nI created `hello.txt` in the working directory with the content `ok`.\n\nDONE",
+  "tools": [
+    "read",
+    "write"
+  ],
+  "transcript_entries": 5,
+  "usage": {
+    "cacheRead": 9414,
+    "cacheWrite": 10297,
+    "cost_usd": 0.001877,
+    "input": 6,
+    "output": 989
+  }
+}

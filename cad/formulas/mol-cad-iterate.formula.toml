@@ -1,0 +1,99 @@
+# mol-cad-iterate: changed intent after freeze; reopen only the affected part/dependent set.
+# Bond after DESIGN freeze with product, scope, change, and affected_parts vars.
+formula = "mol-cad-iterate"
+description = "Reopen only affected parts for changed intent on frozen {{product}} and recheck L3-L4 for {{affected_parts}}"
+type = "workflow"
+
+[vars.product]
+required = true
+description = "hardware product id"
+
+[vars.scope]
+required = true
+description = "paths for the affected part/dependent set only"
+
+[vars.change]
+required = true
+description = "approved changed intent and its rationale"
+
+[vars.affected_parts]
+required = true
+description = "comma-separated part numbers in the impact set, including only affected dependents"
+
+[vars.kernel]
+default = "cadquery"
+pattern = "^(cadquery|build123d)$"
+description = "kernel environment for the affected parts"
+
+[vars.process_default]
+default = "fdm"
+pattern = "^(fdm|cnc)$"
+description = "default manufacturing process"
+
+[[steps]]
+id = "classify-change"
+title = "Define changed intent and affected parts"
+type = "task"
+labels = ["cad", "phase:iterate"]
+description = "Run skill://cad-recheck against the frozen design record. Record {{change}}, why the approved intent changes, and the exact direct-plus-dependent part set represented by {{affected_parts}}. A change after DESIGN freeze reopens only those affected parts; leave every other part frozen."
+
+[steps.metadata]
+skill_hints = "cad-flow, cad-record, cad-recheck"
+execution_mode = "interactive"
+
+[[steps]]
+id = "intent-gate"
+title = "INTENT gate for the frozen-design change"
+type = "task"
+needs = ["classify-change"]
+labels = ["cad", "phase:gate"]
+description = "Present the revised intent and exact impact set. Obtain explicit user approval before reopening any frozen part. Without approval leave the gate unresolved; only bd gate resolve closes it."
+
+[steps.gate]
+type = "human"
+timeout = "72h"
+
+[[steps]]
+id = "reopen-affected"
+title = "Reopen only {{affected_parts}}"
+type = "task"
+needs = ["intent-gate"]
+labels = ["cad", "phase:iterate"]
+description = "Reopen only the parts and dependents listed in the approved impact set {{affected_parts}}. Do not touch or reopen any unaffected part, revision, or evidence. Use {{kernel}} and {{process_default}} where a model change requires them. Record reopened state and the per-part versions."
+
+[steps.metadata]
+skill_hints = "cad-record, cad-model, cad-flow"
+
+[[steps]]
+id = "detail-recheck"
+title = "Recheck L3 detail for affected parts"
+type = "task"
+needs = ["reopen-affected"]
+labels = ["cad", "phase:detail"]
+description = "For {{affected_parts}} only, each post-freeze L3 commit batch runs `uv run --script skill://cad-model/scripts/cad_model.py run hw --label vN --kernel {{kernel}}`, then `uv run --script skill://cad-model/scripts/cad_model.py check vN --hw hw --out checks-vN.json`; a blocking check failure stops the batch. Then run `uv run --script skill://cad-render/scripts/render.py hw --version vN [--views iso front side exploded closeup-<PN>]`. Run skill://cad-fits and skill://cad-drawings for fits, fasteners, tolerances, datums, process rules, and drawings. Before the L3 gate, run `uv run --script skill://cad-design/scripts/form_check.py --hw hw --parts-dir DIR --fidelity F3`; L3 requires F3. Recheck affected parts and dependents only; preserve unaffected parts' existing evidence."
+
+[steps.metadata]
+skill_hints = "cad-fits, cad-drawings, cad-recheck, cad-record"
+
+[[steps]]
+id = "analysis-recheck"
+title = "Recheck L4 analysis for affected parts"
+type = "task"
+needs = ["detail-recheck"]
+labels = ["cad", "phase:analysis"]
+description = "For {{affected_parts}} only, run the kinematic sweep using `uv run --script skill://cad-motion/scripts/sweep.py ... --worst-step worst.step`; pass `worst_case.pose` and `worst.step` to the separate cad-freecad static FEA workflow, not yet merged. For an L4 commit batch, run `uv run --script skill://cad-model/scripts/cad_model.py run hw --label vN --kernel {{kernel}}`, then `uv run --script skill://cad-model/scripts/cad_model.py check vN --hw hw --out checks-vN.json`; a blocking check failure stops the batch. Then render with `uv run --script skill://cad-render/scripts/render.py hw --version vN [--views iso front side exploded closeup-<PN>]`. Apply post-LAYOUT recheck only to the affected set; preserve untouched-part evidence and record verification results plus the design entry/bead note."
+
+[steps.metadata]
+skill_hints = "cad-analysis, cad-recheck, cad-record, cad-flow"
+
+[[steps]]
+id = "design-freeze-gate"
+title = "DESIGN freeze gate for affected parts"
+type = "task"
+needs = ["analysis-recheck"]
+labels = ["cad", "phase:gate"]
+description = "Present the changed intent, reopened part list, updated L3-L4 evidence, and preserved evidence for untouched parts. Obtain explicit approval to re-freeze only the affected set. Do not re-open or re-approve unaffected parts; only bd gate resolve closes this human gate."
+
+[steps.gate]
+type = "human"
+timeout = "72h"

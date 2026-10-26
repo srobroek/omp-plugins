@@ -1,0 +1,82 @@
+# mol-cad-part: one L2 subassembly or part loop, built and checked independently.
+# Bond one per subassembly with --type parallel after LAYOUT freeze.
+formula = "mol-cad-part"
+description = "Build, check, and record L2 part loop {{subassembly}} for {{product}} using {{kernel}} and {{process_default}}"
+type = "workflow"
+
+[vars.product]
+required = true
+description = "hardware product id"
+
+[vars.scope]
+required = true
+description = "hardware project paths this loop may change"
+
+[vars.subassembly]
+required = true
+description = "one stable subassembly id from hw/assembly.yaml, or one part id"
+
+[vars.kernel]
+default = "cadquery"
+pattern = "^(cadquery|build123d)$"
+description = "modeling kernel; use its dedicated environment"
+
+[vars.process_default]
+default = "fdm"
+pattern = "^(fdm|cnc)$"
+description = "default process for parts without an explicit override"
+
+[[steps]]
+id = "build-part"
+title = "BUILD L2 part loop for {{subassembly}}"
+type = "task"
+labels = ["cad", "phase:parts"]
+description = "Run skill://cad-model for only {{subassembly}} in the {{kernel}} environment. Maintain part.yaml fields and parametric model.py under {{scope}}, using {{process_default}} unless approved part metadata specifies otherwise. Draft and preview without checks; after feedback, each L2 commit batch runs `uv run --script skill://cad-model/scripts/cad_model.py run hw --label vN --kernel {{kernel}}`. Record each immutable version."
+
+[steps.metadata]
+skill_hints = "cad-model, cad-record, cad-flow"
+execution_mode = "interactive"
+
+[[steps]]
+id = "check-part"
+title = "CHECK {{subassembly}} and its affected dependents"
+type = "task"
+needs = ["build-part"]
+labels = ["cad", "phase:parts"]
+description = "For the just-built version vN, run `uv run --script skill://cad-model/scripts/cad_model.py check vN --hw hw --out checks-vN.json`. A blocking check failure stops the batch; do not render or proceed. At/after LAYOUT freeze, run skill://cad-recheck for the changed parts and dependents, including all applicable earlier-stage checks; record the results and repair only authorized findings."
+
+[steps.metadata]
+skill_hints = "cad-recheck, cad-record"
+
+[[steps]]
+id = "render-part"
+title = "Render the committed version and present gate images"
+type = "task"
+needs = ["check-part"]
+labels = ["cad", "phase:parts"]
+description = "For each committed L2 version, run `uv run --script skill://cad-render/scripts/render.py hw --version vN [--views iso front side exploded closeup-<PN>]`. Read every PNG, include its path and a short description in gate evidence, and use the OCP Viewer to inspect the build."
+
+[steps.metadata]
+skill_hints = "cad-render, cad-viewer"
+
+[[steps]]
+id = "fidelity-gate"
+title = "Check form fidelity for {{subassembly}}"
+type = "task"
+needs = ["render-part"]
+labels = ["cad", "phase:parts"]
+description = "Before the L2 gate, run `uv run --script skill://cad-design/scripts/form_check.py --hw hw --parts-dir DIR --fidelity F2` on affected parts. Every made part needs F2 or later. At L3 DETAIL, run the same command with `--fidelity F3` before the gate. Every made part needs F3. Record JSON evidence; findings block the gate."
+
+[steps.metadata]
+skill_hints = "cad-design, cad-record"
+
+[[steps]]
+id = "record-evidence"
+title = "COMMIT evidence for {{subassembly}}"
+type = "task"
+needs = ["fidelity-gate"]
+labels = ["cad", "phase:parts"]
+description = "Record model/revision version, changed part list, dependents, checks and results, render/form evidence in the design record and bead note. Leave failures explicit."
+
+[steps.metadata]
+skill_hints = "cad-record, cad-recheck"

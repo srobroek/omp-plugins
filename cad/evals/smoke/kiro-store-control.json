@@ -1,0 +1,43 @@
+{
+  "at": "2026-10-26T13:51:58+00:00",
+  "latest_extracted_kas_versions_last_used_at_ms": 1793022738284,
+  "unchanged": false,
+  "user_stores": {
+    "~/.kiro": {
+      "added": [],
+      "changed": [],
+      "removed": [],
+      "sqlite": {},
+      "trial_counterpart_entries": 0
+    },
+    "~/Library/Application Support/kiro-cli": {
+      "added": [],
+      "changed": [
+        "~/Library/Application Support/kiro-cli/data.sqlite3",
+        "~/Library/Application Support/kiro-cli/telemetry-export-drops.json"
+      ],
+      "removed": [],
+      "sqlite": {
+        "data.sqlite3": {
+          "rows": {
+            "auth_kv": 2,
+            "conversations": 0,
+            "conversations_v2": 417,
+            "extracted_kas_versions": 6,
+            "history": 1877,
+            "migrations": 11,
+            "pinned_bin_versions": 5,
+            "state": 42
+          },
+          "rows_mentioning_trial": 0,
+          "tables_changed": [
+            "extracted_kas_versions"
+          ]
+        }
+      },
+      "trial_counterpart_entries": 0
+    }
+  },
+  "what": "control window: the same user-store diff as `run.py smoke --harness kiro`, over 30 s with no trial running",
+  "window_s": 30
+}

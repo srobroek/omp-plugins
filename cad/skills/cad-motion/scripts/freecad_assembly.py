@@ -1,0 +1,363 @@
+# /// script
+# requires-python = ">=3.11,<3.15"
+# dependencies = ["cadquery-ocp-novtk==8.0.1.1.0", "pyyaml>=6.0"]
+# ///
+"""Build a FreeCAD 1.1.4 Assembly from the joint record, simulate it headless,
+and check every frame against the joint limits.
+
+Usage:
+    uv run --script freecad_assembly.py --hw HW (--step ASSEMBLY.step | --parts-dir DIR)
+        [--attach PN=PARENT_PN ...] [--report-part PN ...] [--time-step 0.01]
+        [--freecad FREECADCMD] [--job-dir DIR] [--timeout 600]
+
+Inputs and kinematics are pose.py's (same options, same chain). The job:
+writes one STEP per part into the job directory, imports each into a FreeCAD
+Assembly, grounds the chain's ground part, creates one joint per record joint
+(revolute -> Revolute, prismatic -> Slider, fixed -> Fixed) with the joint
+frame (origin, Z along axis) as both connector placements and the limit
+properties enabled, and adds one simulation that drives every movable joint
+with `min + (max - min) * time` over time 0..1. FreeCAD generates the frames;
+the job records every part's placement per frame.
+
+FreeCAD's solver does not enforce joint limits, so this script measures each
+joint's value per frame from the parent and child placements and checks it
+against [min, max]. It also reports the residual (how far a frame departs from
+the joint's freedom) as a solver-consistency check.
+
+freecadcmd can exit 139 after finishing. The result counts only when the job
+printed this run's completion marker and wrote a fresh result file carrying
+the same run id; a non-zero exit after that is reported as a warning.
+
+stdout: JSON. stderr: diagnostics.
+Exit 0 = all frames within limits, 1 = a limit violation or joint residual,
+2 = usage or infrastructure error (FreeCAD missing, job failed, no marker).
+"""
+
+from __future__ import annotations
+
+import argparse
+import importlib.util
+import json
+import math
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+import traceback
+import uuid
+from pathlib import Path
+from typing import Any
+
+POSE_PATH = Path(__file__).with_name("pose.py")
+_spec = importlib.util.spec_from_file_location("cad_motion_pose", POSE_PATH)
+assert _spec and _spec.loader
+pose = importlib.util.module_from_spec(_spec)
+sys.modules["cad_motion_pose"] = pose
+_spec.loader.exec_module(pose)
+
+DEFAULT_FREECAD = Path("/Applications/FreeCAD.app/Contents/Resources/bin/freecadcmd")
+LIMIT_TOL = {"deg": 1e-3, "mm": 1e-3}
+RESIDUAL_TOL_DEG, RESIDUAL_TOL_MM = 1e-3, 1e-3
+MAX_LISTED = 50
+
+# Runs inside freecadcmd. Reads the spec, never the record, so the kinematics stay ours.
+JOB = r'''
+import json, os, sys, traceback
+
+SPEC = json.load(open(__SPEC_PATH__, encoding="utf-8"))
+
+
+def finish(result):
+    result["run_id"] = SPEC["run_id"]
+    with open(SPEC["result"], "w", encoding="utf-8") as handle:
+        json.dump(result, handle)
+    print(SPEC["marker"], flush=True)
+    sys.stderr.flush()
+    os._exit(0)
+
+
+try:
+    import FreeCAD as App
+    import Part
+
+    candidates = [os.path.join(root, "Mod", "Assembly") for root in (App.getHomePath(), App.getResourceDir())]
+    assembly_dir = next(d for d in candidates if os.path.isfile(os.path.join(d, "CommandCreateSimulation.py")))
+    sys.path.insert(0, assembly_dir)
+    import importlib.util
+    import JointObject
+    from PySide import QtCore, QtGui, QtWidgets
+
+    spec = importlib.util.spec_from_file_location(
+        "CommandCreateSimulation", os.path.join(assembly_dir, "CommandCreateSimulation.py"))
+    Sim = importlib.util.module_from_spec(spec)
+    Sim.QtCore, Sim.QtGui, Sim.QtWidgets = QtCore, QtGui, QtWidgets
+    Sim.Gui = type("Gui", (), {"Selection": type("Selection", (), {"clearSelection": staticmethod(lambda: None)})})
+    spec.loader.exec_module(Sim)
+
+    doc = App.newDocument("CadMotion")
+    assembly = doc.addObject("Assembly::AssemblyObject", "Assembly")
+    assembly.Type = "Assembly"
+    objects = {}
+    for part in SPEC["parts"]:
+        obj = doc.addObject("Part::Feature", part["pn"].replace("-", "_"))
+        obj.Label = part["name"]
+        obj.Shape = Part.read(part["path"])
+        base, quaternion = part["start_placement"]
+        obj.Placement = App.Placement(App.Vector(*base), App.Rotation(*quaternion))
+        assembly.addObject(obj)
+        objects[part["pn"]] = obj
+    doc.recompute()
+
+    group = assembly.newObject("Assembly::JointGroup", "Joints")
+    JointObject.GroundedJoint(group.newObject("App::FeaturePython", "Ground"), objects[SPEC["root"]])
+    kinds = {"fixed": 0, "revolute": 1, "prismatic": 3}
+    joints = {}
+    for record in SPEC["joints"]:
+        joint = group.newObject("App::FeaturePython", record["name"])
+        JointObject.Joint(joint, kinds[record["type"]])
+        joint.Label = record["id"]
+        joint.Reference1 = (objects[record["parent"]], [""])
+        joint.Reference2 = (objects[record["child"]], [""])
+        frame = App.Placement(App.Vector(*record["origin"]),
+                              App.Rotation(App.Vector(0, 0, 1), App.Vector(*record["axis"])))
+        joint.Detach1 = True
+        joint.Detach2 = True
+        joint.Placement1 = frame
+        joint.Placement2 = frame
+        if record["type"] == "revolute":
+            joint.EnableAngleMin = joint.EnableAngleMax = True
+            joint.AngleMin, joint.AngleMax = record["min"], record["max"]
+        elif record["type"] == "prismatic":
+            joint.EnableLengthMin = joint.EnableLengthMax = True
+            joint.LengthMin, joint.LengthMax = record["min"], record["max"]
+        joints[record["id"]] = joint
+    doc.recompute()
+    assembly.solve()
+
+    simulation = assembly.newObject("Assembly::SimulationGroup", "Simulations").newObject("App::FeaturePython", "Simulation")
+    Sim.Simulation(simulation)
+    simulation.aTimeStart, simulation.bTimeEnd, simulation.cTimeStepOutput = 0.0, 1.0, SPEC["time_step"]
+    for motion_spec in SPEC["motions"]:
+        motion = assembly.newObject("App::FeaturePython", "Motion")
+        Sim.Motion(motion, motion_spec["kind"], joints[motion_spec["joint"]], motion_spec["formula"])
+        simulation.addObject(motion)
+    doc.recompute()
+    assembly.solve()
+    assembly.generateSimulation(simulation)
+    count = assembly.numberOfFrames()
+    frames = []
+    for index in range(count):
+        assembly.updateForFrame(index)
+        frames.append({pn: [list(obj.Placement.Base), list(obj.Placement.Rotation.Q)] for pn, obj in objects.items()})
+    finish({"version": list(App.Version()[:4]), "frames": frames})
+except Exception:
+    finish({"error": traceback.format_exc()})
+'''
+
+
+def find_freecad(explicit: Path | None) -> Path | None:
+    """freecadcmd from --freecad, $FREECADCMD, PATH, or the macOS app bundle."""
+    candidates = [explicit, os.environ.get("FREECADCMD"), shutil.which("freecadcmd"), DEFAULT_FREECAD]
+    for candidate in candidates:
+        if candidate and Path(candidate).is_file() and os.access(candidate, os.X_OK):
+            return Path(candidate)
+    return None
+
+
+def motion_formula(joint: Any) -> str:
+    """Drive the joint linearly from min at time 0 to max at time 1.
+
+    FreeCAD evaluates an Angular motion formula in radians, unlike the joint's
+    AngleMin/AngleMax properties, which are degrees.
+    """
+    low, span = joint.min, joint.max - joint.min
+    if joint.type == "revolute":
+        low, span = math.radians(low), math.radians(span)
+    return f"{low!r} + {span!r}*time"
+
+
+def job_spec(chain: Any, part_paths: dict[str, Path], names: dict[str, str], run_id: str,
+             result: Path, time_step: float) -> dict[str, Any]:
+    # Parts start at the motion's time-0 pose (every joint at min): solving from
+    # the zero pose straight to a start angle far from it can land FreeCAD on
+    # the joint's other branch, 180 degrees off.
+    start = chain.transforms({j.id: j.min for j in chain.movable})
+    return {
+        "run_id": run_id,
+        "marker": f"CAD_MOTION_DONE {run_id}",
+        "result": str(result),
+        "time_step": time_step,
+        "root": chain.root,
+        "parts": [
+            {"pn": pn, "name": names[pn], "path": str(part_paths[pn]),
+             "start_placement": [list(start[pn].trans), list(start[pn].quaternion())]}
+            for pn in chain.parts
+        ],
+        "joints": [
+            {"id": j.id, "name": "Joint_" + "".join(c if c.isalnum() else "_" for c in j.id), "type": j.type,
+             "parent": j.parent, "child": j.child, "origin": list(j.origin), "axis": list(j.axis),
+             "min": j.min, "max": j.max}
+            for j in chain.joints
+        ],
+        "motions": [
+            {"joint": j.id, "kind": "Angular" if j.type == "revolute" else "Linear", "formula": motion_formula(j)}
+            for j in chain.movable
+        ],
+    }
+
+
+def run_job(freecad: Path, job_dir: Path, spec: dict[str, Any], timeout: float) -> tuple[dict[str, Any], list[str], int]:
+    """Run the job; return (result, warnings, exit_code). Raises MotionError without a trusted result."""
+    spec_path = job_dir / "spec.json"
+    spec_path.write_text(json.dumps(spec, indent=2), encoding="utf-8")
+    job_path = job_dir / "job.py"
+    job_path.write_text(JOB.replace("__SPEC_PATH__", json.dumps(str(spec_path))), encoding="utf-8")
+    result_path = Path(spec["result"])
+    started = time.time()
+    try:
+        proc = subprocess.run([str(freecad), str(job_path)], cwd=job_dir, capture_output=True, text=True,
+                              timeout=timeout, check=False)
+    except subprocess.TimeoutExpired as error:
+        raise pose.MotionError(f"freecadcmd did not finish within {timeout} s") from error
+    tail = "\n".join((proc.stdout + proc.stderr).splitlines()[-20:])
+    if spec["marker"] not in proc.stdout.splitlines():
+        raise pose.MotionError(f"freecadcmd exited {proc.returncode} without the completion marker:\n{tail}")
+    if not result_path.is_file() or result_path.stat().st_mtime < started:
+        raise pose.MotionError(f"freecadcmd printed the marker but {result_path} is missing or stale")
+    try:
+        result = json.loads(result_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        raise pose.MotionError(f"cannot parse {result_path}: {error}") from error
+    if result.get("run_id") != spec["run_id"]:
+        raise pose.MotionError(f"{result_path} belongs to another run")
+    if "error" in result:
+        raise pose.MotionError(f"the FreeCAD job failed:\n{result['error']}")
+    warnings = []
+    if proc.returncode != 0:
+        warnings.append(f"freecadcmd exited {proc.returncode} after writing a complete result (known teardown crash)")
+    return result, warnings, proc.returncode
+
+
+def check_frames(chain: Any, frames: list[dict[str, list[list[float]]]]) -> dict[str, Any]:
+    """Measure every joint in every frame; report limits, residuals, and violations."""
+    joints: dict[str, dict[str, Any]] = {}
+    violations: list[dict[str, Any]] = []
+    residuals: list[dict[str, Any]] = []
+    for joint in chain.joints:
+        joints[joint.id] = {"type": joint.type, "unit": joint.unit, "min": joint.min, "max": joint.max,
+                            "observed_min": None, "observed_max": None, "violations": 0,
+                            "max_residual_deg": 0.0, "max_residual_mm": 0.0}
+    for index, frame in enumerate(frames):
+        placements = {pn: pose.Rigid.from_quaternion(q, base) for pn, (base, q) in frame.items()}
+        for joint in chain.joints:
+            value, residual_deg, residual_mm = joint.measure(placements[joint.parent].inverse() @ placements[joint.child])
+            entry = joints[joint.id]
+            entry["max_residual_deg"] = max(entry["max_residual_deg"], residual_deg)
+            entry["max_residual_mm"] = max(entry["max_residual_mm"], residual_mm)
+            if residual_deg > RESIDUAL_TOL_DEG or residual_mm > RESIDUAL_TOL_MM:
+                residuals.append({"frame": index, "joint": joint.id, "residual_deg": residual_deg, "residual_mm": residual_mm})
+            if not joint.movable:
+                continue
+            entry["observed_min"] = value if entry["observed_min"] is None else min(entry["observed_min"], value)
+            entry["observed_max"] = value if entry["observed_max"] is None else max(entry["observed_max"], value)
+            tol = LIMIT_TOL[joint.unit]
+            if value < joint.min - tol or value > joint.max + tol:
+                entry["violations"] += 1
+                violations.append({"frame": index, "joint": joint.id, "value": value,
+                                   "min": joint.min, "max": joint.max, "unit": joint.unit})
+    for entry in joints.values():
+        for key in ("observed_min", "observed_max", "max_residual_deg", "max_residual_mm"):
+            if entry[key] is not None:
+                entry[key] = round(entry[key], 6)
+    return {"joints": joints, "violations": violations, "residuals": residuals}
+
+
+def frame_placements(frames: list[dict[str, Any]], parts: list[str]) -> dict[str, dict[str, Any]]:
+    picks = {"start": 0, "mid": len(frames) // 2, "end": len(frames) - 1}
+    report: dict[str, dict[str, Any]] = {}
+    for pn in parts:
+        report[pn] = {}
+        for label, index in picks.items():
+            base, q = frames[index][pn]
+            report[pn][label] = {"frame": index, "base": [round(v, 4) for v in base], "quaternion": [round(v, 6) for v in q]}
+    return report
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="FreeCAD Assembly simulation with limit checks")
+    pose.add_geometry_arguments(parser)
+    parser.add_argument("--report-part", action="append", default=[], metavar="PN",
+                        help="part whose start/mid/end placements are reported (default: every joint child)")
+    parser.add_argument("--time-step", type=float, default=0.01, help="simulation output step over time 0..1")
+    parser.add_argument("--freecad", type=Path, help="freecadcmd binary")
+    parser.add_argument("--job-dir", type=Path, help="keep the generated job here (default: a temporary directory)")
+    parser.add_argument("--timeout", type=float, default=600.0, help="seconds before freecadcmd is stopped")
+    args = parser.parse_args(argv)
+    started = time.monotonic()
+    freecad = find_freecad(args.freecad)
+    if freecad is None:
+        print("freecad_assembly: freecadcmd not found; pass --freecad or set FREECADCMD", file=sys.stderr)
+        return 2
+    if not 0.0 < args.time_step <= 0.5:
+        print("freecad_assembly: --time-step must be in (0, 0.5]", file=sys.stderr)
+        return 2
+    temporary = None
+    try:
+        _, chain, parts = pose.load_inputs(args)
+        report_parts = args.report_part or [j.child for j in chain.movable]
+        unknown = [pn for pn in report_parts if pn not in chain.parts]
+        if unknown:
+            raise pose.MotionError(f"--report-part names parts outside the chain: {unknown}")
+        if args.job_dir:
+            job_dir = args.job_dir.resolve()
+            job_dir.mkdir(parents=True, exist_ok=True)
+        else:
+            temporary = tempfile.TemporaryDirectory(prefix="cad-motion-")
+            job_dir = Path(temporary.name)
+        paths = {}
+        for pn in chain.parts:
+            paths[pn] = job_dir / f"{pn}.step"
+            pose.write_step(paths[pn], None, [(parts[pn], pose.Rigid.identity())])
+        run_id = uuid.uuid4().hex
+        spec = job_spec(chain, paths, {pn: parts[pn].name for pn in chain.parts}, run_id,
+                        job_dir / f"result-{run_id}.json", args.time_step)
+        job_started = time.monotonic()
+        result, warnings, exit_code = run_job(freecad, job_dir, spec, args.timeout)
+        job_seconds = time.monotonic() - job_started
+        frames = result["frames"]
+        if len(frames) < 1:
+            raise pose.MotionError("FreeCAD generated no frames")
+        checks = check_frames(chain, frames)
+    except (pose.MotionError, OSError) as error:
+        print(f"freecad_assembly: {error}", file=sys.stderr)
+        return 2
+    finally:
+        if temporary is not None:
+            temporary.cleanup()
+    moved = any(frames[0][pn] != frames[-1][pn] for pn in chain.parts)
+    failed = bool(checks["violations"] or checks["residuals"])
+    print(json.dumps({
+        "status": "fail" if failed else "pass",
+        "freecad": {"binary": str(freecad), "version": ".".join(result["version"][:3]), "exit_code": exit_code,
+                    "warnings": warnings},
+        "frames": len(frames),
+        "placements_change": moved,
+        "motions": spec["motions"],
+        "placements": frame_placements(frames, report_parts),
+        "limit_check": checks["joints"],
+        "violations": checks["violations"][:MAX_LISTED],
+        "residuals": checks["residuals"][:MAX_LISTED],
+        "job_dir": str(job_dir) if args.job_dir else None,
+        "timings_s": {"freecad": round(job_seconds, 2), "total": round(time.monotonic() - started, 2)},
+    }, indent=2))
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except Exception:  # an OCCT or FreeCAD failure is infrastructure, never a check result
+        traceback.print_exc()
+        sys.exit(2)

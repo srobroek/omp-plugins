@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://srobroek.com/cad/schemas/decision.schema.json",
+  "title": "Design decision record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "title", "status", "context", "decision", "consequences", "date"],
+  "properties": {
+    "id": {"type": "string", "pattern": "^DR-[0-9]{3}$"},
+    "title": {"type": "string", "minLength": 1},
+    "status": {"type": "string", "enum": ["proposed", "accepted", "superseded", "rejected"]},
+    "context": {"type": "string", "minLength": 1},
+    "decision": {"type": "string", "minLength": 1},
+    "consequences": {"type": "string", "minLength": 1},
+    "date": {"type": "string", "format": "date"},
+    "alternatives": {"type": "array", "items": {"type": "string"}}
+  }
+}

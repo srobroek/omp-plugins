@@ -1,0 +1,179 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/srobroek/omp-plugins/cad/skills/cad-concept/assets/schemas/concept-scene.schema.json",
+  "title": "CAD L0 concept scene",
+  "description": "Rough visual concept: 1-4 live variants built from primitives, rendered side by side by the cad-concept viewer. Z is up, lengths are mm, rotations are XYZ Euler degrees. Cross-field rules (unique ids, joint wiring, limit order) are checked by scripts/concept.py check.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "version", "id", "title", "units", "variants"],
+  "properties": {
+    "format": { "const": "cad.concept-scene" },
+    "version": { "const": 1 },
+    "id": { "$ref": "#/$defs/id" },
+    "title": { "type": "string", "minLength": 1 },
+    "units": { "const": "mm" },
+    "notes": { "type": "string" },
+    "chosen": {
+      "$ref": "#/$defs/id",
+      "description": "Variant id the user approved at the VARIANT gate. Absent until then."
+    },
+    "variants": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 4,
+      "items": { "$ref": "#/$defs/variant" }
+    },
+    "retired": {
+      "type": "array",
+      "description": "Variants removed by a drop or merge, kept for the design record. Not rendered.",
+      "items": { "$ref": "#/$defs/retired" }
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$",
+      "maxLength": 48
+    },
+    "vec3": {
+      "type": "array",
+      "items": { "type": "number" },
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "positive": { "type": "number", "exclusiveMinimum": 0 },
+    "variant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "label", "root"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "label": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "summary": { "type": "string" },
+        "params": {
+          "type": "object",
+          "description": "Named design parameters that distinguish this variant, e.g. reach_mm. Carried into the handoff.",
+          "propertyNames": { "pattern": "^[a-z][a-z0-9_]*$" },
+          "additionalProperties": { "type": ["number", "string", "boolean"] }
+        },
+        "root": { "$ref": "#/$defs/group" },
+        "joints": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/joint" }
+        }
+      }
+    },
+    "retired": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "label", "disposition", "reason"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "label": { "type": "string", "minLength": 1 },
+        "disposition": { "enum": ["dropped", "merged"] },
+        "into": { "$ref": "#/$defs/id" },
+        "reason": { "type": "string", "minLength": 1 }
+      },
+      "if": { "properties": { "disposition": { "const": "merged" } } },
+      "then": { "required": ["into"] }
+    },
+    "transform": {
+      "properties": {
+        "position": { "$ref": "#/$defs/vec3", "description": "Origin in the parent frame, mm. Default [0,0,0]." },
+        "rotation": { "$ref": "#/$defs/vec3", "description": "XYZ Euler angles in degrees. Default [0,0,0]." }
+      }
+    },
+    "node": {
+      "oneOf": [{ "$ref": "#/$defs/group" }, { "$ref": "#/$defs/part" }]
+    },
+    "group": {
+      "type": "object",
+      "$ref": "#/$defs/transform",
+      "unevaluatedProperties": false,
+      "required": ["kind", "id", "label", "children"],
+      "properties": {
+        "kind": { "const": "group" },
+        "id": { "$ref": "#/$defs/id" },
+        "label": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "children": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/node" }
+        }
+      }
+    },
+    "part": {
+      "type": "object",
+      "$ref": "#/$defs/transform",
+      "unevaluatedProperties": false,
+      "required": ["kind", "id", "label", "shape"],
+      "properties": {
+        "kind": { "const": "part" },
+        "id": { "$ref": "#/$defs/id" },
+        "label": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "shape": { "$ref": "#/$defs/shape" },
+        "color": {
+          "type": "string",
+          "pattern": "^#[0-9a-fA-F]{6}$",
+          "description": "Model colour hint. Default: the viewer palette."
+        }
+      }
+    },
+    "shape": {
+      "description": "Primitive centred on the part origin. Cylinder and capsule axes run along local Z; height is the overall tip-to-tip length.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "size"],
+          "properties": {
+            "type": { "const": "box" },
+            "size": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/positive" },
+              "minItems": 3,
+              "maxItems": 3
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "radius", "height"],
+          "properties": {
+            "type": { "enum": ["cylinder", "capsule"] },
+            "radius": { "$ref": "#/$defs/positive" },
+            "height": { "$ref": "#/$defs/positive" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "radius"],
+          "properties": {
+            "type": { "const": "sphere" },
+            "radius": { "$ref": "#/$defs/positive" }
+          }
+        }
+      ]
+    },
+    "joint": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Single-DOF joint. The child node must be a direct child of the parent node. Axis and origin are in the parent frame; the authored child transform is the pose at value 0. Revolute values are degrees, prismatic values mm.",
+      "required": ["id", "type", "parent", "child", "axis", "origin", "min", "max", "nominal"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "label": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "type": { "enum": ["revolute", "prismatic"] },
+        "parent": { "$ref": "#/$defs/id" },
+        "child": { "$ref": "#/$defs/id" },
+        "axis": { "$ref": "#/$defs/vec3" },
+        "origin": { "$ref": "#/$defs/vec3" },
+        "min": { "type": "number" },
+        "max": { "type": "number" },
+        "nominal": { "type": "number" }
+      }
+    }
+  }
+}

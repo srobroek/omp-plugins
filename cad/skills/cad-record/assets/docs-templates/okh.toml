@@ -1,0 +1,37 @@
+schema = "OKH-LOSH-v1.0"
+
+[okhv]
+name = "Lamp arm"
+repo = ""
+version = "X1"
+license = ""
+licensor = ""
+author = ""
+design_owner = ""
+release_date = ""
+documentation_language = "en"
+hardware_license = ""
+software = "FreeCAD 1.1.4; CadQuery 2.8 or build123d 0.13"
+tool = ""
+
+[technology_readiness_level]
+value = ""
+
+[documentation]
+readme = "README.md"
+
+[bom]
+complete = true
+
+[manufacturing_files]
+files = ["hw/parts/"]
+
+[operating_instructions]
+readme = "docs/index.md"
+
+[quality_management]
+quality_system = ""
+
+[validation]
+validation_method = ""
+validation_description = ""
