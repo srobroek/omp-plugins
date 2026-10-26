@@ -1,0 +1,9 @@
+PN: LAL-0001
+rev: X1
+title: Lamp arm lower link
+material: PETG
+process: fdm
+finish: as printed
+mass_target: 16 g
+make_buy: make
+supplier: null

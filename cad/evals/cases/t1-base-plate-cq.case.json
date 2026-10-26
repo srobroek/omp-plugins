@@ -1,0 +1,17 @@
+{
+  "id": "t1-base-plate-cq",
+  "tier": "T1",
+  "tags": ["T1-cadquery", "T1", "cadquery", "cnc", "hole-pattern"],
+  "kernel": "cadquery",
+  "prompt": "This repository is a hardware project whose design record lives in hw/. Use the cad plugin's single-part flow to add one part to it.\n\nPart: PN LBP-0001, rev X1, title \"Lamp base plate\", process cnc, material aluminium 6061-T6, make_buy make.\nKernel: CadQuery 2.8.\nGeometry: a square plate 80 mm × 80 mm × 5 mm with sharp corners. Four Ø4.5 mm through clearance holes for M4 screws on a 64 mm square pattern centred on the plate, and one Ø8.5 mm through cable hole at the plate centre. No other features.\n\nDeliver hw/parts/LBP-0001/part.yaml and hw/parts/LBP-0001/model.py, run the model, and export the solid as STEP AP242 to hw/parts/LBP-0001/LBP-0001.step.",
+  "gate_answers": [
+    {
+      "when": "(?i)\\b(approve|approval|confirm|proceed|go ahead|shall i|should i|ready to|commit batch)\\b",
+      "reply": "Approved. Commit batch and continue through to the exported STEP without further questions.",
+      "max_uses": 3
+    }
+  ],
+  "seed": "desk-lamp",
+  "deliverables": {"pn": "LBP-0001", "step": "hw/parts/LBP-0001/LBP-0001.step"},
+  "truth": "truth/t1-base-plate-cq"
+}
