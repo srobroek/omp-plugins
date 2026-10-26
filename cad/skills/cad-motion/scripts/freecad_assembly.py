@@ -6,7 +6,7 @@
 and check every frame against the joint limits.
 
 Usage:
-    uv run --script freecad_assembly.py --hw HW (--step ASSEMBLY.step | --parts-dir DIR)
+    uv run --script freecad_assembly.py --hw HW (--step ASSEMBLY.step | --parts-dir DIR | --version vN|latest)
         [--attach PN=PARENT_PN ...] [--report-part PN ...] [--time-step 0.01]
         [--freecad FREECADCMD] [--job-dir DIR] [--timeout 600]
 
@@ -40,7 +40,6 @@ import importlib.util
 import json
 import math
 import os
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -49,6 +48,9 @@ import traceback
 import uuid
 from pathlib import Path
 from typing import Any
+sys.path.insert(0, str(Path(__file__).parents[2] / "cad-analysis" / "scripts"))
+
+from freecad_lookup import find_freecad
 
 POSE_PATH = Path(__file__).with_name("pose.py")
 _spec = importlib.util.spec_from_file_location("cad_motion_pose", POSE_PATH)
@@ -57,7 +59,7 @@ pose = importlib.util.module_from_spec(_spec)
 sys.modules["cad_motion_pose"] = pose
 _spec.loader.exec_module(pose)
 
-DEFAULT_FREECAD = Path("/Applications/FreeCAD.app/Contents/Resources/bin/freecadcmd")
+
 LIMIT_TOL = {"deg": 1e-3, "mm": 1e-3}
 RESIDUAL_TOL_DEG, RESIDUAL_TOL_MM = 1e-3, 1e-3
 MAX_LISTED = 50
@@ -157,13 +159,6 @@ except Exception:
 '''
 
 
-def find_freecad(explicit: Path | None) -> Path | None:
-    """freecadcmd from --freecad, $FREECADCMD, PATH, or the macOS app bundle."""
-    candidates = [explicit, os.environ.get("FREECADCMD"), shutil.which("freecadcmd"), DEFAULT_FREECAD]
-    for candidate in candidates:
-        if candidate and Path(candidate).is_file() and os.access(candidate, os.X_OK):
-            return Path(candidate)
-    return None
 
 
 def motion_formula(joint: Any) -> str:
@@ -245,6 +240,7 @@ def check_frames(chain: Any, frames: list[dict[str, list[list[float]]]]) -> dict
     joints: dict[str, dict[str, Any]] = {}
     violations: list[dict[str, Any]] = []
     residuals: list[dict[str, Any]] = []
+    range_findings: list[dict[str, Any]] = []
     for joint in chain.joints:
         joints[joint.id] = {"type": joint.type, "unit": joint.unit, "min": joint.min, "max": joint.max,
                             "observed_min": None, "observed_max": None, "violations": 0,
@@ -267,11 +263,20 @@ def check_frames(chain: Any, frames: list[dict[str, list[list[float]]]]) -> dict
                 entry["violations"] += 1
                 violations.append({"frame": index, "joint": joint.id, "value": value,
                                    "min": joint.min, "max": joint.max, "unit": joint.unit})
+    for joint in chain.movable:
+        entry = joints[joint.id]
+        tol = LIMIT_TOL[joint.unit]
+        if (entry["observed_min"] is None or entry["observed_max"] is None
+                or entry["observed_min"] > joint.min + tol
+                or entry["observed_max"] < joint.max - tol):
+            range_findings.append({"joint": joint.id, "observed_min": entry["observed_min"],
+                                   "observed_max": entry["observed_max"], "min": joint.min,
+                                   "max": joint.max, "unit": joint.unit, "reason": "observed_range_incomplete"})
     for entry in joints.values():
         for key in ("observed_min", "observed_max", "max_residual_deg", "max_residual_mm"):
             if entry[key] is not None:
                 entry[key] = round(entry[key], 6)
-    return {"joints": joints, "violations": violations, "residuals": residuals}
+    return {"joints": joints, "violations": violations, "residuals": residuals, "range_findings": range_findings}
 
 
 def frame_placements(frames: list[dict[str, Any]], parts: list[str]) -> dict[str, dict[str, Any]]:
@@ -337,7 +342,7 @@ def main(argv: list[str] | None = None) -> int:
         if temporary is not None:
             temporary.cleanup()
     moved = any(frames[0][pn] != frames[-1][pn] for pn in chain.parts)
-    failed = bool(checks["violations"] or checks["residuals"])
+    failed = bool(checks["violations"] or checks["residuals"] or checks["range_findings"])
     print(json.dumps({
         "status": "fail" if failed else "pass",
         "freecad": {"binary": str(freecad), "version": ".".join(result["version"][:3]), "exit_code": exit_code,
@@ -348,6 +353,7 @@ def main(argv: list[str] | None = None) -> int:
         "placements": frame_placements(frames, report_parts),
         "limit_check": checks["joints"],
         "violations": checks["violations"][:MAX_LISTED],
+        "range_findings": checks["range_findings"][:MAX_LISTED],
         "residuals": checks["residuals"][:MAX_LISTED],
         "job_dir": str(job_dir) if args.job_dir else None,
         "timings_s": {"freecad": round(job_seconds, 2), "total": round(time.monotonic() - started, 2)},

@@ -9,7 +9,12 @@ from collections.abc import Sequence
 _PART_NAME = re.compile(r"^([A-Z]{2,5}-\d{4})(?![0-9])")
 
 
-def select_solid_index(names_by_solid: Sequence[Sequence[str]], part: str | None) -> int:
+def select_solid_index(names_by_solid: Sequence[Sequence[str]], part: str | None, solid_index: int | None = None) -> int:
+    """Select one STEP solid by 1-based index or PN-first product/label names."""
+    if solid_index is not None:
+        if solid_index < 1 or solid_index > len(names_by_solid):
+            raise ValueError(f"solid_index {solid_index} is out of range for {len(names_by_solid)} STEP solids")
+        return solid_index - 1
     """Select one STEP solid by cad-model's PN-first product or label names."""
     available = sorted({
         match.group(1)

@@ -28,14 +28,24 @@ TRIGGER
 - `step`: STEP file path, relative to the case YAML or absolute.
 - `part`: optional PN-first product/label identifier; required when the STEP contains multiple solids.
 - `pose`: optional mapping of joint IDs to values, copied from cad-motion's `worst_case.pose`.
-- `material`: `E` (MPa), `nu`, `density` (kg/m³), and `yield` (MPa); `name` is optional.
-- `fixed_faces`: `indices: [1, ...]` (1-based) or `plane: {axis: x|y|z, value: mm, tolerance: mm}`.
   `part` may be omitted for a STEP containing exactly one solid. A requested PN must match exactly one
   solid by a PN-first product or label name; unknown or ambiguous PNs list the available PNs.
 - `loads`: list of `{selector: <face selector>, force: [Fx, Fy, Fz]}` in N; selector uses the same
   `indices` or `plane` form.
 
 - `mesh_size`: positive maximum element size in mm.
+
+- `required_safety_factor`: optional positive yield-safety-factor threshold; a completed solve below
+  it is a check failure.
+- `solid_index`: optional 1-based index into all STEP solids, for selecting one solid when labels or
+  product names are ambiguous. Mutually exclusive with `part`.
+
+## Exit codes
+
+- `0`: analysis completed and any requested safety-factor threshold passed.
+- `1`: analysis completed, but the required safety factor was not met.
+- `2`: no result; invalid input, unavailable or failed FreeCAD job, timeout, malformed result, or
+  other infrastructure failure.
 
 ## Rules
 

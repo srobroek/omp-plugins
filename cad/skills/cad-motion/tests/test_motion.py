@@ -121,6 +121,15 @@ class FrameCheckTests(unittest.TestCase):
         checks = freecad_assembly.check_frames(chain, [frame])
         self.assertEqual([r["joint"] for r in checks["residuals"]], ["J-002"])
 
+    def test_a_movable_joint_that_never_reaches_its_range_fails(self) -> None:
+        chain = pose.build_chain([joint("J-001", "revolute", "TST-0001", "TST-0002", (0, 0, 1), (100, 0, 0), 0, 90)])
+        checks = freecad_assembly.check_frames(chain, [self.frame(chain, {"J-001": 0.0})])
+        self.assertEqual(checks["violations"], [])
+        self.assertEqual(len(checks["range_findings"]), 1)
+        self.assertEqual(checks["range_findings"][0]["reason"], "observed_range_incomplete")
+        self.assertEqual(checks["range_findings"][0]["observed_min"], 0.0)
+        self.assertEqual(checks["range_findings"][0]["observed_max"], 0.0)
+
 
 PLANAR_YAML = """subassemblies:
   - {{id: planar, title: Planar test arm, parts: [TST-0001, TST-0002, TST-0003]}}
