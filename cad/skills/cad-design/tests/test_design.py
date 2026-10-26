@@ -21,6 +21,7 @@ SKILL = HERE.parent
 SCRIPTS = SKILL / "scripts"
 TEMPLATE_HW = SKILL.parent / "cad-record" / "assets" / "project-template" / "hw"
 FIXTURES = SKILL.parent / "cad-motion" / "tests" / "fixtures" / "build_fixtures.py"
+DEFECTS = HERE / "fixtures" / "defects"
 KERNELS = ("cadquery", "build123d")
 TEMPLATE_PARTS = sorted(p.name for p in (TEMPLATE_HW / "parts").iterdir() if (p / "part.yaml").is_file())
 MADE_PARTS = ["LMP-0001", "LMP-0002", "LMP-0003", "LMP-0004"]
@@ -77,6 +78,8 @@ class ReferenceModelTests(unittest.TestCase):
             for pn, row in self.checks[kernel][1]["parts"].items():
                 with self.subTest(kernel=kernel, part=pn):
                     self.assertTrue(row["valid"])
+                    self.assertTrue(row["kernel_valid"])
+                    self.assertLessEqual(row["readback_rel_error"], 1e-6)
                     self.assertEqual(row["solids"], 1)
 
     def test_params_key_sets_are_equal_across_kernels(self) -> None:
@@ -132,6 +135,24 @@ class BlockDetectorTests(unittest.TestCase):
 
     def test_f1_does_not_judge_form(self) -> None:
         self.assertEqual((self.f1[0], self.f1[1]["findings"]), (0, []))
+
+
+@unittest.skipUnless(shutil.which("uv"), "uv is required to build the kernel environments")
+class KernelDefectTests(unittest.TestCase):
+    """Defects only the in-memory shape shows: the STEP read-back alone passes both parts."""
+
+    def test_kernel_invalid_face_and_loose_fillets_are_findings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            code, report = run_json([sys.executable, str(SCRIPTS / "build_reference.py"), "--kernel", "cadquery",
+                                     "--models", str(DEFECTS / "cadquery"), "--out", str(out)])
+            self.assertEqual((code, report["errors"]), (0, []))
+            code, report = form_check(out, "F0")
+        self.assertEqual(code, 1)
+        self.assertTrue(all(row["valid"] for row in report["parts"].values()), report["parts"])
+        found = sorted((f["check"], f["part"], f.get("source")) for f in report["findings"])
+        self.assertEqual(found, [("brep_invalid", "TST-0101", "kernel"), ("step_readback", "TST-0101", None),
+                                 ("step_readback", "TST-0102", None)])
 
 
 if __name__ == "__main__":

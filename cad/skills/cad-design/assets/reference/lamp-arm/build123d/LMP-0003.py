@@ -3,13 +3,17 @@
 CNC 6061-T6 link between the elbow (J-002) and the head tilt (J-003), both axis Y.
 The elbow end is a 10 mm tongue that turns inside the lower link's clevis; the plan
 outline flares through 8 mm vertical blends to the 17 mm body and the head clevis.
-The side outline sags between the two round ends. Silhouette edges carry 1.5 mm
+The side outline sags between the two round ends on runs that leave each round on a
+tangent and meet mid-span in a 40 mm blend: a fillet rolled across a kink of a few
+degrees leaves edges 0.06 mm out of tolerance. Silhouette edges carry 1.5 mm
 fillets; then the head clevis slot, H8 pin bores with 0.5 mm entry chamfers, a top
 lightening pocket and a ball-end cable channel underneath.
 
 Zero pose, assembly coordinates: elbow bore on (160, 0, 40), tip bore on (360, 0, 40),
 both along Y.
 """
+
+import math
 
 import build123d as bd
 
@@ -24,6 +28,7 @@ PARAMS = {
     "body_from_x": 200.0,
     "body_half_w": 8.5,
     "flare_fillet": 8.0,
+    "sag_blend": 40.0,  # radius of the blend where the sagging runs meet mid-span
     "edge_fillet": 1.5,
     "pin_bore_d": 5.009,  # 5 H8 mid-limit from cad-fits (5.000..5.018); pin 5 f7
     "bore_chamfer": 0.5,
@@ -46,6 +51,32 @@ def _face(start, segments):
             edges.append(bd.ThreePointArc(current, segment[1], segment[2]))
             current = segment[2]
     return bd.Face(bd.Wire(edges))
+
+
+def _tangent(center, radius, point, side):
+    """Where a line from `point` touches the circle; side -1 or +1 picks the lower or upper touch point."""
+    dx, dy = point[0] - center[0], point[1] - center[1]
+    phi, alpha = math.atan2(dy, dx), math.acos(radius / math.hypot(dx, dy))
+    touches = [(center[0] + radius * math.cos(phi + s * alpha), center[1] + radius * math.sin(phi + s * alpha)) for s in (-1, 1)]
+    return max(touches, key=lambda q: side * q[1])
+
+
+def _unit(p, q):
+    n = math.hypot(q[0] - p[0], q[1] - p[1])
+    return ((q[0] - p[0]) / n, (q[1] - p[1]) / n)
+
+
+def _rounded(points, radius):
+    """Segments along the polyline `points`, from points[0], with a `radius` arc at every inner corner."""
+    segments = []
+    for a, k, b in zip(points, points[1:], points[2:]):
+        u1, u2 = _unit(k, a), _unit(k, b)
+        half = math.acos(max(-1.0, min(1.0, u1[0] * u2[0] + u1[1] * u2[1]))) / 2.0
+        t, rise = radius / math.tan(half), radius / math.sin(half) - radius
+        bisector = _unit((0.0, 0.0), (u1[0] + u2[0], u1[1] + u2[1]))
+        segments += [("line", (k[0] + t * u1[0], k[1] + t * u1[1])),
+                     ("arc", (k[0] + rise * bisector[0], k[1] + rise * bisector[1]), (k[0] + t * u2[0], k[1] + t * u2[1]))]
+    return segments + [("line", points[-1])]
 
 
 def _is_line_along(edge, axis):
@@ -106,13 +137,15 @@ def build(params: dict) -> bd.Part:
     flare = [e for e in plan.edges()
              if _is_line_along(e, (0, 0, 1)) and p["tongue_to_x"] - 1 < e.center().X < p["body_from_x"] + 1]
     plan = bd.fillet(flare, p["flare_fillet"])
-    side = bd.extrude(bd.Plane.XZ * _face((ex, ez - r), [
-        ("line", (mid, ez - sag)),
-        ("line", (tx, tz - r)),
-        ("arc", (tx + r, tz), (tx, tz + r)),
-        ("line", (mid, ez + sag)),
-        ("line", (ex, ez + r)),
-        ("arc", (ex - r, ez), (ex, ez - r)),
+    low, high = (mid, ez - sag), (mid, ez + sag)
+    elbow_low, tip_low = _tangent((ex, ez), r, low, -1), _tangent((tx, tz), r, low, -1)
+    tip_high, elbow_high = _tangent((tx, tz), r, high, 1), _tangent((ex, ez), r, high, 1)
+    blend = p["sag_blend"]
+    side = bd.extrude(bd.Plane.XZ * _face(elbow_low, [
+        *_rounded([elbow_low, low, tip_low], blend),
+        ("arc", (tx + r, tz), tip_high),
+        *_rounded([tip_high, high, elbow_high], blend),
+        ("arc", (ex - r, ez), elbow_low),
     ]), amount=3 * bw, both=True)
     body = plan & side
 

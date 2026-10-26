@@ -14,9 +14,13 @@ Usage:
 The script re-runs itself inside the kernel's uv environment (KERNEL_ENVS);
 the first OCP import in a fresh environment can take minutes. Geometry is
 written through cad-motion's kernel-neutral AP242 writer, so both kernels'
-files have the same product structure and names.
+files have the same product structure and names. Each part also records what
+only the in-memory shape shows, measured with cad-model's `cadmodel.occ`:
+BRepCheck on the kernel shape (a STEP read-back can heal an invalid face) and
+its volume, which form_check compares with the STEP read-back.
 
-stdout: JSON {kernel, parts: {PN: {params_keys, seconds, step}}, errors}.
+stdout: JSON {kernel, parts: {PN: {params_keys, seconds, step, name, kernel_valid,
+kernel_errors, kernel_volume_mm3}}, errors}.
 Exit 0 = every part built, 1 = a part violated the model.py contract or
 failed to build, 2 = usage or infrastructure error.
 """
@@ -37,6 +41,7 @@ from typing import Any
 HERE = Path(__file__).resolve().parent
 SKILL = HERE.parent
 POSE_PATH = SKILL.parent / "cad-motion" / "scripts" / "pose.py"
+CAD_MODEL_SCRIPTS = SKILL.parent / "cad-model" / "scripts"
 DEFAULT_HW = SKILL.parent / "cad-record" / "assets" / "project-template" / "hw"
 REFERENCE = SKILL / "assets" / "reference" / "lamp-arm"
 ENV_MARKER = "CAD_DESIGN_KERNEL_ENV"
@@ -127,6 +132,9 @@ def check_contract(module: Any, kernel: str, path: Path) -> dict[str, Any]:
 
 def build_all(kernel: str, models: Path, hw: Path, out: Path, only: list[str]) -> tuple[dict[str, Any], list[str]]:
     pose = load_module("cad_motion_pose", POSE_PATH)
+    sys.path.insert(0, str(CAD_MODEL_SCRIPTS))
+    from cadmodel import occ
+
     titles = part_titles(hw)
     out.mkdir(parents=True, exist_ok=True)
     parts: dict[str, Any] = {}
@@ -148,11 +156,15 @@ def build_all(kernel: str, models: Path, hw: Path, out: Path, only: list[str]) -
             errors.append(f"{pn}: {type(error).__name__}: {error}")
             traceback.print_exc(file=sys.stderr)
             continue
+        kernel_errors = occ.check_statuses(shape)
         parts[pn] = {
             "params_keys": sorted(params),
             "seconds": round(time.monotonic() - started, 2),
             "step": str(step),
             "name": name,
+            "kernel_valid": not kernel_errors,
+            "kernel_errors": kernel_errors,
+            "kernel_volume_mm3": occ.volume(shape),
         }
     return parts, errors
 

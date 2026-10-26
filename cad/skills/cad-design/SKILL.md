@@ -33,7 +33,9 @@ TRIGGER
 5. Export one STEP per part, then run
    `uv run --script scripts/form_check.py --hw hw --parts-dir DIR --fidelity F2|F3`.
    -> JSON per part (validity, area shares, blends) and per joint (bore offset); exit 0 = no
-   findings, 1 = findings, 2 = usage error.
+   findings, 1 = findings, 2 = usage error. When DIR also holds build_reference.py's
+   `build.json`, form_check adds the in-memory checks: `brep_invalid` with `source: kernel`
+   and `step_readback` (read-back volume drift above 1e-6).
 6. Walk the render self-check questions in `references/fidelity.md` against the renders.
    A part that fails stays in the stage; report the level it reached.
 

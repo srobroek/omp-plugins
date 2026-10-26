@@ -3,13 +3,18 @@
 CNC 6061-T6 link that turns on the base pin (J-001, axis Z) and carries the elbow
 clevis (J-002, axis Y). Form: the intersection of a plan outline (hub round, waisted
 taper, square fork end) and a side outline (flat hub, sagging top and bottom, round
-elbow end), with 1.5 mm fillets on every silhouette edge. Then the elbow clevis slot
-with a tool-radius end, H8 pin bores with 0.5 mm entry chamfers, a top lightening
-pocket, and a ball-end cable channel underneath.
+elbow end), with 1.5 mm fillets on every silhouette edge. Both outlines are tangent
+continuous: straight runs leave the hub and elbow rounds on tangents and every shallow
+kink between runs carries a 40 mm blend, because a fillet rolled across a kink of a
+few degrees leaves edges 0.1 mm out of tolerance. Then the elbow clevis slot with a
+tool-radius end, H8 pin bores with 0.5 mm entry chamfers, a top lightening pocket,
+and a ball-end cable channel underneath.
 
 Zero pose, assembly coordinates: hub bore on (0, 0, 40) along Z; elbow bore on
 (160, 0, 40) along Y; the arm lies along +X.
 """
+
+import math
 
 import cadquery as cq
 
@@ -24,6 +29,7 @@ PARAMS = {
     "fork_x": 130.0,
     "fork_half_w": 11.0,
     "side_waist_x": 80.0,  # side kinks must not coincide with plan kinks: the fillet fails there
+    "outline_blend": 40.0,  # radius of the blends on the shallow outline kinks
     "waist_half_h": 7.5,
     "elbow_r": 11.0,
     "edge_fillet": 1.5,
@@ -42,6 +48,32 @@ def _outline(plane, start, segments):
     for segment in segments:
         wire = wire.lineTo(*segment[1]) if segment[0] == "line" else wire.threePointArc(segment[1], segment[2])
     return wire.close()
+
+
+def _tangent(center, radius, point, side):
+    """Where a line from `point` touches the circle; side -1 or +1 picks the lower or upper touch point."""
+    dx, dy = point[0] - center[0], point[1] - center[1]
+    phi, alpha = math.atan2(dy, dx), math.acos(radius / math.hypot(dx, dy))
+    touches = [(center[0] + radius * math.cos(phi + s * alpha), center[1] + radius * math.sin(phi + s * alpha)) for s in (-1, 1)]
+    return max(touches, key=lambda q: side * q[1])
+
+
+def _unit(p, q):
+    n = math.hypot(q[0] - p[0], q[1] - p[1])
+    return ((q[0] - p[0]) / n, (q[1] - p[1]) / n)
+
+
+def _rounded(points, radius):
+    """Segments along the polyline `points`, from points[0], with a `radius` arc at every inner corner."""
+    segments = []
+    for a, k, b in zip(points, points[1:], points[2:]):
+        u1, u2 = _unit(k, a), _unit(k, b)
+        half = math.acos(max(-1.0, min(1.0, u1[0] * u2[0] + u1[1] * u2[1]))) / 2.0
+        t, rise = radius / math.tan(half), radius / math.sin(half) - radius
+        bisector = _unit((0.0, 0.0), (u1[0] + u2[0], u1[1] + u2[1]))
+        segments += [("line", (k[0] + t * u1[0], k[1] + t * u1[1])),
+                     ("arc", (k[0] + rise * bisector[0], k[1] + rise * bisector[1]), (k[0] + t * u2[0], k[1] + t * u2[1]))]
+    return segments + [("line", points[-1])]
 
 
 def _is_line_along(edge, axis):
@@ -89,24 +121,20 @@ def build(params: dict) -> cq.Shape:
     hub_r, half_h, er = p["hub_r"], p["hub_h"] / 2.0, p["elbow_r"]
     end_x = ex + er + 4.0
 
-    plan = _outline("XY", (hx, hy + hub_r), [
-        ("arc", (hx - hub_r, hy), (hx, hy - hub_r)),
-        ("line", (p["waist_x"], -p["waist_half_w"])),
-        ("line", (p["fork_x"], -p["fork_half_w"])),
-        ("line", (end_x, -p["fork_half_w"])),
-        ("line", (end_x, p["fork_half_w"])),
-        ("line", (p["fork_x"], p["fork_half_w"])),
-        ("line", (p["waist_x"], p["waist_half_w"])),
-    ]).extrude(hz + 2 * half_h, both=True)
-    side = _outline("XZ", (hx - hub_r - 5.0, hz - half_h), [
-        ("line", (hx + hub_r, hz - half_h)),  # flat hub seat out to the hub radius
-        ("line", (p["side_waist_x"], ez - p["waist_half_h"])),
-        ("line", (ex, ez - er)),
-        ("arc", (ex + er, ez), (ex, ez + er)),
-        ("line", (p["side_waist_x"], ez + p["waist_half_h"])),
-        ("line", (hx + hub_r, hz + half_h)),
-        ("line", (hx - hub_r - 5.0, hz + half_h)),
-    ]).extrude(3 * hub_r, both=True)
+    blend = p["outline_blend"]
+    fork, waist = (p["fork_x"], p["fork_half_w"]), (p["waist_x"], p["waist_half_w"])
+    hub_touch = _tangent((hx, hy), hub_r, (waist[0], -waist[1]), -1)
+    lower = [hub_touch, (waist[0], -waist[1]), (fork[0], -fork[1]), (end_x, -fork[1])]
+    upper = [(x, -y) for x, y in reversed(lower)]
+    plan = _outline("XY", upper[-1], [("arc", (hx - hub_r, hy), hub_touch), *_rounded(lower, blend),
+                                      ("line", upper[0]), *_rounded(upper, blend)]).extrude(hz + 2 * half_h, both=True)
+    sx, sh = p["side_waist_x"], p["waist_half_h"]
+    elbow_touch = _tangent((ex, ez), er, (sx, ez - sh), -1)
+    # flat hub seat out to the hub radius, then the sagging run to a tangent on the elbow round
+    lower = [(hx - hub_r - 5.0, hz - half_h), (hx + hub_r, hz - half_h), (sx, ez - sh), elbow_touch]
+    upper = [(x, 2 * ez - z) for x, z in reversed(lower)]
+    side = _outline("XZ", lower[0], [*_rounded(lower, blend), ("arc", (ex + er, ez), upper[0]),
+                                     *_rounded(upper, blend)]).extrude(3 * hub_r, both=True)
     body = plan.intersect(side).val()
 
     silhouette = [e for e in body.Edges() if not (_is_line_along(e, (0, 0, 1)) or _is_line_along(e, (0, 1, 0)))]

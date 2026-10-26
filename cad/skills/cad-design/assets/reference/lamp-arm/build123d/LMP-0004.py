@@ -5,7 +5,10 @@ inside the upper link's clevis; a loft carries its rounded section into a round 
 which joins a revolved cap and shade. The revolved profile holds the 4 mm cap roll-over,
 a cosmetic split-line groove, the 2.4 mm shade wall (six 0.4 mm perimeters) with a
 full-round rim, the E14 lampholder seat and its M10x1 nipple boss. F3 adds a fluted grip
-band on the cap and the cable path from the arm into the socket.
+band on the cap and the cable path from the arm into the socket: a 6 mm run along the
+neck that starts on the axis of a 7 mm entry from below. Unequal radii keep the
+T-junction regular: with equal radii the two bores' intersection curves cross at two
+singular points, and the CadQuery cut left an unorientable face there.
 
 Zero pose, assembly coordinates: pivot bore on (360, 0, 40) along Y; the shade axis is
 vertical through (430, 0) and opens downward.
@@ -44,6 +47,7 @@ PARAMS = {
     "grip_r": 0.8,
     "grip_z": [53.0, 60.0],
     "cable_d": 6.0,
+    "cable_entry_d": 7.0,  # 1 mm over the run, see the module docstring
     "cable_entry_x": 410.0,
 }
 BOTTOM = (bd.Align.CENTER, bd.Align.CENTER, bd.Align.MIN)
@@ -156,11 +160,11 @@ def build(params: dict) -> bd.Part:
             p["grip_r"], z1 - z0, align=BOTTOM
         )
 
-    cable_r = p["cable_d"] / 2.0
-    run = bd.Pos(p["cable_entry_x"] - cable_r, 0, pz) * bd.Rot(0, 90, 0) * bd.Cylinder(
-        cable_r, p["shade_axis_x"] - p["cable_entry_x"] + cable_r, align=BOTTOM
+    cable_r, entry_r = p["cable_d"] / 2.0, p["cable_entry_d"] / 2.0
+    run = bd.Pos(p["cable_entry_x"], 0, pz) * bd.Rot(0, 90, 0) * bd.Cylinder(
+        cable_r, p["shade_axis_x"] - p["cable_entry_x"], align=BOTTOM
     )
-    entry = bd.Pos(p["cable_entry_x"], 0, pz - 2 * p["neck_r"]) * bd.Cylinder(cable_r, 2 * p["neck_r"], align=BOTTOM)
+    entry = bd.Pos(p["cable_entry_x"], 0, pz - 2 * p["neck_r"]) * bd.Cylinder(entry_r, 2 * p["neck_r"], align=BOTTOM)
     bore = bd.Pos(px, 0, pz) * bd.Rot(90, 0, 0) * bd.Cylinder(p["pin_bore_d"] / 2.0, 4 * half_t)
     body = body - run - entry - bore
 
