@@ -36,7 +36,12 @@ Exit codes: 0 every view passed, or a cache hit; 1 a quality failure, with rende
 |---|---|---|
 | `BLANK` | subject under 0.5 % of the frame, or nothing but backdrop | GLB empty or a WebGL failure; rerun with `--force`, then report |
 | `CLIPPED` | a subject pixel touches the frame edge | report the view; framing is automatic |
-| `NO_SHADOW` | shadow area under 4 % of product area, or under 22 luminance levels deep | report the view; check the ground part sits at the GLB minimum |
+| `NO_SHADOW` | shadow area under 4 % of product area, or under 22 luminance levels deep; a `closeup-<PN>` view needs only the 4 % area at 10 levels, since it may frame just a part high above the floor | report the view; check the ground part sits at the GLB minimum |
+| `INVERTED_SHADOW` | the floor 3 to 10 px below a part standing on the floor is no darker (median) than the shadow core under a part high above it | report the view; the floor shadow must darken towards contact |
+
+The floor shows only a baked studio shadow: a dark contact shadow at the foot of every part on
+the floor, plus a wide, faint softbox shadow whose penumbra grows and darkness falls with a
+part's height. The key light shades the parts onto each other, never the floor.
 
 The cache key is the GLB, `part-map.json`, `assembly.yaml`, the resolved material per PN, and
 the renderer files. A rerun with the same key and intact PNGs prints `"cache": "hit"`.

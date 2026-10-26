@@ -38,31 +38,43 @@ PRODUCT = (60, 64, 70)
 
 
 def frame(w: int = 120, h: int = 90, *, subject=None, other=None, shadow=None, shadow_drop: int = 30,
+          overhung=None, overhung_drop: int = 30, rim=None,
           backdrop=BACKDROP, beauty_blank: bool = False) -> "render.Frame":
     """A synthetic frame: rectangles (x0, y0, x1, y1), exclusive ends, painted in this order:
-    shadow (backdrop darkened by shadow_drop), other part, subject."""
+    shadow (backdrop darkened by shadow_drop), overhung floor (darkened by overhung_drop), other
+    part, subject, then the grounded rim (a floor zone only, on whatever part is painted there)."""
     rgba = bytearray(bytes((*backdrop, 255)) * (w * h))
     mask = bytearray(w * h)
+    floor = bytearray(w * h)
 
-    def paint(rect, colour, cls):
+    def paint(rect, colour, cls=0, zone=0):
         x0, y0, x1, y1 = rect
         for y in range(y0, y1):
             for x in range(x0, x1):
-                if not beauty_blank:
+                if colour and not beauty_blank:
                     rgba[(y * w + x) * 4:(y * w + x) * 4 + 3] = bytes(colour)
                 if cls:
                     mask[y * w + x] = cls
+                if zone:
+                    floor[y * w + x] = zone
 
     if shadow:
-        paint(shadow, tuple(c - shadow_drop for c in backdrop), 0)
+        paint(shadow, tuple(c - shadow_drop for c in backdrop))
+    if overhung:
+        paint(overhung, tuple(c - overhung_drop for c in backdrop), zone=render.FLOOR_OVERHUNG)
     if other:
         paint(other, (150, 155, 160), 1)
     if subject:
         paint(subject, PRODUCT, 2)
-    return render.Frame(w, h, bytes(rgba), bytes(mask))
+    if rim:
+        paint(rim, None, zone=render.FLOOR_RIM)
+    return render.Frame(w, h, bytes(rgba), bytes(mask), bytes(floor))
 
 
 GOOD = dict(subject=(30, 20, 70, 60), shadow=(40, 60, 95, 75))
+# A grounded subject: its bottom rows stand on the floor, its contact shadow fills the rows below,
+# and floor to its right lies under an overhang.
+GROUNDED = dict(subject=(30, 20, 70, 60), rim=(30, 57, 70, 60), shadow=(30, 60, 70, 75), overhung=(80, 30, 110, 60))
 
 
 class QualityHeuristics(unittest.TestCase):
@@ -114,9 +126,30 @@ class QualityHeuristics(unittest.TestCase):
         self.assertEqual(quality.failures, ["NO_SHADOW"])
         self.assertEqual(quality.metrics["shadow_ratio"], 0.0)
 
+    def test_a_contact_darker_than_the_overhang_shadow_passes(self) -> None:
+        quality = render.assess(frame(**GROUNDED, shadow_drop=40, overhung_drop=12))
+        self.assertTrue(quality.passed, quality.failures)
+        self.assertEqual((quality.metrics["contact_depth"], quality.metrics["overhang_depth"]), (40.0, 12.0))
+
+    def test_an_overhang_shadow_darker_than_the_contact_is_inverted(self) -> None:
+        """Head 85e4829914: the shade 117 mm up cast the darkest shadow, the base barely grounded."""
+        quality = render.assess(frame(**GROUNDED, shadow_drop=12, overhung_drop=40))
+        self.assertEqual(quality.failures, ["INVERTED_SHADOW"])
+
+    def test_without_floor_zones_the_inversion_check_is_skipped(self) -> None:
+        quality = render.assess(frame(**GOOD))
+        self.assertEqual((quality.metrics["contact_depth"], quality.metrics["overhang_depth"]), (None, None))
+
+    def test_a_faint_shadow_passes_a_close_up_but_not_a_full_assembly_view(self) -> None:
+        """A close-up may frame only a part high above the floor, whose true shadow is faint."""
+        faint = frame(**GOOD, shadow_drop=14)
+        self.assertTrue(render.assess(faint, closeup=True).passed)
+        self.assertEqual(render.assess(faint).failures, ["NO_SHADOW"])
+        self.assertEqual(render.assess(frame(**GOOD, shadow_drop=3), closeup=True).failures, ["NO_SHADOW"])
+
     def test_frame_rejects_mismatched_buffers(self) -> None:
         with self.assertRaises(ValueError):
-            render.Frame(4, 4, bytes(10), bytes(16))
+            render.Frame(4, 4, bytes(64), bytes(16), bytes(10))
 
 
 class Materials(unittest.TestCase):

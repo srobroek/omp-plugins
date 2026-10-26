@@ -20,8 +20,9 @@ Playwright, and writes:
     HW/renders/<version>/<view>.png   one per view
     HW/renders/<version>/manifest.json
 
-Each frame is graded from its own pixels plus a subject mask: BLANK (nothing but backdrop),
-CLIPPED (the subject touches the frame edge), NO_SHADOW (no darkened ground beside the product).
+Each frame is graded from its own pixels plus a subject mask and floor zones: BLANK (nothing but
+backdrop), CLIPPED (the subject touches the frame edge), NO_SHADOW (no darkened ground beside the
+product), INVERTED_SHADOW (the floor at a grounded rim is no darker than under an overhang).
 A rerun whose source, materials, and renderer hashes match a passing manifest is a cache hit.
 
 stdout: one JSON summary. Exit 0 = every view passed (or cache hit), 1 = a render-quality
@@ -87,6 +88,9 @@ MIN_SHADOW_RATIO = 0.04  # shadow pixels / product pixels needed for a visible g
 MIN_SHADOW_DEPTH = 22  # backdrop luminance minus the 2nd-percentile shadow luminance
 PART_CLEARANCE_PX = 2  # ground pixels this close to a part are anti-aliased edges, not shadow
 SAMPLE_STRIDE = 2  # interior statistics read every 2nd pixel in x and y
+CONTACT_BAND_PX = (3, 10)  # floor rows below a grounded rim's lower edge read as its contact shadow
+FLOOR_RIM = 1  # floor-zone byte: part surface within the renderer's contact band of the floor
+FLOOR_OVERHUNG = 2  # floor-zone byte: floor under a part at least the renderer's overhang height up
 
 
 class InfraError(RuntimeError):
@@ -291,16 +295,20 @@ def explode_offsets(joints: list[dict[str, Any]], root: str, transforms: dict[st
 
 @dataclass(frozen=True)
 class Frame:
-    """An 8-bit RGBA frame (top-down rows) and its class mask: 0 empty, 1 other part, 2 subject."""
+    """An 8-bit RGBA frame (top-down rows), its class mask (0 empty, 1 other part, 2 subject),
+    and its floor zones (FLOOR_RIM on part surface standing on the floor, FLOOR_OVERHUNG on floor
+    under a part high above it, else 0), one byte per pixel each."""
 
     width: int
     height: int
     rgba: bytes
     mask: bytes
+    floor: bytes
 
     def __post_init__(self) -> None:
-        if len(self.rgba) != self.width * self.height * 4 or len(self.mask) != self.width * self.height:
-            raise ValueError("rgba must be width*height*4 bytes and mask width*height bytes")
+        pixels = self.width * self.height
+        if len(self.rgba) != pixels * 4 or len(self.mask) != pixels or len(self.floor) != pixels:
+            raise ValueError("rgba must be width*height*4 bytes, mask and floor width*height bytes")
 
 
 @dataclass
@@ -338,8 +346,30 @@ def _near_part_rows(frame: Frame, radius: int) -> list[int]:
     return near
 
 
-def assess(frame: Frame) -> Quality:
-    """Grade one render: BLANK, CLIPPED, or NO_SHADOW; see the module docstring."""
+def _contact_lumas(frame: Frame) -> list[float]:
+    """Luminance of the floor CONTACT_BAND_PX rows below each grounded-rim pixel whose column
+    runs on as open floor (no part pixel) through the band: the rim's contact shadow."""
+    w, h, rgba, mask = frame.width, frame.height, frame.rgba, frame.mask
+    lo, hi = CONTACT_BAND_PX
+    out = []
+    for y in range(h - hi):
+        row = frame.floor[y * w:(y + 1) * w]
+        if FLOOR_RIM not in row:
+            continue
+        for x in range(w):
+            if row[x] != FLOOR_RIM or any(mask[(y + d) * w + x] for d in range(1, hi + 1)):
+                continue
+            for d in range(lo, hi + 1):
+                i = ((y + d) * w + x) * 4
+                out.append(_luma(rgba[i], rgba[i + 1], rgba[i + 2]))
+    return out
+
+
+def assess(frame: Frame, *, closeup: bool = False) -> Quality:
+    """Grade one render: BLANK, CLIPPED, NO_SHADOW, or INVERTED_SHADOW; see the module docstring.
+
+    A close-up view may frame only a part high above the floor, whose true shadow is faint: its
+    NO_SHADOW depth floor is SHADOW_DELTA instead of MIN_SHADOW_DEPTH."""
     w, h, rgba, mask = frame.width, frame.height, frame.rgba, frame.mask
     total = w * h
     subject = mask.count(2)
@@ -379,6 +409,7 @@ def assess(frame: Frame) -> Quality:
 
     near = _near_part_rows(frame, PART_CLEARANCE_PX)
     shadow_lumas = []
+    overhung_lumas = []
     for y in range(0, h, SAMPLE_STRIDE):
         row_near = near[y]
         for x in range(0, w, SAMPLE_STRIDE):
@@ -388,10 +419,18 @@ def assess(frame: Frame) -> Quality:
             luma = _luma(rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2])
             if luma <= bl - SHADOW_DELTA:
                 shadow_lumas.append(luma)
+            if frame.floor[i] == FLOOR_OVERHUNG:
+                overhung_lumas.append(luma)
     shadow_px = len(shadow_lumas) * SAMPLE_STRIDE * SAMPLE_STRIDE
     shadow_ratio = shadow_px / parts if parts else 0.0
     shadow_lumas.sort()
     depth = bl - shadow_lumas[len(shadow_lumas) // 50] if shadow_lumas else 0.0
+    # Contact depth: the median of the band below grounded rims. Overhang depth: the shadow core
+    # (2nd-percentile luminance) on floor under a part high above it.
+    contact_lumas = sorted(_contact_lumas(frame))
+    contact_depth = bl - contact_lumas[len(contact_lumas) // 2] if contact_lumas else None
+    overhung_lumas.sort()
+    overhang_depth = bl - overhung_lumas[len(overhung_lumas) // 50] if overhung_lumas else None
 
     failures = []
     if subject_cov < MIN_SUBJECT_COVERAGE or content_cov < MIN_CONTENT_COVERAGE:
@@ -399,8 +438,11 @@ def assess(frame: Frame) -> Quality:
     else:
         if any(edges.values()):
             failures.append("CLIPPED")
-        if shadow_ratio < MIN_SHADOW_RATIO or depth < MIN_SHADOW_DEPTH:
+        min_depth = SHADOW_DELTA if closeup else MIN_SHADOW_DEPTH
+        if shadow_ratio < MIN_SHADOW_RATIO or depth < min_depth:
             failures.append("NO_SHADOW")
+        if contact_depth is not None and overhang_depth is not None and contact_depth <= overhang_depth:
+            failures.append("INVERTED_SHADOW")
     return Quality(not failures, failures, {
         "backdrop_rgb": list(backdrop),
         "subject_coverage": round(subject_cov, 5),
@@ -409,9 +451,12 @@ def assess(frame: Frame) -> Quality:
         "subject_margin_px": margins,
         "shadow_ratio": round(shadow_ratio, 4),
         "shadow_depth": round(depth, 1),
+        "contact_depth": None if contact_depth is None else round(contact_depth, 1),
+        "overhang_depth": None if overhang_depth is None else round(overhang_depth, 1),
         "thresholds": {"min_subject_coverage": MIN_SUBJECT_COVERAGE, "min_content_coverage": MIN_CONTENT_COVERAGE,
-                       "min_shadow_ratio": MIN_SHADOW_RATIO, "min_shadow_depth": MIN_SHADOW_DEPTH,
-                       "shadow_delta": SHADOW_DELTA},
+                       "min_shadow_ratio": MIN_SHADOW_RATIO,
+                       "min_shadow_depth": SHADOW_DELTA if closeup else MIN_SHADOW_DEPTH,
+                       "shadow_delta": SHADOW_DELTA, "contact_band_px": list(CONTACT_BAND_PX)},
     })
 
 
@@ -432,6 +477,11 @@ def renderer_sha256() -> str:
         if path.is_file():
             digest.update(path.name.encode() + b"\0" + path.read_bytes())
     return digest.hexdigest()
+
+
+def view_kind(name: str) -> str:
+    """iso, front, side, exploded, or closeup (any closeup-<PN>)."""
+    return "closeup" if name.startswith("closeup-") else name
 
 
 def parse_views(tokens: list[str], pns: list[str]) -> list[str]:
@@ -467,7 +517,7 @@ def build_scene(hw: Path, version: Version, views: list[str], size: tuple[int, i
                               DIRECTIONS["exploded"])
     view_specs = []
     for name in views:
-        kind = "closeup" if name.startswith("closeup-") else name
+        kind = view_kind(name)
         view_specs.append({"name": name, "direction": to_glb(DIRECTIONS[kind]),
                            "subject": [name.removeprefix("closeup-")] if kind == "closeup" else None,
                            "explode": kind == "exploded"})
@@ -628,7 +678,8 @@ def grade(results: dict[str, Any]) -> tuple[dict[str, Any], dict[str, bytes], bo
         if header != "data:image/png;base64":
             raise InfraError(f"view {name}: capture is not a PNG data URL")
         pngs[name] = base64.b64decode(b64)
-        quality = assess(Frame(r["width"], r["height"], base64.b64decode(r["rgba"]), base64.b64decode(r["mask"])))
+        frame = Frame(r["width"], r["height"], *(base64.b64decode(r[k]) for k in ("rgba", "mask", "floor")))
+        quality = assess(frame, closeup=view_kind(name) == "closeup")
         passed &= quality.passed
         views[name] = {"png": f"{name}.png", "sha256": sha256(pngs[name]), "subject": r["subject"],
                        "explode": r["explode"], "camera": camera_record(r["camera"]),
