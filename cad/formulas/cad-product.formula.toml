@@ -120,7 +120,7 @@ title = "L3 DETAIL: fit, fastener, tolerance, process rules, and drawings"
 type = "task"
 needs = ["parts-fanout"]
 labels = ["cad", "phase:detail"]
-description = "Run skill://cad-fits and skill://cad-drawings. Specify fits, fasteners, tolerances, datums, and process rules. At the L3 gate, form_check must pass at F3: run `uv run --script skill://cad-design/scripts/form_check.py --hw hw --parts-dir hw/versions/vN/parts --fidelity F3`. For each L3 batch, run cad-model run then check. A blocking failure stops the batch. Render the successful version and show it at the gate. Generate drawings with `uv run --script skill://cad-drawings/scripts/drawing.py <step> --part <part.yaml> --product <product.yaml> --output-dir <dir> [--scale <ratio>]`. Recheck changed parts/dependents after LAYOUT freeze."
+description = "Run skill://cad-fits and skill://cad-drawings. Specify fits, fasteners, tolerances, datums, and process rules. At the L3 gate, form_check must pass at F3: run `uv run --script skill://cad-design/scripts/form_check.py --hw hw --parts-dir hw/versions/vN/parts --fidelity F3`. For each L3 batch, run cad-model run then check. A blocking failure stops the batch. Render the successful version and show it at the gate. Generate drawings with `uv run --script skill://cad-drawings/scripts/drawing.py hw/versions/vN/parts/<PN>.step --part hw/parts/<PN>/part.yaml --product hw/product.yaml --metrics hw/versions/vN/metrics.json --output-dir <dir> [--scale <ratio>]`. Recheck changed parts/dependents after LAYOUT freeze."
 
 [steps.metadata]
 skill_hints = "cad-fits, cad-drawings, cad-recheck, cad-record, cad-flow"
@@ -203,7 +203,7 @@ title = "RELEASE: assemble and validate product package"
 type = "task"
 needs = ["design-freeze-gate"]
 labels = ["cad", "phase:release"]
-description = "Run skill://cad-record, skill://cad-bom, skill://cad-drawings, and skill://cad-analysis to assemble and validate STEP AP242, drawings, EBOM, verification, and documentation. Generate drawings with `uv run --script skill://cad-drawings/scripts/drawing.py <step> --part <part.yaml> --product <product.yaml> --output-dir <dir> [--scale <ratio>]`. Static FEA command: `uv run --script skill://cad-analysis/scripts/fea_static.py <case.yaml>`. Include GitBuilding, DIN SPEC 3105-1, and Open Know-How docs. Validate records and evidence. Use FreeCAD 1.1.4 only. No slicer, CAM, or machine tooling."
+description = "Run skill://cad-record, skill://cad-bom, skill://cad-drawings, and skill://cad-analysis to assemble and validate STEP AP242, drawings, EBOM, verification, and documentation. Generate drawings with `uv run --script skill://cad-drawings/scripts/drawing.py hw/versions/vN/parts/<PN>.step --part hw/parts/<PN>/part.yaml --product hw/product.yaml --metrics hw/versions/vN/metrics.json --output-dir <dir> [--scale <ratio>]`. Static FEA command: `uv run --script skill://cad-analysis/scripts/fea_static.py <case.yaml>`. Include GitBuilding, DIN SPEC 3105-1, and Open Know-How docs. Validate records and evidence. Use FreeCAD 1.1.4 only. No slicer, CAM, or machine tooling."
 
 [steps.metadata]
 skill_hints = "cad-record, cad-bom, cad-drawings, cad-analysis"

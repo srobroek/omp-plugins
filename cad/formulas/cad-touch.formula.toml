@@ -135,7 +135,7 @@ title = "Assemble and validate ECO release {{to_rev}}"
 type = "task"
 needs = ["reconcile"]
 labels = ["cad", "phase:release"]
-description = "Run skill://cad-record, skill://cad-bom, and skill://cad-drawings to update the release manifest, STEP AP242, drawings, EBOM, verification matrix, and docs for the affected revision/dependent set. For drawings use `uv run --script skill://cad-drawings/scripts/drawing.py <step> --part <part.yaml> --product <product.yaml> --output-dir <dir> [--scale <ratio>]`. Preserve unchanged artifacts. Validate the revision transition {{from_rev}} -> {{to_rev}}, ECO decision {{decision}}, and release evidence. Use FreeCAD 1.1.4 only. No slicer, CAM, or machine tooling."
+description = "Run skill://cad-record, skill://cad-bom, and skill://cad-drawings to update the release manifest, STEP AP242, drawings, EBOM, verification matrix, and docs for the affected revision/dependent set. For drawings use `uv run --script skill://cad-drawings/scripts/drawing.py hw/versions/vN/parts/<PN>.step --part hw/parts/<PN>/part.yaml --product hw/product.yaml --metrics hw/versions/vN/metrics.json --output-dir <dir> [--scale <ratio>]`. Preserve unchanged artifacts. Validate the revision transition {{from_rev}} -> {{to_rev}}, ECO decision {{decision}}, and release evidence. Use FreeCAD 1.1.4 only. No slicer, CAM, or machine tooling."
 
 [steps.metadata]
 skill_hints = "cad-record, cad-bom, cad-drawings"

@@ -121,7 +121,7 @@ title = "L3 DETAIL: fits, fasteners, tolerances, rules, and drawing"
 type = "task"
 needs = ["parts"]
 labels = ["cad", "phase:detail"]
-description = "Run skill://cad-fits for fits/stack-ups and skill://cad-drawings for detail and release drawings. Specify fit classes, fasteners, tolerances, datums, and process rules. Press fits are declared in `hw/interfaces.yaml` and automatically allowed by check. For each L3 commit batch, run `uv run --script skill://cad-model/scripts/cad_model.py run hw --label vN --kernel {{kernel}}`, then `uv run --script skill://cad-model/scripts/cad_model.py check vN --hw hw [--out FILE]`; a blocking failure stops the batch. Render the successful version with `uv run --script skill://cad-render/scripts/render.py hw --version vN`. Before the L3 gate, run `uv run --script skill://cad-design/scripts/form_check.py --hw hw --parts-dir hw/versions/vN/parts --fidelity F3`; require F3. Generate the drawing with `uv run --script skill://cad-drawings/scripts/drawing.py <step> --part <part.yaml> --product <product.yaml> --output-dir <dir> [--scale <ratio>]"
+description = "Run skill://cad-fits for fits/stack-ups and skill://cad-drawings for detail and release drawings. Specify fit classes, fasteners, tolerances, datums, and process rules. Press fits are declared in `hw/interfaces.yaml` and automatically allowed by check. For each L3 commit batch, run `uv run --script skill://cad-model/scripts/cad_model.py run hw --label vN --kernel {{kernel}}`, then `uv run --script skill://cad-model/scripts/cad_model.py check vN --hw hw [--out FILE]`; a blocking failure stops the batch. Render the successful version with `uv run --script skill://cad-render/scripts/render.py hw --version vN`. Before the L3 gate, run `uv run --script skill://cad-design/scripts/form_check.py --hw hw --parts-dir hw/versions/vN/parts --fidelity F3`; require F3. Generate the drawing with `uv run --script skill://cad-drawings/scripts/drawing.py hw/versions/vN/parts/<PN>.step --part hw/parts/<PN>/part.yaml --product hw/product.yaml --metrics hw/versions/vN/metrics.json --output-dir <dir> [--scale <ratio>]"
 
 [steps.metadata]
 skill_hints = "cad-fits, cad-drawings, cad-recheck, cad-record, cad-flow"
@@ -203,7 +203,7 @@ title = "RELEASE: assemble and validate the package"
 type = "task"
 needs = ["design-freeze-gate"]
 labels = ["cad", "phase:release"]
-description = "Run skill://cad-record, skill://cad-bom, and skill://cad-drawings to assemble STEP AP242, drawings, EBOM, verification, and documentation. Generate drawings with `uv run --script skill://cad-drawings/scripts/drawing.py <step> --part <part.yaml> --product <product.yaml> --output-dir <dir> [--scale <ratio>]`. Include GitBuilding, DIN SPEC 3105-1, and Open Know-How docs. Validate records and evidence. Use FreeCAD 1.1.4 only. No slicer, CAM, or machine tooling. Write `hw/releases/<rev>/manifest.json`."
+description = "Run skill://cad-record, skill://cad-bom, and skill://cad-drawings to assemble STEP AP242, drawings, EBOM, verification, and documentation. Generate drawings with `uv run --script skill://cad-drawings/scripts/drawing.py hw/versions/vN/parts/<PN>.step --part hw/parts/<PN>/part.yaml --product hw/product.yaml --metrics hw/versions/vN/metrics.json --output-dir <dir> [--scale <ratio>]`. Include GitBuilding, DIN SPEC 3105-1, and Open Know-How docs. Validate records and evidence. Use FreeCAD 1.1.4 only. No slicer, CAM, or machine tooling. Write `hw/releases/<rev>/manifest.json`."
 
 [steps.metadata]
 skill_hints = "cad-record, cad-bom, cad-drawings"
