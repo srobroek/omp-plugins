@@ -14,6 +14,7 @@ seats from the hub top down and its circlip bears on the access pocket ceiling.
 import math
 
 import cadquery as cq
+from cadmodel.safe import safe_cut
 
 KERNEL = "cadquery"
 PARAMS = {
@@ -108,7 +109,8 @@ def build(params: dict) -> cq.Shape:
             .slot2D(p["mount_travel"] + p["cbore_d"], p["cbore_d"], angle)
             .extrude(p["cbore_depth"])
         )
-        body = body.cut(through).cut(cbore)
+        body = safe_cut(body, through)
+        body = safe_cut(body, cbore)
 
     for k in range(4):
         a = math.radians(45.0 + 90.0 * k)
@@ -116,12 +118,12 @@ def build(params: dict) -> cq.Shape:
             cq.Workplane("XY").center(p["foot_r"] * math.cos(a), p["foot_r"] * math.sin(a))
             .circle(p["foot_d"] / 2.0).extrude(p["foot_depth"])
         )
-        body = body.cut(foot)
+        body = safe_cut(body, foot)
 
     if p["engraving"]:
         text = (
             cq.Workplane("XY").workplane(offset=h).center(*p["text_at"])
             .text(p["engraving"], p["text_size"], -p["text_depth"], combine=False, font="Arial", kind="bold")
         )
-        body = body.cut(text)
+        body = safe_cut(body, text)
     return body.val()

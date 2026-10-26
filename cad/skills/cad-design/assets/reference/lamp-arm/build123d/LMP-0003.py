@@ -16,6 +16,7 @@ both along Y.
 import math
 
 import build123d as bd
+from cadmodel.safe import safe_cut, safe_fuse, safe_intersect
 
 KERNEL = "build123d"
 PARAMS = {
@@ -108,10 +109,10 @@ def _stadium(x0, x1, width, z0, z1):
 def _ball_channel(x0, x1, r, zc, z_open):
     """Stopped channel cut from below by a ball-end mill of radius r travelling x0 -> x1 at height zc."""
     channel = bd.Pos(x0, 0, zc) * bd.Rot(0, 90, 0) * bd.Cylinder(r, x1 - x0, align=BOTTOM)
-    channel += bd.Pos(x0, 0, z_open) * bd.Box(x1 - x0, 2 * r, zc - z_open, align=(bd.Align.MIN, bd.Align.CENTER, bd.Align.MIN))
+    channel = safe_fuse(channel, bd.Pos(x0, 0, z_open) * bd.Box(x1 - x0, 2 * r, zc - z_open, align=(bd.Align.MIN, bd.Align.CENTER, bd.Align.MIN)))
     for x in (x0, x1):
-        channel += bd.Pos(x, 0, zc) * bd.Sphere(r)
-        channel += bd.Pos(x, 0, z_open) * bd.Cylinder(r, zc - z_open, align=BOTTOM)
+        channel = safe_fuse(channel, bd.Pos(x, 0, zc) * bd.Sphere(r))
+        channel = safe_fuse(channel, bd.Pos(x, 0, z_open) * bd.Cylinder(r, zc - z_open, align=BOTTOM))
     return channel
 
 
@@ -147,16 +148,18 @@ def build(params: dict) -> bd.Part:
         *_rounded([tip_high, high, elbow_high], blend),
         ("arc", (ex - r, ez), elbow_low),
     ]), amount=3 * bw, both=True)
-    body = plan & side
+    body = safe_intersect(plan, side)
 
     silhouette = [e for e in body.edges() if not (_is_line_along(e, (0, 0, 1)) or _is_line_along(e, (0, 1, 0)))]
     body = bd.fillet(silhouette, p["edge_fillet"])
 
     slot_r = p["slot_w"] / 2.0
     slot_x = p["slot_end_x"] + slot_r
-    slot = bd.Pos(slot_x, 0, tz - 2 * r) * bd.Cylinder(slot_r, 4 * r, align=BOTTOM)
-    slot += bd.Pos(slot_x, 0, tz - 2 * r) * bd.Box(
-        x_end + 5.0 - slot_x, p["slot_w"], 4 * r, align=(bd.Align.MIN, bd.Align.CENTER, bd.Align.MIN)
+    slot = safe_fuse(
+        bd.Pos(slot_x, 0, tz - 2 * r) * bd.Cylinder(slot_r, 4 * r, align=BOTTOM),
+        bd.Pos(slot_x, 0, tz - 2 * r) * bd.Box(
+            x_end + 5.0 - slot_x, p["slot_w"], 4 * r, align=(bd.Align.MIN, bd.Align.CENTER, bd.Align.MIN)
+        ),
     )
     bore_r = p["pin_bore_d"] / 2.0
     bores = [bd.Pos(x, 0, z) * bd.Rot(90, 0, 0) * bd.Cylinder(bore_r, 4 * bw) for x, z in ((ex, ez), (tx, tz))]
@@ -164,7 +167,11 @@ def build(params: dict) -> bd.Part:
     pocket = _stadium(x0, x1, width, floor, ez + 3 * r)
     cx0, cx1, cr, czc = p["cable_channel"]
     channel = _ball_channel(cx0, cx1, cr, czc, ez - 3 * r)
-    body = body - slot - bores[0] - bores[1] - pocket - channel
+    body = safe_cut(body, slot)
+    body = safe_cut(body, bores[0])
+    body = safe_cut(body, bores[1])
+    body = safe_cut(body, pocket)
+    body = safe_cut(body, channel)
 
     entries = _circle_edges(body, bore_r, [((ex, 0.0, ez), (0, 1, 0)), ((tx, 0.0, tz), (0, 1, 0))])
     return bd.chamfer(entries, p["bore_chamfer"])

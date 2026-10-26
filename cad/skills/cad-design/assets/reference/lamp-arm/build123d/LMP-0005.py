@@ -12,6 +12,7 @@ the head underside sits 0.3 mm above the lower-link hub (axial play).
 import math
 
 import build123d as bd
+from cadmodel.safe import safe_cut
 
 KERNEL = "build123d"
 PARAMS = {
@@ -51,4 +52,4 @@ def build(params: dict) -> bd.Part:
     pin = bd.revolve(bd.Plane.XZ * bd.Face(bd.Polyline(*section, close=True)), bd.Axis.Z)
     socket = bd.extrude(bd.Pos(0, 0, -k) * bd.RegularPolygon(p["socket_s"] / 2.0 / math.cos(math.pi / 6), 6),
                         amount=p["socket_depth"])
-    return _plane(p).location * (pin - socket)
+    return _plane(p).location * safe_cut(pin, socket)

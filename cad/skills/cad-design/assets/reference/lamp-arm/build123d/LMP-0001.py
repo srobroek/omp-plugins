@@ -14,6 +14,7 @@ seats from the hub top down and its circlip bears on the access pocket ceiling.
 import math
 
 import build123d as bd
+from cadmodel.safe import safe_cut
 
 KERNEL = "build123d"
 PARAMS = {
@@ -109,16 +110,16 @@ def build(params: dict) -> bd.Part:
         x, y = p["mount_r"] * math.cos(a), p["mount_r"] * math.sin(a)
         through = bd.SlotOverall(p["mount_travel"] + p["mount_clear_d"], p["mount_clear_d"], rotation=angle)
         cbore = bd.SlotOverall(p["mount_travel"] + p["cbore_d"], p["cbore_d"], rotation=angle)
-        body -= bd.extrude(bd.Pos(x, y, 0) * through, amount=h)
-        body -= bd.extrude(bd.Pos(x, y, h - p["cbore_depth"]) * cbore, amount=p["cbore_depth"])
+        body = safe_cut(body, bd.extrude(bd.Pos(x, y, 0) * through, amount=h))
+        body = safe_cut(body, bd.extrude(bd.Pos(x, y, h - p["cbore_depth"]) * cbore, amount=p["cbore_depth"]))
 
     for k in range(4):
         a = math.radians(45.0 + 90.0 * k)
-        body -= bd.Pos(p["foot_r"] * math.cos(a), p["foot_r"] * math.sin(a), 0) * bd.Cylinder(
+        body = safe_cut(body, bd.Pos(p["foot_r"] * math.cos(a), p["foot_r"] * math.sin(a), 0) * bd.Cylinder(
             p["foot_d"] / 2.0, p["foot_depth"], align=(bd.Align.CENTER, bd.Align.CENTER, bd.Align.MIN)
-        )
+        ))
 
     if p["engraving"]:
         text = bd.Text(p["engraving"], p["text_size"], font="Arial", font_style=bd.FontStyle.BOLD)
-        body -= bd.extrude(bd.Pos(*p["text_at"], h) * text, amount=-p["text_depth"])
+        body = safe_cut(body, bd.extrude(bd.Pos(*p["text_at"], h) * text, amount=-p["text_depth"]))
     return body

@@ -17,6 +17,7 @@ vertical through (430, 0) and opens downward.
 import math
 
 import cadquery as cq
+from cadmodel.safe import safe_cut, safe_fuse
 
 KERNEL = "cadquery"
 PARAMS = {
@@ -144,14 +145,15 @@ def build(params: dict) -> cq.Shape:
     shade = _outline(cq.Plane((p["shade_axis_x"], 0, 0), (1, 0, 0), (0, -1, 0)), start, segments).revolve(
         360.0, (0, 0, 0), (0, 1, 0)
     )
-    body = cq.Workplane("XY").add(knuckle).union(neck).union(stub).union(shade)
+    body = safe_fuse(cq.Workplane("XY").add(knuckle), neck, stub, shade)
     rc = p["cap_r"]
     z0, z1 = p["grip_z"]
     for k in range(p["grip_flutes"]):
         a = 2.0 * math.pi * k / p["grip_flutes"]
-        body = body.cut(
+        body = safe_cut(
+            body,
             cq.Workplane("XY").workplane(offset=z0)
-            .center(p["shade_axis_x"] + rc * math.cos(a), rc * math.sin(a)).circle(p["grip_r"]).extrude(z1 - z0)
+            .center(p["shade_axis_x"] + rc * math.cos(a), rc * math.sin(a)).circle(p["grip_r"]).extrude(z1 - z0),
         )
 
     cable_r, entry_r = p["cable_d"] / 2.0, p["cable_entry_d"] / 2.0
@@ -162,8 +164,9 @@ def build(params: dict) -> cq.Shape:
         2 * p["neck_r"]
     )
     bore = cq.Workplane("XZ").center(px, pz).circle(p["pin_bore_d"] / 2.0).extrude(2 * half_t, both=True)
-    body = body.cut(run).cut(entry).cut(bore).val()
-
+    body = safe_cut(body, run)
+    body = safe_cut(body, entry)
+    body = safe_cut(body, bore).val()
     bore_r = p["pin_bore_d"] / 2.0
     entries = [e for e in body.Edges() if e.geomType() == "CIRCLE" and abs(e.radius() - bore_r) < 1e-6
                and abs(e.arcCenter().x - px) < 1e-3 and abs(e.arcCenter().z - pz) < 1e-3]

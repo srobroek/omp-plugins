@@ -12,6 +12,7 @@ the head underside sits 0.3 mm above the lower-link hub (axial play).
 import math
 
 import cadquery as cq
+from cadmodel.safe import safe_cut
 
 KERNEL = "cadquery"
 PARAMS = {
@@ -52,5 +53,5 @@ def build(params: dict) -> cq.Shape:
     local = cq.Plane((0, 0, 0), (1, 0, 0), (0, -1, 0))
     pin = cq.Workplane(local).polyline(section).close().revolve(360.0, (0, 0, 0), (0, 1, 0))
     socket = cq.Workplane("XY").workplane(offset=-k).polygon(6, p["socket_s"] / math.cos(math.pi / 6)).extrude(p["socket_depth"])
-    shape = pin.cut(socket).val()
+    shape = safe_cut(pin, socket).val()
     return shape.transformShape(plane.rG)
