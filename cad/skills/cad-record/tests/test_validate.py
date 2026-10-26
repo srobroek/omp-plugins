@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regression cases for the CAD design-record validator."""
+"""Regression cases for CAD record validation and template model provenance."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ from pathlib import Path
 SKILL = Path(__file__).resolve().parents[1]
 CONCEPT = SKILL.parent / "cad-concept"
 TEMPLATE = SKILL / "assets" / "project-template"
+REFERENCE_MODELS = SKILL.parent / "cad-design" / "assets" / "reference" / "lamp-arm" / "cadquery"
 VALIDATOR = SKILL / "scripts" / "validate.py"
 
 
@@ -56,6 +57,13 @@ class ValidateProject(unittest.TestCase):
         result, report = self.validate()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(report, {"ok": True, "findings": []})
+
+    def test_template_models_match_cad_design_references_byte_for_byte(self) -> None:
+        for part_dir in sorted((TEMPLATE / "hw" / "parts").iterdir()):
+            model = part_dir / "model.py"
+            reference = REFERENCE_MODELS / f"{part_dir.name}.py"
+            with self.subTest(part=part_dir.name):
+                self.assertEqual(model.read_bytes(), reference.read_bytes())
 
     def test_template_validates_fixed_pin_joints(self) -> None:
         assembly = yaml.safe_load((self.hw / "assembly.yaml").read_text(encoding="utf-8"))
@@ -133,6 +141,14 @@ class ValidateProject(unittest.TestCase):
         result, report = self.validate()
         self.assertEqual(result.returncode, 1)
         self.assertIn("REQ-007 has no verification row", json.dumps(report["findings"]))
+
+    def test_rejects_part_with_missing_decision_reference(self) -> None:
+        path = self.hw / "parts" / "LMP-0001" / "part.yaml"
+        text = path.read_text(encoding="utf-8").replace("decisions: [DR-002]", "decisions: [DR-999]")
+        path.write_text(text, encoding="utf-8")
+        result, report = self.validate()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("decision DR-999 does not exist", json.dumps(report["findings"]))
 
     def test_validates_optional_concept_handoff(self) -> None:
         source = CONCEPT / "assets" / "examples" / "lamp-arm.scene.json"

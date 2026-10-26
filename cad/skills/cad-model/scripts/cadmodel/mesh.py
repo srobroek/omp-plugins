@@ -92,7 +92,13 @@ def part_map(glb: Path, products: dict[str, str]) -> dict[str, Any]:
 
 
 def watertight(glb: Path, pns: Iterable[str]) -> dict[str, dict[str, Any]]:
-    """Per PN: whether its triangles, welded by position, form a closed 2-manifold."""
+    """Per PN: whether its triangles, welded by position, form a closed 2-manifold.
+
+    A triangle whose corners weld to fewer than three vertices is dropped first: it has no area
+    and bounds nothing. BRepMesh emits one wherever a face boundary meets a sphere pole (a ball-end
+    channel end). Dropping it removes one degenerate edge and two coincident uses of a real edge,
+    so it cannot close a hole: a gap still leaves edges that only one remaining triangle uses.
+    """
     import trimesh
 
     scene = trimesh.load(str(glb), force="scene", process=False)
@@ -109,6 +115,9 @@ def watertight(glb: Path, pns: Iterable[str]) -> dict[str, dict[str, Any]]:
             continue
         mesh = trimesh.util.concatenate(meshes)
         mesh.merge_vertices(merge_tex=True, merge_norm=True)
+        faces = mesh.faces
+        collapsed = (faces[:, 0] == faces[:, 1]) | (faces[:, 1] == faces[:, 2]) | (faces[:, 0] == faces[:, 2])
+        mesh.update_faces(~collapsed)
         report[pn] = {"watertight": bool(mesh.is_watertight), "triangles": int(len(mesh.faces)),
-                      "euler_number": int(mesh.euler_number)}
+                      "collapsed_triangles": int(collapsed.sum()), "euler_number": int(mesh.euler_number)}
     return report

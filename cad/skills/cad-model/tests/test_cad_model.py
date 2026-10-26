@@ -295,5 +295,19 @@ class CrossKernelTests(unittest.TestCase):
         self.assertEqual(runs[KERNELS[0]]["v1"][1].keys(), runs[KERNELS[1]]["v1"][1].keys())
 
 
+@unittest.skipUnless(shutil.which("uv"), "uv is required for the trimesh environment")
+class MeshWatertightTests(unittest.TestCase):
+    """A sphere-pole triangle collapses when welded: it must neither fail a closed mesh nor close an open one."""
+
+    def test_collapsed_triangles_are_dropped_and_holes_still_fail(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = subprocess.run(["uv", "run", "--quiet", "--script", str(FIXTURES / "mesh_probe.py"), tmp],
+                                  capture_output=True, text=True, check=False)
+        self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+        report = json.loads(proc.stdout)
+        self.assertEqual((report["TST-0001"]["watertight"], report["TST-0001"]["collapsed_triangles"]), (True, 1))
+        self.assertEqual((report["TST-0002"]["watertight"], report["TST-0002"]["collapsed_triangles"]), (False, 1))
+
+
 if __name__ == "__main__":
     unittest.main()

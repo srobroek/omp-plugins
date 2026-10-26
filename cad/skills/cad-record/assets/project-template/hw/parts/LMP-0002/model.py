@@ -1,1 +1,132 @@
-"""Parametric source placeholder for the lower link."""
+"""LMP-0002 Lower link: cad-design reference model, CadQuery 2.8, fidelity F2.
+
+CNC 6061-T6 link that turns on the base pin (J-001, axis Z) and carries the elbow
+clevis (J-002, axis Y). Form: the intersection of a plan outline (hub round, waisted
+taper, square fork end) and a side outline (flat hub, sagging top and bottom, round
+elbow end), with 1.5 mm fillets on every silhouette edge. Then the elbow clevis slot
+with a tool-radius end, H8 pin bores with 0.5 mm entry chamfers, a top lightening
+pocket, and a ball-end cable channel underneath.
+
+Zero pose, assembly coordinates: hub bore on (0, 0, 40) along Z; elbow bore on
+(160, 0, 40) along Y; the arm lies along +X.
+"""
+
+import cadquery as cq
+
+KERNEL = "cadquery"
+PARAMS = {
+    "hub_origin": [0.0, 0.0, 40.0],
+    "elbow_origin": [160.0, 0.0, 40.0],
+    "hub_r": 13.0,
+    "hub_h": 20.0,
+    "waist_x": 70.0,
+    "waist_half_w": 9.0,
+    "fork_x": 130.0,
+    "fork_half_w": 11.0,
+    "side_waist_x": 80.0,  # side kinks must not coincide with plan kinks: the fillet fails there
+    "waist_half_h": 7.5,
+    "elbow_r": 11.0,
+    "edge_fillet": 1.5,
+    "pin_bore_d": 5.009,  # 5 H8 mid-limit from cad-fits (5.000..5.018); pin 5 f7
+    "bore_chamfer": 0.5,
+    "slot_w": 10.4,  # upper-link tongue 10 mm + 0.2 mm side clearance
+    "slot_end_x": 132.0,
+    "pocket": [24.0, 116.0, 8.0, 44.0],  # x0, x1, width, floor z
+    "cable_channel": [20.0, 126.0, 3.0, 34.0],  # x0, x1, ball radius, ball-centre z
+}
+
+
+def _outline(plane, start, segments):
+    """Closed wire from ("line", end) and ("arc", mid, end) segments in `plane` coordinates."""
+    wire = cq.Workplane(plane).moveTo(*start)
+    for segment in segments:
+        wire = wire.lineTo(*segment[1]) if segment[0] == "line" else wire.threePointArc(segment[1], segment[2])
+    return wire.close()
+
+
+def _is_line_along(edge, axis):
+    if edge.geomType() != "LINE":
+        return False
+    d = (edge.endPoint() - edge.startPoint()).normalized()
+    return abs(abs(d.dot(cq.Vector(*axis))) - 1.0) < 1e-6
+
+
+def _circle_edges(shape, radius, axes):
+    """Circular edges of `radius` centred on one of the (point, direction) axes."""
+    found = []
+    for edge in shape.Edges():
+        if edge.geomType() == "CIRCLE" and abs(edge.radius() - radius) < 1e-6:
+            center = edge.arcCenter()
+            for point, direction in axes:
+                offset = center - cq.Vector(*point)
+                d = cq.Vector(*direction)
+                if (offset - d * offset.dot(d)).Length < 1e-3:
+                    found.append(edge)
+                    break
+    return found
+
+
+def _stadium(x0, x1, width, z0, z1):
+    return cq.Workplane("XY").workplane(offset=z0).center((x0 + x1) / 2.0, 0).slot2D(x1 - x0, width).extrude(z1 - z0)
+
+
+def _ball_channel(x0, x1, r, zc, z_open):
+    """Stopped channel cut from below by a ball-end mill of radius r travelling x0 -> x1 at height zc."""
+    channel = cq.Workplane("YZ").workplane(offset=x0).center(0, zc).circle(r).extrude(x1 - x0)
+    channel = channel.union(
+        cq.Workplane("XY").box(x1 - x0, 2 * r, zc - z_open, centered=(False, True, False)).translate((x0, 0, z_open))
+    )
+    for x in (x0, x1):
+        channel = channel.union(cq.Workplane("XY").sphere(r).translate((x, 0, zc)))
+        channel = channel.union(cq.Workplane("XY").workplane(offset=z_open).center(x, 0).circle(r).extrude(zc - z_open))
+    return channel
+
+
+def build(params: dict) -> cq.Shape:
+    p = {**PARAMS, **params}
+    hx, hy, hz = p["hub_origin"]
+    ex, _, ez = p["elbow_origin"]
+    hub_r, half_h, er = p["hub_r"], p["hub_h"] / 2.0, p["elbow_r"]
+    end_x = ex + er + 4.0
+
+    plan = _outline("XY", (hx, hy + hub_r), [
+        ("arc", (hx - hub_r, hy), (hx, hy - hub_r)),
+        ("line", (p["waist_x"], -p["waist_half_w"])),
+        ("line", (p["fork_x"], -p["fork_half_w"])),
+        ("line", (end_x, -p["fork_half_w"])),
+        ("line", (end_x, p["fork_half_w"])),
+        ("line", (p["fork_x"], p["fork_half_w"])),
+        ("line", (p["waist_x"], p["waist_half_w"])),
+    ]).extrude(hz + 2 * half_h, both=True)
+    side = _outline("XZ", (hx - hub_r - 5.0, hz - half_h), [
+        ("line", (hx + hub_r, hz - half_h)),  # flat hub seat out to the hub radius
+        ("line", (p["side_waist_x"], ez - p["waist_half_h"])),
+        ("line", (ex, ez - er)),
+        ("arc", (ex + er, ez), (ex, ez + er)),
+        ("line", (p["side_waist_x"], ez + p["waist_half_h"])),
+        ("line", (hx + hub_r, hz + half_h)),
+        ("line", (hx - hub_r - 5.0, hz + half_h)),
+    ]).extrude(3 * hub_r, both=True)
+    body = plan.intersect(side).val()
+
+    silhouette = [e for e in body.Edges() if not (_is_line_along(e, (0, 0, 1)) or _is_line_along(e, (0, 1, 0)))]
+    body = body.fillet(p["edge_fillet"], silhouette)
+
+    slot_r = p["slot_w"] / 2.0
+    slot_x = p["slot_end_x"] + slot_r
+    slot = (
+        cq.Workplane("XY").workplane(offset=ez - 2 * er).center(slot_x, 0).circle(slot_r).extrude(4 * er)
+        .union(cq.Workplane("XY").box(end_x + 5.0 - slot_x, p["slot_w"], 4 * er, centered=(False, True, False))
+               .translate((slot_x, 0, ez - 2 * er)))
+    )
+    bore_r = p["pin_bore_d"] / 2.0
+    hub_bore = cq.Workplane("XY").workplane(offset=hz - 2 * half_h).center(hx, hy).circle(bore_r).extrude(4 * half_h)
+    elbow_bore = cq.Workplane("XZ").center(ex, ez).circle(bore_r).extrude(2 * er, both=True)
+    x0, x1, width, floor = p["pocket"]
+    pocket = _stadium(x0, x1, width, floor, hz + 2 * half_h)
+    cx0, cx1, cr, czc = p["cable_channel"]
+    channel = _ball_channel(cx0, cx1, cr, czc, hz - 2 * half_h)
+    body = cq.Workplane("XY").add(body).cut(slot).cut(hub_bore).cut(elbow_bore).cut(pocket).cut(channel).val()
+
+    entries = _circle_edges(body, bore_r, [((hx, hy, hz), (0, 0, 1)), ((ex, 0.0, ez), (0, 1, 0))])
+    return body.chamfer(p["bore_chamfer"], None, entries)
