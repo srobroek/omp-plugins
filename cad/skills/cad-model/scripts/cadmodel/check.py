@@ -17,7 +17,7 @@ import yaml
 from cadmodel import build, mesh, occ
 from cadmodel.motion import load_pose
 
-FITS_SCRIPT = Path(__file__).resolve().parents[5] / "cad" / "skills" / "cad-fits" / "scripts" / "fits.py"
+FITS_SCRIPT = Path(__file__).resolve().parents[3] / "cad-fits" / "scripts" / "fits.py"
 
 AP242 = "AP242_MANAGED_MODEL_BASED_3D_ENGINEERING"
 READBACK_REL = 1e-6          # STEP read-back volume vs the kernel's in-memory volume

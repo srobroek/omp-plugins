@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import re
 import shutil
 import subprocess
@@ -470,6 +471,27 @@ class CheckRuleTests(unittest.TestCase):
         self.assertEqual({tuple(item["pair"]) for item in declared}, {
             ("LMP-0002", "LMP-0005"), ("LMP-0002", "LMP-0006"), ("LMP-0003", "LMP-0007")})
         self.assertTrue(all(item["classification"] == "interference" for item in declared))
+
+    def test_an_installed_plugin_copy_classifies_press_fits_with_its_own_cad_fits(self) -> None:
+        """The plugin runs from OMP's cache or a --plugin-dir, where nothing above it is this repository."""
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = Path(tmp) / "cache" / "srobroek-omp___cad___0.0.0"  # never named `cad`, unlike the repository's
+            shutil.copytree(HERE.parents[2], plugin, ignore=shutil.ignore_patterns("__pycache__"))
+            hw = Path(tmp) / "hw"
+            hw.mkdir()
+            (hw / "interfaces.yaml").write_text(
+                "interfaces:\n  - id: IF-001\n    limits:\n      press_fit: {fit: 5 H7/p6, pair: [TST-0001, TST-0002]}\n",
+                encoding="utf-8")
+            probe = ("import json, sys\nfrom pathlib import Path\nfrom cadmodel import check\n"
+                     "print(json.dumps({'fits': str(check.FITS_SCRIPT), 'declared': check.declared_press_fits(Path(sys.argv[1]))}))\n")
+            scripts = plugin / "skills" / "cad-model" / "scripts"
+            proc = subprocess.run([sys.executable, "-c", probe, str(hw)], cwd=scripts, capture_output=True, text=True,
+                                  check=False, timeout=60, env={**os.environ, "PYTHONPATH": str(scripts)})
+            self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+            result = json.loads(proc.stdout)
+            self.assertTrue(Path(result["fits"]).is_relative_to(plugin.resolve()), result["fits"])
+        self.assertEqual([(item["pair"], item["classification"]) for item in result["declared"]],
+                         [([BASE, ARM_PN], "interference")])
 
     def test_an_allowed_pair_whose_measurement_failed_still_fails(self) -> None:
         geometry = gaps({(BASE, ARM_PN): None})
