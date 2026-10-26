@@ -7,8 +7,8 @@
 Usage:
     uv run --script cad_model.py run <hw-dir> --label vN [--kernel auto|cadquery|build123d]
                                      [--attach PN=PARENT_PN ...]
-    uv run --script cad_model.py check vN [--hw HW] [--pair PN:PN ...] [--allow-interference PN:PN ...]
-                                     [--expect-solids PN=N ...] [--out FILE]
+    uv run --script cad_model.py check vN --hw hw [--out FILE]
+       [--pair PN:PN ...] [--allow-interference PN:PN ...] [--expect-solids PN=N ...]
     uv run --script cad_model.py diff vA vB [--hw HW] [--out FILE]
 
 run   executes every hw/parts/<PN>/model.py in its declared kernel's own uv environment
@@ -72,7 +72,7 @@ def parser() -> argparse.ArgumentParser:
     check.add_argument("--pair", action="append", type=_pair, metavar="PN:PN",
                        help="check only these pairs for interference (default: all pairs)")
     check.add_argument("--allow-interference", action="append", type=_pair, default=[], metavar="PN:PN",
-                       help="declared interference fit: reported, not blocking (repeatable)")
+                       help="undeclared intentional overlap: reported, not blocking (repeatable)")
     check.add_argument("--expect-solids", action="append", type=_expect, default=[], metavar="PN=N",
                        help="expected solid count; overrides the previous version as baseline")
     check.add_argument("--out", type=Path, help="also write the result JSON here")

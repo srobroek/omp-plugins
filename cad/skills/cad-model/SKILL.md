@@ -26,7 +26,8 @@ TRIGGER
    part in its declared kernel's own uv environment; `cadquery` or `build123d` additionally
    requires every part to declare that kernel.
 3. Check: `uv run --script skill://cad-model/scripts/cad_model.py check vN --hw hw [--out FILE]`
-   → check result JSON; `blocking_failures` names every failed blocking check.
+   → check result JSON; press-fit pairs declared in `hw/interfaces.yaml` are allowed automatically.
+   `blocking_failures` names every failed blocking check.
 4. Diff: `uv run --script skill://cad-model/scripts/cad_model.py diff vA vB --hw hw` → per-part
    volume and bbox deltas, added/removed parts, exact shared / A-only / B-only volumes.
 5. Recheck: write the check JSON with `--out`, then pass it to `cad-recheck` `stamp.py --checks`,
@@ -42,7 +43,10 @@ MUST Pick the next label above the newest version; versions are immutable and `r
 MUST Treat `check` exit 1 as a failed stage gate; report `blocking_failures` and the numbers verbatim.
 MUST Resolve current files through `hw/versions/latest.json`, never by guessing a version path.
 MUST Add a missing material density to `assets/materials.yaml` with its source; `mass_g: null` means unknown.
-DEFAULT Declare an intended press or snap fit with `--allow-interference PN:PN`, not by editing geometry.
+MUST Declare press fits and their part pairs in `hw/interfaces.yaml`; `check` classifies the fit and
+allows measured interference only for pairs classified as interference fits. A declared interference
+fit that measures clearance is a blocking finding.
+DEFAULT Use `--allow-interference PN:PN` only for an undeclared, intentional overlap.
 NOT Put a short timeout around `run`: a cold OCP import took 170 to 320 s per fresh environment.
 NOT Hand-edit files under `hw/versions/`; rebuild under a new label.
 
