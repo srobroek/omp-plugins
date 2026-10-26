@@ -13,7 +13,11 @@ TRIGGER
 
 1. Provide the part STEP file, matching `metrics.json` from its cad-model version, `hw/parts/<PN>/part.yaml`, and `hw/product.yaml` with part identity, title, material, revision, regime, and general tolerance.
 2. Run `scripts/drawing.py <step> --part <part.yaml> --product <product.yaml> --metrics <metrics.json> --output-dir <dir> [--scale <ratio>] [--timeout <seconds>]` with FreeCAD 1.1.4 installed; timeout defaults to 120 seconds. Headless `freecadcmd` runs `scripts/techdraw_job.py`: a TechDraw projection group places the front, top, and right views in the regime's projection angle. `--scale` is the largest scale tried; smaller standard scales follow until the views and annotations fit the drawing area.
-3. `scripts/drawing.py` composes the sheet, then runs `scripts/layout_check.py` over the SVG. The run fails with `layout_check_failed` and writes `drawing_<run>.rejected.svg` when annotation text overlaps a view, another text, the frame, or the title block; when two views are closer than 10 mm or lie outside the frame; when the projection symbol leaves its title-block cell; or when a template placeholder remains.
+3. `scripts/drawing.py` composes the sheet, then runs `scripts/layout_check.py` over the SVG. A violation fails the run with `layout_check_failed` and writes `drawing_<run>.rejected.svg`. The check rejects:
+   - annotation text that overlaps a view, another text, the frame, or the title block
+   - two views closer than 10 mm, or a view outside the frame
+   - a projection symbol outside its title-block cell
+   - a remaining template placeholder
 4. `scripts/svg_to_png.swift` and `scripts/svg_to_pdf.swift` export the checked SVG through macOS AppKit/PDFKit, not GUI FreeCAD; the PDF page matches the sheet size.
 5. Review the JSON report and both raster previews; confirm orthographic views, dimensions, title block, and projection symbol.
 6. Record accepted drawing checks in the hardware project's `verification.csv` after a human reviews both raster previews.

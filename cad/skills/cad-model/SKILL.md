@@ -52,6 +52,6 @@ NOT Hand-edit files under `hw/versions/`; rebuild under a new label.
 
 OUTPUT
 L1 MODEL <RUN|CHECK|DIFF> vN: <PASS|FAIL>, <parts> parts, <wall s>
-   Blocking — each `blocking_failures` entry with its part or pair and number
-   Changed — each changed part with volume delta, only for diff
+   Blocking: each `blocking_failures` entry with its part or pair and number
+   Changed: each changed part with volume delta, only for diff
 CAP 60w clean · 140w with findings

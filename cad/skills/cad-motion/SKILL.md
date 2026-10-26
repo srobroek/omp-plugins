@@ -62,7 +62,7 @@ NOT Take the worst-case pose from intuition; it comes from `sweep.py` `worst_cas
 
 OUTPUT
 L1 MOTION <POSE|SWEEP|FREECAD>: <PASS|FAIL>, <poses or frames>, <timing>
-   Collisions — pose and pair per entry, only if any
-   Clearance — the three smallest pairs with pose
-   Worst case — pose, reach mm, STEP path
+   Collisions: pose and pair per entry, only if any
+   Clearance: the three smallest pairs with pose
+   Worst case: pose, reach mm, STEP path
 CAP 80w clean · 160w with findings
