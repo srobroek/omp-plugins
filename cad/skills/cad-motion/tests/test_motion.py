@@ -34,6 +34,7 @@ def load(name: str, path: Path):
 
 pose = load("cad_motion_pose", SCRIPTS / "pose.py")
 freecad_assembly = load("cad_motion_freecad", SCRIPTS / "freecad_assembly.py")
+sweep = load("cad_motion_sweep", SCRIPTS / "sweep.py")
 
 
 def joint(jid: str, kind: str, parent: str, child: str, axis, origin, low: float, high: float, nominal: float = 0.0):
@@ -120,6 +121,17 @@ class FrameCheckTests(unittest.TestCase):
         frame["TST-0003"][0] = [0.0, 0.0, 2.0]  # child lifted 2 mm along the revolute axis
         checks = freecad_assembly.check_frames(chain, [frame])
         self.assertEqual([r["joint"] for r in checks["residuals"]], ["J-002"])
+
+
+class ClearanceTests(unittest.TestCase):
+    """sweep's clearance verdict on given distances; needs no OCP."""
+
+    def test_a_clearance_just_below_the_requirement_fails_though_it_rounds_up(self) -> None:
+        measured = {("TST-0001", "TST-0003"): {"pair": ["TST-0001", "TST-0003"], "clearance_mm": 0.49996,
+                                               "pose": {"J-001": 0.0}}}
+        rows, findings = sweep.clearance_report(measured, 0.5)
+        self.assertEqual(rows[0]["clearance_mm"], 0.5)
+        self.assertEqual([f["pair"] for f in findings], [["TST-0001", "TST-0003"]])
 
 
 PLANAR_YAML = """subassemblies:
@@ -210,6 +222,49 @@ class StepTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
         self.assertEqual(sorted(result["placements"]), [f"LMP-000{n}" for n in range(1, 8)])
         self.assertIn("PRODUCT('LMP-0003 Upper link'", out.read_text(encoding="utf-8"))
+
+    def cad_model_version(self) -> Path:
+        """A cad-model layout: versions/v1 with zero-pose parts, an assembly.step posed at J-001=30, latest.json."""
+        hw = self.hw(90)
+        version = hw / "versions" / "v1"
+        shutil.copytree(self.planar, version / "parts")
+        proc, _ = self.run_script("pose.py", "--hw", str(hw), "--parts-dir", str(self.planar), "--set", "J-001=30",
+                                  "--out", str(version / "assembly.step"))
+        self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+        (version / "manifest.json").write_text(json.dumps({"label": "v1", "pose": {"values": {"J-001": 30.0, "J-002": 0.0}}}),
+                                               encoding="utf-8")
+        (hw / "versions" / "latest.json").write_text(json.dumps({"label": "v1", "parts": {}}), encoding="utf-8")
+        return hw
+
+    def test_a_cad_model_assembly_step_posed_at_nominal_is_refused(self) -> None:
+        hw = self.cad_model_version()
+        proc, result = self.run_script("sweep.py", "--hw", str(hw), "--step", str(hw / "versions" / "v1" / "assembly.step"),
+                                       "--steps", "5", "--grid", "0", "--worst-step", str(self.root / "w3.step"))
+        self.assertEqual((proc.returncode, result), (2, {}), proc.stderr[-2000:])
+        self.assertIn("--version v1", proc.stderr)
+
+    def test_a_version_sweeps_like_its_parts_dir(self) -> None:
+        hw = self.cad_model_version()
+        common = ("--hw", str(hw), "--steps", "5", "--grid", "3")
+        runs = [self.run_script("sweep.py", *common, *source, "--worst-step", str(self.root / f"w-{n}.step"))
+                for n, source in enumerate((("--version", "v1"), ("--parts-dir", str(hw / "versions" / "v1" / "parts"))))]
+        (by_version, a), (by_dir, b) = runs
+        self.assertEqual((by_version.returncode, by_dir.returncode), (0, 0), by_version.stderr[-2000:] + by_dir.stderr[-2000:])
+        for key in ("status", "poses", "pairs", "collisions", "min_clearance", "reach_envelope"):
+            self.assertEqual(a[key], b[key], key)
+        self.assertEqual((a["worst_case"]["pose"], a["worst_case"]["reach_mm"]), (b["worst_case"]["pose"], b["worst_case"]["reach_mm"]))
+        self.assertIn("--version v1", a["worst_case"]["command"])
+
+    def test_latest_resolves_through_latest_json_and_an_unbuilt_version_is_refused(self) -> None:
+        hw = self.cad_model_version()
+        posed = [self.run_script("pose.py", "--hw", str(hw), *source, "--set", "J-002=90", "--out", str(self.root / f"l-{n}.step"))
+                 for n, source in enumerate((("--version", "latest"), ("--parts-dir", str(self.planar))))]
+        (latest, a), (by_dir, b) = posed
+        self.assertEqual((latest.returncode, by_dir.returncode), (0, 0), latest.stderr[-2000:])
+        self.assertEqual(a["placements"], b["placements"])
+        proc, _ = self.run_script("pose.py", "--hw", str(hw), "--version", "v2", "--out", str(self.root / "v2.step"))
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("not a built cad-model version", proc.stderr)
 
     @unittest.skipUnless(freecad_assembly.find_freecad(None), "freecadcmd not found")
     def test_freecad_simulation_moves_within_limits(self) -> None:

@@ -20,8 +20,10 @@ run   executes every hw/parts/<PN>/model.py in its declared kernel's own uv envi
         part-map.json     PN -> glTF node and mesh names
         metrics.json      per part: volume, area, bbox, solids, holes, mass from assets/materials.yaml
         manifest.json     per part: kernel, model path, source sha256, params, kernel volume;
-                          tool versions per environment; pose; joint pairs; file hashes
-      and hw/versions/latest.json pointing at that version (paths relative to hw/).
+                          tool versions per environment; pose; joint pairs with joint id and type;
+                          file hashes
+      and hw/versions/latest.json pointing at that version (paths relative to hw/). Labels
+      increase: an existing label or one below the newest built version is refused.
 check runs the geometry checks on a built version; diff compares two built versions.
 
 stdout: one JSON document. stderr: diagnostics.
@@ -42,14 +44,14 @@ from cadmodel import build
 
 def _pair(text: str) -> tuple[str, str]:
     a, sep, b = text.partition(":")
-    if not sep or not build.PN.match(a) or not build.PN.match(b) or a == b:
+    if not sep or not build.is_pn(a) or not build.is_pn(b) or a == b:
         raise argparse.ArgumentTypeError(f"expected PN:PN, got {text!r}")
     return a, b
 
 
 def _expect(text: str) -> tuple[str, int]:
     pn, sep, n = text.partition("=")
-    if not sep or not build.PN.match(pn) or not n.isdigit():
+    if not sep or not build.is_pn(pn) or not n.isdigit():
         raise argparse.ArgumentTypeError(f"expected PN=COUNT, got {text!r}")
     return pn, int(n)
 

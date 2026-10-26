@@ -5,12 +5,14 @@
 """Kinematic sweep: interference, clearance, reach envelope, and worst-case pose.
 
 Usage:
-    uv run --script sweep.py --hw HW (--step ASSEMBLY.step | --parts-dir DIR)
+    uv run --script sweep.py --hw HW (--version vN|latest | --step ASSEMBLY.step | --parts-dir DIR)
         [--attach PN=PARENT_PN ...] --worst-step WORST.step
         [--steps 19] [--grid 3] [--end-effector PN] [--include-pair PN:PN ...]
         [--min-clearance 0] [--volume-tol 0.001] [--max-poses 5000] [--time-limit 600]
 
-Inputs and kinematics are pose.py's (same options, same chain).
+Inputs and kinematics are pose.py's (same options, same chain): the geometry is
+at the zero pose, so pass a cad-model version with `--version`, not its
+nominal-pose assembly.step.
 
 Poses: for every movable joint, `--steps` values evenly spaced through
 [min, max] with the other joints at nominal; plus a combined grid of
@@ -19,15 +21,18 @@ Identical poses are evaluated once.
 
 Pairs: every pair of chain parts except joint-connected parent/child pairs
 (fixed joints and --attach included); `--include-pair A:B` puts an excluded
-pair back. Per pose and pair: the minimum distance (BRepExtrema_DistShapeShape)
-and, when it is within 1e-6 mm, the overlap volume (BRepAlgoAPI_Common).
-Volumes and centres of mass use pose.py's `volume_properties`, the adaptive
-integration cad-model measures every volume with.
+pair back. Per pose and pair: pose.py's `interference`, the one interference
+rule cad-model `check` uses too: the minimum distance
+(BRepExtrema_DistShapeShape) and, when it is within 1e-6 mm, the overlap volume
+(non-destructive BRepAlgoAPI_Common, measured with pose.py's adaptive
+`volume_properties`). Centres of mass use `volume_properties` as well.
 A pair evaluation is cached on the pair's relative transform, so a joint
 sweep recomputes only the pairs that joint moves.
 
-Checks: a collision is an overlap volume above `--volume-tol` mm^3; a
-clearance finding is a minimum distance below `--min-clearance` mm (off at 0).
+Checks: a collision is an overlap volume above `--volume-tol` mm^3 (default
+pose.py's INTERFERENCE_MM3, 1e-3); a clearance finding is a minimum distance
+below `--min-clearance` mm (off at 0), compared before the output rounds it to
+4 decimals.
 
 Reach envelope: the union of the end-effector's posed bounding boxes.
 End effector: `--end-effector`, else the part with the most movable joints
@@ -68,7 +73,6 @@ pose = importlib.util.module_from_spec(_spec)
 sys.modules["cad_motion_pose"] = pose
 _spec.loader.exec_module(pose)
 
-CONTACT_MM = 1e-6
 CRITERION = "max_horizontal_reach"
 MAX_LISTED = 50
 
@@ -144,24 +148,13 @@ class Geometry:
         if cached is not None:
             self.cache_hits += 1
             return cached
-        from OCP.BRepAlgoAPI import BRepAlgoAPI_Common
-        from OCP.BRepExtrema import BRepExtrema_DistShapeShape
-
         self.evaluations += 1
-        shape_a = self.parts[a].shape
-        shape_b = pose.placed(self.parts[b].shape, relative)
-        extrema = BRepExtrema_DistShapeShape(shape_a, shape_b)
-        if not extrema.IsDone():
-            raise pose.MotionError(f"distance computation failed for {a} / {b}")
-        distance = extrema.Value()
-        volume = 0.0
-        if distance <= CONTACT_MM:
-            common = BRepAlgoAPI_Common(shape_a, shape_b)
-            if not common.IsDone():
-                raise pose.MotionError(f"interference computation failed for {a} / {b}")
-            volume = max(0.0, pose.volume_properties(common.Shape()).Mass())
-        self.cache[key] = (distance, volume)
-        return distance, volume
+        try:
+            measured = pose.interference(self.parts[a].shape, pose.placed(self.parts[b].shape, relative))
+        except pose.MotionError as error:
+            raise pose.MotionError(f"{a} / {b}: {error}") from error
+        self.cache[key] = measured
+        return measured
 
     def bounds(self, pn: str, rigid: Any) -> tuple[list[float], list[float]]:
         from OCP.Bnd import Bnd_Box
@@ -226,9 +219,26 @@ def sweep(chain: Any, geometry: Geometry, poses: list[tuple[str, dict[str, float
     return state
 
 
+def clearance_report(clearance: dict[tuple[str, str], dict[str, Any]],
+                     required: float) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """(per-pair minimum clearance smallest first, findings for the pairs below `required` mm).
+
+    The comparison uses the measured distance; only the output rounds it to 4 decimals.
+    """
+    ordered = sorted(clearance.values(), key=lambda item: item["clearance_mm"])
+    rows = [{**item, "clearance_mm": round(item["clearance_mm"], 4)} for item in ordered]
+    findings = [{"check": "min_clearance", "pair": row["pair"], "clearance_mm": row["clearance_mm"],
+                 "required_mm": required, "pose": row["pose"]}
+                for item, row in zip(ordered, rows) if item["clearance_mm"] < required]
+    return rows, findings
+
+
 def pose_command(args: argparse.Namespace, values: dict[str, float]) -> str:
     parts = ["uv run --script pose.py", f"--hw {args.hw}"]
-    parts.append(f"--step {args.step}" if args.step else f"--parts-dir {args.parts_dir}")
+    if args.version:
+        parts.append(f"--version {args.version}")
+    else:
+        parts.append(f"--step {args.step}" if args.step else f"--parts-dir {args.parts_dir}")
     parts += [f"--attach {spec}" for spec in args.attach]
     parts += [f"--set {jid}={value!r}" for jid, value in values.items()]
     parts.append(f"--out {args.worst_step}")
@@ -245,7 +255,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--include-pair", action="append", default=[], metavar="PN:PN",
                         help="check a joint-connected pair as well (repeatable)")
     parser.add_argument("--min-clearance", type=float, default=0.0, help="required clearance in mm (0 = report only)")
-    parser.add_argument("--volume-tol", type=float, default=1e-3, help="overlap volume in mm^3 that counts as a collision")
+    parser.add_argument("--volume-tol", type=float, default=pose.INTERFERENCE_MM3,
+                        help="overlap volume in mm^3 that counts as a collision")
     parser.add_argument("--max-poses", type=int, default=5000, help="refuse sweeps with more poses than this")
     parser.add_argument("--time-limit", type=float, default=600.0, help="seconds before the sweep stops as incomplete")
     args = parser.parse_args(argv)
@@ -290,14 +301,7 @@ def main(argv: list[str] | None = None) -> int:
     except (pose.MotionError, OSError) as error:
         print(f"sweep: {error}", file=sys.stderr)
         return 2
-    clearance = sorted(state.clearance.values(), key=lambda item: item["clearance_mm"])
-    for item in clearance:
-        item["clearance_mm"] = round(item["clearance_mm"], 4)
-    findings = [
-        {"check": "min_clearance", "pair": item["pair"], "clearance_mm": item["clearance_mm"],
-         "required_mm": args.min_clearance, "pose": item["pose"]}
-        for item in clearance if item["clearance_mm"] < args.min_clearance
-    ]
+    clearance, findings = clearance_report(state.clearance, args.min_clearance)
     failed = bool(state.collisions or findings)
     status = "incomplete" if not complete else ("fail" if failed else "pass")
     per_pose = (swept - loaded) / state.evaluated if state.evaluated else 0.0

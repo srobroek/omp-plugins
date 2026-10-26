@@ -5,7 +5,7 @@
 """Pose an assembly at given joint values and write the posed STEP AP242.
 
 Usage:
-    uv run --script pose.py --hw HW (--step ASSEMBLY.step | --parts-dir DIR)
+    uv run --script pose.py --hw HW (--version vN|latest | --step ASSEMBLY.step | --parts-dir DIR)
         [--attach PN=PARENT_PN ...] [--set J-###=VALUE ...] --out POSED.step
 
 Joint record: hw/assembly.yaml `joints`. Supported types: revolute (values in
@@ -13,10 +13,18 @@ degrees), prismatic (values in mm) and fixed. `origin` (mm) and `axis` are in
 assembly coordinates at the zero pose, where every joint value is 0.
 
 Geometry, exactly one of:
+    --version VER    a cad-model version: the zero-pose per-part STEPs in
+                     HW/versions/<VER>/parts. `latest` is the label
+                     HW/versions/latest.json names; the version must be built
+                     (manifest.json present).
     --step FILE      one assembly STEP; every leaf product whose name starts
                      with a PN (`LMP-0003` or `LMP-0003 Lower link`) is a part.
                      Instance placements are flattened into assembly
                      coordinates; a PN instanced more than once is rejected.
+                     A cad-model version's assembly.step is posed at the
+                     joints' nominal values; when one is non-zero it is
+                     refused (its manifest.json tells), since posing it again
+                     would apply the nominal twice. Use --version instead.
     --parts-dir DIR  one STEP per part, named `<PN>.step` or
                      `<PN> <anything>.step` (`.stp` also accepted). The part
                      keeps the file's PN-first product name; an unnamed file
@@ -63,6 +71,14 @@ STEP_SUFFIXES = (".step", ".stp")
 # fluted housing (LMP-0004) differed by 5.6e-6 relative, above the 1e-6 read-back bound; the adaptive
 # rule agreed to 1.6e-11.
 VOLUME_EPS = 1e-9
+# The one interference rule of cad-motion `sweep` and cad-model `check` (`interference` below): a
+# shared volume above INTERFERENCE_MM3 interferes. Shapes farther apart than OVERLAP_GATE_MM share
+# no volume, so the Boolean is skipped. FUZZY_MM is the Boolean fuzzy value: the kernel's own
+# precision, so a Boolean never glues distinct faces.
+INTERFERENCE_MM3 = 1e-3
+OVERLAP_GATE_MM = 1e-6
+FUZZY_MM = 1e-7
+VERSION_LABEL = re.compile(r"^v([1-9][0-9]*)$")  # a cad-model version label: v1, v2, ...
 
 Vec = tuple[float, float, float]
 
@@ -469,6 +485,47 @@ def volume_properties(shape: Any) -> Any:
     return props
 
 
+def shape_list(shapes: Iterable[Any]) -> Any:
+    """An OCP list of shapes for the Boolean argument and tool setters."""
+    try:  # OCP 8.0 binds NCollection lists under OCP.collections and drops TopTools_ListOfShape
+        from OCP.collections import List_TopoDS_Shape as ShapeList
+    except ImportError:  # OCP 7.9
+        from OCP.TopTools import TopTools_ListOfShape as ShapeList
+
+    result = ShapeList()
+    for shape in shapes:
+        result.Append(shape)
+    return result
+
+
+def interference(shape_a: Any, shape_b: Any) -> tuple[float, float]:
+    """(minimum distance mm, shared volume mm^3) of two shapes in one frame.
+
+    The shared volume is the Boolean common, run non-destructively (the inputs, which posed parts
+    share with every other pose, keep their tolerances) with fuzzy value FUZZY_MM, and measured with
+    `volume_properties`; it is 0 without a Boolean when the shapes are farther apart than
+    OVERLAP_GATE_MM. A shared volume above INTERFERENCE_MM3 is interference.
+    """
+    from OCP.BRepAlgoAPI import BRepAlgoAPI_Common
+    from OCP.BRepExtrema import BRepExtrema_DistShapeShape
+
+    extrema = BRepExtrema_DistShapeShape(shape_a, shape_b)
+    if not extrema.IsDone():
+        raise MotionError("distance computation failed")
+    distance = extrema.Value()
+    if distance > OVERLAP_GATE_MM:
+        return distance, 0.0
+    common = BRepAlgoAPI_Common()
+    common.SetArguments(shape_list([shape_a]))
+    common.SetTools(shape_list([shape_b]))
+    common.SetNonDestructive(True)
+    common.SetFuzzyValue(FUZZY_MM)
+    common.Build()
+    if not common.IsDone():  # Build leaves it not done on any kernel error
+        raise MotionError("interference computation failed")
+    return distance, max(0.0, volume_properties(common.Shape()).Mass())
+
+
 def _part_titles(hw: Path) -> dict[str, str]:
     import yaml
 
@@ -663,20 +720,70 @@ def write_posed(path: Path, hw: Path, chain: Chain, parts: Mapping[str, Part], v
 # --------------------------------------------------------------------------- CLI
 
 
+def _version(text: str) -> str:
+    if text != "latest" and not VERSION_LABEL.match(text):
+        raise argparse.ArgumentTypeError(f"expected vN or latest, got {text!r}")
+    return text
+
+
 def add_geometry_arguments(parser: argparse.ArgumentParser) -> None:
     """Options shared by the cad-motion scripts."""
     parser.add_argument("--hw", type=Path, required=True, help="hardware design record directory (hw/)")
     source = parser.add_mutually_exclusive_group(required=True)
-    source.add_argument("--step", type=Path, help="assembly STEP with PN-first product names")
-    source.add_argument("--parts-dir", type=Path, help="directory with one <PN>.step per part")
+    source.add_argument("--version", type=_version, metavar="vN|latest",
+                        help="cad-model version whose zero-pose parts/<PN>.step files to use")
+    source.add_argument("--step", type=Path, help="zero-pose assembly STEP with PN-first product names")
+    source.add_argument("--parts-dir", type=Path, help="directory with one zero-pose <PN>.step per part")
     parser.add_argument("--attach", action="append", default=[], metavar="PN=PARENT_PN",
                         help="rigidly attach a part without a joint to a parent part (repeatable)")
+
+
+def version_parts_dir(hw: Path, version: str) -> Path:
+    """The zero-pose per-part STEP folder of a built cad-model version; `latest` via latest.json."""
+    versions = hw / "versions"
+    label = version
+    if version == "latest":
+        try:
+            label = json.loads((versions / "latest.json").read_text(encoding="utf-8"))["label"]
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            raise MotionError(f"--version latest: cannot read the label in {versions / 'latest.json'}: {error}") from error
+        if not isinstance(label, str) or not VERSION_LABEL.match(label):
+            raise MotionError(f"--version latest: {versions / 'latest.json'} names no version label: {label!r}")
+    folder = versions / label
+    if not (folder / "manifest.json").is_file():
+        raise MotionError(f"--version {version}: {folder} is not a built cad-model version (no manifest.json)")
+    return folder / "parts"
+
+
+def refuse_posed_version_step(step: Path) -> None:
+    """Refuse a cad-model version's assembly.step posed away from the zero pose.
+
+    `cad_model.py run` writes assembly.step at the joints' nominal values and records them in the
+    sibling manifest.json; posing that file again would apply the nominal twice.
+    """
+    manifest = step.parent / "manifest.json"
+    if step.name != "assembly.step" or not manifest.is_file():
+        return
+    try:
+        values = json.loads(manifest.read_text(encoding="utf-8"))["pose"]["values"]
+        moved = {jid: value for jid, value in values.items() if value != 0}
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return  # not a cad-model manifest
+    if moved:
+        label = step.parent.name
+        raise MotionError(
+            f"{step} is cad-model's assembly.step, posed at the nominal {moved}, not the zero pose; "
+            f"use --version {label} or --parts-dir {step.parent / 'parts'}"
+        )
 
 
 def load_inputs(args: argparse.Namespace) -> tuple[Assembly, Chain, dict[str, Part]]:
     """Read the joint record and geometry and build the connected chain."""
     assembly = load_assembly(args.hw)
-    parts = load_parts(args.hw, args.step, args.parts_dir)
+    if args.step is not None:
+        refuse_posed_version_step(args.step)
+    parts_dir = version_parts_dir(args.hw, args.version) if args.version else args.parts_dir
+    parts = load_parts(args.hw, args.step, parts_dir)
     chain = build_chain([*assembly.joints, *attach_joints(args.attach)], parts)
     require_geometry(chain, parts)
     return assembly, chain, parts

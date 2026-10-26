@@ -155,5 +155,46 @@ class KernelDefectTests(unittest.TestCase):
                                  ("step_readback", "TST-0102", None)])
 
 
+PARITY_MODELS = {
+    "cadquery": {
+        "TST-0201": 'import cadquery as cq\nKERNEL = "cadquery"\nPARAMS = {"size": float("nan")}\n\n\n'
+                    'def build(params):\n    return cq.Workplane().box(10, 10, 10)\n',
+        "TST-0202": 'import cadquery as cq\nKERNEL = "cadquery"\nPARAMS = {"size": 10.0}\n\n\n'
+                    'def build(params):\n    s = params["size"]\n'
+                    '    return cq.Workplane().pushPoints([(0, 0), (2 * s, 0)]).box(s, s, s, combine=False)\n',
+    },
+    "build123d": {
+        "TST-0203": 'import bd_warehouse  # noqa: F401 - in the build123d runner environment\n'
+                    'from build123d import Box\nKERNEL = "build123d"\nPARAMS = {"size": 10.0}\n\n\n'
+                    'def build(params):\n    return Box(params["size"], params["size"], params["size"])\n',
+    },
+}
+
+
+@unittest.skipUnless(shutil.which("uv"), "uv is required to build the kernel environments")
+class RunnerParityTests(unittest.TestCase):
+    """build_reference builds through cad-model's runners: same environment, same model.py contract."""
+
+    def build(self, kernel: str, tmp: str) -> tuple[int, dict]:
+        models = Path(tmp) / "models"
+        models.mkdir()
+        for pn, source in PARITY_MODELS[kernel].items():
+            (models / f"{pn}.py").write_text(source, encoding="utf-8")
+        return run_json([sys.executable, str(SCRIPTS / "build_reference.py"), "--kernel", kernel,
+                         "--models", str(models), "--out", str(Path(tmp) / "out")])
+
+    def test_cadquery_rejects_nan_params_and_keeps_every_workplane_object(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            code, report = self.build("cadquery", tmp)
+        self.assertEqual(code, 1)
+        self.assertEqual([e.split(":")[:2] for e in report["errors"]], [["TST-0201", " ContractError"]])
+        self.assertAlmostEqual(report["parts"]["TST-0202"]["kernel_volume_mm3"], 2000.0, places=6)
+
+    def test_build123d_models_can_use_bd_warehouse(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            code, report = self.build("build123d", tmp)
+        self.assertEqual((code, report["errors"], sorted(report["parts"])), (0, [], ["TST-0203"]))
+
+
 if __name__ == "__main__":
     unittest.main()

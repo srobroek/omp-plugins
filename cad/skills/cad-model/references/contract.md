@@ -28,9 +28,12 @@
 | `scripts/cad_model.py` (orchestrator) | cadquery-ocp-novtk 8.0.1.1.0, pyyaml, trimesh 4, numpy | 3.11-3.14 |
 
 The two kernels' OCP builds clash, so each runner is its own uv script environment, started as a
-subprocess. With `--kernel auto` and parts in both kernels, both runners run concurrently. Every
-file the orchestrator writes after the runners (assembly, GLB, metrics, checks) is computed from
-the per-part STEP files through one OCP, so the JSON is identical whichever kernel built a part.
+subprocess. With `--kernel auto` and parts in both kernels, both runners run concurrently: each is
+fed its request and drained by its own thread. When one runner fails, the other is killed with its
+uv process group before the partial version folder is removed, so a failed run leaves nothing.
+Every file the orchestrator writes after the runners (assembly, GLB, metrics, checks) is computed
+from the per-part STEP files through one OCP, so the JSON is identical whichever kernel built a
+part. cad-design's `build_reference.py` builds its reference models through the same runners.
 
 ## Safe edits
 

@@ -38,7 +38,7 @@ Exit codes: 0 pass; 1 a part model failed (`run`, no version written) or a block
 
 ## Rules
 
-MUST Pick the next unused label; versions are immutable and `run` refuses an existing one.
+MUST Pick the next label above the newest version; versions are immutable and `run` refuses an existing or lower label.
 MUST Treat `check` exit 1 as a failed stage gate; report `blocking_failures` and the numbers verbatim.
 MUST Resolve current files through `hw/versions/latest.json`, never by guessing a version path.
 MUST Add a missing material density to `assets/materials.yaml` with its source; `mass_g: null` means unknown.
