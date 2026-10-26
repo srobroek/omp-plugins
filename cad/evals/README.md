@@ -29,17 +29,16 @@ directory can serve as a `ratchet` variant.
   - `step_readback.py` uses `cadquery-ocp-novtk` 8.0.x;
   - `record_check.py` uses `pyyaml`.
   The oracles use `cadquery` 2.8 and `build123d` 0.13, each in its own environment. The tests cache built oracle STEP files by model hash in `~/.cache/cad-evals/oracle-steps`.
-- The AWS CLI and a dedicated Bedrock-only profile that issues temporary credentials (`[auth] aws_profile`, or `run.py --aws-profile PROFILE`; default `$AWS_PROFILE`). See [Credentials](#credentials).
-- The harness CLIs for the cells you run.
+
 
 ## Credentials
 
-The runner exports AWS credentials from one profile with `aws configure export-credentials` and passes them to the harnesses that call Bedrock (OMP, Claude Code, OpenCode) as environment variables. Kiro signs in through its own login and gets none. The profile comes from `[auth] aws_profile` in `matrix.toml`, or from `--aws-profile PROFILE` given before the command (`run.py --aws-profile cad-eval-bedrock run --pilot …`), which overrides it; without either, `$AWS_PROFILE` is used.
+The runner exports AWS credentials from one profile with `aws configure export-credentials` and passes them to the harnesses that call Bedrock (OMP, Claude Code, OpenCode) as environment variables. Kiro uses its own trial-local copy of the user's login database and receives no AWS credentials. The profile comes from `[auth] aws_profile` in `matrix.toml`, or from `--aws-profile PROFILE` given before the command (`run.py --aws-profile cad-eval-bedrock run --pilot …`), which overrides it; without either, `$AWS_PROFILE` is used.
 
 An agent under test can read those variables, so the credentials reach exactly as far as the profile's role. Give the runner a dedicated profile:
 
 - **Bedrock invocation only.** An IAM Identity Center permission set, or a role reached through `role_arn` and `source_profile`, whose policy allows `bedrock:InvokeModel` and `bedrock:InvokeModelWithResponseStream` and nothing else. The Converse and ConverseStream calls need exactly these two permissions ([Converse API](https://docs.aws.amazon.com/bedrock/latest/userguide/conversation-inference.html)). Scope the resources to the foundation models and inference profiles in the matrix.
-- **Temporary credentials.** The runner refuses credentials with no `Expiration`, which are long-lived access keys, as an `auth_error` before any trial starts.
+- **Temporary credentials.** The runner refuses credentials with no `Expiration`, which are long-lived access keys, as an `auth_error` before any trial starts. Before staging each trial, credentials must remain valid for its wall-clock ceiling (`case_timeout_s`, or the smoke `--timeout`) plus five minutes. This profile's credential process returns cached credentials until they expire. If an export remains too short-lived, the runner polls every 30 seconds for up to the credential's remaining lifetime plus five minutes (capped at one hour), then re-exports. If suitable credentials still do not arrive, the slot is `not_started`; rerun after the profile refreshes to resume it.
 
 The runner does not narrow the credentials itself. An `sts assume-role` with an inline session policy would narrow them, but it needs a second role whose trust policy admits your SSO role. That role chaining was not proven with SSO credentials, so the runner does not try it.
 
@@ -143,12 +142,12 @@ python3 cad/evals/run.py inventory --harness omp --model amazon-bedrock/global.a
 python3 cad/evals/run.py smoke --harness omp --model amazon-bedrock/global.anthropic.claude-haiku-5-5 --out /tmp/smoke
 ```
 
-A rerun into the same `--out` resumes:
+A rerun into the same `--out` resumes pending slots:
 
 - a `(case, rep)` with a row in `results.jsonl` is skipped;
 - a slot that only errored runs again.
 
-To retry a whole cell, delete its directory. `--keep-sandboxes` keeps each trial directory for inspection and prints its path to stderr; the trial's copy of your Kiro login is deleted first. `--concurrency` overrides the matrix value. A harness whose preflight refuses has none of its cells started: the reason goes to stderr and the pending slots count as `not_started`. A trial refused later in a long run lands in `errors.jsonl` as `auth_error`, and a rerun picks it up. A Kiro trial that refreshed its copy of your login lands as `kiro_token_refreshed`: the runner tells you on stderr to sign in again, and the Kiro slots still queued count as `not_started`.
+AWS-credential-refused slots have no error row. Refresh the source profile to obtain fresh credentials, then rerun. Kiro may refresh its isolated login copy without stopping any trial; the copy is deleted at trial end.
 
 The pilot writes traces for every pilot case because no split exists yet. A ratchet variant run must pass `--train-ids`, one case id per line, so that test cases never get transcripts.
 
@@ -160,6 +159,7 @@ The pilot writes traces for every pilot case because no split exists yet. A ratc
   - `model` (the served id, read from the stream), `usage`, `latency_s`;
   - `harness`, `requested_model`, `turns`, `retries`;
   - `isolation` (`clean` or `contaminated`), `leaks`, `inventory` and `isolation_mechanism`. `inventory` holds what the harness reported loading; the harness `version`, from its stream (Claude Code's `system/init`) or its CLI (`omp --version`, `kiro-cli --version`, `opencode --version`), run model-free after the turn; and `baseline`: the bundled items this run loaded that no supported setting removes (`loaded`) and the harness version that list was declared for (`declared_for`).
+- For Kiro rows, `inventory.kiro_login_refreshed: true` notes that the token in the trial-local copy changed. Kiro's login refresh is not treated as a failure or a reason to halt later trials; the copied login is still deleted at trial end.
 - `errors.jsonl`: attempts with nothing scorable, each with a `failure_class`:
 
   | Class | Meaning |
@@ -171,8 +171,7 @@ The pilot writes traces for every pilot case because no split exists yet. A ratc
   | `model_unverified` | The stream carried no served model |
   | `truth_leak` | The stream mentions the hidden truth directory |
   | `plugin_missing` | The staged plugin lacks what the harness loads |
-  | `auth_error` | AWS credentials could not be exported from the `[auth]` profile or carry no `Expiration`, or the Kiro login a trial would copy expires too soon |
-  | `kiro_token_refreshed` | After a Kiro trial, the token row in its copy of your login had changed or could not be read back, so your own store may hold a superseded refresh token. Sign in again; no further Kiro trial starts in that run |
+  | `auth_error` | AWS credentials could not be exported from the `[auth]` profile or carry no `Expiration` |
   | `grader_error` | A grader could not run |
   | `runner_error` | An unexpected runner exception |
 
@@ -201,7 +200,7 @@ Each row then records what the harness itself reported loading, and the leaks: e
 
 **Host effects.** `run.py smoke` snapshots the shared temp directories (`$TMPDIR` and `/tmp`, two levels deep) and the harness's user stores before staging and after cleanup. For Kiro the stores are `~/Library/Application Support/kiro-cli` and `~/.kiro`, with per-table row counts and digests of every SQLite file, and the targets of the kiro-cli executables linked into the trial, by size, mtime and SHA-256, so an updater writing through a link shows. It records what the harness wrote to the trial's own `TMPDIR`, attributes shared-temp additions to the trial when their path names the trial (Claude slugs the work dir) or matches a name in the trial's `TMPDIR`, counts every other addition as a concurrent process's without naming it, and reports added, removed or changed store entries, changed tables and rows that mention the trial. `host.unchanged` is strict, so a user's Kiro running beside the smoke makes it false; compare with `smoke/kiro-store-control.json`.
 
-**Kiro login.** A trial must never refresh the token it copies: a refresh inside the trial would leave the user's store holding an older token. Before a Kiro cell starts, and again before each Kiro trial, the runner reads the access token's expiry from the user's store (read-only) and refuses unless it outlives the trial's ceiling (`case_timeout_s`, or `--timeout` for a smoke) by 5 minutes. Kiro's tokens last about an hour. The runner never refreshes on the user's behalf. The refusal tells the user to refresh their own login: `kiro-cli logout`, then `kiro-cli login` ([CLI commands](https://kiro.dev/docs/reference/cli-commands.md); logout is user-wide). The alternative is to wait for their own Kiro to refresh the token shortly before it expires. `kiro-cli whoami` only reports the login: it left a valid token's expiry unchanged. Kiro does not publish how early it refreshes, so the 5-minute margin is a guess. After every Kiro trial the runner therefore compares the copy's `kirocli:odic:token` row with what it copied. A changed row, or a copy it cannot read back, files the trial as `kiro_token_refreshed`, tells the user on stderr to sign in again and starts no further Kiro trial in that run. The copy is then deleted, so a kept sandbox holds no login.
+- **Kiro login.** Each trial gets a private copy of the login database under its isolated HOME. Kiro refreshes its own token as needed; the runner never refuses Kiro trials based on token expiry or stops later trials when the copied token changes. A changed token is noted in `inventory.kiro_login_refreshed`; the copy is deleted after each trial, including kept sandboxes, without modifying the user's login store.
 
 The smoke records in `smoke/` predate the CLI version lookup, so their `inventory.version` is null for OMP, Kiro and OpenCode. The CLIs reported the declared versions (18.12.3, 2.34.0, 2.1.4) when those smokes ran. When the record scrub landed, the committed records' `added_by_other_processes` lists were reduced to counts and Kiro's `isolation_mechanism` was corrected, without new calls. The records predate the Kiro executable fingerprint.
 

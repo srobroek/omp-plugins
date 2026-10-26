@@ -123,7 +123,9 @@ def load_matrix(path: Path) -> Matrix:
 # TMPDIR is the trial's own (`adapters.base.trial_temp`), never the host's.
 _HOST_KEEP = ("PATH", "LANG", "LC_ALL", "LC_CTYPE", "USER", "LOGNAME", "SHELL")
 _GIT_ENV = {"GIT_TERMINAL_PROMPT": "0", "PAGER": "cat", "GIT_PAGER": "cat", "TERM": "dumb"}
-_CRED_MARGIN_S = 35 * 60  # longer than the default case ceiling
+_CRED_MARGIN_S = 5 * 60  # same duration as Kiro's removed token gate, retained for AWS credentials
+_CRED_POLL_S = 30
+_CRED_MAX_WAIT_S = 60 * 60  # a single 1-hour credential lifetime at most
 _CRED_KEYS = ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN")
 TRIAL_PREFIX = "cad-eval-"  # every trial root is mkdtemp(prefix=TRIAL_PREFIX) in the temp directory
 
@@ -178,12 +180,17 @@ class Redactor:
         return value
 
 
+class CredentialsUnavailable(TrialError):
+    """AWS credentials could not be renewed in time; the slot was not started."""
+
+    def __init__(self, detail: str):
+        super().__init__("credentials_unavailable", detail)
+
+
 class HostSource:
-    """Builds the `Host` handed to adapters, re-exporting AWS credentials when they
-    near expiry. Credentials are exported from the host profile once per window, so
-    the harness never reads ~/.aws or runs the profile's credential_process itself.
-    Only temporary credentials are accepted, and every value exported is registered
-    with `redact`, the scrub all records pass through."""
+    """Builds the `Host` handed to adapters. It re-exports near expiry, but a profile
+    credential process may return its cached credentials until they expire. Credentials
+    must outlive the trial ceiling by the shared margin; exported values are redacted."""
 
     def __init__(self, auth: dict):
         self.profile = auth.get("aws_profile") or os.environ.get("AWS_PROFILE")
@@ -191,7 +198,8 @@ class HostSource:
         self.redact = Redactor(Path.home())
         self._lock = threading.Lock()
         self._aws: dict[str, str] = {}
-        self._expires = 0.0
+        self._expires: datetime | None = None
+        self._credential_refusal: str | None = None
         self._base = self._base_env()
 
     @staticmethod
@@ -229,14 +237,53 @@ class HostSource:
         if creds.get("SessionToken"):
             self._aws["AWS_SESSION_TOKEN"] = creds["SessionToken"]
         self.redact.add_secrets(self._aws[key] for key in _CRED_KEYS if key in self._aws)
-        self._expires = datetime.fromisoformat(expiry).timestamp()
+        self._expires = datetime.fromisoformat(expiry)
+        if self._expires.tzinfo is None:
+            self._expires = self._expires.replace(tzinfo=timezone.utc)
 
-    def get(self) -> adapters.Host:
+    def get(self, ceiling_s: float | None = None) -> adapters.Host:
+        if self._credential_refusal:
+            raise CredentialsUnavailable(self._credential_refusal)
         with self._lock:
-            if self.profile and time.time() > self._expires - _CRED_MARGIN_S:
+            if self._credential_refusal:
+                raise CredentialsUnavailable(self._credential_refusal)
+            if self.profile and not self._aws:
                 self._export_aws()
+            if self.profile and ceiling_s is not None and not _credentials_outlive_trial(self._expires, ceiling_s):
+                previous_expiry = self._expires
+                self._export_aws()
+                if not _credentials_outlive_trial(self._expires, ceiling_s):
+                    self._wait_for_credentials(previous_expiry, ceiling_s)
             return adapters.Host(base_env=dict(self._base), aws_env=dict(self._aws), real_home=Path.home())
 
+    def _wait_for_credentials(self, previous_expiry: datetime | None, ceiling_s: float) -> None:
+        if previous_expiry is None:
+            previous_expiry = datetime.now(timezone.utc)
+        remaining = max(0.0, (previous_expiry - datetime.now(timezone.utc)).total_seconds())
+        wait_s = min(remaining + _CRED_MARGIN_S, _CRED_MAX_WAIT_S)
+        print(
+            f"AWS credentials for profile {self.profile} need to outlive the {ceiling_s / 60:.0f}-min trial ceiling "
+            f"plus {_CRED_MARGIN_S // 60} min; waiting up to {wait_s / 60:.1f} min for credential_process to refresh.",
+            file=sys.stderr,
+        )
+        deadline = time.monotonic() + wait_s
+        while time.monotonic() < deadline:
+            time.sleep(min(_CRED_POLL_S, deadline - time.monotonic()))
+            try:
+                self._export_aws()
+            except TrialError:
+                continue
+            if self._expires > previous_expiry and _credentials_outlive_trial(self._expires, ceiling_s):
+                return
+        self._credential_refusal = (
+            f"profile {self.profile} did not issue AWS credentials that outlive the {ceiling_s / 60:.0f}-min trial "
+            f"ceiling by {_CRED_MARGIN_S // 60} min after waiting up to {wait_s / 60:.1f} min"
+        )
+        raise CredentialsUnavailable(self._credential_refusal)
+
+
+def _credentials_outlive_trial(expires: datetime | None, ceiling_s: float) -> bool:
+    return expires is not None and expires.timestamp() - time.time() >= ceiling_s + _CRED_MARGIN_S
 
 # ---------------------------------------------------------------- one trial
 
@@ -441,25 +488,15 @@ def stop_trial_processes(paths: TrialPaths, env: dict[str, str]) -> None:
     sweep_trial_processes(paths.root)
 
 
-def token_refreshed(harness: str) -> str:
-    """The failure class of a trial that refreshed its copy of the user's login. The
-    trial is recorded as an error and no further trial of that harness starts."""
-    return f"{harness}_token_refreshed"
-
-
-def end_trial(paths: TrialPaths, adapter, host: adapters.Host, *, keep: bool) -> None:
-    """Close a trial: stop what it left running, have the adapter check and delete its
-    copy of the user's login, then remove the trial directory, or keep it and say
-    where. Raises `token_refreshed` afterwards when the trial refreshed that copy."""
+def end_trial(paths: TrialPaths, adapter, host: adapters.Host, *, keep: bool) -> bool:
+    """Stop trial processes, record login refresh, remove or retain the sandbox."""
     stop_trial_processes(paths, adapter.env(paths, host))
     refreshed = adapter.release_login(paths)
     if keep:
         print(f"kept sandbox {paths.root}", file=sys.stderr)
     else:
         shutil.rmtree(paths.root, ignore_errors=True)
-    if refreshed:
-        print(f"{adapter.name}: {refreshed}", file=sys.stderr)
-        raise TrialError(token_refreshed(adapter.name), refreshed)
+    return refreshed
 
 
 def _links(directory: str, names: list[str]) -> set[str]:
@@ -526,12 +563,13 @@ class Scored:
 
 
 def attempt(case: dict, cell: Cell, adapter, cfg: dict, artifact_dir: Path, keep: bool, host_source: HostSource) -> Scored:
-    host = host_source.get()
     ceiling_s = float(cfg["case_timeout_s"])
+    host = host_source.get(ceiling_s)
     refusal = adapter.preflight(host, ceiling_s)
     if refusal:  # checked per trial too: a long run can outlast the login it started with
         raise TrialError("auth_error", refusal)
     paths = stage_trial(case, adapter, host, require_plugin=True)
+    row = None
     try:
         started = time.monotonic()
         conv = converse(case, cell, adapter, paths, host, ceiling_s=ceiling_s, max_turns=int(cfg["max_turns"]))
@@ -566,9 +604,9 @@ def attempt(case: dict, cell: Cell, adapter, cfg: dict, artifact_dir: Path, keep
         }
         return Scored(row, conv.transcript, conv.raw)
     finally:
-        end_trial(paths, adapter, host, keep=keep)
-
-
+        refreshed = end_trial(paths, adapter, host, keep=keep)
+        if row is not None and cell.harness == "kiro" and refreshed:
+            row["inventory"]["kiro_login_refreshed"] = True
 # ---------------------------------------------------------------- slots and sinks
 
 
@@ -617,6 +655,9 @@ def run_slot(case: dict, rep: int, cell: Cell, adapter, cfg: dict, sink: Sink, *
         try:
             scored = attempt(case, cell, adapter, cfg, artifact_dir, keep, host_source)
         except Exception as exc:  # every unscorable attempt lands in errors.jsonl, never as a zero
+            if isinstance(exc, CredentialsUnavailable):
+                print(f"{cell.harness}: slot {slot} not_started: {exc}", file=sys.stderr)
+                return "not_started"
             error = exc if isinstance(exc, TrialError) else TrialError("runner_error", f"{type(exc).__name__}: {exc}")
             if error.transient and attempt_no < max_attempts:
                 time.sleep(backoff_s(attempt_no, retry, rng))
@@ -656,10 +697,9 @@ def run_matrix(matrix: Matrix, cells: list[Cell], cases: list[dict], reps: int, 
 
     `trace_ids=None` writes traces for every case (pilot, before a split exists);
     otherwise only ids in the set (the ratchet train split) get traces. A harness whose
-    preflight refuses (Kiro: a login that would expire within a trial) has none of its
-    cells started; the reason goes to stderr and the slots count as `not_started`. A
-    trial that refreshes its copy of the user's login (`token_refreshed`) stops that
-    harness the same way: its slots still queued count as `not_started`.
+    preflight refuses has none of its cells started; its reason goes to stderr and the
+    slots count as `not_started`. AWS credentials that cannot outlive the case ceiling
+    also leave the slot `not_started`, with a stderr reason and no error row.
     """
     cfg = {key: matrix.raw.get(key, default) for key, default in (("case_timeout_s", 1800), ("max_turns", 4), ("retry", {}))}
     host_source = host_source or HostSource(matrix.raw.get("auth", {}))
@@ -689,9 +729,6 @@ def run_matrix(matrix: Matrix, cells: list[Cell], cases: list[dict], reps: int, 
                                rng=random.Random(slot_seed), host_source=host_source)
         with lock:
             counts[outcome] = counts.get(outcome, 0) + 1
-            if outcome == token_refreshed(cell.harness) and cell.harness not in halted:
-                halted.add(cell.harness)
-                print(f"{cell.harness}: remaining cells not started after {outcome}", file=sys.stderr)
 
     with ThreadPoolExecutor(max_workers=max(1, concurrency)) as pool:
         list(pool.map(one, slots))
