@@ -17,7 +17,7 @@ from typing import Any
 
 import yaml
 
-FREECADCMD = Path("/Applications/FreeCAD.app/Contents/Resources/bin/freecadcmd")
+from freecad_lookup import find_freecad
 
 
 class CaseError(ValueError):
@@ -26,6 +26,18 @@ class CaseError(ValueError):
 
 def error(message: str, *, code: str = "invalid_case") -> dict[str, Any]:
     return {"status": "error", "error": {"code": code, "message": message}}
+
+def apply_required_safety_factor(result: dict[str, Any], required: float | None) -> dict[str, Any]:
+    """Mark a completed solve failed only when its requested yield margin is missed."""
+    factor = result.get("safety_factor_yield")
+    result["required_safety_factor"] = required
+    result["status"] = "fail" if required is not None and factor is not None and factor < required else "pass"
+    return result
+
+
+def result_exit_code(result: dict[str, Any]) -> int:
+    """Map completed checks to CLI codes; malformed or absent results are no-result."""
+    return {"pass": 0, "fail": 1}.get(result.get("status"), 2)
 
 
 def selector(value: Any, name: str) -> dict[str, Any]:
@@ -48,6 +60,27 @@ def selector(value: Any, name: str) -> dict[str, Any]:
     if plane["tolerance"] < 0:
         raise CaseError(f"{name}.plane.tolerance must be non-negative")
     return {"plane": plane}
+
+def selected_face_indices(face_count: int, selector: dict[str, Any], faces: Any = None) -> list[int]:
+    """Resolve a selector against a shape, failing when no face matches."""
+    if "indices" in selector:
+        indices = selector["indices"]
+    else:
+        plane = selector["plane"]
+        axis = plane["axis"].upper()
+        target = float(plane["value"])
+        tolerance = float(plane["tolerance"])
+        indices = []
+        for index, face in enumerate(faces or (), 1):
+            bounds = face.BoundBox
+            low, high = getattr(bounds, axis + "Min"), getattr(bounds, axis + "Max")
+            if abs(low - target) <= tolerance and abs(high - target) <= tolerance:
+                indices.append(index)
+    if not indices:
+        raise CaseError("face selector matched no faces")
+    if any(index > face_count for index in indices):
+        raise CaseError("face index is out of range")
+    return indices
 
 
 def load_case(path: Path) -> dict[str, Any]:
@@ -82,6 +115,21 @@ def load_case(path: Path) -> dict[str, Any]:
     part = raw.get("part")
     if part is not None and (not isinstance(part, str) or not part):
         raise CaseError("part must be a non-empty part number")
+    solid_index = raw.get("solid_index")
+    if solid_index is not None and (
+        not isinstance(solid_index, int) or isinstance(solid_index, bool) or solid_index < 1
+    ):
+        raise CaseError("solid_index must be a positive 1-based integer")
+    if solid_index is not None and part is not None:
+        raise CaseError("part and solid_index are mutually exclusive")
+    required_safety_factor = raw.get("required_safety_factor")
+    if required_safety_factor is not None and (
+        not isinstance(required_safety_factor, (int, float))
+        or isinstance(required_safety_factor, bool)
+        or not math.isfinite(required_safety_factor)
+        or required_safety_factor <= 0
+    ):
+        raise CaseError("required_safety_factor must be a positive finite number")
     if "pose" in raw:
         pose = raw["pose"]
         if not isinstance(pose, dict) or not pose or any(
@@ -114,7 +162,7 @@ def run_directory(case_path: Path, run_id: str) -> Path:
     return case_path.parent.resolve() / "runs" / run_id
 
 
-def run_job(case_path: Path, case: dict[str, Any]) -> tuple[dict[str, Any], int]:
+def run_job(case_path: Path, case: dict[str, Any], timeout: float = 600.0) -> tuple[dict[str, Any], int]:
     run_id = uuid.uuid4().hex
     run_dir = run_directory(case_path, run_id)
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -125,6 +173,8 @@ def run_job(case_path: Path, case: dict[str, Any]) -> tuple[dict[str, Any], int]
         "run_id": run_id,
         "step": case["_step"],
         "part": case.get("part"),
+        "solid_index": case.get("solid_index"),
+        "required_safety_factor": case.get("required_safety_factor"),
         "pose": case.get("pose"),
         "selection_module": str(Path(__file__).with_name("fea_part_selection.py").resolve()),
         "material": case["material"],
@@ -132,10 +182,11 @@ def run_job(case_path: Path, case: dict[str, Any]) -> tuple[dict[str, Any], int]
         "loads": case["loads"],
         "mesh_size": case["mesh_size"],
         "output": str(marker_path),
+        "run_directory": str(run_dir),
     }
     # JSON is data, not Python source: the generated job loads it as a literal.
     job_json = json.dumps(job)
-    script = f'''import json, os, sys, time, math
+    script = f'''import json, os, re, shutil, sys, time, math
 import FreeCAD as App, Part, Import, ObjectsFem
 from femmesh.gmshtools import GmshTools
 from femtools.ccxtools import CcxTools
@@ -163,8 +214,12 @@ def run():
                 for solid in o.Shape.Solids]
         if not solids: raise RuntimeError("STEP contains no solid geometry")
         names=[[name for name in (obj.Label, obj.Name) if name] for obj, _ in solids]
-        try: selected=select_solid_index(names, JOB.get("part"))
-        except ValueError as e: raise RuntimeError(str(e))
+        if JOB.get("solid_index") is not None:
+            try: selected=select_solid_index(names, JOB.get("part"), JOB["solid_index"])
+            except ValueError as e: raise RuntimeError(str(e))
+        else:
+            try: selected=select_solid_index(names, JOB.get("part"))
+            except ValueError as e: raise RuntimeError(str(e))
         source,solid=solids[selected]
         geom=source
         if len(source.Shape.Solids) != 1:
@@ -174,7 +229,7 @@ def run():
             geom.Placement=source.Placement
         a=ObjectsFem.makeAnalysis(doc, "Analysis")
         solver=ObjectsFem.makeSolverCalculiXCcxTools(doc, "CalculiXCcxTools")
-        solver.AnalysisType="static"; solver.GeometricalNonlinearity="linear"; solver.WorkingDir=os.path.dirname(JOB["output"]); solver.SplitInputWriter=False; a.addObject(solver)
+        solver.AnalysisType="static"; solver.GeometricalNonlinearity="linear"; solver.WorkingDir=os.path.dirname(JOB["output"]); solver.SplitInputWriter=False; solver.MatrixSolverType="spooles"; a.addObject(solver)
         matobj=ObjectsFem.makeMaterialSolid(doc, "Material"); mat=matobj.Material
         mat["Name"]=JOB["material"].get("name", "Case material")
         mat["YoungsModulus"]="%s MPa" % JOB["material"]["E"]
@@ -188,8 +243,27 @@ def run():
             force=ObjectsFem.makeConstraintForce(doc, "FaceForce%d" % n); force.References=selected_faces(geom, spec["selector"])
             force.Force="%.12g N" % math.sqrt(fx*fx+fy*fy+fz*fz)
             force.Direction=(direction,["Edge1"]); force.Reversed=False; a.addObject(force)
-        mesh=ObjectsFem.makeMeshGmsh(doc, "GmshMesh"); a.addObject(mesh); mesh.Shape=geom; mesh.ElementDimension="3D"; mesh.ElementOrder="2nd"; mesh.HighOrderOptimize="Elastic+Optimization"; mesh.CharacteristicLengthMax="%s mm" % JOB["mesh_size"]; mesh.CharacteristicLengthMin="%s mm" % (JOB["mesh_size"]*0.5); doc.recompute()
-        gm=GmshTools(mesh); gm.update_mesh_data(); gm.get_tmp_file_paths(solver.WorkingDir, True); gm.create_mesh(); doc.recompute()
+        mesh=ObjectsFem.makeMeshGmsh(doc, "GmshMesh"); a.addObject(mesh); mesh.Shape=geom; mesh.ElementDimension="3D"; mesh.ElementOrder="2nd"; mesh.HighOrderOptimize="Elastic"; mesh.CharacteristicLengthMax="%s mm" % JOB["mesh_size"]; mesh.CharacteristicLengthMin="%s mm" % (JOB["mesh_size"]*0.5); mesh.OptimizeStd=False; mesh.OptimizeNetgen=False; doc.recompute()
+        gm=GmshTools(mesh); gm.prepare()
+        gm.write_part_file()
+        gm.write_geo()
+        geo_path=gm.temp_file_geo
+        brep_path=gm.temp_file_geometry
+        with open(geo_path, "r", encoding="utf-8") as geo_file: source_geo=geo_file.read()
+        source_geo=re.sub(r"(?m)^//.*shape2mesh[.]geo$", "// Gmsh input file: shape2mesh.geo", source_geo)
+        source_geo=re.sub(r"(?m)^General[.]NumThreads[ \t]*=[ \t]*[^;]+;", "General.NumThreads = 1;", source_geo)
+        source_geo=re.sub(r"(?m)^Mesh[.]Optimize[ \t]*=[ \t]*[^;]+;", "Mesh.Optimize = 0;", source_geo)
+        source_geo=re.sub(r"(?m)^Mesh[.]OptimizeNetgen[ \t]*=[ \t]*[^;]+;", "Mesh.OptimizeNetgen = 0;", source_geo)
+        source_geo=re.sub(r"(?m)^Mesh[.]HighOrderOptimize[ \t]*=[ \t]*[^;]+;", "Mesh.HighOrderOptimize = 2;", source_geo)
+        source_geo=re.sub(r"(?m)^Mesh[.]RandomFactor3D[ \t]*=[ \t]*[^;]+;", "Mesh.RandomFactor3D = 0;", source_geo)
+        source_geo="Mesh.RandomSeed = 1;\\n" + source_geo
+        with open(geo_path, "w", encoding="utf-8") as geo_file: geo_file.write(source_geo)
+        mesh_inputs={{"geometry_sha256":__import__("hashlib").sha256(open(brep_path,"rb").read()).hexdigest(), "geo_sha256":__import__("hashlib").sha256(source_geo.encode("utf-8")).hexdigest()}}
+        shutil.copyfile(brep_path, os.path.join(JOB["run_directory"], "GmshGeometry.brep"))
+        shutil.copyfile(geo_path, os.path.join(JOB["run_directory"], "GmshInput.geo"))
+        gm.compute(); gm.process.waitForFinished(-1)
+        gm.update_properties()
+        doc.recompute()
         nodes=int(mesh.FemMesh.NodeCount); elements=len(mesh.FemMesh.Volumes)
         if nodes <= 0 or elements <= 0: raise RuntimeError("Gmsh produced an empty mesh")
         solver_started=time.perf_counter(); fea=CcxTools(solver); fea.reset_mesh_purge_results_checked(); fea.update_objects(); fea.setup_working_dir(solver.WorkingDir); fea.setup_ccx()
@@ -201,9 +275,19 @@ def run():
         stress=[float(v) for v in results.vonMises]; displacement=[float(v) for v in results.DisplacementLengths]
         if not stress or not displacement: raise RuntimeError("solver returned no stress or displacement results")
         max_stress=max(stress); max_displacement=max(displacement); y=float(JOB["material"]["yield"])
-        warnings=[]
-        versions={{"freecad":".".join(App.Version()[:3]), "gmsh":"bundled 4.15.0", "calculix":"bundled 2.23"}}
-        result={{"status":"pass", "run_id":JOB["run_id"], "part":JOB.get("part"), "max_von_mises_mpa":max_stress, "max_displacement_mm":max_displacement, "safety_factor_yield":y/max_stress if max_stress else None, "node_count":nodes, "element_count":elements, "solve_time_seconds":solve_seconds, "solver_versions":versions, "warnings":warnings, "worst_case_pose":{{"step":JOB["step"], **({{"pose":JOB["pose"]}} if JOB.get("pose") is not None else {{}})}}}}
+        safety_factor=y/max_stress if max_stress else None
+        solver_started=time.perf_counter(); fea=CcxTools(solver); fea.reset_mesh_purge_results_checked(); fea.update_objects(); fea.setup_working_dir(solver.WorkingDir); fea.setup_ccx()
+        problems=fea.check_prerequisites()
+        if problems: raise RuntimeError("CalculiX prerequisites failed: %r" % problems)
+        fea.write_inp_file(); fea.ccx_run(); fea.load_results(); solve_seconds=time.perf_counter()-solver_started
+        result={{"run_id":JOB["run_id"], "part":JOB.get("part"), "solid_index":JOB.get("solid_index"), "max_von_mises_mpa":max_stress, "max_displacement_mm":max_displacement, "safety_factor_yield":safety_factor, "node_count":nodes, "element_count":elements, "solve_time_seconds":solve_seconds}}
+        result["solver_versions"]={{"freecad":".".join(App.Version()[:3])}}
+        result["warnings"]=[]
+        result["worst_case_pose"]={{"step":JOB["step"], **({{"pose":JOB["pose"]}} if JOB.get("pose") is not None else {{}})}}
+        result["required_safety_factor"]=JOB.get("required_safety_factor")
+        result["mesh_input_hashes"]=mesh_inputs
+        result["mesh_input_files"]=["GmshGeometry.brep", "GmshInput.geo"]
+        result["status"]="fail" if result["required_safety_factor"] is not None and safety_factor is not None and safety_factor < result["required_safety_factor"] else "pass"
         with open(JOB["output"], "w", encoding="utf-8") as f: json.dump(result,f,indent=2); f.write("\\n")
     finally:
         App.closeDocument(doc.Name)
@@ -214,7 +298,15 @@ except Exception as e:
 '''
     job_path.write_text(script, encoding="utf-8")
     try:
-        completed = subprocess.run([str(FREECADCMD), str(job_path)], cwd=run_dir, capture_output=True, text=True)
+        freecad = find_freecad()
+        if freecad is None:
+            return error("freecadcmd not found; set FREECADCMD or add it to PATH", code="freecad_unavailable"), 2
+        completed = subprocess.run([str(freecad), str(job_path)], cwd=run_dir, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        result = error(f"FreeCAD job exceeded timeout of {timeout} seconds", code="freecad_timeout")
+        result.update({"run_id": run_id, "run_directory": str(run_dir)})
+        output_path.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+        return result, 2
     except OSError as exc:
         return error(f"cannot start FreeCAD: {exc}", code="freecad_unavailable"), 2
     if not marker_path.is_file():
@@ -222,16 +314,18 @@ except Exception as e:
         result.update({"run_id": run_id, "run_directory": str(run_dir)})
         result["details"] = {"returncode": completed.returncode, "stderr": completed.stderr[-4000:]}
         output_path.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
-        return result, 1
+        return result, 2
     try:
         result = json.loads(marker_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        return error(f"cannot parse FreeCAD result marker: {exc}", code="invalid_result"), 1
+        return error(f"cannot parse FreeCAD result marker: {exc}", code="invalid_result"), 2
     if result.get("run_id") != run_id:
-        return error("FreeCAD result marker run id does not match this invocation", code="invalid_result"), 1
+        return error("FreeCAD result marker run id does not match this invocation", code="invalid_result"), 2
+    if result.get("status") != "error":
+        result = apply_required_safety_factor(result, case.get("required_safety_factor"))
     result["run_directory"] = str(run_dir)
     result["warnings"] = result.get("warnings", [])
-    if completed.returncode == 139:
+    if completed.returncode == 139 and result.get("status") == "pass":
         result["warnings"].append("FreeCAD exited with 139 after writing its result marker; outputs were validated.")
     elif completed.returncode != 0:
         result["warnings"].append(f"FreeCAD exited with status {completed.returncode}.")
@@ -239,19 +333,19 @@ except Exception as e:
         result["error"] = {"code": "freecad_failed", "message": f"FreeCAD exited with status {completed.returncode}"}
     if completed.stderr.strip():
         result["warnings"].append("FreeCAD emitted diagnostics on stderr.")
-    if result.get("status") != "pass":
-        output_path.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
-        return result, 1
+    status = result_exit_code(result)
+    if status == 2 and result.get("status") != "error":
+        result = error("FreeCAD result has an unknown status", code="invalid_result")
     output_path.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
-    return result, 0
+    return result, status
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("case", type=Path, help="case YAML")
     args = parser.parse_args(argv)
-    if not FREECADCMD.is_file():
-        print(json.dumps(error(f"FreeCAD is not installed at {FREECADCMD}", code="freecad_unavailable")))
+    if find_freecad() is None:
+        print(json.dumps(error("freecadcmd not found; set FREECADCMD or add it to PATH", code="freecad_unavailable")))
         return 2
     try:
         case = load_case(args.case.resolve())

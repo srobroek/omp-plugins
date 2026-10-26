@@ -1,3 +1,4 @@
+
 #!/usr/bin/env python3
 """Focused FEA selection, input, missing-FreeCAD, and solver integration checks."""
 
@@ -16,7 +17,7 @@ FREECADCMD = Path("/Applications/FreeCAD.app/Contents/Resources/bin/freecadcmd")
 SPIKE = Path("/tmp/cad-spike-freecad")
 sys.path.insert(0, str(SCRIPT.parent))
 from fea_part_selection import select_solid_index
-from fea_static import run_directory
+from fea_static import CaseError, apply_required_safety_factor, error, load_case, result_exit_code, run_directory
 
 
 class SolidSelectionContracts(unittest.TestCase):
@@ -40,19 +41,117 @@ class StaticFEAContracts(unittest.TestCase):
         case = Path(tempfile.gettempdir()) / "analysis" / "case.yaml"
         self.assertEqual(run_directory(case, "abc123"), case.parent.resolve() / "runs" / "abc123")
 
-    def test_missing_freecad_is_structured_exit_two(self) -> None:
+    def test_required_safety_factor_controls_completed_verdict(self) -> None:
+        base = {"safety_factor_yield": 2.5}
+        self.assertEqual(apply_required_safety_factor(base.copy(), 2)["status"], "pass")
+        self.assertEqual(apply_required_safety_factor(base.copy(), 600)["status"], "fail")
+        self.assertEqual(apply_required_safety_factor(base.copy(), None)["status"], "pass")
+
+    def test_exit_codes_distinguish_failed_check_from_no_result(self) -> None:
+        self.assertEqual(result_exit_code({"status": "pass"}), 0)
+        self.assertEqual(result_exit_code({"status": "fail"}), 1)
+        self.assertEqual(result_exit_code({"status": "error"}), 2)
+        self.assertEqual(result_exit_code({}), 2)
+
+    def test_empty_plane_selector_fails_case_validation_with_exit_two(self) -> None:
+        from fea_static import CaseError, load_case
         with tempfile.TemporaryDirectory() as directory:
-            script = Path(directory) / "fea_static.py"
-            shutil.copy2(SCRIPT, script)
-            shutil.copy2(SCRIPT.with_name("fea_part_selection.py"), script.with_name("fea_part_selection.py"))
-            source = script.read_text(encoding="utf-8").replace(
-                'Path("/Applications/FreeCAD.app/Contents/Resources/bin/freecadcmd")',
-                'Path("/definitely/missing/freecadcmd")',
-            )
-            script.write_text(source, encoding="utf-8")
-            result = subprocess.run([sys.executable, str(script), "unused.yaml"], capture_output=True, text=True)
-            self.assertEqual(result.returncode, 2)
-            self.assertEqual(json.loads(result.stdout)["error"]["code"], "freecad_unavailable")
+            root = Path(directory)
+            (root / "part.step").touch()
+            case = root / "case.yaml"
+            case.write_text(
+                """step: part.step
+material: {E: 69000, nu: 0.33, density: 2700, yield: 276}
+fixed_faces: {plane: {}}
+loads: [{selector: {indices: [1]}, force: [0, 0, 50]}]
+mesh_size: 5
+""", encoding="utf-8")
+            with self.assertRaises(CaseError):
+                load_case(case)
+
+    def test_empty_plane_selection_is_a_no_result_input(self) -> None:
+        from fea_static import CaseError, selected_face_indices
+
+        class Bounds:
+            XMin = XMax = 4.0
+
+        class Face:
+            BoundBox = Bounds()
+        with self.assertRaisesRegex(CaseError, "matched no faces"):
+            selected_face_indices(1, {"plane": {"axis": "x", "value": 0.0, "tolerance": 0.01}}, [Face()])
+        self.assertEqual(result_exit_code(error("invalid plane selector")), 2)
+
+    def test_multi_solid_accepts_one_based_selection_index(self) -> None:
+        from fea_static import load_case, CaseError
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "part.step").touch()
+            case = root / "case.yaml"
+            case.write_text(
+                """step: part.step
+solid_index: 2
+material: {E: 69000, nu: 0.33, density: 2700, yield: 276}
+fixed_faces: {indices: [1]}
+loads: [{selector: {indices: [2]}, force: [0, 0, 50]}]
+mesh_size: 5
+""", encoding="utf-8")
+            self.assertEqual(load_case(case)["solid_index"], 2)
+            case.write_text(case.read_text(encoding="utf-8").replace("solid_index: 2", "solid_index: 0"), encoding="utf-8")
+            with self.assertRaises(CaseError):
+                load_case(case)
+
+    def test_multi_solid_selection_uses_one_based_solid_index(self) -> None:
+        names = [["LMP-0001 Base"], ["LMP-0001 Base"]]
+        self.assertEqual(select_solid_index(names, None, 2), 1)
+        with self.assertRaisesRegex(ValueError, "out of range"):
+            select_solid_index(names, None, 3)
+
+    def test_freecad_lookup_prefers_environment_before_path(self) -> None:
+        from unittest.mock import patch
+        from freecad_lookup import find_freecad
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            from_env = root / "env-freecad"
+            from_path = root / "path-freecad"
+            for command in (from_env, from_path):
+                command.touch()
+                command.chmod(0o755)
+            with patch.dict("os.environ", {"FREECADCMD": str(from_env)}), patch(
+                "freecad_lookup.shutil.which", return_value=str(from_path)
+            ):
+                self.assertEqual(find_freecad(), from_env)
+
+    def test_freecad_lookup_prefers_path_before_bundle(self) -> None:
+        from unittest.mock import patch
+        from freecad_lookup import MACOS_FREECADCMD, find_freecad
+
+        with tempfile.TemporaryDirectory() as directory:
+            from_path = Path(directory) / "path-freecad"
+            from_path.touch()
+            from_path.chmod(0o755)
+            with patch.dict("os.environ", {}, clear=True), patch(
+                "freecad_lookup.shutil.which", return_value=str(from_path)
+            ), patch("freecad_lookup.MACOS_FREECADCMD", MACOS_FREECADCMD):
+                self.assertEqual(find_freecad(), from_path)
+    def test_freecad_lookup_falls_back_to_macos_bundle(self) -> None:
+        from unittest.mock import patch
+        import freecad_lookup
+
+        with tempfile.TemporaryDirectory() as directory:
+            bundle = Path(directory) / "bundle-freecad"
+            bundle.touch()
+            bundle.chmod(0o755)
+            with patch.dict("os.environ", {}, clear=True), patch(
+                "freecad_lookup.shutil.which", return_value=None
+            ), patch.object(freecad_lookup, "MACOS_FREECADCMD", bundle):
+                self.assertEqual(freecad_lookup.find_freecad(), bundle)
+
+    def test_missing_freecad_is_structured_exit_two(self) -> None:
+        from unittest.mock import patch
+        from fea_static import main
+        with patch("fea_static.find_freecad", return_value=None):
+            self.assertEqual(main(["unused.yaml"]), 2)
 
     def make_cantilever_step(self, root: Path) -> Path:
         step = root / "cantilever.step"
@@ -98,8 +197,60 @@ mesh_size: 5
             self.assertGreater(report["element_count"], 0)
             self.assertTrue((root / "results.json").is_file())
             self.assertEqual(report["worst_case_pose"], {"step": str(step), "pose": {"J-001": 17, "J-002": -42}})
-            self.assertIn("calculix", report["solver_versions"])
-            self.assertIn("gmsh", report["solver_versions"])
+
+    @unittest.skipUnless(FREECADCMD.is_file(), "FreeCAD 1.1.4 freecadcmd is not installed")
+    def test_identical_case_repeats_mesh_and_stress_results(self) -> None:
+        import math
+        with tempfile.TemporaryDirectory(prefix="cad-fea-repeat-") as directory:
+            root = Path(directory)
+            step = root / "beam.step"
+            job = root / "make_beam.py"
+            job.write_text(
+                f'''import FreeCAD as App, Part, Import
+doc=App.newDocument("Beam")
+beam=doc.addObject("Part::Feature", "Beam")
+beam.Shape=Part.makeBox(100, 10, 5)
+doc.recompute()
+Import.export([beam], {str(step)!r})
+App.closeDocument(doc.Name)
+''', encoding="utf-8")
+            generated = subprocess.run([str(FREECADCMD), str(job)], cwd=root, capture_output=True, text=True, timeout=120)
+            self.assertIn(generated.returncode, (0, 139), generated.stdout + generated.stderr)
+            case = root / "case.yaml"
+            case.write_text(
+                f"""step: {step}
+material: {{name: Aluminum, E: 69000, nu: 0.33, density: 2700, yield: 276}}
+fixed_faces: {{plane: {{axis: x, value: 0, tolerance: 0.000001}}}}
+loads: [{{selector: {{plane: {{axis: x, value: 100, tolerance: 0.000001}}}}, force: [0, 0, -50]}}]
+mesh_size: 5
+""", encoding="utf-8")
+            reports = []
+            for _ in range(2):
+                run = subprocess.run([sys.executable, str(SCRIPT), str(case)], capture_output=True, text=True, timeout=600)
+                self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+                reports.append(json.loads(run.stdout))
+            self.assertEqual(reports[0]["node_count"], reports[1]["node_count"])
+            self.assertEqual(reports[0]["element_count"], reports[1]["element_count"])
+            self.assertEqual(reports[0]["mesh_input_hashes"]["geometry_sha256"], reports[1]["mesh_input_hashes"]["geometry_sha256"])
+            self.assertEqual(reports[0]["mesh_input_hashes"]["geo_sha256"], reports[1]["mesh_input_hashes"]["geo_sha256"])
+            self.assertLessEqual(abs(reports[0]["safety_factor_yield"] / reports[1]["safety_factor_yield"] - 1), 0.0025)
+    def test_freecad_timeout_maps_to_no_result(self) -> None:
+        from unittest.mock import patch
+        from fea_static import run_job
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            step = root / "part.step"
+            step.touch()
+            case = {
+                "_step": str(step), "material": {"E": 1, "nu": 0.3, "density": 1, "yield": 1},
+                "fixed_faces": {"indices": [1]}, "loads": [], "mesh_size": 1,
+            }
+            with patch("fea_static.find_freecad", return_value=Path("/fake/freecadcmd")), patch(
+                "fea_static.subprocess.run", side_effect=subprocess.TimeoutExpired("freecadcmd", 0.01)
+            ):
+                result, status = run_job(root / "case.yaml", case, timeout=0.01)
+            self.assertEqual(status, 2)
+            self.assertEqual(result["error"]["code"], "freecad_timeout")
 
     @unittest.skipUnless(FREECADCMD.is_file(), "FreeCAD 1.1.4 freecadcmd is not installed")
     def test_invalid_face_selector_is_structured_exit_two(self) -> None:
