@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Focused projection, rendered output, marker, and XML-security tests."""
+"""Focused projection, layout, rendered output, marker, and XML-security tests."""
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -13,9 +14,169 @@ import unittest
 from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts/drawing.py"
+sys.path.insert(0, str(SCRIPT.parent))
+import drawing  # noqa: E402  (sets up the defusedxml import path first)
+import layout_check  # noqa: E402
+import sheet  # noqa: E402
+from layout_check import Box, SheetRegions, check_layout  # noqa: E402
+
 FREECADCMD = Path("/Applications/FreeCAD.app/Contents/Resources/bin/freecadcmd")
 AUTHORITATIVE_STEP = Path("/tmp/cad-authoritative-source/project/hw/versions/v1/parts/LMP-0003.step")
 AUTHORITATIVE_METRICS = Path("/tmp/cad-authoritative-source/project/hw/versions/v1/metrics.json")
+TEMPLATES_PRESENT = all(spec.template.is_file() for spec in sheet.SPECS.values())
+
+REGIONS = SheetRegions(frame=Box(10, 10, 190, 140), title_block=Box(100, 110, 190, 140), symbol_cell=Box(170, 110, 190, 120))
+SYMBOL = '<g id="projection-symbol"><circle cx="180" cy="115" r="3"/></g>'
+
+
+def svg_document(*parts: str) -> str:
+    return f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 150">{"".join(parts)}</svg>'
+
+
+def view(name: str, x0: float, y0: float, x1: float, y1: float) -> str:
+    return f'<g id="view-{name}"><path d="M {x0} {y0} L {x1} {y0} L {x1} {y1} L {x0} {y1} Z"/></g>'
+
+
+def annotations(*parts: str) -> str:
+    return f'<g id="cad-annotations">{"".join(parts)}</g>'
+
+
+def label(content: str, x: float, y: float, size: float = 3.5, **extra: str) -> str:
+    attributes = "".join(f' {key.replace("_", "-")}="{value}"' for key, value in extra.items())
+    return f'<text x="{x}" y="{y}" font-size="{size}"{attributes}>{content}</text>'
+
+
+class LayoutCheck(unittest.TestCase):
+    """check_layout over hand-built SVG: one passing sheet, then one violation per rule."""
+
+    def good_sheet(self, *extra: str, symbol: str = SYMBOL) -> str:
+        return svg_document(view("front", 30, 40, 90, 60), view("top", 30, 75, 90, 85), symbol,
+                            annotations('<g class="dimension"><line x1="30" y1="34" x2="90" y2="34"/>'
+                                        + label("60.00", 60, 33, text_anchor="middle") + "</g>"), *extra)
+
+    def test_clean_layout_passes(self) -> None:
+        self.assertEqual(check_layout(self.good_sheet(), REGIONS, ["DN"]), [])
+
+    def test_overlapping_views_fail(self) -> None:
+        problems = check_layout(self.good_sheet(view("right", 85, 45, 100, 55)), REGIONS, [])
+        self.assertTrue(any("view-front and view-right" in p for p in problems), problems)
+
+    def test_views_closer_than_minimum_gap_fail(self) -> None:
+        problems = check_layout(self.good_sheet(view("right", 95, 40, 105, 60)), REGIONS, [])
+        self.assertTrue(any("5.00 mm apart" in p for p in problems), problems)
+
+    def test_view_outside_frame_or_on_title_block_fails(self) -> None:
+        problems = check_layout(self.good_sheet(view("right", 150, 100, 170, 125)), REGIONS, [])
+        self.assertIn("view-right overlaps the title block", problems)
+        problems = check_layout(self.good_sheet(view("right", 2, 40, 20, 60)), REGIONS, [])
+        self.assertIn("view-right lies outside the drawing frame", problems)
+
+    def test_annotation_text_over_geometry_fails(self) -> None:
+        problems = check_layout(self.good_sheet(annotations(label("21.00", 85, 50))), REGIONS, [])
+        self.assertTrue(any("'21.00' overlaps view-front geometry" in p for p in problems), problems)
+
+    def test_rotated_annotation_text_uses_its_rotated_extent(self) -> None:
+        clear = annotations(label("21.00", 97, 50, text_anchor="middle", transform="rotate(-90 97 50)"))
+        self.assertEqual(check_layout(self.good_sheet(clear), REGIONS, []), [])
+        crossing = annotations(label("21.00", 92, 50, text_anchor="middle", transform="rotate(-90 92 50)"))
+        self.assertTrue(any("overlaps view-front" in p for p in check_layout(self.good_sheet(crossing), REGIONS, [])))
+
+    def test_annotation_text_overlapping_text_or_frame_fails(self) -> None:
+        problems = check_layout(self.good_sheet(annotations(label("⌀5.01", 55, 33))), REGIONS, [])
+        self.assertTrue(any("'⌀5.01'" in p and "'60.00'" in p and "overlaps" in p for p in problems), problems)
+        problems = check_layout(self.good_sheet(annotations(label("⌀5.01", 8, 30))), REGIONS, [])
+        self.assertTrue(any("crosses the drawing frame" in p for p in problems), problems)
+
+    def test_dimension_line_through_geometry_fails(self) -> None:
+        crossing = annotations('<g class="dimension"><line x1="95" y1="40" x2="85" y2="60"/></g>')
+        problems = check_layout(self.good_sheet(crossing), REGIONS, [])
+        self.assertTrue(any("dimension line" in p and "view-front" in p for p in problems), problems)
+        leader = annotations('<g class="leader"><line x1="95" y1="30" x2="60" y2="50"/></g>')
+        self.assertEqual(check_layout(self.good_sheet(leader), REGIONS, []), [])
+
+    def test_projection_symbol_outside_its_cell_or_duplicated_fails(self) -> None:
+        outside = '<g id="projection-symbol"><circle cx="195" cy="115" r="3"/></g>'
+        self.assertIn("projection symbol lies outside its title-block cell",
+                      check_layout(self.good_sheet(symbol=outside), REGIONS, []))
+        problems = check_layout(self.good_sheet(SYMBOL), REGIONS, [])
+        self.assertIn("expected exactly one projection symbol, found 2", problems)
+
+    def test_template_placeholder_fails(self) -> None:
+        problems = check_layout(self.good_sheet(label("A. Nemesis", 120, 130)), REGIONS, ["A. Nemesis"])
+        self.assertIn("template placeholder remains: 'A. Nemesis'", problems)
+
+
+def synthetic_projection(matched: bool = True) -> dict:
+    """A TechDraw job result shaped like techdraw_job.py output, for composition without FreeCAD."""
+    def box_view(center, half_w, half_h, extra=""):
+        svg = (f'<g stroke="#000000" stroke-width="0.7"><path d="M {-half_w} {-half_h} L {half_w} {-half_h} '
+               f'L {half_w} {half_h} L {-half_w} {half_h} Z"/>{extra}</g>')
+        return {"center": center, "box": [-half_w, -half_h, half_w, half_h], "svg": svg}
+    bores = '<circle cx="-50" cy="0" r="2.5045"/><circle cx="50" cy="0" r="2.5045"/>'
+    bore = {"id": "H1", "diameter_mm": 5.009, "view": "front", "matched": matched, "circle": [-50, 0, 2.5045]}
+    return {"scale": 1.0, "face_count": 6, "extent_mm": {"width": 120.0, "height": 20.0},
+            "views": {"front": box_view([150, 70], 60, 10, bores), "top": box_view([150, 102], 60, 8),
+                      "right": box_view([60, 70], 8, 10)},
+            "bores": [bore, {**bore, "id": "H2", "circle": [50, 0, 2.5045]},
+                      {"id": "H3", "diameter_mm": 3.0, "view": "top", "matched": True, "circle": [0, 0, 1.5]}]}
+
+
+@unittest.skipUnless(TEMPLATES_PRESENT, "FreeCAD 1.1.4 TechDraw templates are not installed")
+class SheetComposition(unittest.TestCase):
+    PART = {"PN": "TEST-001", "rev": "B", "title": "Test Part", "material": "PLA"}
+
+    def compose(self, regime: str, **projection_options) -> sheet.Sheet:
+        product = {"regime": regime, "general_tolerance": "ISO 2768-m"}
+        return sheet.compose(synthetic_projection(**projection_options), self.PART, product, sheet.SPECS[regime])
+
+    def test_metrics_bores_get_callouts_and_the_sheet_passes_layout(self) -> None:
+        for regime in ("iso", "asme"):
+            with self.subTest(regime=regime):
+                drawn = self.compose(regime)
+                self.assertEqual(drawn.svg.count('id="hole-diameter-H'), 2)
+                self.assertEqual(drawn.svg.count("⌀5.01"), 2)
+                self.assertNotIn("⌀3.00", drawn.svg)
+                self.assertIn("bore H3", drawn.warnings[0])
+                self.assertEqual(check_layout(drawn.svg, sheet.SPECS[regime].regions, drawn.placeholders), [])
+
+    def test_unmatched_metrics_bore_is_a_metrics_mismatch(self) -> None:
+        with self.assertRaisesRegex(ValueError, "metrics_mismatch: bore H1"):
+            self.compose("iso", matched=False)
+
+    def test_every_template_field_is_filled_from_the_record_or_blank(self) -> None:
+        iso = self.compose("iso")
+        for placeholder in ("A. Nemesis", "B. Hecate", "YYYY-MM-DD", "X / Y", "DN", "AAA", "ISO 5457 template"):
+            self.assertIn(placeholder, iso.placeholders)
+            self.assertNotIn(f">{placeholder}<", iso.svg)
+        for value in ("TEST-001", "Test Part", "PLA", "ISO 2768-m", "1 / 1", "1 : 1"):
+            self.assertIn(f">{value}<", iso.svg)
+        asme = self.compose("asme")
+        for placeholder in ("Company Name", "Drawing Title 1", "Drawn By", "Approved 1", "Sheet n of m"):
+            self.assertNotIn(f">{placeholder}<", asme.svg)
+        for value in ("TEST-001", "Test Part", "PLA", "ISO 2768-m", "Scale 1:1", "Sheet 1 of 1"):
+            self.assertIn(f">{value}<", asme.svg)
+
+    def test_asme_labels_appear_once_each(self) -> None:
+        texts = re.findall(r">([^<>]+:)<", self.compose("asme").svg)
+        self.assertEqual(texts.count("Approved:"), 1)
+        self.assertEqual(texts.count("Released:"), 1)
+        self.assertEqual(len(texts), len(set(texts)), texts)
+
+    def test_projection_arrangement_and_free_sides(self) -> None:
+        iso, asme = self.compose("iso").svg, self.compose("asme").svg
+        self.assertIn('id="extras_outlines"', iso.split('id="projection-symbol"', 1)[1])
+        self.assertIn('id="polygon5123"', asme.split('id="projection-symbol"', 1)[1])
+        width_y = lambda svg: float(re.search(r'id="overall-front-width".*?y1="([-.0-9]+)"', svg, re.S).group(1))
+        self.assertLess(width_y(iso), 70)   # first angle: top view below, dimension above the front view
+        self.assertGreater(width_y(asme), 70)  # third angle: top view above, dimension below
+
+
+def view_centers(svg: str) -> dict[str, tuple[float, float]]:
+    centers = {}
+    for name in ("front", "top", "right"):
+        transform = svg.split(f'id="view-{name}" transform="', 1)[1].split('"', 1)[0]
+        centers[name] = tuple(map(float, re.search(r"translate\(([-.0-9]+) ([-.0-9]+)\)", transform).groups()))
+    return centers
 
 
 class DrawingContracts(unittest.TestCase):
@@ -38,42 +199,40 @@ class DrawingContracts(unittest.TestCase):
              "--metrics", str(metrics), "--output-dir", str(output), "--timeout", str(timeout)],
             capture_output=True, text=True, timeout=timeout+30,
         )
+
     def test_timed_out_projection_kills_process_group(self) -> None:
         if not hasattr(os,"killpg"):
             self.skipTest("process groups are unavailable")
-        sys.path.insert(0,str(SCRIPT.parent))
+        fake=self.root/"fake-freecad"
+        child_pid=self.root/"child.pid"
+        fake.write_text(f'#!/bin/sh\nsleep 30 &\necho $! > "{child_pid}"\nwait\n',encoding="utf-8")
+        fake.chmod(0o755)
+        previous_freecadcmd=drawing.FREECADCMD
+        drawing.FREECADCMD=fake
         try:
-            import drawing
-            fake=self.root/"fake-freecad"
-            child_pid=self.root/"child.pid"
-            fake.write_text(f'#!/bin/sh\nsleep 30 &\necho $! > "{child_pid}"\nwait\n',encoding="utf-8")
-            fake.chmod(0o755)
-            previous_freecadcmd=drawing.FREECADCMD
-            drawing.FREECADCMD=fake
-            try:
-                result,message=drawing.run_freecad_projection(self.root/"part.step",self.root,2.0)
-            finally:
-                drawing.FREECADCMD=previous_freecadcmd
-            self.assertIsNone(result)
-            self.assertIn("exceeded",message)
-            pid=int(child_pid.read_text(encoding="utf-8"))
-            deadline=time.monotonic()+2
-            while time.monotonic()<deadline:
-                try:
-                    os.kill(pid,0)
-                except ProcessLookupError:
-                    break
-                except PermissionError:
-                    self.fail(f"child process {pid} survived projection timeout")
-                time.sleep(0.05)
-            else:
-                self.fail(f"child process {pid} survived projection timeout")
+            result,message=drawing.run_techdraw({"step":str(self.root/"part.step")},self.root,2.0)
         finally:
-            sys.path.remove(str(SCRIPT.parent))
+            drawing.FREECADCMD=previous_freecadcmd
+        self.assertIsNone(result)
+        self.assertIn("exceeded",message)
+        self.assertEqual(list(self.root.glob("techdraw_*")), [])
+        pid=int(child_pid.read_text(encoding="utf-8"))
+        deadline=time.monotonic()+2
+        while time.monotonic()<deadline:
+            try:
+                os.kill(pid,0)
+            except ProcessLookupError:
+                break
+            except PermissionError:
+                self.fail(f"child process {pid} survived projection timeout")
+            time.sleep(0.05)
+        else:
+            self.fail(f"child process {pid} survived projection timeout")
+
     def test_missing_freecad_is_structured_exit_two(self) -> None:
         result = subprocess.run(
             [sys.executable, str(SCRIPT), "unused.step", "--part", str(self.part), "--product", str(self.product), "--metrics", str(self.metrics),
-             "--output-dir", str(self.root / "out")], env={**__import__("os").environ, "FREECADCMD": str(self.root / "missing-freecadcmd")},
+             "--output-dir", str(self.root / "out")], env={**os.environ, "FREECADCMD": str(self.root / "missing-freecadcmd")},
             capture_output=True, text=True, timeout=20,
         )
         self.assertEqual(result.returncode, 2)
@@ -91,122 +250,81 @@ class DrawingContracts(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertEqual(json.loads(result.stdout)["error"]["code"], "invalid_input")
 
-    def test_metrics_bore_data_overrides_step_cylinder_guess(self) -> None:
-        sys.path.insert(0, str(SCRIPT.parent))
-        try:
-            import drawing
-            args = type("Args", (), {
-                "step": self.root / "part.step", "part": self.part, "product": self.product,
-                "metrics": self.metrics, "scale": 1.0,
-            })()
-            args.step.write_bytes(b"step stub")
-            self.metrics.write_text(json.dumps({"parts": {"TEST-001": {"holes": [
-                {"id":"H1", "diameter_mm":5.009, "axis":[0,-1,0], "position":[1,2,3], "depth_mm":9, "through":True}
-            ]}}}), encoding="utf-8")
-            part, product, step, holes = drawing.read_inputs(args)
-            self.assertEqual(holes[0]["diameter_mm"], 5.009)
-            projection = {"projections": {key:"<path d=\"M 0 0 L 10 10\"/>" for key in ("front","top","right")}}
-            template = drawing.TEMPLATES / "ISO/A4_Landscape_ISO5457_minimal.svg"
-            original = template.read_text(encoding="utf-8")
-            temporary_template = self.root / "template.svg"
-            temporary_template.write_text(original, encoding="utf-8")
-            svg, _ = drawing.make_sheet({**projection, "holes":holes}, part, product, 1.0, temporary_template)
-            self.assertIn('id="hole-diameter-H1"', svg)
-            self.assertIn("⌀ 5.01", svg)
-            self.assertNotIn("⌀ 5.20", svg)
-        finally:
-            sys.path.remove(str(SCRIPT.parent))
-    @unittest.skipUnless(FREECADCMD.is_file(), "FreeCAD 1.1.4 freecadcmd is not installed")
-    def test_lamp_upper_link_renders_views_hole_and_title_block(self) -> None:
-        step = AUTHORITATIVE_STEP
-        self.assertTrue(step.is_file(), "the authoritative cad-model v1 STEP must be present")
+    def test_metrics_bore_data_is_validated(self) -> None:
+        args = type("Args", (), {"step": self.root / "part.step", "part": self.part, "product": self.product,
+                                 "metrics": self.metrics, "scale": 1.0})()
+        args.step.write_bytes(b"step stub")
+        self.metrics.write_text(json.dumps({"parts": {"TEST-001": {"holes": [
+            {"id":"H1", "diameter_mm":5.009, "axis":[0,-1,0], "position":[1,2,3], "depth_mm":9, "through":True}
+        ]}}}), encoding="utf-8")
+        _, _, _, holes = drawing.read_inputs(args)
+        self.assertEqual(holes[0]["diameter_mm"], 5.009)
+        self.metrics.write_text(json.dumps({"parts": {"TEST-001": {"holes": [
+            {"id":"H1", "diameter_mm":5.009, "axis":[0,0,0], "position":[1,2,3]}
+        ]}}}), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "axis must be non-zero"):
+            drawing.read_inputs(args)
+
+    def real_drawing(self, regime: str) -> tuple[dict, str]:
+        self.assertTrue(AUTHORITATIVE_STEP.is_file(), "the authoritative cad-model v1 STEP must be present")
         self.assertTrue(AUTHORITATIVE_METRICS.is_file(), "the authoritative cad-model v1 metrics must be present")
         part = self.root / "part.yaml"
         part.write_text("PN: LMP-0003\nrev: X1\ntitle: Upper link\nmaterial: Aluminum 6061-T6\n", encoding="utf-8")
-        result = self.command(step, self.root / "output", part=part, metrics=AUTHORITATIVE_METRICS)
+        product = self.root / "product.yaml"
+        product.write_text(f"regime: {regime}\ngeneral_tolerance: ISO 2768-m\n", encoding="utf-8")
+        result = self.command(AUTHORITATIVE_STEP, self.root / regime, part=part, product=product, metrics=AUTHORITATIVE_METRICS)
         report = json.loads(result.stdout)
         self.assertEqual(result.returncode, 0, report)
         self.assertEqual(report["status"], "pass")
-        self.assertTrue(report["templates_found"]["iso"])
-        self.assertTrue(report["templates_found"]["asme"])
-        self.assertEqual(report["projection_method"], "first-angle")
-        self.assertGreaterEqual(report["visible_paths"], 12)
-        self.assertGreaterEqual(report["face_count"], 10)
+        self.assertEqual(report["layout_check"], "pass")
         self.assertEqual(report["hole_diameters_mm"], [5.009, 5.009])
         for key in ("svg", "pdf", "rendered_svg_png", "rendered_pdf_png"):
             path = Path(report[key])
             self.assertTrue(path.is_file())
             self.assertGreater(path.stat().st_size, 0)
         svg = Path(report["svg"]).read_text(encoding="utf-8")
-        for required in ("LMP-0003", "Upper link", "Aluminum 6061-T6", "ISO 2768-m", "⌀ 5.01"):
-            self.assertIn(required,svg)
-        self.assertIn('freecad:editable="drawing_number"',svg)
-        self.assertIn('<tspan>LMP-0003</tspan>',svg)
-        self.assertIn('<tspan>X1</tspan>',svg)
-        self.assertIn('id="view-front"', svg)
-        self.assertIn('id="view-top"', svg)
+        spec = sheet.SPECS[regime]
+        self.assertEqual(check_layout(svg, spec.regions, sheet.STOCK_PLACEHOLDERS), [])
+        for required in ("LMP-0003", "X1", "Upper link", "Aluminum 6061-T6", "ISO 2768-m", ">221.00<", ">21.00<"):
+            self.assertIn(required, svg)
         self.assertEqual(svg.count('id="hole-diameter-H'), 2)
-        self.assertIn('id="hole-diameter-H1"',svg)
-        self.assertIn('id="hole-diameter-H2"',svg)
-        self.assertIn('id="overall-front-width"', svg)
-        self.assertIn('id="overall-front-height"', svg)
-        self.assertNotIn("Company Name", svg)
-        self.assertNotIn(">A</tspan>", svg)
-        front = svg.split('id="view-front" transform="', 1)[1].split('"', 1)[0]
-        top = svg.split('id="view-top" transform="', 1)[1].split('"', 1)[0]
-        right = svg.split('id="view-right" transform="', 1)[1].split('"', 1)[0]
-        import re
-        fc = tuple(map(float, re.search(r"translate\(([-.0-9]+) ([-.0-9]+)\)", front).groups()))
-        tc = tuple(map(float, re.search(r"translate\(([-.0-9]+) ([-.0-9]+)\)", top).groups()))
-        rc = tuple(map(float, re.search(r"translate\(([-.0-9]+) ([-.0-9]+)\)", right).groups()))
-        self.assertGreater(tc[1], fc[1])
-        self.assertLess(rc[0], fc[0])
-    def test_asme_uses_third_angle_view_positions_and_symbol(self) -> None:
-        step = AUTHORITATIVE_STEP
-        self.assertTrue(step.is_file(), "the authoritative cad-model v1 STEP must be present")
-        self.assertTrue(AUTHORITATIVE_METRICS.is_file(), "the authoritative cad-model v1 metrics must be present")
-        part = self.root / "part.yaml"
-        part.write_text("PN: LMP-0003\nrev: X1\ntitle: Upper link\nmaterial: Aluminum 6061-T6\n", encoding="utf-8")
-        product = self.root / "product.yaml"
-        product.write_text("regime: asme\ngeneral_tolerance: ASME Y14.5\n", encoding="utf-8")
-        result = self.command(step, self.root / "asme", part=part, product=product, metrics=AUTHORITATIVE_METRICS)
-        report = json.loads(result.stdout)
-        self.assertEqual(result.returncode, 0, report)
-        self.assertEqual(report["hole_diameters_mm"], [5.009, 5.009])
-        svg = Path(report["svg"]).read_text(encoding="utf-8")
-        self.assertIn('id="third_angle_projection_symbol"', svg)
-        for text in ("Upper link","LMP-0003","X1","Aluminum 6061-T6","ASME Y14.5","1 : 1"):
-            self.assertIn(text,svg)
-        self.assertEqual(svg.count('id="cad-asme-title-field-'),6)
-        self.assertNotIn("Company Name", svg)
-        self.assertNotIn("Drawing Title 1", svg)
-        self.assertNotIn("Drawn By", svg)
-        self.assertNotIn('id="BlockJ Size"',svg)
-        self.assertNotIn('id="tspan3784"',svg)
-        self.assertIn("⌀ 5.01", svg)
-        self.assertEqual(svg.count('id="hole-diameter-H'),2)
-        front=svg.split('id="view-front" transform="',1)[1].split('"',1)[0]
-        top=svg.split('id="view-top" transform="',1)[1].split('"',1)[0]
-        right=svg.split('id="view-right" transform="',1)[1].split('"',1)[0]
-        import re
-        fc=tuple(map(float,re.search(r"translate\(([-.0-9]+) ([-.0-9]+)\)",front).groups()))
-        tc=tuple(map(float,re.search(r"translate\(([-.0-9]+) ([-.0-9]+)\)",top).groups()))
-        rc=tuple(map(float,re.search(r"translate\(([-.0-9]+) ([-.0-9]+)\)",right).groups()))
-        self.assertLess(tc[1],fc[1])
-        self.assertGreater(rc[0],fc[0])
+        self.assertEqual(svg.count(">⌀5.01<"), 2)
+        self.assertEqual(svg.count('id="projection-symbol"'), 1)
+        return report, svg
+
+    @unittest.skipUnless(FREECADCMD.is_file(), "FreeCAD 1.1.4 freecadcmd is not installed")
+    def test_iso_lamp_upper_link_is_first_angle_with_complete_title_block(self) -> None:
+        report, svg = self.real_drawing("iso")
+        self.assertTrue(report["templates_found"]["iso"])
+        self.assertEqual(report["projection_method"], "first-angle")
+        self.assertGreaterEqual(report["visible_paths"], 12)
+        self.assertGreaterEqual(report["face_count"], 10)
+        self.assertIn("<tspan>LMP-0003</tspan>", svg)
+        self.assertIn("<tspan>1 / 1</tspan>", svg)
+        centers = view_centers(svg)
+        self.assertGreater(centers["top"][1], centers["front"][1])  # top view below the front view
+        self.assertLess(centers["right"][0], centers["front"][0])  # right view left of the front view
+
+    @unittest.skipUnless(FREECADCMD.is_file(), "FreeCAD 1.1.4 freecadcmd is not installed")
+    def test_asme_lamp_upper_link_is_third_angle_with_unique_labels(self) -> None:
+        report, svg = self.real_drawing("asme")
+        self.assertEqual(report["projection_method"], "third-angle")
+        self.assertIn("Scale 1:2", svg)
+        self.assertEqual(svg.count(">Approved:<"), 1)
+        self.assertIn(">Released:<", svg)
+        centers = view_centers(svg)
+        self.assertLess(centers["top"][1], centers["front"][1])  # top view above the front view
+        self.assertGreater(centers["right"][0], centers["front"][0])  # right view right of the front view
 
     def test_safe_svg_validation_blocks_entity_expansion(self) -> None:
-        sys.path.insert(0, str(SCRIPT.parent))
-        try:
-            import drawing
-            svg = self.root / "hostile.svg"
-            svg.write_text('<!DOCTYPE x [<!ENTITY boom "abc">]><svg xmlns="http://www.w3.org/2000/svg"><text>&boom;</text></svg>', encoding="utf-8")
-            ok, message, count = drawing.verify_svg_content(svg, self.root / "missing.png", {"PN":"x","rev":"A","title":"t","material":"m"})
-            self.assertFalse(ok)
-            self.assertEqual(count, 0)
-            self.assertIn("unsafe SVG", message)
-        finally:
-            sys.path.remove(str(SCRIPT.parent))
+        svg = self.root / "hostile.svg"
+        svg.write_text('<!DOCTYPE x [<!ENTITY boom "abc">]><svg xmlns="http://www.w3.org/2000/svg"><text>&boom;</text></svg>', encoding="utf-8")
+        ok, message, count = drawing.verify_svg_content(svg, self.root / "missing.png", {"PN":"x","rev":"A","title":"t","material":"m"})
+        self.assertFalse(ok)
+        self.assertEqual(count, 0)
+        self.assertIn("unsafe SVG", message)
+        with self.assertRaises(Exception):
+            layout_check.check_layout(svg.read_text(encoding="utf-8"), REGIONS, [])
 
 
 if __name__ == "__main__":

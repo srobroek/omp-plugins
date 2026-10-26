@@ -1,3 +1,5 @@
+// Rasterizes a drawing SVG to a PNG preview on white and fails when the render is blank.
+// Usage: swift svg_to_png.swift <drawing.svg> <preview.png>
 import AppKit
 import Foundation
 

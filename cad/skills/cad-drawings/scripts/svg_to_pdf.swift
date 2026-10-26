@@ -1,3 +1,6 @@
+// Prints a drawing SVG to a one-page PDF sized to the sheet, checks the PDF text layer for the
+// required title-block values, and writes a PNG preview of the PDF page.
+// Usage: swift svg_to_pdf.swift <drawing.svg> <drawing.pdf> <preview.png> [required text ...]
 import AppKit
 import Foundation
 import PDFKit
@@ -7,7 +10,8 @@ let output=URL(fileURLWithPath:CommandLine.arguments[2])
 let preview=URL(fileURLWithPath:CommandLine.arguments[3])
 let required=Array(CommandLine.arguments.dropFirst(4))
 guard let image=NSImage(contentsOfFile:input) else { fputs("SVG load failed\n",stderr); exit(2) }
-let pageSize=NSSize(width:842,height:595)
+// NSImage reports an SVG's mm width and height in points, so the page matches the sheet size.
+let pageSize=image.size
 let page=NSView(frame:NSRect(origin:.zero,size:pageSize))
 let imageView=NSImageView(frame:page.bounds)
 imageView.image=image
@@ -31,7 +35,7 @@ guard FileManager.default.fileExists(atPath:output.path), ((try? FileManager.def
 guard let pdf=PDFDocument(url:output), pdf.pageCount>0 else { fputs("Generated PDF cannot be parsed\n",stderr); exit(5) }
 let pdfText=(0..<pdf.pageCount).compactMap{pdf.page(at:$0)?.string}.joined(separator:" ")
 for field in required where !pdfText.contains(field) { fputs("PDF missing required field: \(field)\n",stderr); exit(6) }
-guard let pdfPage=pdf.page(at:0), let pdfImage=pdfPage.thumbnail(of:CGSize(width:1684,height:1191),for:.mediaBox).cgImage(forProposedRect:nil,context:nil,hints:nil) else { fputs("PDF page render failed\n",stderr); exit(7) }
+guard let pdfPage=pdf.page(at:0), let pdfImage=pdfPage.thumbnail(of:CGSize(width:pageSize.width*2,height:pageSize.height*2),for:.mediaBox).cgImage(forProposedRect:nil,context:nil,hints:nil) else { fputs("PDF page render failed\n",stderr); exit(7) }
 let bitmap=NSBitmapImageRep(cgImage:pdfImage)
 guard let png=bitmap.representation(using:.png,properties:[:]) else { fputs("PDF PNG encode failed\n",stderr); exit(8) }
 try png.write(to:preview)
