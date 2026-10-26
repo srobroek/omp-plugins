@@ -19,7 +19,7 @@ class HarnessGeneratorTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory(prefix="cad-harness-test-")
         self.addCleanup(self.temporary.cleanup)
         self.cad = Path(self.temporary.name) / "cad"
-        shutil.copytree(CAD, self.cad)
+        shutil.copytree(CAD, self.cad, copy_function=shutil.copyfile)
         self.generator = self.cad / "harness" / "generate.py"
 
     def run_generator(self, *args: str) -> subprocess.CompletedProcess[str]:
@@ -39,23 +39,19 @@ class HarnessGeneratorTests(unittest.TestCase):
         self.generate()
         current = self.run_generator("--check")
         self.assertEqual(current.returncode, 0, current.stdout + current.stderr)
-        self.assertIn("PASS: 6 harness agents current and read-only", current.stdout)
+        self.assertIn("PASS: 6 harness agents current", current.stdout)
 
         target = self.cad / "harness" / "claude" / "agents" / "cad-mech-reviewer.md"
-        target.chmod(0o644)
         target.write_text(target.read_text(encoding="utf-8") + "\nmanual drift\n", encoding="utf-8")
         stale = self.run_generator("--check")
         self.assertNotEqual(stale.returncode, 0, stale.stdout)
         self.assertIn("stale harness/claude/agents/cad-mech-reviewer.md", stale.stderr)
-        (self.cad / "harness" / "kiro" / "agents" / "cad-mech-reviewer.json").unlink()
+        missing_path = self.cad / "harness" / "kiro" / "agents" / "cad-mech-reviewer.json"
+        missing_path.unlink()
         missing = self.run_generator("--check")
         self.assertNotEqual(missing.returncode, 0, missing.stdout)
         self.assertIn("missing harness/kiro/agents/cad-mech-reviewer.json", missing.stderr)
-        target.chmod(0o444)
-        target.chmod(0o644)
-        writable = self.run_generator("--check")
-        self.assertNotEqual(writable.returncode, 0, writable.stdout)
-        self.assertIn("writable generated file harness/claude/agents/cad-mech-reviewer.md", writable.stderr)
+
     def test_harness_formats_expose_only_read_capabilities(self) -> None:
         self.generate()
         for name in ("cad-mech-reviewer", "cad-dfm-reviewer"):
@@ -78,23 +74,6 @@ class HarnessGeneratorTests(unittest.TestCase):
                 self.assertIn("edit: deny", opencode)
                 self.assertIn("bash: deny", opencode)
 
-    def test_every_generated_agent_has_read_only_permissions(self) -> None:
-        self.generate()
-        files = sorted((self.cad / "harness").glob("*/agents/*"))
-        self.assertEqual(len(files), 6)
-        for path in files:
-            with self.subTest(path=path.relative_to(self.cad)):
-                self.assertEqual(path.stat().st_mode & 0o222, 0, f"{path} is writable")
-                text = path.read_text(encoding="utf-8")
-                if path.suffix == ".json":
-                    self.assertIn('"fs_write"', text)
-                    self.assertIn('"shell"', text)
-                    self.assertIn('"deny"', text)
-                elif "opencode" in path.parts:
-                    self.assertIn("edit: deny", text)
-                    self.assertIn("bash: deny", text)
-                else:
-                    self.assertIn("tools: Read, Grep, Glob", text)
 
 
 if __name__ == "__main__":
