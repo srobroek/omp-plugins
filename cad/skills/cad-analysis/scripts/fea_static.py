@@ -109,12 +109,18 @@ def load_case(path: Path) -> dict[str, Any]:
     return raw
 
 
+def run_directory(case_path: Path, run_id: str) -> Path:
+    """Return the isolated working directory for one case run."""
+    return case_path.parent.resolve() / "runs" / run_id
+
+
 def run_job(case_path: Path, case: dict[str, Any]) -> tuple[dict[str, Any], int]:
     run_id = uuid.uuid4().hex
-    workdir = case_path.parent.resolve()
-    job_path = workdir / f"fea_static_{run_id}.py"
-    marker_path = workdir / f"fea_static_{run_id}.json"
-    output_path = workdir / "results.json"
+    run_dir = run_directory(case_path, run_id)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    job_path = run_dir / f"fea_static_{run_id}.py"
+    marker_path = run_dir / f"fea_static_{run_id}.json"
+    output_path = case_path.parent.resolve() / "results.json"
     job = {
         "run_id": run_id,
         "step": case["_step"],
@@ -208,11 +214,12 @@ except Exception as e:
 '''
     job_path.write_text(script, encoding="utf-8")
     try:
-        completed = subprocess.run([str(FREECADCMD), str(job_path)], cwd=workdir, capture_output=True, text=True)
+        completed = subprocess.run([str(FREECADCMD), str(job_path)], cwd=run_dir, capture_output=True, text=True)
     except OSError as exc:
         return error(f"cannot start FreeCAD: {exc}", code="freecad_unavailable"), 2
     if not marker_path.is_file():
         result = error("FreeCAD job did not write its run-specific completion marker", code="missing_completion_marker")
+        result.update({"run_id": run_id, "run_directory": str(run_dir)})
         result["details"] = {"returncode": completed.returncode, "stderr": completed.stderr[-4000:]}
         output_path.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
         return result, 1
@@ -222,6 +229,7 @@ except Exception as e:
         return error(f"cannot parse FreeCAD result marker: {exc}", code="invalid_result"), 1
     if result.get("run_id") != run_id:
         return error("FreeCAD result marker run id does not match this invocation", code="invalid_result"), 1
+    result["run_directory"] = str(run_dir)
     result["warnings"] = result.get("warnings", [])
     if completed.returncode == 139:
         result["warnings"].append("FreeCAD exited with 139 after writing its result marker; outputs were validated.")

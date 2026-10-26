@@ -16,6 +16,7 @@ FREECADCMD = Path("/Applications/FreeCAD.app/Contents/Resources/bin/freecadcmd")
 SPIKE = Path("/tmp/cad-spike-freecad")
 sys.path.insert(0, str(SCRIPT.parent))
 from fea_part_selection import select_solid_index
+from fea_static import run_directory
 
 
 class SolidSelectionContracts(unittest.TestCase):
@@ -35,6 +36,10 @@ class SolidSelectionContracts(unittest.TestCase):
 
 
 class StaticFEAContracts(unittest.TestCase):
+    def test_run_directory_is_nested_under_case_runs(self) -> None:
+        case = Path(tempfile.gettempdir()) / "analysis" / "case.yaml"
+        self.assertEqual(run_directory(case, "abc123"), case.parent.resolve() / "runs" / "abc123")
+
     def test_missing_freecad_is_structured_exit_two(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             script = Path(directory) / "fea_static.py"
