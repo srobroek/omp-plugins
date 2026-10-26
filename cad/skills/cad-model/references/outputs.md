@@ -29,13 +29,27 @@ Mass is solid-material mass: `volume_mm3 * density / 1000`, density from `assets
 ```
 
 - A bore is the concave cylindrical faces of one solid on one axis line with one radius (within
-  1e-4 mm): seam-split faces and coaxial stretches across a slot (a clevis pin bore) are one bore.
-  A convex cylinder (boss, pin) is not a hole; neither is a stretch that covers less than the full
-  circle (slot end, concave fillet, open channel). Slots and non-cylindrical cut-outs are not listed.
+  1e-4 mm) that close the full circle on each axial slice; slices are cut at every face boundary.
+  Seam-split faces side by side close it. Faces that only follow each other along the axis (a
+  half-round channel cut in two pieces) do not. A convex cylinder (boss, pin) is not a hole;
+  neither is a stretch that covers less than the full circle (slot end, concave fillet, open
+  channel). Slots and non-cylindrical cut-outs are not listed.
+- An end is open when a face across its rim reaches more than 1e-4 mm outside the bore radius:
+  a boundary face, a slot, a cross bore, a larger coaxial step, or a lead-in chamfer or round.
+  There is no minimum lead-in angle: a chamfer of half-angle α and axial length L opens the end
+  once L·tan α > 1e-4 mm. An end is closed when every face across its rim stays within the
+  radius: a flat floor, a drill point, a ball end, a corner radius, or a counterbore shoulder.
+- Two stretches on one axis make one bore only when both facing ends are open, as in a clevis pin
+  bore across its slot. Otherwise each is its own bore, as with two blind holes drilled from
+  opposite faces.
+- Each coaxial step is its own bore. A Ø5 through hole with a Ø9 x 3 counterbore lists the Ø5
+  through from the shoulder, and the Ø9 blind with depth 3 down to the shoulder. They share the
+  axis line, and the larger bore's floor (`position + axis * depth_mm`) is one end of the smaller
+  bore. Steps are not merged into one entry because each is its own tool and depth, which is what
+  a manufacturability check reads, and because the step chain stays recoverable from the axis.
 - `diameter_mm` is rounded to 3 decimals. `depth_mm` is the axial length of the cylindrical wall,
-  entry chamfers and drill points excluded, gaps across slots included.
-- `through` is true when the bore opens onto a boundary face at both ends; an end closed by a
-  floor (flat or drill point) makes it blind.
+  entry chamfers, rounds and drill points excluded, gaps across slots included.
+- `through` is true when the bore is open at both ends.
 - `axis` is the unit drilling direction and `position` the axis point at the entry end. A blind
   bore enters at its open end. A through bore enters so its axis points down: the first non-zero
   component of z, y, x is negative.
