@@ -11,6 +11,7 @@ import platform
 import shutil
 import signal
 import subprocess
+import tempfile
 import time
 from concurrent.futures import FIRST_EXCEPTION, ThreadPoolExecutor, wait
 from dataclasses import dataclass
@@ -137,45 +138,51 @@ def run_kernels(requests: Mapping[str, list[dict[str, str]]]) -> dict[str, dict[
     """Run every kernel's runner subprocess at once and collect their JSON results.
 
     `requests` maps a kernel to its request parts, `{pn, name, model, step}` (protocol in runner.py).
-    Each runner is fed and drained by its own thread, so no runner waits for another to finish. When
+    Each runner writes its result to its own file in a private temporary folder, so nothing it or
+    OCCT prints can stand in for the result; its stdout and stderr are one console stream. Each
+    runner is fed and drained by its own thread, so no runner waits for another to finish. When
     one fails, every runner still running is killed with its process group (uv and the kernel's
     Python) before this raises, so none writes a STEP after the caller removes its output folder.
     """
     if shutil.which("uv") is None:
         raise UsageError("uv is required to run the kernel environments")
-    procs: dict[str, tuple[subprocess.Popen[str], float]] = {}
-    try:
-        for kernel in requests:
-            proc = subprocess.Popen(["uv", "run", "--quiet", "--script", str(RUNNERS[kernel])],
-                                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                    text=True, start_new_session=True)
-            procs[kernel] = (proc, time.perf_counter())
-    except BaseException:
-        _stop(proc for proc, _ in procs.values())
-        raise
-    with ThreadPoolExecutor(max_workers=len(procs)) as pool:
-        futures = {pool.submit(_runner_result, kernel, proc, started, requests[kernel]): kernel
-                   for kernel, (proc, started) in procs.items()}
+    with tempfile.TemporaryDirectory(prefix="cad-model-runners-") as tmp:
+        procs: dict[str, tuple[subprocess.Popen[str], float]] = {}
         try:
-            done, _ = wait(futures, return_when=FIRST_EXCEPTION)
-            for future in done:
-                future.result()
+            for kernel in requests:
+                proc = subprocess.Popen(["uv", "run", "--quiet", "--script", str(RUNNERS[kernel])],
+                                        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                        text=True, start_new_session=True)
+                procs[kernel] = (proc, time.perf_counter())
         except BaseException:
             _stop(proc for proc, _ in procs.values())
             raise
-    return {kernel: future.result() for future, kernel in futures.items()}
+        with ThreadPoolExecutor(max_workers=len(procs)) as pool:
+            futures = {pool.submit(_runner_result, kernel, proc, started, requests[kernel],
+                                   Path(tmp) / f"{kernel}.json"): kernel
+                       for kernel, (proc, started) in procs.items()}
+            try:
+                done, _ = wait(futures, return_when=FIRST_EXCEPTION)
+                for future in done:
+                    future.result()
+            except BaseException:
+                _stop(proc for proc, _ in procs.values())
+                raise
+        return {kernel: future.result() for future, kernel in futures.items()}
 
 
-def _runner_result(kernel: str, proc: subprocess.Popen[str], started: float, parts: list[dict[str, str]]) -> dict[str, Any]:
-    stdout, stderr = proc.communicate(json.dumps({"parts": parts}))  # no timeout: a cold OCP import takes minutes
-    if proc.returncode != 0 or not stdout.strip():
-        raise UsageError(f"{kernel} runner exited {proc.returncode}: {stderr[-3000:]}")
+def _runner_result(kernel: str, proc: subprocess.Popen[str], started: float, parts: list[dict[str, str]],
+                   result_path: Path) -> dict[str, Any]:
+    request = json.dumps({"result": str(result_path), "parts": parts})
+    console, _ = proc.communicate(request)  # no timeout: a cold OCP import takes minutes
+    if proc.returncode != 0:
+        raise UsageError(f"{kernel} runner exited {proc.returncode}: {console[-3000:]}")
     try:
-        result = json.loads(stdout.strip().splitlines()[-1])
-    except ValueError as error:
-        raise UsageError(f"{kernel} runner wrote no JSON result: {stdout[-1000:]}") from error
+        result = json.loads(result_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise UsageError(f"{kernel} runner wrote no result ({error}): {console[-1000:]}") from error
     result["wall_s"] = round(time.perf_counter() - started, 3)
-    result["stderr_tail"] = stderr[-2000:]
+    result["console_tail"] = console[-2000:]
     return result
 
 

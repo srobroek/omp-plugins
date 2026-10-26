@@ -539,10 +539,11 @@ FAKE_RUNNER = """# /// script
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-import json, pathlib, sys, time
-part = json.load(sys.stdin)["parts"][0]
+import atexit, json, pathlib, sys, time
+request = json.load(sys.stdin)
+part = request["parts"][0]
 {body}
-print(json.dumps({{"kernel": "fake", "tools": {{}}, "import_s": 0.0, "parts": {{}}}}))
+pathlib.Path(request["result"]).write_text(json.dumps({{"kernel": "fake", "tools": {{}}, "import_s": 0.0, "parts": {{}}}}))
 """
 FAKE_BODIES = {
     "waits_for_peer": "deadline = time.monotonic() + 30\n"
@@ -554,12 +555,18 @@ FAKE_BODIES = {
     "fails": "sys.exit(2)",
     "writes_late": "time.sleep(4)\npathlib.Path(part['step']).parent.mkdir(parents=True, exist_ok=True)\n"
                    "pathlib.Path(part['step']).write_text('late')",
+    # OCCT's STEP-writer statistics on stdout, around a decoy JSON line, and an unterminated line at exit.
+    "stdout_noise": "print('****** Statistics on Transfer (Write) ******')\n"
+                    "print(json.dumps({'kernel': 'decoy', 'tools': {}, 'import_s': 0.0, 'parts': {}}))\n"
+                    "atexit.register(sys.stdout.write, '****** Transfer Mode = 0  I.E.  As Is ******')",
+    "exits_without_result": "sys.exit(0)",
 }
 
 
 @unittest.skipUnless(shutil.which("uv"), "uv is required to start the runners")
 class RunnerLifecycleTests(unittest.TestCase):
-    """`run_kernels` with stand-in runners: they run at once, and a failure stops the others."""
+    """`run_kernels` with stand-in runners: they run at once, a failure stops the others, and the
+    result comes from the file the request names, whatever the runner prints."""
 
     def runners(self, root: Path, cadquery: str, build123d: str) -> dict[str, Path]:
         paths = {}
@@ -589,6 +596,21 @@ class RunnerLifecycleTests(unittest.TestCase):
                 self.assertLess(time.monotonic() - started, 4.0)
             time.sleep(6)
             self.assertFalse(late.parent.exists(), "the stopped runner recreated the partial folder")
+
+    def test_the_result_file_is_immune_to_stray_stdout_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(build.RUNNERS, self.runners(Path(tmp), "stdout_noise", "stdout_noise")):
+                results = build.run_kernels({"cadquery": [{"pn": "TST-0001"}], "build123d": [{"pn": "TST-0002"}]})
+        for kernel, result in results.items():
+            with self.subTest(kernel=kernel):
+                self.assertEqual(result["kernel"], "fake")
+                self.assertIn("Transfer Mode = 0", result["console_tail"])
+
+    def test_a_runner_that_exits_without_its_result_is_a_usage_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(build.RUNNERS, self.runners(Path(tmp), "exits_without_result", "signals_peer")):
+                with self.assertRaisesRegex(build.UsageError, "cadquery runner wrote no result"):
+                    build.run_kernels({"cadquery": [{"pn": "TST-0001"}]})
 
 
 @unittest.skipUnless(shutil.which("uv"), "uv is required for the trimesh environment")

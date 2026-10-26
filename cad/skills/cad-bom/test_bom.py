@@ -6,6 +6,7 @@ from __future__ import annotations
 import csv
 import importlib.util
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -78,6 +79,25 @@ class RollUpTests(unittest.TestCase):
         self.assertEqual(bom.Node("PIN-0001 pin", False).pn, "PIN-0001")
         self.assertIsNone(bom.Node("PIN-00012", False).pn)
         self.assertIsNone(bom.Node("pin-0001", False).pn)
+
+
+class ConsoleRedirectTests(unittest.TestCase):
+    """The OCCT console redirect keeps output written through C stdio, as OCCT writes it, off the JSON stdout."""
+
+    @unittest.skipUnless(os.name == "posix", "the probe reaches C stdio through the POSIX libc")
+    def test_c_stdio_output_inside_the_redirect_reaches_stderr_not_a_piped_stdout(self) -> None:
+        # A pipe makes C stdout fully buffered: left in the buffer, the noise reaches stdout at exit, after the JSON.
+        probe = ("import ctypes, importlib.util, json, sys\n"
+                 f"spec = importlib.util.spec_from_file_location('bom', {str(BOM_SCRIPT)!r})\n"
+                 "bom = sys.modules['bom'] = importlib.util.module_from_spec(spec)\n"
+                 "spec.loader.exec_module(bom)\n"
+                 "with bom._stdout_to_stderr():\n"
+                 "    ctypes.CDLL(None).puts(b'****** Statistics on Transfer (Read) ******')\n"
+                 "print(json.dumps({'status': 'pass'}))\n")
+        proc = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, check=False, timeout=60)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stdout, '{"status": "pass"}\n')
+        self.assertIn("Statistics on Transfer (Read)", proc.stderr)
 
 
 @unittest.skipUnless(shutil.which("uv"), "uv is required to build and read STEP through OCP")

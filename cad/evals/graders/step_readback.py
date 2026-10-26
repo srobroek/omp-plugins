@@ -10,15 +10,20 @@ stdout: {"solids": int, "volume_mm3": float, "bbox_mm": [dx, dy, dz],
          "holes": [{"diameter_mm": float, "axis": [dx, dy, dz], "through": [x, y, z]}]}
 A hole is one concave cylindrical surface (material outward normal pointing at its
 axis), deduplicated by diameter and axis line, so a hole split into two half-faces
-counts once. Convex cylinders such as rounded link ends are not holes.
+counts once. Convex cylinders such as rounded link ends are not holes. OCCT's
+console output (a parse error, for one) goes to stderr, never into the JSON.
 
 Exit 0 = read; 1 = the file is not a readable STEP solid; 2 = usage or OCCT crash.
 """
 
 from __future__ import annotations
 
+import contextlib
+import ctypes
 import json
+import os
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 
 
@@ -30,12 +35,32 @@ def main(argv: list[str]) -> int:
     if not path.is_file():
         print(f"no such file: {path}", file=sys.stderr)
         return 1
-    shape = _read(path)
-    if shape is None:
+    with _stdout_to_stderr():
+        shape = _read(path)
+        report = None if shape is None else measure(shape)
+    if report is None:
         return 1
-    json.dump(measure(shape), sys.stdout, sort_keys=True)
+    json.dump(report, sys.stdout, sort_keys=True)
     sys.stdout.write("\n")
     return 0
+
+
+@contextlib.contextmanager
+def _stdout_to_stderr() -> Iterator[None]:
+    """Point fd 1 at stderr while OCCT runs. OCCT prints through C stdio, which holds the bytes
+    when stdout is a pipe, so its buffers are flushed before fd 1 is swapped and restored."""
+    libc = ctypes.CDLL(None) if os.name == "posix" else ctypes.CDLL("ucrtbase")
+    sys.stdout.flush()
+    libc.fflush(None)
+    saved = os.dup(1)
+    try:
+        os.dup2(2, 1)
+        yield
+    finally:
+        sys.stdout.flush()
+        libc.fflush(None)  # NULL: every C stdio output stream
+        os.dup2(saved, 1)
+        os.close(saved)
 
 
 def _read(path: Path):

@@ -10,6 +10,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import math
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -141,6 +142,25 @@ class ClearanceTests(unittest.TestCase):
         rows, findings = sweep.clearance_report(measured, 0.5)
         self.assertEqual(rows[0]["clearance_mm"], 0.5)
         self.assertEqual([f["pair"] for f in findings], [["TST-0001", "TST-0003"]])
+
+
+class ConsoleRedirectTests(unittest.TestCase):
+    """stdout_to_stderr keeps console output written through C stdio, as OCCT writes it, off the JSON stdout."""
+
+    @unittest.skipUnless(os.name == "posix", "the probe reaches C stdio through the POSIX libc")
+    def test_c_stdio_output_inside_the_redirect_reaches_stderr_not_a_piped_stdout(self) -> None:
+        # A pipe makes C stdout fully buffered: left in the buffer, the noise reaches stdout at exit, after the JSON.
+        probe = ("import ctypes, importlib.util, json, sys\n"
+                 f"spec = importlib.util.spec_from_file_location('pose', {str(SCRIPTS / 'pose.py')!r})\n"
+                 "pose = sys.modules['pose'] = importlib.util.module_from_spec(spec)\n"
+                 "spec.loader.exec_module(pose)\n"
+                 "with pose.stdout_to_stderr():\n"
+                 "    ctypes.CDLL(None).puts(b'****** Statistics on Transfer (Write) ******')\n"
+                 "print(json.dumps({'status': 'pass'}))\n")
+        proc = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, check=False, timeout=60)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stdout, '{"status": "pass"}\n')
+        self.assertIn("Statistics on Transfer (Write)", proc.stderr)
 
 
 PLANAR_YAML = """subassemblies:

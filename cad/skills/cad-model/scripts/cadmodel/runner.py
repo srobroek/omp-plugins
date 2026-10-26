@@ -1,12 +1,13 @@
 """Kernel runner core: execute part model scripts in one kernel's environment, write per-part STEP.
 
 Each `run_<kernel>.py` is a uv script that pins one kernel environment and calls `main`. The
-orchestrator (`cad_model.py run`) sends one JSON request on stdin:
+orchestrator (`cad_model.py run`) sends one JSON request on stdin, naming the file for the result:
 
-    {"parts": [{"pn": "LMP-0003", "name": "LMP-0003 Upper link",
+    {"result": "/abs/tmp/cadquery.json",
+     "parts": [{"pn": "LMP-0003", "name": "LMP-0003 Upper link",
                 "model": "/abs/hw/parts/LMP-0003/model.py", "step": "/abs/out/LMP-0003.step"}]}
 
-and reads one JSON result on stdout, identical in shape for every kernel:
+and reads one JSON result from that file once the runner exits, identical in shape for every kernel:
 
     {"kernel": "cadquery", "tools": {"python": "3.12.13", "cadquery": "2.8.0", ...},
      "import_s": 3.7,
@@ -15,8 +16,9 @@ and reads one JSON result on stdout, identical in shape for every kernel:
                "LMP-0004": {"ok": false, "error": {"type": "SafeEditError", "message": "...",
                                                    "where": "model.py:42 in build"}}}}
 
-A part that fails never stops the others. Model output and OCCT console noise go to stderr.
-Exit 0 when the request was processed (part failures are in the JSON), 2 when it could not be.
+A part that fails never stops the others. stdout and stderr are console output only: model output
+and OCCT's console messages land there and never reach the result, whenever they are flushed.
+Exit 0 when the request was processed (part failures are in the result), 2 when it could not be.
 """
 
 from __future__ import annotations
@@ -105,23 +107,22 @@ def _failure(error: BaseException, model: str) -> dict[str, Any]:
 
 def main(kernel: str, dists: tuple[str, ...]) -> int:
     sys.dont_write_bytecode = True  # never leave __pycache__ beside hw/parts/<PN>/model.py
-    pose = load_pose()
     try:
         request = json.load(sys.stdin)
         parts = request["parts"]
+        result = Path(request["result"])
     except (ValueError, KeyError, TypeError) as error:
         print(f"run_{kernel}: bad request on stdin: {error}", file=sys.stderr)
         return 2
     results: dict[str, Any] = {}
-    with pose.stdout_to_stderr():
-        started = time.perf_counter()
-        importlib.import_module(kernel)
-        import_s = round(time.perf_counter() - started, 3)
-        for part in parts:
-            try:
-                results[part["pn"]] = build_part(kernel, part)
-            except Exception as error:  # noqa: BLE001 - every model failure is reported per part
-                results[part["pn"]] = _failure(error, str(Path(part["model"])))
-    json.dump({"kernel": kernel, "tools": tool_versions(dists), "import_s": import_s, "parts": results}, sys.stdout)
-    sys.stdout.write("\n")
+    started = time.perf_counter()
+    importlib.import_module(kernel)
+    import_s = round(time.perf_counter() - started, 3)
+    for part in parts:
+        try:
+            results[part["pn"]] = build_part(kernel, part)
+        except Exception as error:  # noqa: BLE001 - every model failure is reported per part
+            results[part["pn"]] = _failure(error, str(Path(part["model"])))
+    result.write_text(json.dumps({"kernel": kernel, "tools": tool_versions(dists), "import_s": import_s,
+                                  "parts": results}) + "\n", encoding="utf-8")
     return 0

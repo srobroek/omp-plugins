@@ -228,6 +228,18 @@ class OracleAndNull(unittest.TestCase):
         self.assertEqual(graded.grade["pass"], 0.0)
         self.assertIn("holes", graded.explanation)
 
+    def test_an_unparsable_step_grades_unreadable_not_as_a_grader_error(self):
+        """OCCT prints the parse error on its console, which must stay off step_readback's JSON stdout."""
+        case = runner.load_cases(["t1-lower-link-cq"])[0]
+        work = copy_of(case["_seed"], "unparsable-step")
+        step = work / case["deliverables"]["step"]
+        step.parent.mkdir(parents=True, exist_ok=True)
+        step.write_text("ISO-10303-21;\nHEADER;\nFILE_SCHEMA(('AP242_MANAGED_MODEL_BASED_3D_ENGINEERING_MIM_LF'));\nENDSEC;\n"
+                        "DATA;\n#1=FOO(1,;\nENDSEC;\nEND-ISO-10303-21;\n", encoding="utf-8")
+        graded = grade(case, work)
+        self.assertEqual(graded.grade["step"], 0.0)
+        self.assertIn("STEP unreadable", graded.explanation)
+
 
 class StepResolution(unittest.TestCase):
     def test_latest_json_cannot_point_outside_hw(self):

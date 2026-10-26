@@ -280,13 +280,14 @@ jobs:
           enable-cache: true
           cache-dependency-glob: cad-pep723-headers.txt
 
-      # The suites' own interpreter needs pyyaml and jsonschema; the scripts they
-      # start through `uv run --script` bring their own environments.
+      # The suites' own interpreter needs pyyaml and jsonschema, plus defusedxml for
+      # the cad-drawings modules its tests import; the scripts they start through
+      # `uv run --script` bring their own environments.
       - name: CAD skill tests
         run: |
           status=0
           while IFS= read -r test; do
-            uv run --no-project --with pyyaml==6.0.3 --with jsonschema==4.26.0 \
+            uv run --no-project --with pyyaml==6.0.3 --with jsonschema==4.26.0 --with defusedxml==0.7.1 \
               python -m unittest discover -s "$(dirname "$test")" -p "$(basename "$test")" -v || status=1
           done < <(git ls-files 'cad/skills/*/test_*.py')
           exit $status

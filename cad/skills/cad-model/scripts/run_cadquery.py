@@ -4,7 +4,7 @@
 # ///
 """CadQuery 2.8 kernel runner for `cad_model.py run`; protocol in cadmodel/runner.py.
 
-Not for direct use: it reads a JSON request on stdin and writes a JSON result on stdout.
+Not for direct use: it reads a JSON request on stdin and writes its JSON result to the file the request names.
 """
 
 import sys

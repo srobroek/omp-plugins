@@ -17,7 +17,8 @@
 - Import only the declared kernel, OCP, the standard library, `cadmodel.safe`, and the kernel's
   warehouse: `bd_warehouse` 0.4.0 is in the build123d environment. `cq_warehouse` is not on PyPI
   and is not in the CadQuery environment.
-- `print` output and OCCT console messages go to stderr; they never corrupt the JSON channel.
+- `print` output and OCCT console messages are runner console output; the runner returns its result
+  in a file the orchestrator names, so console output never corrupts it.
 
 ## Kernel environments
 

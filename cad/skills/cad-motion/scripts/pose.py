@@ -52,6 +52,8 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import ctypes
+import functools
 import json
 import math
 import os
@@ -446,16 +448,30 @@ class Part:
 
 @contextlib.contextmanager
 def stdout_to_stderr() -> Iterator[None]:
-    """Route OCCT's console output away from the JSON channel."""
-    sys.stdout.flush()
+    """Route OCCT's console output away from the JSON channel.
+
+    OCCT prints through C stdio, which holds the bytes when stdout is a pipe (fully buffered), so
+    the buffers are flushed on both sides of the swap: what OCCT prints inside reaches stderr, not
+    fd 1 at exit after the JSON."""
+    _flush_stdout()
     saved = os.dup(1)
     try:
         os.dup2(2, 1)
         yield
     finally:
-        sys.stdout.flush()
+        _flush_stdout()
         os.dup2(saved, 1)
         os.close(saved)
+
+
+def _flush_stdout() -> None:
+    sys.stdout.flush()
+    _c_library().fflush(None)  # NULL: every C stdio output stream
+
+
+@functools.cache
+def _c_library() -> ctypes.CDLL:
+    return ctypes.CDLL(None) if os.name == "posix" else ctypes.CDLL("ucrtbase")
 
 
 def to_trsf(rigid: Rigid) -> Any:

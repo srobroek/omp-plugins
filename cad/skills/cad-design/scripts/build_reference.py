@@ -82,7 +82,7 @@ def build_all(kernel: str, models: Path, hw: Path, out: Path, only: list[str]) -
                 "model": str(path.resolve()), "step": str(out.resolve() / f"{path.stem}.step")}
                for path in sorted(models.glob("*.py")) if not only or path.stem in only]
     result = build.run_kernels({kernel: request})[kernel]
-    sys.stderr.write(result["stderr_tail"])
+    sys.stderr.write(result["console_tail"])
     parts: dict[str, Any] = {}
     errors: list[str] = []
     for item in request:
