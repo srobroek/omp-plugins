@@ -15,14 +15,7 @@
   "harness": "opencode",
   "host": {
     "shared_temp": {
-      "added_by_other_processes": [
-        "/private/tmp/rr4",
-        "/private/tmp/rr4/apps",
-        "/private/tmp/rr4/rr4-probe.mjs",
-        "$TMPDIR/pyright-29902-ysinWeSmfK2b",
-        "$TMPDIR/tmp.aZelpkGT5M",
-        "$TMPDIR/toolbox-telemetry-emf900239464"
-      ],
+      "added_by_other_processes": 6,
       "added_by_trial": [],
       "roots": [
         "/private/tmp",

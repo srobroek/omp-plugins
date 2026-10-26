@@ -25,10 +25,7 @@
   "harness": "claude",
   "host": {
     "shared_temp": {
-      "added_by_other_processes": [
-        "$TMPDIR/opencode/spike-wt",
-        "$TMPDIR/toolbox-telemetry-emf867907972"
-      ],
+      "added_by_other_processes": 2,
       "added_by_trial": [],
       "roots": [
         "/private/tmp",

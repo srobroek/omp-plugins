@@ -12,10 +12,11 @@ an empty `--mcp-config` file allows no MCP server, and `--plugin-dir` loads cad.
 What Claude Code bundles is switched off through its documented switches
 (`BUNDLED_OFF`); the built-in commands no switch removes are the version's
 declared `BASELINE`. TMPDIR and CLAUDE_CODE_TMPDIR (Claude's own temp root, `/tmp`
-by default on macOS) point into the trial. HOME stays real only behind the toolbox
-launcher, which resolves its own install from it. Bedrock auth:
-`CLAUDE_CODE_USE_BEDROCK` plus exported AWS credentials. The `system/init` event
-lists what loaded and is the inventory.
+by default on macOS) point into the trial, and so does HOME. A `claude` that is the
+Amazon toolbox launcher runs as the real binary behind it; when that binary cannot
+be found, `preflight` refuses, because the launcher needs the real HOME and injects
+builder rules. Bedrock auth: `CLAUDE_CODE_USE_BEDROCK` plus exported AWS
+credentials. The `system/init` event lists what loaded and is the inventory.
 """
 
 from __future__ import annotations
@@ -87,8 +88,8 @@ def resolve_launcher(bin_name: str) -> str:
     `~/.toolbox/bin/claude` is `toolbox-exec`, which copies Amazon builder rules into
     the Claude rules directory and adds builder context before it starts Claude Code
     (only `--bare` skips that). Running the versioned binary the launcher would run,
-    read from the toolbox's `info.json`, keeps those rules out. Any other `claude`
-    is returned unchanged."""
+    read from the toolbox's `info.json`, keeps those rules out. Any other `claude`,
+    or a launcher whose binary is missing, is returned unchanged."""
     if not is_launcher(bin_name):
         return bin_name
     tool = Path(os.path.realpath(shutil.which(bin_name))).parents[2] / "claude-code"  # tools/toolbox/<v>/toolbox-exec
@@ -106,7 +107,6 @@ class ClaudeAdapter:
     # `--bare` keeps only Bash/Edit/Read (no Skill, Task, Write, Glob, Grep), so the
     # cad skills are unreachable; isolation comes from the config dir and flags instead.
     bare: bool = False
-    bypass_launcher: bool = True
     setting_sources: str = "project,local"
     extra_env: dict[str, str] = field(default_factory=dict)
     plugin_marker: str = "skills"  # cad ships no .claude-plugin manifest; Claude derives the name from the directory
@@ -121,12 +121,8 @@ class ClaudeAdapter:
     baseline: Baseline = field(default_factory=lambda: BASELINE)
 
     def __post_init__(self) -> None:
-        if self.bypass_launcher:
-            self.bin = resolve_launcher(self.bin)
-        # Only the launcher needs the user's HOME (it resolves its install from it).
-        self.via_launcher = is_launcher(self.bin)
-        if self.via_launcher:
-            self.isolation += "; WARNING: toolbox launcher in use, it injects Amazon builder rules"
+        self.bin = resolve_launcher(self.bin)
+        self.via_launcher = is_launcher(self.bin)  # the real binary behind the launcher was not found
 
     def prepare(self, paths: TrialPaths, host: Host) -> None:
         # Generated Claude agents ship under harness/claude/agents; project scope
@@ -156,11 +152,8 @@ class ClaudeAdapter:
         return argv
 
     def env(self, paths: TrialPaths, host: Host) -> dict[str, str]:
-        # The launcher resolves its install from the real HOME; the bare binary needs
-        # no HOME of the user's, so it gets the isolated one.
-        home = {"HOME": str(host.real_home)} if self.via_launcher else isolated_home(paths)
         return {
-            **host.base_env, **home, **trial_temp(paths), **host.aws_env, **BUNDLED_OFF, **self.extra_env,
+            **host.base_env, **isolated_home(paths), **trial_temp(paths), **host.aws_env, **BUNDLED_OFF, **self.extra_env,
             "CLAUDE_CONFIG_DIR": str(paths.home / ".claude"), "CLAUDE_CODE_TMPDIR": str(paths.tmp), "NO_COLOR": "1",
         }
 
@@ -168,7 +161,17 @@ class ClaudeAdapter:
         return []  # sessions and history follow CLAUDE_CONFIG_DIR into the trial
 
     def preflight(self, host: Host, ceiling_s: float) -> str | None:
-        return None  # Bedrock credentials are re-exported per trial with margin (HostSource)
+        # Bedrock credentials are re-exported per trial with margin (HostSource).
+        if self.via_launcher:
+            return (
+                f"`{self.bin}` is the Amazon toolbox launcher and the Claude Code binary behind it was not found"
+                " (tools/claude-code/info.json and its versioned `claude`); the launcher needs your real HOME and"
+                " injects builder rules, so no trial starts. Set [harness.claude] bin to the real binary."
+            )
+        return None
+
+    def release_login(self, paths: TrialPaths) -> str | None:
+        return None  # no login is copied into the trial
 
     def version_command(self) -> list[str]:
         return []  # system/init reports `claude_code_version`

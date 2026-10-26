@@ -9,6 +9,10 @@ FAKE_AGENT_MODE selects the behaviour:
   ask-then:D  first turn asks for approval; on --continue copy directory D into cwd
   copy:D      copy directory D into cwd and answer
   quiet       answer without producing files
+  leak        answer with the exported AWS secret and session token, the cwd and FAKE_AGENT_ECHO
+  leak-fail   write the same to stderr and exit 1
+  linger      answer, leaving a child in its process group and a detached one naming the cwd;
+              both PIDs are appended to FAKE_AGENT_PIDS
 
 FAKE_AGENT_VERSION sets the `--version` answer (default: the declared OMP baseline).
 """
@@ -16,10 +20,27 @@ FAKE_AGENT_VERSION sets the `--version` answer (default: the declared OMP baseli
 import json
 import os
 import shutil
+import subprocess
 import sys
 import time
 
 MODEL = "global.anthropic.claude-haiku-5-5"
+
+
+def leaked() -> str:
+    env = os.environ
+    return (f"key={env.get('AWS_SECRET_ACCESS_KEY')} token={env.get('AWS_SESSION_TOKEN')}"
+            f" cwd={os.getcwd()} echo={env.get('FAKE_AGENT_ECHO')}")
+
+
+def linger() -> None:
+    """One child stays in the harness's process group; the other detaches into its own
+    session, as the cad-viewer host does, and only its command line names the trial."""
+    sleep = [sys.executable, "-c", "import time; time.sleep(120)"]
+    quiet = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+    children = [subprocess.Popen(sleep, **quiet), subprocess.Popen([*sleep, os.getcwd()], start_new_session=True, **quiet)]
+    with open(os.environ["FAKE_AGENT_PIDS"], "a", encoding="utf-8") as fh:
+        fh.write("".join(f"{child.pid}\n" for child in children))
 
 
 def emit(text: str, model: str = MODEL) -> None:
@@ -90,6 +111,16 @@ def main() -> int:
     if mode.startswith("copy:"):
         shutil.copytree(mode.split(":", 1)[1], os.getcwd(), dirs_exist_ok=True)
         emit("Exported the STEP file.")
+        return 0
+    if mode == "leak":
+        emit(leaked())
+        return 0
+    if mode == "leak-fail":
+        print(leaked(), file=sys.stderr)
+        return 1
+    if mode == "linger":
+        linger()
+        emit("Started the viewer.")
         return 0
     emit("Nothing to do.")
     return 0

@@ -21,12 +21,7 @@
     "harness": "kiro",
     "host": {
       "shared_temp": {
-        "added_by_other_processes": [
-          "$TMPDIR/opencode/mkdag.py",
-          "$TMPDIR/playwright-artifacts-oSymQd",
-          "$TMPDIR/playwright_chromiumdev_profile-9Ji4YZ",
-          "$TMPDIR/playwright_chromiumdev_profile-9Ji4YZ/Default"
-        ],
+        "added_by_other_processes": 4,
         "added_by_trial": [],
         "roots": [
           "/private/tmp",

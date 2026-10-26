@@ -11,6 +11,7 @@ under test; the matrix sets it.
 from __future__ import annotations
 
 import json
+import os
 import random
 import re
 from dataclasses import dataclass
@@ -64,11 +65,13 @@ class Verdict:
 
 
 def render_candidate(directory: Path | None) -> str:
-    """Concatenate a candidate's text artifacts in path order, bounded."""
-    if directory is None or not directory.is_dir():
+    """Concatenate a candidate's text artifacts in path order, bounded. Symlinks are
+    never followed, so a link in the artifacts sends nothing from outside them."""
+    if directory is None or directory.is_symlink() or not directory.is_dir():
         return ""
+    files = [Path(top, name) for top, _, names in os.walk(directory) for name in names]  # os.walk enters no linked dir
     parts = []
-    for path in sorted(p for p in directory.rglob("*") if p.is_file() and p.suffix in _TEXT_SUFFIXES):
+    for path in sorted(p for p in files if p.suffix in _TEXT_SUFFIXES and p.is_file() and not p.is_symlink()):
         parts.append(f"--- {path.relative_to(directory)} ---\n{path.read_text(encoding='utf-8', errors='replace')}")
     return "\n".join(parts)[:MAX_CANDIDATE_CHARS]
 
