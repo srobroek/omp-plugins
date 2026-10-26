@@ -4,52 +4,179 @@ stream-json emits `system/init`, then `assistant` and `user` events whose
 `message` is an Anthropic Messages object, then one terminal `result` event with
 session usage, cost and the final text. Subagent traffic carries a non-null
 `parent_tool_use_id` and is excluded from the served-model read.
+
+Isolation: CLAUDE_CONFIG_DIR points into the trial (no user settings,
+enabledPlugins, skills, agents, CLAUDE.md or ~/.claude.json MCP servers),
+`--setting-sources project,local` drops user settings, `--strict-mcp-config` with
+an empty `--mcp-config` file allows no MCP server, and `--plugin-dir` loads cad.
+HOME stays real because the installed `claude` is a launcher that resolves its
+own install from it. Bedrock auth: `CLAUDE_CODE_USE_BEDROCK` plus exported AWS
+credentials. The `system/init` event lists what loaded and is the inventory.
 """
 
 from __future__ import annotations
 
 import json
+import os
+import shutil
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Iterable
 
-from .base import TrialPaths, Turn, copy_tree, json_lines, tool_text
+from .base import Host, Inventory, TrialPaths, Turn, copy_tree, isolated_home, json_lines, tool_text
+
+REQUIRED_TOOLS = ("Skill",)  # without it the agent cannot load a cad skill
+
+# Bundled with Claude Code 2.1.310 (ASBX build), observed in a clean run whose
+# CLAUDE_CONFIG_DIR was empty: they ship in the binary, not in user config.
+BUILTIN: dict[str, frozenset[str]] = {
+    "plugins": frozenset({"cc-plugin-agents-md@builtin", "cc-plugin-plugin-authoring@builtin"}),
+    "skills": frozenset({
+        "batch", "claude-api", "code-review", "dataviz", "debug", "deep-research", "doctor", "fewer-permission-prompts",
+        "loop", "plugin-authoring", "run", "run-skill-generator", "simplify", "update-config", "verify", "workflow-authoring",
+    }),
+    "agents": frozenset({"Explore", "Plan", "claude", "general-purpose", "statusline-setup"}),
+    "commands": frozenset({
+        "__remote-workflow", "agents", "auto-mode-setup", "autocompact", "batch", "claude-api", "clear", "code-review",
+        "color", "compact", "config", "context", "dataviz", "debug", "deep-research", "doctor", "effort", "fast",
+        "fewer-permission-prompts", "focus", "goal", "heapdump", "init", "insights", "list-agents", "loop", "mcp", "model",
+        "output-style", "plugin-authoring", "recap", "reload-plugins", "reload-skills", "rename", "run",
+        "run-skill-generator", "security-review", "simplify", "team-onboarding", "update-config", "usage", "verify",
+        "workflow-authoring", "workflow-launch-exec",
+    }),
+}
+
+
+def canonical_model(model: str) -> str:
+    """`global.anthropic.claude-opus-5-5` -> `claude-opus-5-5`, the id Claude Code accepts.
+
+    Claude Code resolves a model through its canonical name; a raw Bedrock id is only
+    honoured via `modelOverrides`, which normally sits in user settings. Without it the
+    flag is silently ignored and the default model serves (seen in the isolated smoke)."""
+    model = model.rsplit("/", 1)[-1]
+    parts = model.split(".")
+    return parts[-1] if len(parts) >= 3 and parts[0] in {"global", "us", "eu", "apac", "jp", "au"} else model
+
+
+def is_launcher(bin_name: str) -> bool:
+    found = shutil.which(bin_name)
+    return bool(found) and os.path.realpath(found).endswith("toolbox-exec")
+
+
+def resolve_launcher(bin_name: str) -> str:
+    """The real Claude Code binary behind an Amazon toolbox launcher.
+
+    `~/.toolbox/bin/claude` is `toolbox-exec`, which copies Amazon builder rules into
+    the Claude rules directory and adds builder context before it starts Claude Code
+    (only `--bare` skips that). Running the versioned binary the launcher would run,
+    read from the toolbox's `info.json`, keeps those rules out. Any other `claude`
+    is returned unchanged."""
+    if not is_launcher(bin_name):
+        return bin_name
+    tool = Path(os.path.realpath(shutil.which(bin_name))).parents[2] / "claude-code"  # tools/toolbox/<v>/toolbox-exec
+    try:
+        version = json.loads((tool / "info.json").read_text(encoding="utf-8"))["CurrentVersion"]["Version"]
+    except (OSError, KeyError, json.JSONDecodeError):
+        return bin_name
+    real = tool / version / "claude"
+    return str(real) if real.is_file() else bin_name
 
 
 @dataclass
 class ClaudeAdapter:
     bin: str = "claude"
-    bare: bool = True
-    # `--bare` still loads user-scope plugins (seen in the smoke stream). Setting
-    # this to "project,local" drops user settings, including enabledPlugins;
-    # untested live, so Bedrock auth must then come from `env` alone.
-    setting_sources: str | None = None
+    # `--bare` keeps only Bash/Edit/Read (no Skill, Task, Write, Glob, Grep), so the
+    # cad skills are unreachable; isolation comes from the config dir and flags instead.
+    bare: bool = False
+    bypass_launcher: bool = True
+    setting_sources: str = "project,local"
     extra_env: dict[str, str] = field(default_factory=dict)
-    plugin_marker: str = ".claude-plugin/plugin.json"
+    plugin_marker: str = "skills"  # cad ships no .claude-plugin manifest; Claude derives the name from the directory
     name: str = "claude"
+    isolation: str = (
+        "real Claude Code binary (toolbox launcher bypassed); CLAUDE_CONFIG_DIR in the trial;"
+        " --setting-sources project,local; trial --settings pins the model and disables bundled plugins;"
+        " --strict-mcp-config with an empty --mcp-config; cad via --plugin-dir; AWS credentials exported to env"
+    )
+    builtin: dict = field(default_factory=lambda: BUILTIN)
 
-    def prepare(self, paths: TrialPaths) -> None:
+    def __post_init__(self) -> None:
+        if self.bypass_launcher:
+            self.bin = resolve_launcher(self.bin)
+        # Only the launcher needs the user's HOME (it resolves its install from it).
+        self.via_launcher = is_launcher(self.bin)
+        if self.via_launcher:
+            self.isolation += "; WARNING: toolbox launcher in use, it injects Amazon builder rules"
+
+    def prepare(self, paths: TrialPaths, host: Host) -> None:
         # Generated Claude agents ship under harness/claude/agents; project scope
         # makes them visible without touching the user's ~/.claude.
         copy_tree(paths.plugin / "harness" / "claude" / "agents", paths.work / ".claude" / "agents")
+        (paths.home / ".claude").mkdir(parents=True, exist_ok=True)
+        (paths.root / "mcp.json").write_text('{"mcpServers": {}}\n', encoding="utf-8")
 
     def command(self, *, model: str, prompt: str, paths: TrialPaths, resume: bool) -> list[str]:
+        canonical = canonical_model(model)
+        settings: dict = {"enabledPlugins": {name: False for name in BUILTIN["plugins"]}}
+        if canonical != model:
+            settings["modelOverrides"] = {canonical: model}
         argv = [
-            self.bin, "-p", "--model", model, "--output-format", "stream-json", "--verbose",
-            "--permission-mode", "bypassPermissions", "--strict-mcp-config",
+            self.bin, "-p", "--model", canonical, "--output-format", "stream-json", "--verbose",
+            "--permission-mode", "bypassPermissions",
+            "--strict-mcp-config", "--mcp-config", str(paths.root / "mcp.json"),
+            "--setting-sources", self.setting_sources, "--settings", json.dumps(settings, sort_keys=True),
         ]
         if self.bare:
             argv.append("--bare")
-        if self.setting_sources:
-            argv += ["--setting-sources", self.setting_sources]
-        if (paths.plugin / self.plugin_marker).is_file():
+        if (paths.plugin / self.plugin_marker).exists():
             argv += ["--plugin-dir", str(paths.plugin)]
         if resume:
             argv.append("--continue")
         argv.append(prompt)
         return argv
 
-    def env(self, paths: TrialPaths) -> dict[str, str]:
-        return dict(self.extra_env)
+    def env(self, paths: TrialPaths, host: Host) -> dict[str, str]:
+        # The launcher resolves its install from the real HOME; the bare binary needs
+        # no HOME of the user's, so it gets the isolated one.
+        home = {"HOME": str(host.real_home)} if self.via_launcher else isolated_home(paths)
+        return {
+            **host.base_env, **home, **host.aws_env, **self.extra_env,
+            "CLAUDE_CONFIG_DIR": str(paths.home / ".claude"), "NO_COLOR": "1",
+        }
+
+    def probe(self, paths: TrialPaths, model: str, stream_lines: list[str]) -> list[tuple[list[str], str]]:
+        return []  # system/init in the first turn's stream is the inventory
+
+    def complete(self, turn: Turn, lines: list[str], paths: TrialPaths, env: dict[str, str]) -> Turn:
+        return turn
+
+    def inventory(self, probe_outputs: list[str], stream_lines: list[str], paths: TrialPaths) -> Inventory:
+        inv = Inventory()
+        init = next((e for e in json_lines(stream_lines) if e.get("type") == "system" and e.get("subtype") == "init"), None)
+        if init is None:
+            return inv
+        inv.observed = True
+        # Instruction files Claude reads from its config dir; init does not list them.
+        config = paths.home / ".claude"
+        inv.context += [str(p) for p in sorted(config.glob("rules/**/*.md")) + sorted(config.glob("CLAUDE.md"))]
+        roots = (str(paths.root), str(paths.root.resolve()))
+        for plugin in init.get("plugins") or []:
+            where = plugin.get("path", "")
+            inside = any(where.startswith(r) for r in roots)
+            inv.plugins.append(plugin.get("name", "") if inside else f"{plugin.get('name', '')}@{where}")
+        inv.skills = [s for s in init.get("skills") or [] if isinstance(s, str)]
+        inv.agents = [a for a in init.get("agents") or [] if isinstance(a, str)]
+        inv.commands = [c for c in init.get("slash_commands") or [] if isinstance(c, str)]
+        inv.mcp = [m.get("name", "") if isinstance(m, dict) else str(m) for m in init.get("mcp_servers") or []]
+        tools = set(init.get("tools") or [])
+        inv.missing = [f"tool:{t}" for t in REQUIRED_TOOLS if t not in tools]
+        # Auto-memory lives under the config dir. Inside the trial's fresh config dir it
+        # starts empty and holds only what this trial writes; anywhere else it is ambient.
+        memory = init.get("memory_paths") or {}
+        for where in memory.values() if isinstance(memory, dict) else memory:
+            if isinstance(where, str) and not any(where.startswith(r) for r in roots):
+                inv.context.append(f"memory:{where}")
+        return inv
 
     def parse(self, lines: Iterable[str]) -> Turn:
         turn = Turn()

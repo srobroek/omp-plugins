@@ -1,0 +1,67 @@
+{
+  "argv": [
+    "~/.cache/.bun/bin/opencode",
+    "run",
+    "--standalone",
+    "--model",
+    "amazon-bedrock/global.anthropic.claude-haiku-5-5",
+    "--format",
+    "json",
+    "--auto",
+    "First, under the heading INSTRUCTIONS, list every instruction file, rule file, steering document and system-prompt section you were given (file path or section heading, one per line), other than skill bodies. Then, under the heading SKILLS, list the names of every skill available to you, one per line. Then create a file named hello.txt whose entire content is the word ok. End your reply with the single word DONE."
+  ],
+  "at": "2026-10-26T11:25:58+00:00",
+  "file_written": true,
+  "harness": "opencode",
+  "inventory": {
+    "agents": [
+      "cad-dfm-reviewer",
+      "cad-mech-reviewer"
+    ],
+    "commands": [],
+    "context": [],
+    "mcp": [],
+    "missing": [],
+    "plugins": [],
+    "skills": [
+      "cad-bom",
+      "cad-concept",
+      "cad-fits",
+      "cad-flow",
+      "cad-model",
+      "cad-motion",
+      "cad-recheck",
+      "cad-record",
+      "cad-review-dfm",
+      "cad-review-mech"
+    ]
+  },
+  "isolation": "clean",
+  "isolation_mechanism": "HOME and XDG_* in the trial (temp OpenCode config/data/state); --standalone private server; cad skills and agents in <work>/.opencode; AWS credentials exported to env",
+  "latency_s": 9.383,
+  "leaks": [],
+  "ok": true,
+  "requested_model": "amazon-bedrock/global.anthropic.claude-haiku-5-5",
+  "served_matches": true,
+  "served_model": "amazon-bedrock/global.anthropic.claude-haiku-5-5",
+  "served_model_live": null,
+  "text": "INSTRUCTIONS\nHarness\nCommunication\nWorking in codebases\nCode comments\nYour Model\nCode Mode\nEnvironment (env block: working directory, platform, temp directory guidance)\nWorktree guidance (session_move note)\n\nSKILLS\ncad-bom\ncad-concept\ncad-fits\ncad-flow\ncad-model\ncad-motion\ncad-recheck\ncad-record\ncad-review-dfm\ncad-review-mech\nopencode\nreport\n\nI created `hello.txt` in the working directory with the content `ok`.\n\nDONE",
+  "tools": [
+    "write"
+  ],
+  "transcript_entries": 3,
+  "usage": {
+    "cacheRead": 9150,
+    "cacheWrite": 9652,
+    "cost_usd": 0.001632,
+    "input": 6,
+    "output": 666
+  },
+  "usage_stream": {
+    "cacheRead": 0,
+    "cacheWrite": 9150,
+    "cost_usd": 0.001386,
+    "input": 4,
+    "output": 483
+  }
+}

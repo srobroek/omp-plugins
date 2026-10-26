@@ -2,20 +2,19 @@
 
 from __future__ import annotations
 
-from .base import Adapter, TrialPaths, Turn, served_matches
+from .base import Adapter, Host, Inventory, TrialPaths, Turn, leaks, served_matches
 from .claude import ClaudeAdapter
 from .kiro import KiroAdapter
 from .omp import OmpAdapter
 from .opencode import OpencodeAdapter
 
 _FACTORIES = {
-    "omp": lambda cfg: OmpAdapter(bin=cfg.get("bin", "omp"), profile=cfg.get("profile"), extra_env=cfg.get("env", {})),
+    "omp": lambda cfg: OmpAdapter(bin=cfg.get("bin", "omp"), extra_env=cfg.get("env", {})),
     "claude": lambda cfg: ClaudeAdapter(
-        bin=cfg.get("bin", "claude"), bare=cfg.get("bare", True), setting_sources=cfg.get("setting_sources"), extra_env=cfg.get("env", {})
+        bin=cfg.get("bin", "claude"), bare=cfg.get("bare", False), bypass_launcher=cfg.get("bypass_launcher", True),
+        setting_sources=cfg.get("setting_sources", "project,local"), extra_env=cfg.get("env", {}),
     ),
-    "kiro": lambda cfg: KiroAdapter(
-        bin=cfg.get("bin", "kiro-cli"), trust_tools=cfg.get("trust_tools", ""), agent=cfg.get("agent"), extra_env=cfg.get("env", {})
-    ),
+    "kiro": lambda cfg: KiroAdapter(bin=cfg.get("bin", "kiro-cli"), trust_tools=cfg.get("trust_tools", ""), extra_env=cfg.get("env", {})),
     "opencode": lambda cfg: OpencodeAdapter(bin=cfg.get("bin", "opencode"), agent=cfg.get("agent"), extra_env=cfg.get("env", {})),
 }
 
@@ -30,4 +29,4 @@ def build(harness: str, cfg: dict) -> Adapter:
     return factory(cfg)
 
 
-__all__ = ["Adapter", "HARNESSES", "TrialPaths", "Turn", "build", "served_matches"]
+__all__ = ["Adapter", "HARNESSES", "Host", "Inventory", "TrialPaths", "Turn", "build", "leaks", "served_matches"]

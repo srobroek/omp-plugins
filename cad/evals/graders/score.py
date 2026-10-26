@@ -1,8 +1,9 @@
 """Programmatic grading of one trial's sandbox against its hidden truth.
 
-`grade_trial` reads the deliverables the case names, runs the two uv-isolated
-probes (STEP read-back through OCCT, design-record check) and compares the
-result with the truth file. Every metric is 0 or 1; `score` is their mean and
+`grade_trial` finds the part's STEP through `hw/versions/latest.json` (the
+cad-model build index, paths relative to hw/), runs the two uv-isolated probes
+(STEP read-back through OCCT, design-record check) and compares the result with
+the truth file. Every metric is 0 or 1; `score` is their mean and
 `pass` is 1 only when all hold. A probe that fails as infrastructure (exit 2)
 raises `GraderError`, which the runner files in errors.jsonl, never as a zero.
 """
@@ -95,13 +96,36 @@ def _probe(script: Path, args: list[str]) -> tuple[int, dict | None, str]:
     return done.returncode, payload, done.stderr.strip()
 
 
+def resolve_step(work: Path, deliverables: dict) -> tuple[Path | None, str]:
+    """The STEP the trial delivered for the case's PN, and where it was found.
+
+    `hw/versions/latest.json` is authoritative when present: its `parts[PN]` path,
+    relative to hw/, must stay inside hw/. Only a record without a build index falls
+    back to the case's legacy `step` path (seed oracles predating cad-model)."""
+    record = work / deliverables.get("record", "hw")
+    latest = record / "versions" / "latest.json"
+    if not latest.is_file():
+        return work / deliverables["step"], f"legacy path {deliverables['step']}"
+    try:
+        index = json.loads(latest.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None, "versions/latest.json is unreadable"
+    rel = ((index.get("parts") or {}) if isinstance(index, dict) else {}).get(deliverables["pn"])
+    if not isinstance(rel, str):
+        return None, f"versions/latest.json names no STEP for {deliverables['pn']}"
+    path = (record / rel).resolve()
+    if not path.is_relative_to(record.resolve()):
+        return None, f"versions/latest.json points outside hw/: {rel}"
+    return path, f"versions/latest.json ({index.get('label')}) -> {rel}"
+
+
 def grade_trial(case: dict, work: Path, truth: dict, validator: Path | None) -> Graded:
     deliverables = case["deliverables"]
     metrics = dict.fromkeys(METRICS, 0)
     notes: list[str] = []
 
-    step_path = work / deliverables["step"]
-    if step_path.is_file():
+    step_path, source = resolve_step(work, deliverables)
+    if step_path is not None and step_path.is_file():
         ok, why = ap242_header(step_path.read_text(encoding="utf-8", errors="replace"))
         metrics["ap242"] = int(ok)
         if not ok:
@@ -113,9 +137,9 @@ def grade_trial(case: dict, work: Path, truth: dict, validator: Path | None) -> 
             metrics.update(geometry)
             notes += more
         else:
-            notes.append(f"STEP unreadable: {err[-300:]}")
+            notes.append(f"STEP unreadable ({source}): {err[-300:]}")
     else:
-        notes.append(f"STEP missing at {deliverables['step']}")
+        notes.append(f"STEP missing ({source})")
 
     args = [str(work / deliverables.get("record", "hw")), "--pn", deliverables["pn"]]
     if validator is not None:

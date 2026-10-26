@@ -42,7 +42,27 @@ def emit(text: str, model: str = MODEL) -> None:
         print(json.dumps(event))
 
 
+def rpc_inventory() -> int:
+    """Answer the OMP inventory probe (`--mode rpc`): get_state and get_available_commands.
+    FAKE_AGENT_PROBE=leaky adds a user skill and a user rule, as an unisolated OMP would."""
+    leaky = os.environ.get("FAKE_AGENT_PROBE") == "leaky"
+    skills = "<skills>\n- cad-flow: Leads mechanical CAD.\n" + ("- user-skill: Something of the user's.\n" if leaky else "") + "</skills>"
+    rules = "\n<domain-rules>\n- user-rule (): A rule of the user's.\n</domain-rules>" if leaky else ""
+    print(json.dumps({"type": "ready"}))
+    for line in sys.stdin:
+        request = json.loads(line)
+        if request["type"] == "get_state":
+            data = {"systemPrompt": [skills + rules + "\n<project-context>\n<workstation>\n- OS: x\n</workstation>\n</project-context>"],
+                    "dumpTools": [{"name": "task", "description": "# Available Agents\n- `scout`: bundled\n- `cad-mech-reviewer`: cad"}]}
+        else:
+            data = {"commands": [{"name": "skill:cad-flow", "source": "skill"}, {"name": "model", "source": "builtin"}]}
+        print(json.dumps({"type": "response", "id": request["id"], "success": True, "data": data}))
+    return 0
+
+
 def main() -> int:
+    if "rpc" in sys.argv:
+        return rpc_inventory()
     mode = os.environ.get("FAKE_AGENT_MODE", "quiet")
     resumed = "--continue" in sys.argv
     if mode == "fail":

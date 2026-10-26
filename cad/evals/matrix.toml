@@ -16,14 +16,19 @@ max_s = 120
 cases = ["t1-lower-link-cq", "t1-lower-link-b3d", "t1-base-plate-cq"]
 reps = 1
 
+[auth]                   # trials get no ~/.aws: credentials are exported from this profile into env
+# aws_profile = "<profile>"   # default: $AWS_PROFILE
+aws_region = "us-east-1"
+
 [judge]                  # pairwise blind judge; must differ from every model under test
 harness = "omp"
 model = "amazon-bedrock/global.anthropic.claude-sonnet-5-5"
 flags = ["--no-tools", "--no-skills", "--no-rules", "--no-extensions"]
 
+# Every harness runs with a clean config (see README "Isolation"); each row is
+# tagged isolation = clean|contaminated with the leaks the harness reported.
 [harness.omp]
 bin = "omp"
-profile = "cad-eval"     # isolated OMP profile: no user plugins, rules or sessions leak into trials
 models = [
   "amazon-bedrock/global.anthropic.claude-opus-5-5",
   "amazon-bedrock/global.openai.gpt-6.1-sol",
@@ -31,8 +36,8 @@ models = [
   "amazon-bedrock/global.moonshotai.kimi-k3",
 ]
 
-[harness.opencode]       # adapter UNTESTED: OpenCode is not installed on the authoring machine
-bin = "opencode"
+[harness.opencode]       # verified with OpenCode v2.1.4
+bin = "opencode"         # resolution: $OPENCODE_BIN, then PATH if it runs, then ~/.cache/.bun/bin/opencode
 models = [
   "amazon-bedrock/global.anthropic.claude-opus-5-5",
   "amazon-bedrock/global.openai.gpt-6.1-sol",
@@ -47,13 +52,15 @@ models = ["claude-opus-5.5", "kimi-k3"]
 
 [harness.claude]
 bin = "claude"
-bare = true              # skip user hooks and CLAUDE.md discovery; user-scope plugins still load (see README)
-# setting_sources = "project,local"   # drops user settings incl. enabledPlugins; untested live
+bare = false             # --bare drops the Skill, Task, Write, Glob and Grep tools: cad skills become unreachable
+bypass_launcher = true   # run the real binary behind the Amazon toolbox launcher, which injects builder rules
+setting_sources = "project,local"   # user settings (enabledPlugins, hooks, env) never load
 models = ["global.anthropic.claude-opus-5-5"]
 
 [harness.claude.env]
 CLAUDE_CODE_USE_BEDROCK = "1"
 AWS_REGION = "us-west-2"
+AWS_DEFAULT_REGION = "us-west-2"
 
 # Optional served-model overrides: a regex the served id must match, keyed by
 # "<harness>:<model>". Without one, both ids are normalised (provider, Bedrock
