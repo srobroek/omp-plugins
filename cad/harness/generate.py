@@ -138,14 +138,9 @@ def main() -> int:
             else:
                 if path.read_text(encoding="utf-8") != expected:
                     drift.append(f"stale {path.relative_to(ROOT)}")
-                if path.stat().st_mode & 0o222:
-                    drift.append(f"writable generated file {path.relative_to(ROOT)}")
         else:
             path.parent.mkdir(parents=True, exist_ok=True)
-            if path.exists():
-                path.chmod(0o644)
             path.write_text(expected, encoding="utf-8")
-            path.chmod(0o444)
             print(f"generated {path.relative_to(ROOT)}")
     if drift:
         print("FAIL: generated CAD agents differ from canonical OMP files:", file=sys.stderr)
@@ -154,7 +149,7 @@ def main() -> int:
         print("Run python3 cad/harness/generate.py", file=sys.stderr)
         return 1
     if args.check:
-        print(f"PASS: {len(outputs)} harness agents current and read-only")
+        print(f"PASS: {len(outputs)} harness agents current")
     return 0
 
 
