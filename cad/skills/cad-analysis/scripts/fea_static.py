@@ -79,6 +79,17 @@ def load_case(path: Path) -> dict[str, Any]:
     size = raw.get("mesh_size")
     if not isinstance(size, (int, float)) or isinstance(size, bool) or not math.isfinite(size) or size <= 0:
         raise CaseError("mesh_size must be a positive finite number in mm")
+    part = raw.get("part")
+    if part is not None and (not isinstance(part, str) or not part):
+        raise CaseError("part must be a non-empty part number")
+    if "pose" in raw:
+        pose = raw["pose"]
+        if not isinstance(pose, dict) or not pose or any(
+            not isinstance(joint, str) or not joint
+            or not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value)
+            for joint, value in pose.items()
+        ):
+            raise CaseError("pose must map joint IDs to finite numeric values")
     raw["fixed_faces"] = selector(raw.get("fixed_faces"), "fixed_faces")
     loads = raw.get("loads")
     if not isinstance(loads, list) or not loads:
@@ -107,6 +118,9 @@ def run_job(case_path: Path, case: dict[str, Any]) -> tuple[dict[str, Any], int]
     job = {
         "run_id": run_id,
         "step": case["_step"],
+        "part": case.get("part"),
+        "pose": case.get("pose"),
+        "selection_module": str(Path(__file__).with_name("fea_part_selection.py").resolve()),
         "material": case["material"],
         "fixed_faces": case["fixed_faces"],
         "loads": case["loads"],
@@ -115,11 +129,13 @@ def run_job(case_path: Path, case: dict[str, Any]) -> tuple[dict[str, Any], int]
     }
     # JSON is data, not Python source: the generated job loads it as a literal.
     job_json = json.dumps(job)
-    script = f'''import json, os, time, math
+    script = f'''import json, os, sys, time, math
 import FreeCAD as App, Part, Import, ObjectsFem
 from femmesh.gmshtools import GmshTools
 from femtools.ccxtools import CcxTools
 JOB=json.loads({job_json!r})
+sys.path.insert(0, os.path.dirname(JOB["selection_module"]))
+from fea_part_selection import select_solid_index
 def selected_faces(obj, selector):
     if "indices" in selector:
         indices=selector["indices"]
@@ -137,10 +153,20 @@ def run():
     doc=App.newDocument("StaticAnalysis")
     try:
         Import.insert(JOB["step"], doc.Name); doc.recompute()
-        solids=[o for o in doc.Objects if hasattr(o, "Shape") and not o.Shape.isNull() and len(o.Shape.Solids)>0]
+        solids=[(o, solid) for o in doc.Objects if hasattr(o, "Shape") and not o.Shape.isNull()
+                for solid in o.Shape.Solids]
         if not solids: raise RuntimeError("STEP contains no solid geometry")
-        if len(solids) != 1: raise RuntimeError("static analysis currently requires one solid STEP object")
-        geom=solids[0]; a=ObjectsFem.makeAnalysis(doc, "Analysis")
+        names=[[name for name in (obj.Label, obj.Name) if name] for obj, _ in solids]
+        try: selected=select_solid_index(names, JOB.get("part"))
+        except ValueError as e: raise RuntimeError(str(e))
+        source,solid=solids[selected]
+        geom=source
+        if len(source.Shape.Solids) != 1:
+            geom=doc.addObject("Part::Feature", "SelectedPart")
+            geom.Label=source.Label
+            geom.Shape=solid
+            geom.Placement=source.Placement
+        a=ObjectsFem.makeAnalysis(doc, "Analysis")
         solver=ObjectsFem.makeSolverCalculiXCcxTools(doc, "CalculiXCcxTools")
         solver.AnalysisType="static"; solver.GeometricalNonlinearity="linear"; solver.WorkingDir=os.path.dirname(JOB["output"]); solver.SplitInputWriter=False; a.addObject(solver)
         matobj=ObjectsFem.makeMaterialSolid(doc, "Material"); mat=matobj.Material
@@ -156,7 +182,7 @@ def run():
             force=ObjectsFem.makeConstraintForce(doc, "FaceForce%d" % n); force.References=selected_faces(geom, spec["selector"])
             force.Force="%.12g N" % math.sqrt(fx*fx+fy*fy+fz*fz)
             force.Direction=(direction,["Edge1"]); force.Reversed=False; a.addObject(force)
-        mesh=ObjectsFem.makeMeshGmsh(doc, "GmshMesh"); a.addObject(mesh); mesh.Shape=geom; mesh.ElementDimension="3D"; mesh.ElementOrder="2nd"; mesh.SecondOrderLinear=False; mesh.CharacteristicLengthMax="%s mm" % JOB["mesh_size"]; mesh.CharacteristicLengthMin="%s mm" % (JOB["mesh_size"]*0.5); doc.recompute()
+        mesh=ObjectsFem.makeMeshGmsh(doc, "GmshMesh"); a.addObject(mesh); mesh.Shape=geom; mesh.ElementDimension="3D"; mesh.ElementOrder="2nd"; mesh.HighOrderOptimize="Elastic+Optimization"; mesh.CharacteristicLengthMax="%s mm" % JOB["mesh_size"]; mesh.CharacteristicLengthMin="%s mm" % (JOB["mesh_size"]*0.5); doc.recompute()
         gm=GmshTools(mesh); gm.update_mesh_data(); gm.get_tmp_file_paths(solver.WorkingDir, True); gm.create_mesh(); doc.recompute()
         nodes=int(mesh.FemMesh.NodeCount); elements=len(mesh.FemMesh.Volumes)
         if nodes <= 0 or elements <= 0: raise RuntimeError("Gmsh produced an empty mesh")
@@ -164,13 +190,14 @@ def run():
         problems=fea.check_prerequisites()
         if problems: raise RuntimeError("CalculiX prerequisites failed: %r" % problems)
         fea.write_inp_file(); fea.ccx_run(); fea.load_results(); solve_seconds=time.perf_counter()-solver_started
-        results=doc.CCX_Results
+        results=next((obj for obj in a.Group if hasattr(obj, "vonMises") and hasattr(obj, "DisplacementLengths")), None)
+        if results is None: raise RuntimeError("CalculiX did not produce a result object")
         stress=[float(v) for v in results.vonMises]; displacement=[float(v) for v in results.DisplacementLengths]
         if not stress or not displacement: raise RuntimeError("solver returned no stress or displacement results")
         max_stress=max(stress); max_displacement=max(displacement); y=float(JOB["material"]["yield"])
         warnings=[]
         versions={{"freecad":".".join(App.Version()[:3]), "gmsh":"bundled 4.15.0", "calculix":"bundled 2.23"}}
-        result={{"status":"pass", "run_id":JOB["run_id"], "max_von_mises_mpa":max_stress, "max_displacement_mm":max_displacement, "safety_factor_yield":y/max_stress if max_stress else None, "node_count":nodes, "element_count":elements, "solve_time_seconds":solve_seconds, "solver_versions":versions, "warnings":warnings, "worst_case_pose":"Input STEP pose only; posed STEP files can be supplied by the motion workflow later."}}
+        result={{"status":"pass", "run_id":JOB["run_id"], "max_von_mises_mpa":max_stress, "max_displacement_mm":max_displacement, "safety_factor_yield":y/max_stress if max_stress else None, "node_count":nodes, "element_count":elements, "solve_time_seconds":solve_seconds, "solver_versions":versions, "warnings":warnings, "worst_case_pose":{{"step":JOB["step"], **({{"pose":JOB["pose"]}} if JOB.get("pose") is not None else {{}})}}}}
         with open(JOB["output"], "w", encoding="utf-8") as f: json.dump(result,f,indent=2); f.write("\\n")
     finally:
         App.closeDocument(doc.Name)

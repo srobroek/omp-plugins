@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Focused FEA input, missing-FreeCAD, and cantilever integration checks."""
+"""Focused FEA selection, input, missing-FreeCAD, and solver integration checks."""
 
 from __future__ import annotations
 
@@ -14,6 +14,24 @@ from pathlib import Path
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts/fea_static.py"
 FREECADCMD = Path("/Applications/FreeCAD.app/Contents/Resources/bin/freecadcmd")
 SPIKE = Path("/tmp/cad-spike-freecad")
+sys.path.insert(0, str(SCRIPT.parent))
+from fea_part_selection import select_solid_index
+
+
+class SolidSelectionContracts(unittest.TestCase):
+    def test_single_solid_does_not_require_part(self) -> None:
+        self.assertEqual(select_solid_index([["LMP-0002 Lower link"]], None), 0)
+
+    def test_multi_solid_selects_part_by_product_or_label_prefix(self) -> None:
+        self.assertEqual(select_solid_index([["LMP-0001 Base"], ["LMP-0002 Lower link"]], "LMP-0002"), 1)
+
+    def test_unknown_part_lists_available_product_numbers(self) -> None:
+        with self.assertRaisesRegex(ValueError, "LMP-0001, LMP-0002"):
+            select_solid_index([["LMP-0001 Base"], ["LMP-0002 Lower link"]], "LMP-0003")
+
+    def test_ambiguous_part_lists_available_product_numbers(self) -> None:
+        with self.assertRaisesRegex(ValueError, "matches 2 STEP solids.*LMP-0002"):
+            select_solid_index([["LMP-0002 Lower link"], ["LMP-0002 Lower link copy"]], "LMP-0002")
 
 
 class StaticFEAContracts(unittest.TestCase):
@@ -21,6 +39,7 @@ class StaticFEAContracts(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             script = Path(directory) / "fea_static.py"
             shutil.copy2(SCRIPT, script)
+            shutil.copy2(SCRIPT.with_name("fea_part_selection.py"), script.with_name("fea_part_selection.py"))
             source = script.read_text(encoding="utf-8").replace(
                 'Path("/Applications/FreeCAD.app/Contents/Resources/bin/freecadcmd")',
                 'Path("/definitely/missing/freecadcmd")',
@@ -56,6 +75,7 @@ App.closeDocument(doc.Name)
             case = root / "case.yaml"
             case.write_text(
                 f"""step: {step}
+pose: {{J-001: 17, J-002: -42}}
 material: {{name: Aluminium 6061, E: 69000, nu: 0.33, density: 2700, yield: 276}}
 fixed_faces: {{plane: {{axis: x, value: 0, tolerance: 0.000001}}}}
 loads:
@@ -72,7 +92,7 @@ mesh_size: 5
             self.assertGreater(report["node_count"], 0)
             self.assertGreater(report["element_count"], 0)
             self.assertTrue((root / "results.json").is_file())
-            self.assertIn("pose", report["worst_case_pose"].lower())
+            self.assertEqual(report["worst_case_pose"], {"step": str(step), "pose": {"J-001": 17, "J-002": -42}})
             self.assertIn("calculix", report["solver_versions"])
             self.assertIn("gmsh", report["solver_versions"])
 
