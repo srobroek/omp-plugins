@@ -1,0 +1,99 @@
+# mol-cad-iterate: changed intent after freeze; reopen only the affected part/dependent set.
+# Bond after DESIGN freeze with product, scope, change, and affected_parts vars.
+formula = "mol-cad-iterate"
+description = "Reopen only affected parts for changed intent on frozen {{product}} and recheck L3-L4 for {{affected_parts}}"
+type = "workflow"
+
+[vars.product]
+required = true
+description = "hardware product id"
+
+[vars.scope]
+required = true
+description = "paths for the affected part/dependent set only"
+
+[vars.change]
+required = true
+description = "approved changed intent and its rationale"
+
+[vars.affected_parts]
+required = true
+description = "comma-separated part numbers in the impact set, including only affected dependents"
+
+[vars.kernel]
+default = "cadquery"
+pattern = "^(cadquery|build123d)$"
+description = "kernel environment for the affected parts"
+
+[vars.process_default]
+default = "fdm"
+pattern = "^(fdm|cnc)$"
+description = "default manufacturing process"
+
+[[steps]]
+id = "classify-change"
+title = "Define changed intent and affected parts"
+type = "task"
+labels = ["cad", "phase:iterate"]
+description = "Run skill://cad-recheck against the frozen design record. Record {{change}}, why the approved intent changes, and the exact direct-plus-dependent part set represented by {{affected_parts}}. A change after DESIGN freeze reopens only those affected parts; leave every other part frozen."
+
+[steps.metadata]
+skill_hints = "cad-flow, cad-record, cad-recheck"
+execution_mode = "interactive"
+
+[[steps]]
+id = "intent-gate"
+title = "INTENT gate for the frozen-design change"
+type = "task"
+needs = ["classify-change"]
+labels = ["cad", "phase:gate"]
+description = "Present the revised intent and exact impact set. Obtain explicit user approval before reopening any frozen part. Without approval leave the gate unresolved; only bd gate resolve closes it."
+
+[steps.gate]
+type = "human"
+timeout = "72h"
+
+[[steps]]
+id = "reopen-affected"
+title = "Reopen only {{affected_parts}}"
+type = "task"
+needs = ["intent-gate"]
+labels = ["cad", "phase:iterate"]
+description = "Reopen only the parts and dependents listed in the approved impact set {{affected_parts}}. Do not touch or reopen any unaffected part, revision, or evidence. Use {{kernel}} and {{process_default}} where a model change requires them. Record reopened state and the per-part versions."
+
+[steps.metadata]
+skill_hints = "cad-record, cad-model, cad-flow"
+
+[[steps]]
+id = "detail-recheck"
+title = "Recheck L3 detail for affected parts"
+type = "task"
+needs = ["reopen-affected"]
+labels = ["cad", "phase:l3-detail"]
+description = "For {{affected_parts}} only, run skill://cad-fits and skill://cad-drawings: update fits, fasteners, tolerances, datums, applicable FDM/CNC rules, and drawings. Recheck L3 criteria for each changed part and affected dependent. Keep unchanged parts frozen with their existing evidence."
+
+[steps.metadata]
+skill_hints = "cad-fits, cad-drawings, cad-recheck, cad-record"
+
+[[steps]]
+id = "analysis-recheck"
+title = "Recheck L4 analysis for affected parts"
+type = "task"
+needs = ["detail-recheck"]
+labels = ["cad", "phase:l4-analysis"]
+description = "For {{affected_parts}} only, run skill://cad-analysis for interference, clearance, stack-up, kinematic sweep where applicable, and static FEA at the worst-case pose. Apply the post-LAYOUT recheck rule to this iteration: recheck only L3-L4 for the affected set and preserve all untouched part evidence. Record verification results and COMMIT the design-record entry plus bead note."
+
+[steps.metadata]
+skill_hints = "cad-analysis, cad-recheck, cad-record, cad-flow"
+
+[[steps]]
+id = "design-freeze-gate"
+title = "DESIGN freeze gate for affected parts"
+type = "task"
+needs = ["analysis-recheck"]
+labels = ["cad", "phase:gate"]
+description = "Present the changed intent, reopened part list, updated L3-L4 evidence, and preserved evidence for untouched parts. Obtain explicit approval to re-freeze only the affected set. Do not re-open or re-approve unaffected parts; only bd gate resolve closes this human gate."
+
+[steps.gate]
+type = "human"
+timeout = "72h"

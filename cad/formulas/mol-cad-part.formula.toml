@@ -1,0 +1,60 @@
+# mol-cad-part: one L2 subassembly or part loop, built and checked independently.
+# Bond one per subassembly with --type parallel after LAYOUT freeze.
+formula = "mol-cad-part"
+description = "Build, check, and record L2 part loop {{subassembly}} for {{product}} using {{kernel}} and {{process_default}}"
+type = "workflow"
+
+[vars.product]
+required = true
+description = "hardware product id"
+
+[vars.scope]
+required = true
+description = "hardware project paths this loop may change"
+
+[vars.subassembly]
+required = true
+description = "one stable subassembly id from hw/assembly.yaml, or one part id"
+
+[vars.kernel]
+default = "cadquery"
+pattern = "^(cadquery|build123d)$"
+description = "modeling kernel; use its dedicated environment"
+
+[vars.process_default]
+default = "fdm"
+pattern = "^(fdm|cnc)$"
+description = "default process for parts without an explicit override"
+
+[[steps]]
+id = "build-part"
+title = "BUILD L2 part loop for {{subassembly}}"
+type = "task"
+labels = ["cad", "phase:l2-parts"]
+description = "Run skill://cad-model for only {{subassembly}} in the {{kernel}} environment. Maintain the part.yaml fields and parametric model.py under {{scope}}, using {{process_default}} unless the approved record specifies otherwise. Draft and render a live preview with no checks, then gather feedback. At this post-LAYOUT stage, a 'commit batch' builds/renders and starts the required recheck of changed parts plus dependents; it does not skip the checks. Record a model version per run."
+
+[steps.metadata]
+skill_hints = "cad-model, cad-record, cad-flow"
+execution_mode = "interactive"
+
+[[steps]]
+id = "check-part"
+title = "CHECK {{subassembly}} and its affected dependents"
+type = "task"
+needs = ["build-part"]
+labels = ["cad", "phase:l2-parts"]
+description = "Run skill://cad-recheck for the changed part(s) and affected dependents. At or after LAYOUT freeze run this stage's checks and all earlier-stage checks, not the entire product indiscriminately. Capture pass/fail evidence and repair only findings inside the authorized scope."
+
+[steps.metadata]
+skill_hints = "cad-recheck, cad-record"
+
+[[steps]]
+id = "record-evidence"
+title = "COMMIT evidence for {{subassembly}}"
+type = "task"
+needs = ["check-part"]
+labels = ["cad", "phase:l2-parts"]
+description = "Record the model/revision version, changed part list, dependent set, stage checks run, earlier-stage recheck results, and evidence in the design record and this bead note. Leave failures explicit; do not report a passing subassembly with missing evidence."
+
+[steps.metadata]
+skill_hints = "cad-record, cad-recheck"
