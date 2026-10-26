@@ -1,0 +1,236 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# dependencies = ["pyyaml>=6.0"]
+# ///
+"""Run a static linear FreeCAD FEM analysis from a case YAML file."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import os
+import subprocess
+import uuid
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+FREECADCMD = Path("/Applications/FreeCAD.app/Contents/Resources/bin/freecadcmd")
+
+
+class CaseError(ValueError):
+    """Invalid case input or unusable solver output."""
+
+
+def error(message: str, *, code: str = "invalid_case") -> dict[str, Any]:
+    return {"status": "error", "error": {"code": code, "message": message}}
+
+
+def selector(value: Any, name: str) -> dict[str, Any]:
+    if not isinstance(value, dict) or len(value) != 1:
+        raise CaseError(f"{name} must contain exactly one of indices or plane")
+    if "indices" in value:
+        indices = value["indices"]
+        if not isinstance(indices, list) or not indices or any(
+            not isinstance(index, int) or isinstance(index, bool) or index < 1 for index in indices
+        ):
+            raise CaseError(f"{name}.indices must be non-empty 1-based positive integers")
+        return {"indices": indices}
+    plane = value.get("plane")
+    if not isinstance(plane, dict) or plane.get("axis") not in ("x", "y", "z"):
+        raise CaseError(f"{name}.plane must specify axis x, y, or z")
+    for key in ("value", "tolerance"):
+        number = plane.get(key)
+        if not isinstance(number, (int, float)) or isinstance(number, bool) or not math.isfinite(number):
+            raise CaseError(f"{name}.plane.{key} must be a finite number in mm")
+    if plane["tolerance"] < 0:
+        raise CaseError(f"{name}.plane.tolerance must be non-negative")
+    return {"plane": plane}
+
+
+def load_case(path: Path) -> dict[str, Any]:
+    try:
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as exc:
+        raise CaseError(f"cannot read case YAML: {exc}") from exc
+    if not isinstance(raw, dict):
+        raise CaseError("case YAML must contain a mapping")
+    step_value = raw.get("step")
+    if not isinstance(step_value, str) or not step_value:
+        raise CaseError("step must be a non-empty path")
+    step = Path(step_value)
+    if not step.is_absolute():
+        step = (path.parent / step).resolve()
+    if not step.is_file():
+        raise CaseError(f"STEP file does not exist: {step}")
+    material = raw.get("material")
+    if not isinstance(material, dict):
+        raise CaseError("material must be a mapping")
+    for key in ("E", "nu", "density", "yield"):
+        value = material.get(key)
+        if not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value):
+            raise CaseError(f"material.{key} must be a finite number")
+    if material["E"] <= 0 or material["density"] <= 0 or material["yield"] <= 0:
+        raise CaseError("material E, density, and yield must be positive")
+    if not 0 < material["nu"] < 0.5:
+        raise CaseError("material.nu must be between 0 and 0.5")
+    size = raw.get("mesh_size")
+    if not isinstance(size, (int, float)) or isinstance(size, bool) or not math.isfinite(size) or size <= 0:
+        raise CaseError("mesh_size must be a positive finite number in mm")
+    raw["fixed_faces"] = selector(raw.get("fixed_faces"), "fixed_faces")
+    loads = raw.get("loads")
+    if not isinstance(loads, list) or not loads:
+        raise CaseError("loads must be a non-empty list")
+    for index, load in enumerate(loads):
+        if not isinstance(load, dict):
+            raise CaseError(f"loads[{index}] must be a mapping")
+        load["selector"] = selector(load.get("selector"), f"loads[{index}].selector")
+        force = load.get("force")
+        if not isinstance(force, list) or len(force) != 3 or any(
+            not isinstance(v, (int, float)) or isinstance(v, bool) or not math.isfinite(v) for v in force
+        ):
+            raise CaseError(f"loads[{index}].force must be three finite components in N")
+        if not any(force):
+            raise CaseError(f"loads[{index}].force must not be zero")
+    raw["_step"] = str(step)
+    return raw
+
+
+def run_job(case_path: Path, case: dict[str, Any]) -> tuple[dict[str, Any], int]:
+    run_id = uuid.uuid4().hex
+    workdir = case_path.parent.resolve()
+    job_path = workdir / f"fea_static_{run_id}.py"
+    marker_path = workdir / f"fea_static_{run_id}.json"
+    output_path = workdir / "results.json"
+    job = {
+        "run_id": run_id,
+        "step": case["_step"],
+        "material": case["material"],
+        "fixed_faces": case["fixed_faces"],
+        "loads": case["loads"],
+        "mesh_size": case["mesh_size"],
+        "output": str(marker_path),
+    }
+    # JSON is data, not Python source: the generated job loads it as a literal.
+    job_json = json.dumps(job)
+    script = f'''import json, os, time, math
+import FreeCAD as App, Part, Import, ObjectsFem
+from femmesh.gmshtools import GmshTools
+from femtools.ccxtools import CcxTools
+JOB=json.loads({job_json!r})
+def selected_faces(obj, selector):
+    if "indices" in selector:
+        indices=selector["indices"]
+    else:
+        p=selector["plane"]; axis=p["axis"].upper(); target=float(p["value"]); tol=float(p["tolerance"])
+        indices=[]
+        for i, face in enumerate(obj.Shape.Faces, 1):
+            bb=face.BoundBox
+            lo=getattr(bb, axis+"Min"); hi=getattr(bb, axis+"Max")
+            if abs(lo-target)<=tol and abs(hi-target)<=tol: indices.append(i)
+    if not indices: raise RuntimeError("face selector matched no faces")
+    if any(i > len(obj.Shape.Faces) for i in indices): raise RuntimeError("face index is out of range")
+    return [(obj, "Face%d" % i) for i in indices]
+def run():
+    doc=App.newDocument("StaticAnalysis")
+    try:
+        Import.insert(JOB["step"], doc.Name); doc.recompute()
+        solids=[o for o in doc.Objects if hasattr(o, "Shape") and not o.Shape.isNull() and len(o.Shape.Solids)>0]
+        if not solids: raise RuntimeError("STEP contains no solid geometry")
+        if len(solids) != 1: raise RuntimeError("static analysis currently requires one solid STEP object")
+        geom=solids[0]; a=ObjectsFem.makeAnalysis(doc, "Analysis")
+        solver=ObjectsFem.makeSolverCalculiXCcxTools(doc, "CalculiXCcxTools")
+        solver.AnalysisType="static"; solver.GeometricalNonlinearity="linear"; solver.WorkingDir=os.path.dirname(JOB["output"]); solver.SplitInputWriter=False; a.addObject(solver)
+        matobj=ObjectsFem.makeMaterialSolid(doc, "Material"); mat=matobj.Material
+        mat["Name"]=JOB["material"].get("name", "Case material")
+        mat["YoungsModulus"]="%s MPa" % JOB["material"]["E"]
+        mat["PoissonRatio"]=str(JOB["material"]["nu"])
+        mat["Density"]="%s kg/m^3" % JOB["material"]["density"]
+        matobj.Material=mat; matobj.References=[(geom, "Solid1")]; a.addObject(matobj)
+        fixed=ObjectsFem.makeConstraintFixed(doc, "FixedFaces"); fixed.References=selected_faces(geom, JOB["fixed_faces"]); a.addObject(fixed)
+        for n, spec in enumerate(JOB["loads"]):
+            fx,fy,fz=spec["force"]
+            direction=doc.addObject("Part::Feature", "LoadDirection%d" % n); direction.Shape=Part.makeLine(App.Vector(0,0,0), App.Vector(fx,fy,fz))
+            force=ObjectsFem.makeConstraintForce(doc, "FaceForce%d" % n); force.References=selected_faces(geom, spec["selector"])
+            force.Force="%.12g N" % math.sqrt(fx*fx+fy*fy+fz*fz)
+            force.Direction=(direction,["Edge1"]); force.Reversed=False; a.addObject(force)
+        mesh=ObjectsFem.makeMeshGmsh(doc, "GmshMesh"); a.addObject(mesh); mesh.Shape=geom; mesh.ElementDimension="3D"; mesh.ElementOrder="2nd"; mesh.SecondOrderLinear=False; mesh.CharacteristicLengthMax="%s mm" % JOB["mesh_size"]; mesh.CharacteristicLengthMin="%s mm" % (JOB["mesh_size"]*0.5); doc.recompute()
+        gm=GmshTools(mesh); gm.update_mesh_data(); gm.get_tmp_file_paths(solver.WorkingDir, True); gm.create_mesh(); doc.recompute()
+        nodes=int(mesh.FemMesh.NodeCount); elements=len(mesh.FemMesh.Volumes)
+        if nodes <= 0 or elements <= 0: raise RuntimeError("Gmsh produced an empty mesh")
+        solver_started=time.perf_counter(); fea=CcxTools(solver); fea.reset_mesh_purge_results_checked(); fea.update_objects(); fea.setup_working_dir(solver.WorkingDir); fea.setup_ccx()
+        problems=fea.check_prerequisites()
+        if problems: raise RuntimeError("CalculiX prerequisites failed: %r" % problems)
+        fea.write_inp_file(); fea.ccx_run(); fea.load_results(); solve_seconds=time.perf_counter()-solver_started
+        results=doc.CCX_Results
+        stress=[float(v) for v in results.vonMises]; displacement=[float(v) for v in results.DisplacementLengths]
+        if not stress or not displacement: raise RuntimeError("solver returned no stress or displacement results")
+        max_stress=max(stress); max_displacement=max(displacement); y=float(JOB["material"]["yield"])
+        warnings=[]
+        versions={{"freecad":".".join(App.Version()[:3]), "gmsh":"bundled 4.15.0", "calculix":"bundled 2.23"}}
+        result={{"status":"pass", "run_id":JOB["run_id"], "max_von_mises_mpa":max_stress, "max_displacement_mm":max_displacement, "safety_factor_yield":y/max_stress if max_stress else None, "node_count":nodes, "element_count":elements, "solve_time_seconds":solve_seconds, "solver_versions":versions, "warnings":warnings, "worst_case_pose":"Input STEP pose only; posed STEP files can be supplied by the motion workflow later."}}
+        with open(JOB["output"], "w", encoding="utf-8") as f: json.dump(result,f,indent=2); f.write("\\n")
+    finally:
+        App.closeDocument(doc.Name)
+try: run()
+except Exception as e:
+    result={{"status":"error", "run_id":JOB["run_id"], "error":{{"code":"analysis_failed", "message":str(e)}}, "warnings":[]}}
+    with open(JOB["output"],"w",encoding="utf-8") as f: json.dump(result,f,indent=2); f.write("\\n")
+'''
+    job_path.write_text(script, encoding="utf-8")
+    try:
+        completed = subprocess.run([str(FREECADCMD), str(job_path)], cwd=workdir, capture_output=True, text=True)
+    except OSError as exc:
+        return error(f"cannot start FreeCAD: {exc}", code="freecad_unavailable"), 2
+    if not marker_path.is_file():
+        result = error("FreeCAD job did not write its run-specific completion marker", code="missing_completion_marker")
+        result["details"] = {"returncode": completed.returncode, "stderr": completed.stderr[-4000:]}
+        output_path.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+        return result, 1
+    try:
+        result = json.loads(marker_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return error(f"cannot parse FreeCAD result marker: {exc}", code="invalid_result"), 1
+    if result.get("run_id") != run_id:
+        return error("FreeCAD result marker run id does not match this invocation", code="invalid_result"), 1
+    result["warnings"] = result.get("warnings", [])
+    if completed.returncode == 139:
+        result["warnings"].append("FreeCAD exited with 139 after writing its result marker; outputs were validated.")
+    elif completed.returncode != 0:
+        result["warnings"].append(f"FreeCAD exited with status {completed.returncode}.")
+        result["status"] = "error"
+        result["error"] = {"code": "freecad_failed", "message": f"FreeCAD exited with status {completed.returncode}"}
+    if completed.stderr.strip():
+        result["warnings"].append("FreeCAD emitted diagnostics on stderr.")
+    if result.get("status") != "pass":
+        output_path.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+        return result, 1
+    output_path.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+    return result, 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("case", type=Path, help="case YAML")
+    args = parser.parse_args(argv)
+    if not FREECADCMD.is_file():
+        print(json.dumps(error(f"FreeCAD is not installed at {FREECADCMD}", code="freecad_unavailable")))
+        return 2
+    try:
+        case = load_case(args.case.resolve())
+    except CaseError as exc:
+        print(json.dumps(error(str(exc))))
+        return 2
+    try:
+        result, status = run_job(args.case.resolve(), case)
+    except OSError as exc:
+        print(json.dumps(error(str(exc), code="io_error")))
+        return 2
+    print(json.dumps(result, indent=2))
+    return status
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
