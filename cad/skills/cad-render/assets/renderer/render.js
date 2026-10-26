@@ -21,12 +21,20 @@ const STUDIO = {
   margin: 0.08, // fraction of each half-frame left empty around the subject and its shadow
   exposure: 1.0,
   environmentIntensity: 0.85,
-  keyFrom: [-0.35, 1.0, 0.4], // key light sits above, slightly front-left; casts the shadow
+  // Product-photography key: high (about 63 deg elevation) and in front, so the shadow falls
+  // beneath and just behind the product.
+  keyFrom: [0.05, 1.0, 0.5],
   keyIntensity: 2.2,
+  keyShadowRadius: 22, // VSM blur radius in shadow-map texels: the soft penumbra
+  // Overhead contact light: a weak, very soft shadow straight down, cast only by geometry
+  // within contactHeight (fraction of the scene's bounding radius) of the ground, so it darkens
+  // the floor under the base without doubling the shadow of anything higher up.
+  contactIntensity: 0.5,
+  contactShadowRadius: 55,
+  contactHeight: 0.14,
   fillFrom: [0.8, 0.5, -0.6],
   fillIntensity: 0.6,
   shadowMapSize: 1024,
-  shadowRadius: 22, // VSM blur radius in shadow-map texels: the soft penumbra
   shadowBlurSamples: 24,
   aoRadius: 0.08, // GTAO radius and depth thickness, as a fraction of the subject's bounding radius
   msaaSamples: 4,
@@ -180,13 +188,18 @@ async function boot() {
   ground.receiveShadow = true;
   world.add(ground);
 
-  const keyDir = new THREE.Vector3(...STUDIO.keyFrom).normalize();
-  const key = new THREE.DirectionalLight(0xffffff, STUDIO.keyIntensity);
-  key.castShadow = true;
-  key.shadow.mapSize.set(STUDIO.shadowMapSize, STUDIO.shadowMapSize);
-  key.shadow.radius = STUDIO.shadowRadius;
-  key.shadow.blurSamples = STUDIO.shadowBlurSamples;
-  world.add(key, key.target);
+  function shadowLight(from, intensity, radius) {
+    const light = new THREE.DirectionalLight(0xffffff, intensity);
+    light.castShadow = true;
+    light.shadow.mapSize.set(STUDIO.shadowMapSize, STUDIO.shadowMapSize);
+    light.shadow.radius = radius;
+    light.shadow.blurSamples = STUDIO.shadowBlurSamples;
+    world.add(light, light.target);
+    return { light, from: new THREE.Vector3(...from).normalize() };
+  }
+  const key = shadowLight(STUDIO.keyFrom, STUDIO.keyIntensity, STUDIO.keyShadowRadius);
+  const contact = shadowLight([0, 1, 0.02], STUDIO.contactIntensity, STUDIO.contactShadowRadius); // 0.02: off-vertical for lookAt
+  const keyDir = key.from;
   const fill = new THREE.DirectionalLight(0xffffff, STUDIO.fillIntensity);
   world.add(fill, fill.target);
 
@@ -242,15 +255,24 @@ async function boot() {
   function placeLights(box) {
     const centre = box.getCenter(new THREE.Vector3());
     const radius = box.getSize(new THREE.Vector3()).length() / 2;
-    key.position.copy(centre).addScaledVector(keyDir, radius * 4);
-    key.target.position.copy(centre);
-    const cam = key.shadow.camera;
-    cam.left = -radius * 1.3; cam.right = radius * 1.3; cam.top = radius * 1.3; cam.bottom = -radius * 1.3;
-    cam.near = radius * 0.5; cam.far = radius * 8;
-    cam.updateProjectionMatrix();
-    key.shadow.bias = -0.0004;
-    key.shadow.normalBias = radius * 0.004;
-    key.shadow.needsUpdate = true;
+    const height = radius * 4;
+    key.light.position.copy(centre).addScaledVector(key.from, height);
+    key.light.target.position.copy(centre);
+    const above = new THREE.Vector3(centre.x, groundY, centre.z);
+    contact.light.position.copy(above).addScaledVector(contact.from, height);
+    contact.light.target.position.copy(above);
+    for (const { light } of [key, contact]) {
+      const cam = light.shadow.camera;
+      cam.left = -radius * 1.3; cam.right = radius * 1.3; cam.top = radius * 1.3; cam.bottom = -radius * 1.3;
+      cam.near = radius * 0.5; cam.far = radius * 8;
+      light.shadow.bias = -0.0004;
+      light.shadow.normalBias = radius * 0.004;
+      light.shadow.needsUpdate = true;
+    }
+    // The contact map only sees the slab of geometry just above the ground.
+    contact.light.shadow.camera.near = height - radius * STUDIO.contactHeight;
+    contact.light.shadow.camera.far = height + radius * 0.05;
+    for (const { light } of [key, contact]) light.shadow.camera.updateProjectionMatrix();
     fill.position.copy(centre).addScaledVector(new THREE.Vector3(...STUDIO.fillFrom).normalize(), radius * 4);
     fill.target.position.copy(centre);
     ground.scale.set(radius * 40, radius * 40, 1);
