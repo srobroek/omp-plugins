@@ -17,6 +17,7 @@ HERE = Path(__file__).parent
 BOM_SCRIPT = HERE / "scripts" / "bom.py"
 BUILDER = HERE / "fixtures" / "build_assembly.py"
 SPEC = importlib.util.spec_from_file_location("cad_bom", BOM_SCRIPT)
+RECORD_VALIDATOR = HERE.parent / "cad-record" / "scripts" / "validate.py"
 assert SPEC and SPEC.loader
 bom = importlib.util.module_from_spec(SPEC)
 sys.modules["cad_bom"] = bom
@@ -145,6 +146,49 @@ class StepRoundTripTests(unittest.TestCase):
         self.assertEqual(summary["status"], "fail")
         self.assertEqual(summary["missing_part_yaml"], ["BRK-0002"])
         self.assertEqual(summary["missing_in_step"], ["NUT-0001"])
+
+    def test_generated_bom_pipes_into_cad_record_validator(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory) / "project"
+            hw = project / "hw"
+            hw.mkdir(parents=True)
+            parts = dict(PARTS)
+            parts["BASE-0001"] = (
+                "rev: X2\ntitle: Base plate\nmaterial: PETG\nprocess: fdm\nfinish: deburred\n"
+                "make_buy: make\nmass_target: 40\n"
+            )
+            for pn, text in parts.items():
+                folder = hw / "parts" / pn
+                folder.mkdir(parents=True)
+                extra = "finish: deburred\n" if "finish:" not in text else ""
+                (folder / "part.yaml").write_text(f"PN: {pn}\n" + text + extra, encoding="utf-8")
+            (hw / "product.yaml").write_text(
+                "id: test-assembly\nrigor: pro\nunits: mm\nregime: iso\ngeneral_tolerance: 0.1\n"
+                "flow: {stage: layout, recheck_from: layout}\n", encoding="utf-8"
+            )
+            (hw / "requirements.yaml").write_text(
+                "requirements:\n  - id: REQ-001\n    text: Fit\n    rationale: Assemble\n"
+                "    source: Test\n    priority: must\n    verification: {method: I, criteria: Fits}\n",
+                encoding="utf-8",
+            )
+            (hw / "interfaces.yaml").write_text("interfaces: []\n", encoding="utf-8")
+            (hw / "assembly.yaml").write_text(
+                "subassemblies:\n  - id: main\n    title: Main assembly\n    parts: [BASE-0001, PIN-0001, BRK-0002, SCR-0001]\n"
+                "joints: []\n", encoding="utf-8"
+            )
+            (hw / "verification.csv").write_text(
+                "requirement_id,method,criteria,result,evidence\nREQ-001,I,Fits,planned,\n", encoding="utf-8"
+            )
+
+            bom_proc, _ = self.run_bom(hw)
+            self.assertEqual(bom_proc.returncode, 0, bom_proc.stderr)
+            validation = subprocess.run(
+                [sys.executable, str(RECORD_VALIDATOR), str(project)],
+                capture_output=True, text=True, check=False, timeout=60,
+            )
+
+        self.assertEqual(validation.returncode, 0, validation.stdout + validation.stderr)
+        self.assertEqual(json.loads(validation.stdout), {"ok": True, "findings": []})
 
     def test_missing_step_exits_2(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

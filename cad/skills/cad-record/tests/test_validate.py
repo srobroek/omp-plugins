@@ -128,6 +128,13 @@ class ValidateProject(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("does not exist", json.dumps(report["findings"]))
 
+    def test_rejects_joint_type_not_supported_by_pose(self) -> None:
+        path = self.hw / "assembly.yaml"
+        path.write_text(path.read_text(encoding="utf-8").replace("type: revolute", "type: cylindrical", 1), encoding="utf-8")
+        result, report = self.validate()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("cylindrical", json.dumps(report["findings"]))
+
     def test_requires_verification_row_for_each_requirement_at_release(self) -> None:
         path = self.hw / "verification.csv"
         with path.open(newline="", encoding="utf-8") as stream:
@@ -141,6 +148,61 @@ class ValidateProject(unittest.TestCase):
         result, report = self.validate()
         self.assertEqual(result.returncode, 1)
         self.assertIn("REQ-007 has no verification row", json.dumps(report["findings"]))
+
+    def make_release_ready(self) -> None:
+        for part_file in (self.hw / "parts").glob("*/part.yaml"):
+            part_file.write_text(
+                part_file.read_text(encoding="utf-8").replace("rev: X1", "rev: A"),
+                encoding="utf-8",
+            )
+        bom_path = self.hw / "bom.csv"
+        with bom_path.open(newline="", encoding="utf-8") as stream:
+            rows = list(csv.DictReader(stream))
+            columns = rows[0].keys()
+        for row in rows:
+            row["rev"] = "A"
+        with bom_path.open("w", newline="", encoding="utf-8") as stream:
+            writer = csv.DictWriter(stream, fieldnames=columns)
+            writer.writeheader()
+            writer.writerows(rows)
+        verification_path = self.hw / "verification.csv"
+        with verification_path.open(newline="", encoding="utf-8") as stream:
+            rows = list(csv.DictReader(stream))
+            columns = rows[0].keys()
+        for row in rows:
+            row["result"] = "pass"
+        with verification_path.open("w", newline="", encoding="utf-8") as stream:
+            writer = csv.DictWriter(stream, fieldnames=columns)
+            writer.writeheader()
+            writer.writerows(rows)
+
+    def write_release(self, directory: str, rev: str, files: list[str]) -> None:
+        release_dir = self.hw / "releases" / directory
+        release_dir.mkdir(parents=True, exist_ok=True)
+        (release_dir / "manifest.json").write_text(json.dumps({
+            "product_id": "lamp-arm",
+            "rev": rev,
+            "released_at": "2026-10-26T00:00:00Z",
+            "files": files,
+            "checks": {"record-validation": "pass"},
+        }), encoding="utf-8")
+
+    def test_accepts_release_with_existing_files_and_verified_released_parts(self) -> None:
+        self.make_release_ready()
+        self.write_release("A", "A", ["hw/product.yaml", "hw/bom.csv"])
+        result, report = self.validate()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(report["findings"], [])
+
+    def test_rejects_release_with_mismatched_directory_missing_file_planned_checks_and_prototype(self) -> None:
+        self.write_release("B", "A", ["hw/product.yaml", "hw/not-present.step"])
+        result, report = self.validate()
+        findings = json.dumps(report["findings"])
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("directory name does not match manifest rev", findings)
+        self.assertIn("release file does not exist within project: hw/not-present.step", findings)
+        self.assertIn("verification result must be pass or waived", findings)
+        self.assertIn("release cannot include prototype revision X1", findings)
 
     def test_rejects_part_with_missing_decision_reference(self) -> None:
         path = self.hw / "parts" / "LMP-0001" / "part.yaml"

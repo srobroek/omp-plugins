@@ -29,10 +29,10 @@ TRIGGER
 
 ## Semantics
 
-- `level` 0 is a numbered top assembly; each child is parent + 1. Children of an unnumbered top assembly start at 1.
+- `level` 0 is a numbered top assembly; each child is parent + 1. Children of an unnumbered top assembly start at 1. The record validator uses the same rule, including accepting a numbered assembly row without `part.yaml` when it has child rows.
 - `qty` counts instances per one parent. A repeated subassembly is one row with its qty; its children appear once beneath it. `total_qty` in the JSON multiplies through.
 - An assembly product without a PN is a phantom group; its children merge into the nearest numbered parent.
-- Assemblies need no part.yaml; leaf parts do. `mass` copies `mass_target` (grams) verbatim.
+- Assemblies need no part.yaml; leaf parts do. `mass` copies `mass_target` (grams).
 
 ## Rules
 
