@@ -4,6 +4,7 @@ title: Lamp head housing
 material: PETG
 process: fdm
 finish: Deburr; no sharp edges
-mass_target: 220
+mass_target: 58
 make_buy: make
 supplier: null
+decisions: [DR-002]

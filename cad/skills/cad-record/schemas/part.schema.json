@@ -14,6 +14,7 @@
     "finish": {"type": "string", "minLength": 1},
     "mass_target": {"type": ["number", "null"], "exclusiveMinimum": 0},
     "make_buy": {"type": "string", "enum": ["make", "buy"]},
-    "supplier": {"type": ["string", "null"], "minLength": 1}
+    "supplier": {"type": ["string", "null"], "minLength": 1},
+    "decisions": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^DR-[0-9]{3}$"}}
   }
 }
