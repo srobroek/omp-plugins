@@ -87,7 +87,7 @@ title = "Recheck L3-L4 and dependencies for the ECO impact set"
 type = "task"
 needs = ["revise-part"]
 labels = ["cad", "phase:detail", "phase:analysis"]
-description = "Run skill://cad-fits and skill://cad-drawings for impacted parts, then skill://cad-analysis at the worst-case pose. Recheck L3 detail, tolerances, fasteners, FDM/CNC rules, drawing, BOM, interference, clearance, stack-up, kinematic sweep when applicable, and static FEA for {{part}} plus its affected dependents. Use skill://cad-recheck: post-LAYOUT changes re-run this stage's checks and every earlier applicable check only for the changed/affected set; preserve evidence for all untouched parts. Update verification.csv and the ECO record."
+description = "Run skill://cad-fits and skill://cad-drawings for impacted parts. Run skill://cad-motion sweep at the worst-case pose. For static FEA, run `uv run --script skill://cad-analysis/scripts/fea_static.py <case.yaml>`. Recheck detail, fits, fasteners, process rules, drawings, BOM, interference, clearance, stack-up, kinematics, and static FEA for {{part}} and affected dependents only. Use skill://cad-recheck for post-LAYOUT checks. Preserve evidence for untouched parts. Update verification.csv and the ECO record."
 
 [steps.metadata]
 skill_hints = "cad-fits, cad-drawings, cad-bom, cad-analysis, cad-recheck, cad-record"
@@ -135,7 +135,7 @@ title = "Assemble and validate ECO release {{to_rev}}"
 type = "task"
 needs = ["reconcile"]
 labels = ["cad", "phase:release"]
-description = "Run skill://cad-record, skill://cad-bom, and skill://cad-drawings to update the release manifest, STEP AP242, drawings, EBOM, verification matrix, and docs for the affected revision/dependent set. Preserve unchanged part artifacts. Validate the revision transition {{from_rev}} -> {{to_rev}}, ECO decision {{decision}}, and all release evidence. Use FreeCAD 1.1.4 only; no slicer, CAM, or machine tooling."
+description = "Run skill://cad-record, skill://cad-bom, and skill://cad-drawings to update the release manifest, STEP AP242, drawings, EBOM, verification matrix, and docs for the affected revision/dependent set. For drawings use `uv run --script skill://cad-drawings/scripts/drawing.py <step> --part <part.yaml> --product <product.yaml> --output-dir <dir> [--scale <ratio>]`. Preserve unchanged artifacts. Validate the revision transition {{from_rev}} -> {{to_rev}}, ECO decision {{decision}}, and release evidence. Use FreeCAD 1.1.4 only. No slicer, CAM, or machine tooling."
 
 [steps.metadata]
 skill_hints = "cad-record, cad-bom, cad-drawings"
