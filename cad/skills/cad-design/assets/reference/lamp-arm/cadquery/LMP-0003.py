@@ -16,6 +16,7 @@ both along Y.
 import math
 
 import cadquery as cq
+from cadmodel.safe import safe_cut, safe_fuse, safe_intersect
 
 KERNEL = "cadquery"
 PARAMS = {
@@ -102,12 +103,10 @@ def _stadium(x0, x1, width, z0, z1):
 def _ball_channel(x0, x1, r, zc, z_open):
     """Stopped channel cut from below by a ball-end mill of radius r travelling x0 -> x1 at height zc."""
     channel = cq.Workplane("YZ").workplane(offset=x0).center(0, zc).circle(r).extrude(x1 - x0)
-    channel = channel.union(
-        cq.Workplane("XY").box(x1 - x0, 2 * r, zc - z_open, centered=(False, True, False)).translate((x0, 0, z_open))
-    )
+    channel = safe_fuse(channel, cq.Workplane("XY").box(x1 - x0, 2 * r, zc - z_open, centered=(False, True, False)).translate((x0, 0, z_open)))
     for x in (x0, x1):
-        channel = channel.union(cq.Workplane("XY").sphere(r).translate((x, 0, zc)))
-        channel = channel.union(cq.Workplane("XY").workplane(offset=z_open).center(x, 0).circle(r).extrude(zc - z_open))
+        channel = safe_fuse(channel, cq.Workplane("XY").sphere(r).translate((x, 0, zc)))
+        channel = safe_fuse(channel, cq.Workplane("XY").workplane(offset=z_open).center(x, 0).circle(r).extrude(zc - z_open))
     return channel
 
 
@@ -142,17 +141,17 @@ def build(params: dict) -> cq.Shape:
         *_rounded([tip_high, high, elbow_high], blend),
         ("arc", (ex - r, ez), elbow_low),
     ]).extrude(3 * bw, both=True)
-    body = cq.Workplane("XY").add(plan).intersect(side).val()
+    body = safe_intersect(cq.Workplane("XY").add(plan), side).val()
 
     silhouette = [e for e in body.Edges() if not (_is_line_along(e, (0, 0, 1)) or _is_line_along(e, (0, 1, 0)))]
     body = body.fillet(p["edge_fillet"], silhouette)
 
     slot_r = p["slot_w"] / 2.0
     slot_x = p["slot_end_x"] + slot_r
-    slot = (
-        cq.Workplane("XY").workplane(offset=tz - 2 * r).center(slot_x, 0).circle(slot_r).extrude(4 * r)
-        .union(cq.Workplane("XY").box(x_end + 5.0 - slot_x, p["slot_w"], 4 * r, centered=(False, True, False))
-               .translate((slot_x, 0, tz - 2 * r)))
+    slot = safe_fuse(
+        cq.Workplane("XY").workplane(offset=tz - 2 * r).center(slot_x, 0).circle(slot_r).extrude(4 * r),
+        cq.Workplane("XY").box(x_end + 5.0 - slot_x, p["slot_w"], 4 * r, centered=(False, True, False))
+        .translate((slot_x, 0, tz - 2 * r)),
     )
     bore_r = p["pin_bore_d"] / 2.0
     bores = [cq.Workplane("XZ").center(x, z).circle(bore_r).extrude(2 * bw, both=True) for x, z in ((ex, ez), (tx, tz))]
@@ -160,7 +159,11 @@ def build(params: dict) -> cq.Shape:
     pocket = _stadium(x0, x1, width, floor, ez + 3 * r)
     cx0, cx1, cr, czc = p["cable_channel"]
     channel = _ball_channel(cx0, cx1, cr, czc, ez - 3 * r)
-    body = cq.Workplane("XY").add(body).cut(slot).cut(bores[0]).cut(bores[1]).cut(pocket).cut(channel).val()
+    body = safe_cut(body, slot)
+    body = safe_cut(body, bores[0])
+    body = safe_cut(body, bores[1])
+    body = safe_cut(body, pocket)
+    body = safe_cut(body, channel)
 
     entries = _circle_edges(body, bore_r, [((ex, 0.0, ez), (0, 1, 0)), ((tx, 0.0, tz), (0, 1, 0))])
     return body.chamfer(p["bore_chamfer"], None, entries)

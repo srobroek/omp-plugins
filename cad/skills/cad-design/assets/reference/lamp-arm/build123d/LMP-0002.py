@@ -17,6 +17,7 @@ Zero pose, assembly coordinates: hub bore on (0, 0, 40) along Z; elbow bore on
 import math
 
 import build123d as bd
+from cadmodel.safe import safe_cut, safe_fuse, safe_intersect
 
 KERNEL = "build123d"
 PARAMS = {
@@ -111,10 +112,10 @@ def _stadium(x0, x1, width, z0, z1):
 def _ball_channel(x0, x1, r, zc, z_open):
     """Stopped channel cut from below by a ball-end mill of radius r travelling x0 -> x1 at height zc."""
     channel = bd.Pos(x0, 0, zc) * bd.Rot(0, 90, 0) * bd.Cylinder(r, x1 - x0, align=BOTTOM)
-    channel += bd.Pos(x0, 0, z_open) * bd.Box(x1 - x0, 2 * r, zc - z_open, align=(bd.Align.MIN, bd.Align.CENTER, bd.Align.MIN))
+    channel = safe_fuse(channel, bd.Pos(x0, 0, z_open) * bd.Box(x1 - x0, 2 * r, zc - z_open, align=(bd.Align.MIN, bd.Align.CENTER, bd.Align.MIN)))
     for x in (x0, x1):
-        channel += bd.Pos(x, 0, zc) * bd.Sphere(r)
-        channel += bd.Pos(x, 0, z_open) * bd.Cylinder(r, zc - z_open, align=BOTTOM)
+        channel = safe_fuse(channel, bd.Pos(x, 0, zc) * bd.Sphere(r))
+        channel = safe_fuse(channel, bd.Pos(x, 0, z_open) * bd.Cylinder(r, zc - z_open, align=BOTTOM))
     return channel
 
 
@@ -141,25 +142,31 @@ def build(params: dict) -> bd.Part:
     side = bd.extrude(bd.Plane.XZ * _face(lower[0], [*_rounded(lower, blend), ("arc", (ex + er, ez), upper[0]),
                                                      *_rounded(upper, blend), ("line", lower[0])]),
                       amount=3 * hub_r, both=True)
-    body = plan & side
+    body = safe_intersect(plan, side)
 
     silhouette = [e for e in body.edges() if not (_is_line_along(e, (0, 0, 1)) or _is_line_along(e, (0, 1, 0)))]
     body = bd.fillet(silhouette, p["edge_fillet"])
 
     slot_r = p["slot_w"] / 2.0
     slot_x = p["slot_end_x"] + slot_r
-    slot = bd.Pos(slot_x, 0, ez - 2 * er) * bd.Cylinder(slot_r, 4 * er, align=BOTTOM)
-    slot += bd.Pos(slot_x, 0, ez - 2 * er) * bd.Box(
-        end_x + 5.0 - slot_x, p["slot_w"], 4 * er, align=(bd.Align.MIN, bd.Align.CENTER, bd.Align.MIN)
+    slot = safe_fuse(
+        bd.Pos(slot_x, 0, ez - 2 * er) * bd.Cylinder(slot_r, 4 * er, align=BOTTOM),
+        bd.Pos(slot_x, 0, ez - 2 * er) * bd.Box(
+            end_x + 5.0 - slot_x, p["slot_w"], 4 * er, align=(bd.Align.MIN, bd.Align.CENTER, bd.Align.MIN)
+        ),
     )
     bore_r = p["pin_bore_d"] / 2.0
     hub_bore = bd.Pos(hx, hy, hz - 2 * half_h) * bd.Cylinder(bore_r, 4 * half_h, align=BOTTOM)
     elbow_bore = bd.Pos(ex, 0, ez) * bd.Rot(90, 0, 0) * bd.Cylinder(bore_r, 4 * er)
     x0, x1, width, floor = p["pocket"]
     pocket = _stadium(x0, x1, width, floor, hz + 2 * half_h)
+    body = safe_cut(body, slot)
+    body = safe_cut(body, hub_bore)
+    body = safe_cut(body, elbow_bore)
+    body = safe_cut(body, pocket)
     cx0, cx1, cr, czc = p["cable_channel"]
     channel = _ball_channel(cx0, cx1, cr, czc, hz - 2 * half_h)
-    body = body - slot - hub_bore - elbow_bore - pocket - channel
+    body = safe_cut(body, channel)
 
     entries = _circle_edges(body, bore_r, [((hx, hy, hz), (0, 0, 1)), ((ex, 0.0, ez), (0, 1, 0))])
     return bd.chamfer(entries, p["bore_chamfer"])

@@ -17,6 +17,7 @@ vertical through (430, 0) and opens downward.
 import math
 
 import build123d as bd
+from cadmodel.safe import safe_cut, safe_fuse
 
 KERNEL = "build123d"
 PARAMS = {
@@ -151,13 +152,18 @@ def build(params: dict) -> bd.Part:
     start, segments = _shade_profile(p)
     shade = bd.revolve(bd.Pos(p["shade_axis_x"], 0, 0) * (bd.Plane.XZ * _face(start, segments)),
                        bd.Axis((p["shade_axis_x"], 0, 0), (0, 0, 1)))
-    body = knuckle + neck + stub + shade
+    body = safe_fuse(knuckle, neck)
+    body = safe_fuse(body, stub)
+    body = safe_fuse(body, shade)
     rc = p["cap_r"]
     z0, z1 = p["grip_z"]
     for k in range(p["grip_flutes"]):
         a = 2.0 * math.pi * k / p["grip_flutes"]
-        body -= bd.Pos(p["shade_axis_x"] + rc * math.cos(a), rc * math.sin(a), z0) * bd.Cylinder(
-            p["grip_r"], z1 - z0, align=BOTTOM
+        body = safe_cut(
+            body,
+            bd.Pos(p["shade_axis_x"] + rc * math.cos(a), rc * math.sin(a), z0) * bd.Cylinder(
+                p["grip_r"], z1 - z0, align=BOTTOM
+            ),
         )
 
     cable_r, entry_r = p["cable_d"] / 2.0, p["cable_entry_d"] / 2.0
@@ -166,7 +172,9 @@ def build(params: dict) -> bd.Part:
     )
     entry = bd.Pos(p["cable_entry_x"], 0, pz - 2 * p["neck_r"]) * bd.Cylinder(entry_r, 2 * p["neck_r"], align=BOTTOM)
     bore = bd.Pos(px, 0, pz) * bd.Rot(90, 0, 0) * bd.Cylinder(p["pin_bore_d"] / 2.0, 4 * half_t)
-    body = body - run - entry - bore
+    body = safe_cut(body, run)
+    body = safe_cut(body, bore)
+    body = safe_cut(body, entry)
 
     bore_r = p["pin_bore_d"] / 2.0
     entries = [e for e in body.edges() if e.geom_type == bd.GeomType.CIRCLE and abs(e.radius - bore_r) < 1e-6
