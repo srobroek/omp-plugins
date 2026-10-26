@@ -1,0 +1,55 @@
+---
+name: cad-record
+description: Defines hardware design records, rigor levels and validation. Triggers on how to record or validate a CAD project.
+---
+
+# CAD Design Record
+
+TRIGGER
++ creating or validating a hardware project's `hw/` design record
++ "what goes in the CAD design record", "validate this hardware project"
+- modeling a part or assembly → `cad-model`
+
+## Workflow
+
+1. Create `hw/product.yaml`, `requirements.yaml`, `interfaces.yaml`, and `assembly.yaml` from `assets/project-template/hw/`. Set the product's units to `mm`, choose `regime: iso|asme`, and record the current flow stage.
+2. Add `hw/parts/<PN>/part.yaml` and `model.py` for each part; use a PN matching `^[A-Z]{2,5}-[0-9]{4}$`. Put BOM rows in `hw/bom.csv`, verification evidence in `hw/verification.csv`, design rationale in `hw/decisions/DR-###.md`, release output in `hw/releases/<rev>/manifest.json`, and recheck state in `hw/.cad/recheck.json`.
+3. Add GitBuilding, DIN SPEC 3105-1, and Open Know-How files from `assets/docs-templates/` when documenting a project.
+4. Run `uv run --script <path-to-cad-record>/scripts/validate.py <project-dir>`. Read JSON from stdout; exit 0 means no findings, 1 means record checks failed, 2 means usage or infrastructure failed.
+
+## Rules
+
+MUST Use revision `X1`, `X2`, … for prototypes and released letters `A`–`Y` excluding `I`, `O`, `Q`, `S`, `X`, and `Z`.
+MUST Set `mass_target` and BOM `mass` in grams; `mass_target` may be null when unknown or not applicable.
+MUST Include a `verification` method (`I` inspection, `A` analysis, `D` demonstration, `T` test) and acceptance criteria for every requirement.
+MUST Define every joint's `parent` and `child` as part PNs included in assembly subassembly `parts`, and include axis, origin in mm, and minimum, nominal, and maximum travel values in its unit (degrees for rotary joints, mm for linear joints).
+MUST Keep BOM columns in this order: `level,PN,rev,qty,title,material,process,make_buy,supplier,mass`; `level` is the depth below the top assembly, `qty` is instances per parent, and `mass` copies `mass_target`.
+
+### Rigor levels
+
+| Level | Adds |
+|---|---|
+| `maker` | Clear part identification, assembly interfaces, essential requirements, and basic fit/build notes. |
+| `pro` (default) | Traceable requirement sources and verification criteria, controlled revisions, explicit tolerances and fits, complete EBOM, and documented analysis/review evidence. |
+| `regulated` | `pro` plus controlled approvals, risk traceability, objective verification evidence, configuration and release records, and change-impact traceability required by the project's governing quality system. |
+
+`regime: iso` applies ISO GPS conventions; `regime: asme` applies ASME dimensioning and tolerancing conventions. State the applicable regime on each product; do not mix symbol or tolerance interpretation between regimes.
+
+## Record files
+
+- `product.yaml`: product identity, rigor, units, drawing regime, general tolerance, and workflow state.
+- `requirements.yaml`: `REQ-###` statements with rationale, source, priority, method, and verification criteria.
+- `interfaces.yaml`: mating, motion, clearance, electrical, or thermal contracts.
+- `assembly.yaml`: subassemblies, part references, and joints with travel limits.
+- `parts/<PN>/part.yaml`: part number and revision, material, process, finish, mass target in grams, make/buy, and supplier; `model.py` is the parametric CAD source.
+- `bom.csv`: hierarchical EBOM; values and fields are checked against part records.
+- `verification.csv`: requirement verification status and evidence; every requirement needs a row before release.
+- `decisions/DR-###.md`: dated rationale and consequences for design decisions.
+- `releases/<rev>/manifest.json`: immutable release file inventory and check outcomes.
+- `.cad/recheck.json`: saved recheck scope and result.
+- `assets/docs-templates/`: GitBuilding build guide, DIN SPEC 3105-1 checklist, and OKH manifest templates.
+
+## Rules
+
+MUST Validate the complete record before release; repair every reported finding before issuing a release manifest.
+NOT Treat a nominal joint position outside its stated travel range as valid.

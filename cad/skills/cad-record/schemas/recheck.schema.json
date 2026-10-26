@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://srobroek.com/cad/schemas/recheck.schema.json",
+  "title": "CAD recheck state",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["from", "changed_parts", "dependents", "status"],
+  "properties": {
+    "from": {"const": "layout"},
+    "changed_parts": {"type": "array", "items": {"type": "string", "pattern": "^[A-Z]{2,5}-[0-9]{4}$"}},
+    "dependents": {"type": "array", "items": {"type": "string", "pattern": "^[A-Z]{2,5}-[0-9]{4}$"}},
+    "status": {"type": "string", "enum": ["not-run", "pass", "fail"]}
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://srobroek.com/cad/schemas/part.schema.json",
+  "title": "CAD part record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["PN", "rev", "title", "material", "process", "finish", "mass_target", "make_buy"],
+  "properties": {
+    "PN": {"type": "string", "pattern": "^[A-Z]{2,5}-[0-9]{4}$"},
+    "rev": {"type": "string", "pattern": "^(X[1-9][0-9]*|[A-HJ-NPRTUVWY])$"},
+    "title": {"type": "string", "minLength": 1},
+    "material": {"type": "string", "minLength": 1},
+    "process": {"type": "string", "enum": ["fdm", "cnc", "purchased"]},
+    "finish": {"type": "string", "minLength": 1},
+    "mass_target": {"type": ["number", "null"], "exclusiveMinimum": 0},
+    "make_buy": {"type": "string", "enum": ["make", "buy"]},
+    "supplier": {"type": ["string", "null"], "minLength": 1}
+  }
+}
