@@ -9,6 +9,7 @@ import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { GTAOPass } from "three/addons/postprocessing/GTAOPass.js";
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
+import { FullScreenQuad } from "three/addons/postprocessing/Pass.js";
 
 const css = getComputedStyle(document.documentElement);
 const token = (name) => css.getPropertyValue(name).trim();
@@ -21,29 +22,48 @@ const STUDIO = {
   margin: 0.08, // fraction of each half-frame left empty around the subject and its shadow
   exposure: 1.0,
   environmentIntensity: 0.85,
-  // Product-photography key: high (about 63 deg elevation) and in front, so the shadow falls
-  // beneath and just behind the product.
+  // Product-photography key: high (about 63 deg elevation) and in front. It lights the product
+  // and shades the parts onto each other; the floor takes only the baked studio shadow below.
   keyFrom: [0.05, 1.0, 0.5],
   keyIntensity: 2.2,
-  keyShadowRadius: 22, // VSM blur radius in shadow-map texels: the soft penumbra
-  // Overhead contact light: a weak, very soft shadow straight down, cast only by geometry
-  // within contactHeight (fraction of the scene's bounding radius) of the ground, so it darkens
-  // the floor under the base without doubling the shadow of anything higher up.
-  contactIntensity: 0.5,
-  contactShadowRadius: 55,
-  contactHeight: 0.14,
+  keyShadowRadius: 22, // VSM blur radius in shadow-map texels: the soft penumbra on the parts
   fillFrom: [0.8, 0.5, -0.6],
   fillIntensity: 0.6,
   shadowMapSize: 1024,
   shadowBlurSamples: 24,
+  // Floor shadow, two baked terms, both once per pose.
+  // Softbox: the occlusion of a large overhead softbox, accumulating groundSamples shadow maps
+  // from directions spread cosine-weighted over a cone of groundConeDeg about vertical. A part
+  // high above hides a small solid angle over a wide area: a faint, wide, soft shadow whose
+  // penumbra grows and darkness falls with height. Its opacity is --shadow-opacity.
+  groundSamples: 128,
+  groundConeDeg: 75,
+  groundExtent: 2.5, // half-side of the baked floor square, x the scene's bounding radius
+  groundMapSize: 1024, // baked floor texels per side
+  groundShadowMapSize: 512,
+  groundShadowRadius: 3,
+  // Contact: the studio's ambient occlusion at the foot of a part, ContactShadows-style. The
+  // footprint of part surface within contactHeight of the floor, weighted 1 at the floor down to 0
+  // at contactHeight, blurred by a Gaussian of contactBlur (both x the scene radius), at
+  // contactOpacity. Nothing above contactHeight adds to it.
+  contactHeight: 0.1,
+  contactBlur: 0.13,
+  contactOpacity: 0.7,
+  contactMapSize: 256,
+  // Grader zones, as fractions of the scene's bounding radius: part surface within contactBand
+  // of the floor is a grounded rim; floor under a part at least overhangHeight up is overhung.
+  contactBand: 0.02,
+  overhangHeight: 0.25,
   aoRadius: 0.08, // GTAO radius and depth thickness, as a fraction of the subject's bounding radius
   msaaSamples: 4,
   maxPointsPerMesh: 6000,
 };
-// Mask classes, written as linear grey levels into an 8-bit render target.
-const MASK_SUBJECT = new THREE.Color(1, 1, 1);
-const MASK_OTHER = new THREE.Color(0.5, 0.5, 0.5);
+// Mask pass output, into an 8-bit render target: r = part class level (subject 1, other 0.5,
+// floor and empty 0), g = 1 on a grounded rim, b = 1 on overhung floor.
+const MASK_SUBJECT = 1.0;
+const MASK_OTHER = 0.5;
 const COLOR_KEYS = ["color", "sheenColor", "specularColor", "attenuationColor", "emissive"];
+const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
 
 function setStatus(state, text) {
   document.body.dataset.state = state;
@@ -129,6 +149,90 @@ function toBase64(bytes) {
   return btoa(out);
 }
 
+// Direction i of n towards the softbox: cosine-weighted over a cone about +Y, stratified in
+// sin^2 of the polar angle with a golden-angle azimuth, so every bake is deterministic.
+function coneDirection(i, n, coneRad) {
+  const s = Math.sin(coneRad) * Math.sqrt((i + 0.5) / n);
+  const phi = i * GOLDEN_ANGLE;
+  return new THREE.Vector3(s * Math.cos(phi), Math.sqrt(1 - s * s), s * Math.sin(phi));
+}
+
+// Shaders. HEIGHT_VERTEX passes the world height above the floor; UV_VERTEX the floor-square uv.
+const HEIGHT_VERTEX = `
+uniform float groundY;
+varying float vHeight;
+void main() {
+  vec4 world = modelMatrix * vec4(position, 1.0);
+  vHeight = world.y - groundY;
+  gl_Position = projectionMatrix * viewMatrix * world;
+}`;
+const UV_VERTEX = `
+varying vec2 vUv;
+void main() {
+  vUv = uv;
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+}`;
+// Beauty floor: the two baked terms as shadow opacity, composited. A wall standing on the floor
+// hides half the softbox cone from the floor at its foot, and the blurred footprint is 0.5 on its
+// edge, so 0.5 is full darkness for both. The contact map is drawn from below: mirrored in x.
+const FLOOR_SHADOW_FRAGMENT = `
+uniform sampler2D occlusion;
+uniform sampler2D contact;
+uniform vec3 color;
+uniform float opacity;
+uniform float contactOpacity;
+varying vec2 vUv;
+void main() {
+  float softbox = opacity * clamp(2.0 * texture2D(occlusion, vUv).g, 0.0, 1.0);
+  float foot = contactOpacity * clamp(2.0 * texture2D(contact, vec2(1.0 - vUv.x, vUv.y)).r, 0.0, 1.0);
+  gl_FragColor = vec4(color, 1.0 - (1.0 - softbox) * (1.0 - foot));
+}`;
+// One separable Gaussian pass over the contact footprint. With `weigh`, the source is the height
+// map, turned into the footprint weight 1 - height / contactHeight; otherwise it is the first pass.
+const CONTACT_BLUR_FRAGMENT = `
+uniform sampler2D source;
+uniform bool weigh;
+uniform float contactHeight;
+uniform vec2 texel;
+uniform float sigma;
+varying vec2 vUv;
+float footprint(vec2 uv) {
+  vec4 t = texture2D(source, uv);
+  if (!weigh) return t.r;
+  return t.a > 0.5 ? clamp(1.0 - t.r / contactHeight, 0.0, 1.0) : 0.0;
+}
+void main() {
+  float sum = 0.0;
+  float total = 0.0;
+  for (int i = -24; i <= 24; i++) {
+    float w = exp(-0.5 * float(i * i) / (sigma * sigma));
+    sum += w * footprint(vUv + float(i) * texel);
+    total += w;
+  }
+  gl_FragColor = vec4(sum / total, 0.0, 0.0, 1.0);
+}`;
+const HEIGHT_FRAGMENT = `
+varying float vHeight;
+void main() {
+  gl_FragColor = vec4(vHeight, 0.0, 0.0, 1.0);
+}`;
+const MASK_PART_FRAGMENT = `
+uniform float level;
+uniform float band;
+varying float vHeight;
+void main() {
+  gl_FragColor = vec4(level, vHeight < band ? 1.0 : 0.0, 0.0, 1.0);
+}`;
+// The height map is drawn from below the floor, so it is mirrored in x against the floor uv.
+const MASK_FLOOR_FRAGMENT = `
+uniform sampler2D heights;
+uniform float overhang;
+varying vec2 vUv;
+void main() {
+  vec4 lowest = texture2D(heights, vec2(1.0 - vUv.x, vUv.y));
+  gl_FragColor = vec4(0.0, 0.0, lowest.a > 0.5 && lowest.r >= overhang ? 1.0 : 0.0, 1.0);
+}`;
+
 async function boot() {
   const scene = await (await fetch("/render/scene.json", { cache: "no-store" })).json();
   const { width, height } = scene.image;
@@ -179,29 +283,82 @@ async function boot() {
 
   const restBox = new THREE.Box3().setFromObject(root);
   const groundY = restBox.min.y;
-  const ground = new THREE.Mesh(
-    new THREE.PlaneGeometry(1, 1),
-    new THREE.ShadowMaterial({ color: new THREE.Color(token("--color-shadow")), opacity: Number(token("--shadow-opacity")) }),
-  );
+  // The floor: a square under the scene (placed per pose by stage) that shows only the baked
+  // shadow: the softbox term in `occlusion`, the contact term in `contact` (blurred through
+  // `contactPass`). `heights` holds the lowest part surface above each floor texel.
+  const occlusion = new THREE.WebGLRenderTarget(STUDIO.groundMapSize, STUDIO.groundMapSize, { type: THREE.HalfFloatType });
+  const heights = new THREE.WebGLRenderTarget(STUDIO.groundMapSize / 2, STUDIO.groundMapSize / 2, {
+    type: THREE.HalfFloatType, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter,
+  });
+  const contactPass = new THREE.WebGLRenderTarget(STUDIO.contactMapSize, STUDIO.contactMapSize, { type: THREE.HalfFloatType });
+  const contact = new THREE.WebGLRenderTarget(STUDIO.contactMapSize, STUDIO.contactMapSize, { type: THREE.HalfFloatType });
+  const contactBlur = new FullScreenQuad(new THREE.ShaderMaterial({
+    uniforms: {
+      source: { value: null },
+      weigh: { value: true },
+      contactHeight: { value: 0 },
+      texel: { value: new THREE.Vector2() },
+      // Gaussian sigma in contact texels; independent of the scene size, as both scale with it.
+      sigma: { value: (STUDIO.contactBlur * STUDIO.contactMapSize) / (2 * STUDIO.groundExtent) },
+    },
+    vertexShader: UV_VERTEX,
+    fragmentShader: CONTACT_BLUR_FRAGMENT,
+  }));
+  const floorShadow = new THREE.ShaderMaterial({
+    uniforms: {
+      occlusion: { value: occlusion.texture },
+      contact: { value: contact.texture },
+      color: { value: new THREE.Color(token("--color-shadow")) },
+      opacity: { value: Number(token("--shadow-opacity")) },
+      contactOpacity: { value: STUDIO.contactOpacity },
+    },
+    vertexShader: UV_VERTEX,
+    fragmentShader: FLOOR_SHADOW_FRAGMENT,
+    transparent: true,
+  });
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), floorShadow);
   ground.rotation.x = -Math.PI / 2;
   ground.position.y = groundY;
-  ground.receiveShadow = true;
   world.add(ground);
 
-  function shadowLight(from, intensity, radius) {
+  function shadowLight(intensity, mapSize, radius, blurSamples) {
     const light = new THREE.DirectionalLight(0xffffff, intensity);
     light.castShadow = true;
-    light.shadow.mapSize.set(STUDIO.shadowMapSize, STUDIO.shadowMapSize);
+    light.shadow.mapSize.set(mapSize, mapSize);
     light.shadow.radius = radius;
-    light.shadow.blurSamples = STUDIO.shadowBlurSamples;
-    world.add(light, light.target);
-    return { light, from: new THREE.Vector3(...from).normalize() };
+    light.shadow.blurSamples = blurSamples;
+    return light;
   }
-  const key = shadowLight(STUDIO.keyFrom, STUDIO.keyIntensity, STUDIO.keyShadowRadius);
-  const contact = shadowLight([0, 1, 0.02], STUDIO.contactIntensity, STUDIO.contactShadowRadius); // 0.02: off-vertical for lookAt
-  const keyDir = key.from;
+  // Points `light` along `from` at the sphere (centre, radius), its shadow camera enclosing it.
+  function aimShadowLight(light, centre, from, radius) {
+    light.position.copy(centre).addScaledVector(from, radius * 4);
+    light.target.position.copy(centre);
+    const cam = light.shadow.camera;
+    cam.left = -radius * 1.3; cam.right = radius * 1.3; cam.top = radius * 1.3; cam.bottom = -radius * 1.3;
+    cam.near = radius * 0.5; cam.far = radius * 8;
+    cam.updateProjectionMatrix();
+    light.shadow.bias = -0.0004;
+    light.shadow.normalBias = radius * 0.004;
+  }
+  const key = shadowLight(STUDIO.keyIntensity, STUDIO.shadowMapSize, STUDIO.keyShadowRadius, STUDIO.shadowBlurSamples);
+  const keyDir = new THREE.Vector3(...STUDIO.keyFrom).normalize();
   const fill = new THREE.DirectionalLight(0xffffff, STUDIO.fillIntensity);
-  world.add(fill, fill.target);
+  world.add(key, key.target, fill, fill.target);
+
+  // Floor bake (STUDIO.groundSamples). The parts and the floor move into their own scene, so the
+  // studio key casts nothing on the floor; there the parts only cast, drawn with no output.
+  const bakeScene = new THREE.Scene();
+  const bakeLight = shadowLight(1, STUDIO.groundShadowMapSize, STUDIO.groundShadowRadius, 8);
+  bakeScene.add(bakeLight, bakeLight.target);
+  const bakeCamera = new THREE.OrthographicCamera();
+  const bakeShadow = new THREE.ShadowMaterial({
+    color: 0xffffff, opacity: 1 / STUDIO.groundSamples, blending: THREE.AdditiveBlending, depthTest: false, depthWrite: false,
+  });
+  const castOnly = new THREE.MeshBasicMaterial({ colorWrite: false, depthTest: false, depthWrite: false });
+  const heightMaterial = new THREE.ShaderMaterial({
+    uniforms: { groundY: { value: groundY } }, vertexShader: HEIGHT_VERTEX, fragmentShader: HEIGHT_FRAGMENT, side: THREE.DoubleSide,
+  });
+  let bakedPose = null;
 
   const camera = new THREE.PerspectiveCamera(STUDIO.fovDeg, width / height, 0.01, 100);
   const composerTarget = new THREE.WebGLRenderTarget(width, height, { type: THREE.HalfFloatType, samples: STUDIO.msaaSamples });
@@ -216,8 +373,19 @@ async function boot() {
   composer.addPass(new OutputPass());
 
   const maskTarget = new THREE.WebGLRenderTarget(width, height);
-  const maskSubject = new THREE.MeshBasicMaterial({ color: MASK_SUBJECT });
-  const maskOther = new THREE.MeshBasicMaterial({ color: MASK_OTHER });
+  const zones = { groundY: { value: groundY }, band: { value: 0 }, overhang: { value: 0 } };
+  const maskPart = (level) => new THREE.ShaderMaterial({
+    uniforms: { groundY: zones.groundY, band: zones.band, level: { value: level } },
+    vertexShader: HEIGHT_VERTEX,
+    fragmentShader: MASK_PART_FRAGMENT,
+  });
+  const maskSubject = maskPart(MASK_SUBJECT);
+  const maskOther = maskPart(MASK_OTHER);
+  const maskFloor = new THREE.ShaderMaterial({
+    uniforms: { heights: { value: heights.texture }, overhang: zones.overhang },
+    vertexShader: UV_VERTEX,
+    fragmentShader: MASK_FLOOR_FRAGMENT,
+  });
   const copy = document.createElement("canvas");
   copy.width = width;
   copy.height = height;
@@ -241,7 +409,8 @@ async function boot() {
     root.updateMatrixWorld(true);
   }
 
-  // Points of the subject and of their shadow footprint on the ground, so the frame holds both.
+  // Points of the subject and of their key-light projection on the floor, so the frame holds the
+  // subject and the floor its shadow falls on.
   function framingPoints(meshes) {
     const points = vertexSample(meshes);
     const shadows = [];
@@ -252,68 +421,133 @@ async function boot() {
     return points.concat(shadows);
   }
 
-  function placeLights(box) {
-    const centre = box.getCenter(new THREE.Vector3());
-    const radius = box.getSize(new THREE.Vector3()).length() / 2;
-    const height = radius * 4;
-    key.light.position.copy(centre).addScaledVector(key.from, height);
-    key.light.target.position.copy(centre);
-    const above = new THREE.Vector3(centre.x, groundY, centre.z);
-    contact.light.position.copy(above).addScaledVector(contact.from, height);
-    contact.light.target.position.copy(above);
-    for (const { light } of [key, contact]) {
-      const cam = light.shadow.camera;
-      cam.left = -radius * 1.3; cam.right = radius * 1.3; cam.top = radius * 1.3; cam.bottom = -radius * 1.3;
-      cam.near = radius * 0.5; cam.far = radius * 8;
-      light.shadow.bias = -0.0004;
-      light.shadow.normalBias = radius * 0.004;
-      light.shadow.needsUpdate = true;
-    }
-    // The contact map only sees the slab of geometry just above the ground.
-    contact.light.shadow.camera.near = height - radius * STUDIO.contactHeight;
-    contact.light.shadow.camera.far = height + radius * 0.05;
-    for (const { light } of [key, contact]) light.shadow.camera.updateProjectionMatrix();
-    fill.position.copy(centre).addScaledVector(new THREE.Vector3(...STUDIO.fillFrom).normalize(), radius * 4);
-    fill.target.position.copy(centre);
-    ground.scale.set(radius * 40, radius * 40, 1);
-    ground.position.x = centre.x;
-    ground.position.z = centre.z;
-    return radius;
-  }
-
-  function renderMask(subject) {
+  // Runs `body` with each part drawn by partMaterial(pn) and the floor by floorMaterial (hidden
+  // when null), then restores the beauty materials.
+  function withMaterials(partMaterial, floorMaterial, body) {
     const saved = new Map();
     for (const [pn, part] of parts) {
       for (const mesh of part.meshes) {
         saved.set(mesh, mesh.material);
-        mesh.material = subject.has(pn) ? maskSubject : maskOther;
+        mesh.material = partMaterial(pn);
       }
     }
+    ground.material = floorMaterial ?? floorShadow;
+    ground.visible = floorMaterial !== null;
+    try {
+      return body();
+    } finally {
+      for (const [mesh, material] of saved) mesh.material = material;
+      ground.material = floorShadow;
+      ground.visible = true;
+    }
+  }
+
+  // Orthographic camera square over the floor, from above (uv-aligned) or from below (mirrored in x).
+  function aimFloorCamera(floor, half, fromBelow) {
+    bakeCamera.left = -half; bakeCamera.right = half; bakeCamera.top = half; bakeCamera.bottom = -half;
+    bakeCamera.near = half * 0.5; bakeCamera.far = half * 4;
+    bakeCamera.position.copy(floor);
+    bakeCamera.position.y += fromBelow ? -half : half;
+    bakeCamera.up.set(0, 0, -1);
+    bakeCamera.lookAt(floor);
+    bakeCamera.updateProjectionMatrix();
+  }
+
+  // Bakes, for the current pose, the lowest part surface above each floor texel, the contact term
+  // from it, and the softbox occlusion (the mean shadow of the bake light over the cone). The
+  // softbox samples PCF shadows: VSM's variance bound lightens the floor right at a contact.
+  function bakeFloor(centre, radius) {
+    const half = radius * STUDIO.groundExtent;
+    const floor = new THREE.Vector3(centre.x, groundY, centre.z);
+    const cone = THREE.MathUtils.degToRad(STUDIO.groundConeDeg);
+    const beautyShadowType = renderer.shadowMap.type;
+    renderer.shadowMap.type = THREE.PCFShadowMap;
+    bakeScene.add(root, ground);
+    renderer.setClearColor(0x000000, 0);
+    try {
+      aimFloorCamera(floor, half, true);
+      renderer.setRenderTarget(heights);
+      withMaterials(() => heightMaterial, null, () => renderer.render(bakeScene, bakeCamera));
+      const blur = contactBlur.material.uniforms;
+      blur.contactHeight.value = radius * STUDIO.contactHeight;
+      for (const [source, weigh, dx, dy, target] of [[heights, true, 1, 0, contactPass], [contactPass, false, 0, 1, contact]]) {
+        blur.source.value = source.texture;
+        blur.weigh.value = weigh;
+        blur.texel.value.set(dx / STUDIO.contactMapSize, dy / STUDIO.contactMapSize);
+        renderer.setRenderTarget(target);
+        contactBlur.render(renderer);
+      }
+      aimFloorCamera(floor, half, false);
+      renderer.setRenderTarget(occlusion);
+      renderer.clear();
+      renderer.autoClear = false;
+      ground.receiveShadow = true;
+      withMaterials(() => castOnly, bakeShadow, () => {
+        for (let i = 0; i < STUDIO.groundSamples; i += 1) {
+          aimShadowLight(bakeLight, centre, coneDirection(i, STUDIO.groundSamples, cone), radius);
+          renderer.render(bakeScene, bakeCamera);
+        }
+      });
+    } finally {
+      ground.receiveShadow = false;
+      renderer.autoClear = true;
+      renderer.setRenderTarget(null);
+      renderer.shadowMap.type = beautyShadowType;
+      world.add(root, ground);
+    }
+  }
+
+  // Places the key, the fill, the floor square, and the grader zones around the scene's bounding
+  // sphere, and rebakes the floor when the pose changed. Returns the radius.
+  function stage(box, pose) {
+    const centre = box.getCenter(new THREE.Vector3());
+    const radius = box.getSize(new THREE.Vector3()).length() / 2;
+    aimShadowLight(key, centre, keyDir, radius);
+    fill.position.copy(centre).addScaledVector(new THREE.Vector3(...STUDIO.fillFrom).normalize(), radius * 4);
+    fill.target.position.copy(centre);
+    const side = 2 * radius * STUDIO.groundExtent;
+    ground.scale.set(side, side, 1);
+    ground.position.x = centre.x;
+    ground.position.z = centre.z;
+    ground.updateMatrixWorld();
+    zones.band.value = radius * STUDIO.contactBand;
+    zones.overhang.value = radius * STUDIO.overhangHeight;
+    if (bakedPose !== pose) {
+      bakeFloor(centre, radius);
+      bakedPose = pose;
+    }
+    return radius;
+  }
+
+  // Class mask (0 empty, 1 other part, 2 subject) and floor zones (1 grounded rim on a part,
+  // 2 overhung floor, else 0), both one byte per pixel in top-down rows.
+  function renderMask(subject) {
+    const rgba = new Uint8Array(width * height * 4);
     world.background = null;
-    ground.visible = false;
     const toneMapping = renderer.toneMapping;
     renderer.toneMapping = THREE.NoToneMapping;
-    renderer.setRenderTarget(maskTarget);
-    renderer.setClearColor(0x000000, 1);
-    renderer.clear();
-    renderer.render(world, camera);
-    const rgba = new Uint8Array(width * height * 4);
-    renderer.readRenderTargetPixels(maskTarget, 0, 0, width, height, rgba);
+    withMaterials((pn) => (subject.has(pn) ? maskSubject : maskOther), maskFloor, () => {
+      renderer.setRenderTarget(maskTarget);
+      renderer.setClearColor(0x000000, 1);
+      renderer.clear();
+      renderer.render(world, camera);
+      renderer.readRenderTargetPixels(maskTarget, 0, 0, width, height, rgba);
+    });
     renderer.setRenderTarget(null);
     renderer.toneMapping = toneMapping;
-    ground.visible = true;
     world.background = backdrop;
-    for (const [mesh, material] of saved) mesh.material = material;
-    // Flip to top-down rows and reduce to one class byte: 0 empty, 1 other part, 2 subject.
     const mask = new Uint8Array(width * height);
+    const floor = new Uint8Array(width * height);
     for (let y = 0; y < height; y += 1) {
       const src = (height - 1 - y) * width * 4, dst = y * width;
       for (let x = 0; x < width; x += 1) {
-        const r = rgba[src + x * 4];
-        mask[dst + x] = r > 200 ? 2 : r > 60 ? 1 : 0;
+        const [r, g, b] = rgba.subarray(src + x * 4, src + x * 4 + 3);
+        const cls = r > 200 ? 2 : r > 60 ? 1 : 0;
+        mask[dst + x] = cls;
+        floor[dst + x] = cls ? (g > 127 ? 1 : 0) : b > 127 ? 2 : 0;
       }
     }
-    return mask;
+    return { mask, floor };
   }
 
   async function capture(name) {
@@ -327,7 +561,7 @@ async function boot() {
       return parts.get(pn).meshes;
     });
     const sceneBox = new THREE.Box3().setFromObject(root);
-    const radius = placeLights(sceneBox);
+    const radius = stage(sceneBox, Boolean(view.explode));
     const fit = fitCamera(camera, framingPoints(subjectMeshes), view.direction);
     const subjectRadius = new THREE.Box3().setFromPoints(vertexSample(subjectMeshes)).getSize(new THREE.Vector3()).length() / 2;
     const aoRadius = subjectRadius * STUDIO.aoRadius;
@@ -337,7 +571,7 @@ async function boot() {
     copyCtx.drawImage(renderer.domElement, 0, 0);
     const pixels = copyCtx.getImageData(0, 0, width, height).data;
     const png = copy.toDataURL("image/png");
-    const mask = renderMask(subject);
+    const { mask, floor } = renderMask(subject);
     const applied = {};
     for (const [pn, part] of parts) applied[pn] = readBack(part.material);
     return {
@@ -347,6 +581,7 @@ async function boot() {
       png,
       rgba: toBase64(new Uint8Array(pixels.buffer)),
       mask: toBase64(mask),
+      floor: toBase64(floor),
       camera: {
         frame: "glb",
         position: camera.position.toArray(),
@@ -380,6 +615,7 @@ async function boot() {
         environment: "RoomEnvironment",
         ambientOcclusion: "GTAOPass",
         shadowMap: "VSMShadowMap",
+        floorShadow: "baked softbox occlusion",
         backdrop: `#${backdrop.getHexString()}`,
       },
     },
