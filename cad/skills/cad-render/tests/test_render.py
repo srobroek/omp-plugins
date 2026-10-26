@@ -19,6 +19,7 @@ from pathlib import Path
 
 SKILL = Path(__file__).resolve().parent.parent
 RENDER_PY = SKILL / "scripts" / "render.py"
+MATERIALS_PY = SKILL / "scripts" / "materials.py"
 TEMPLATE_HW = SKILL.parent / "cad-record" / "assets" / "project-template" / "hw"
 
 
@@ -32,6 +33,7 @@ def load(name: str, path: Path):
 
 
 render = load("cad_render", RENDER_PY)
+materials = load("cad_render_materials", MATERIALS_PY)
 
 BACKDROP = (218, 219, 220)
 PRODUCT = (60, 64, 70)
@@ -153,7 +155,7 @@ class QualityHeuristics(unittest.TestCase):
 
 
 class Materials(unittest.TestCase):
-    table = render.MaterialTable.load()
+    table = materials.MaterialTable.load()
 
     def rule(self, material: str, finish: str = "") -> str:
         return self.table.resolve(material, finish).id
@@ -180,16 +182,16 @@ class Materials(unittest.TestCase):
 
     def test_every_rule_uses_known_pbr_keys(self) -> None:
         for rule in [*self.table.rules, self.table.default]:
-            self.assertLessEqual(set(rule.pbr), set(render.PBR_KEYS), rule.id)
+            self.assertLessEqual(set(rule.pbr), set(materials.PBR_KEYS), rule.id)
 
-    def test_a_bad_table_is_an_infra_error(self) -> None:
+    def test_a_bad_table_is_a_materials_error(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "m.json"
             path.write_text(json.dumps({"rules": [{"id": "x", "label": "x", "material": "x",
                                                    "pbr": {"color": "#ffffff", "glow": 1}}],
                                         "default": {"id": "d", "label": "d", "pbr": {"color": "#000000"}}}))
-            with self.assertRaises(render.InfraError):
-                render.MaterialTable.load(path)
+            with self.assertRaises(materials.MaterialsError):
+                materials.MaterialTable.load(path)
 
 
 IDENTITY = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]]
