@@ -135,6 +135,7 @@ def validate_project(project_dir: Path) -> list[dict[str, str]]:
             findings.append(finding(str(parts_dir), "no part records found"))
 
     bom = read_csv(hw / "bom.csv", CSV_COLUMNS["bom.csv"], findings)
+    bom_levels: list[int | None] = []
     for index, row in enumerate(bom, start=2):
         row_path = f"{hw / 'bom.csv'}:{index}"
         normalized: dict[str, Any] = dict(row)
@@ -143,19 +144,34 @@ def validate_project(project_dir: Path) -> list[dict[str, str]]:
                 normalized[number] = int(row[number])
             except (TypeError, ValueError):
                 findings.append(finding(row_path, f"{number} must be an integer"))
-        for number in ("mass",):
-            if row.get(number, "") == "":
-                normalized[number] = None
-            else:
-                try:
-                    normalized[number] = float(row[number])
-                except (TypeError, ValueError):
-                    findings.append(finding(row_path, f"{number} must be a positive number or blank"))
-        normalized["supplier"] = row.get("supplier") or None
+                if number == "level":
+                    normalized[number] = None
+        bom_levels.append(normalized.get("level"))
+        if row.get("mass", "") == "":
+            normalized["mass"] = None
+        else:
+            try:
+                normalized["mass"] = float(row["mass"])
+            except (TypeError, ValueError):
+                findings.append(finding(row_path, "mass must be a positive number or blank"))
+        for field in ("rev", "title", "material", "process", "make_buy", "supplier"):
+            normalized[field] = row.get(field) or None
         validate_document(normalized, "bom-row.schema.json", row_path, findings)
+
+    for position, row in enumerate(bom):
+        index = position + 2
+        row_path = f"{hw / 'bom.csv'}:{index}"
+        level = bom_levels[position]
+        has_children = level == 0 or (
+            level is not None
+            and position + 1 < len(bom_levels)
+            and bom_levels[position + 1] is not None
+            and bom_levels[position + 1] > level
+        )
         pn = row.get("PN", "")
         if pn not in part_records:
-            findings.append(finding(row_path, f"BOM PN {pn!r} has no matching parts/<PN>/part.yaml"))
+            if not has_children:
+                findings.append(finding(row_path, f"BOM PN {pn!r} has no matching parts/<PN>/part.yaml and is not an assembly"))
             continue
         part, part_path = part_records[pn]
         for field, part_field in (("rev", "rev"), ("title", "title"), ("material", "material"),
@@ -172,15 +188,15 @@ def validate_project(project_dir: Path) -> list[dict[str, str]]:
         if mass != part.get("mass_target"):
             findings.append(finding(row_path, f"mass {mass!r} does not match {part_path} mass_target ({part.get('mass_target')!r})"))
 
-    levels: list[int] = []
-    for index, row in enumerate(bom, start=2):
-        try:
-            level = int(row["level"])
-        except (KeyError, TypeError, ValueError):
+    previous_level: int | None = None
+    for index, level in enumerate(bom_levels, start=2):
+        if level is None:
             continue
-        if (not levels and level != 1) or (levels and level > levels[-1] + 1):
-            findings.append(finding(f"{hw / 'bom.csv'}:{index}", "level must start at 1 and cannot skip a parent depth"))
-        levels.append(level)
+        if (previous_level is None and level not in (0, 1)) or (
+            previous_level is not None and level > previous_level + 1
+        ):
+            findings.append(finding(f"{hw / 'bom.csv'}:{index}", "level must start at 0 or 1 and cannot skip a parent depth"))
+        previous_level = level
 
     assembly = documents.get("assembly.yaml")
     if isinstance(assembly, dict):
@@ -228,11 +244,34 @@ def validate_project(project_dir: Path) -> list[dict[str, str]]:
         product = documents.get("product.yaml")
         for path in manifests:
             manifest = load_json(path, findings)
-            if validate_document(manifest, "release-manifest.schema.json", str(path), findings):
-                if isinstance(product, dict) and isinstance(manifest, dict) and manifest.get("product_id") != product.get("id"):
-                    findings.append(finding(str(path), "manifest product_id does not match product.yaml id"))
-                if not (hw / "verification.csv").is_file():
-                    findings.append(finding(str(path), "release requires a verification.csv"))
+            valid_manifest = validate_document(manifest, "release-manifest.schema.json", str(path), findings)
+            if not valid_manifest or not isinstance(manifest, dict):
+                continue
+            if isinstance(product, dict) and manifest.get("product_id") != product.get("id"):
+                findings.append(finding(str(path), "manifest product_id does not match product.yaml id"))
+            if path.parent.name != manifest.get("rev"):
+                findings.append(finding(str(path), "release directory name does not match manifest rev"))
+            project_root = hw.parent if hw == project_dir else project_dir
+            root = project_root.resolve()
+            for file_name in manifest.get("files", []):
+                candidate = root / file_name
+                try:
+                    candidate.resolve().relative_to(root)
+                    exists = candidate.is_file()
+                except (OSError, ValueError):
+                    exists = False
+                if not exists:
+                    findings.append(finding(str(path), f"release file does not exist within project: {file_name}"))
+            verification_path = hw / "verification.csv"
+            if not verification_path.is_file():
+                findings.append(finding(str(path), "release requires a verification.csv"))
+            else:
+                for index, row in enumerate(verification, start=2):
+                    if row.get("result") not in {"pass", "waived"}:
+                        findings.append(finding(f"{verification_path}:{index}", "release verification result must be pass or waived"))
+            for pn, (part, part_path) in part_records.items():
+                if isinstance(part.get("rev"), str) and part["rev"].startswith("X"):
+                    findings.append(finding(part_path, f"release cannot include prototype revision {part['rev']} for {pn}"))
     return findings
 
 

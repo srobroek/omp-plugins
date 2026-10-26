@@ -25,7 +25,7 @@
         "required": ["id", "type", "parent", "child", "axis", "origin", "min", "max", "nominal"],
         "properties": {
           "id": {"type": "string", "pattern": "^J-[0-9]{3}$"},
-          "type": {"type": "string", "enum": ["revolute", "prismatic", "cylindrical", "ball", "fixed"]},
+          "type": {"type": "string", "enum": ["revolute", "prismatic", "fixed"]},
           "parent": {"type": "string", "pattern": "^[A-Z]{2,5}-[0-9]{4}$"},
           "child": {"type": "string", "pattern": "^[A-Z]{2,5}-[0-9]{4}$"},
           "axis": {"$ref": "#/$defs/vector"},

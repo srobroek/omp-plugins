@@ -6,14 +6,14 @@
   "additionalProperties": false,
   "required": ["level", "PN", "rev", "qty", "title", "material", "process", "make_buy", "supplier", "mass"],
   "properties": {
-    "level": {"type": "integer", "minimum": 1},
+    "level": {"type": "integer", "minimum": 0},
     "PN": {"type": "string", "pattern": "^[A-Z]{2,5}-[0-9]{4}$"},
-    "rev": {"type": "string", "pattern": "^(X[1-9][0-9]*|[A-HJ-NPRTUVWY])$"},
+    "rev": {"type": ["string", "null"], "pattern": "^(X[1-9][0-9]*|[A-HJ-NPRTUVWY])?$"},
     "qty": {"type": "integer", "minimum": 1},
-    "title": {"type": "string", "minLength": 1},
-    "material": {"type": "string", "minLength": 1},
-    "process": {"type": "string", "enum": ["fdm", "cnc", "purchased"]},
-    "make_buy": {"type": "string", "enum": ["make", "buy"]},
+    "title": {"type": ["string", "null"]},
+    "material": {"type": ["string", "null"]},
+    "process": {"type": ["string", "null"], "enum": ["fdm", "cnc", "purchased", null]},
+    "make_buy": {"type": ["string", "null"], "enum": ["make", "buy", null]},
     "supplier": {"type": ["string", "null"]},
     "mass": {"type": ["number", "null"], "exclusiveMinimum": 0}
   }
