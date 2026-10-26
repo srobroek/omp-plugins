@@ -198,6 +198,42 @@ mesh_size: 5
             self.assertTrue((root / "results.json").is_file())
             self.assertEqual(report["worst_case_pose"], {"step": str(step), "pose": {"J-001": 17, "J-002": -42}})
 
+    @unittest.skipUnless(FREECADCMD.is_file(), "FreeCAD 1.1.4 freecadcmd is not installed")
+    def test_identical_case_repeats_mesh_and_stress_results(self) -> None:
+        import math
+        with tempfile.TemporaryDirectory(prefix="cad-fea-repeat-") as directory:
+            root = Path(directory)
+            step = root / "beam.step"
+            job = root / "make_beam.py"
+            job.write_text(
+                f'''import FreeCAD as App, Part, Import
+doc=App.newDocument("Beam")
+beam=doc.addObject("Part::Feature", "Beam")
+beam.Shape=Part.makeBox(100, 10, 5)
+doc.recompute()
+Import.export([beam], {str(step)!r})
+App.closeDocument(doc.Name)
+''', encoding="utf-8")
+            generated = subprocess.run([str(FREECADCMD), str(job)], cwd=root, capture_output=True, text=True, timeout=120)
+            self.assertIn(generated.returncode, (0, 139), generated.stdout + generated.stderr)
+            case = root / "case.yaml"
+            case.write_text(
+                f"""step: {step}
+material: {{name: Aluminum, E: 69000, nu: 0.33, density: 2700, yield: 276}}
+fixed_faces: {{plane: {{axis: x, value: 0, tolerance: 0.000001}}}}
+loads: [{{selector: {{plane: {{axis: x, value: 100, tolerance: 0.000001}}}}, force: [0, 0, -50]}}]
+mesh_size: 5
+""", encoding="utf-8")
+            reports = []
+            for _ in range(2):
+                run = subprocess.run([sys.executable, str(SCRIPT), str(case)], capture_output=True, text=True, timeout=600)
+                self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+                reports.append(json.loads(run.stdout))
+            self.assertEqual(reports[0]["node_count"], reports[1]["node_count"])
+            self.assertEqual(reports[0]["element_count"], reports[1]["element_count"])
+            self.assertEqual(reports[0]["mesh_input_hashes"]["geometry_sha256"], reports[1]["mesh_input_hashes"]["geometry_sha256"])
+            self.assertEqual(reports[0]["mesh_input_hashes"]["geo_sha256"], reports[1]["mesh_input_hashes"]["geo_sha256"])
+            self.assertLessEqual(abs(reports[0]["safety_factor_yield"] / reports[1]["safety_factor_yield"] - 1), 0.0025)
     def test_freecad_timeout_maps_to_no_result(self) -> None:
         from unittest.mock import patch
         from fea_static import run_job

@@ -182,10 +182,11 @@ def run_job(case_path: Path, case: dict[str, Any], timeout: float = 600.0) -> tu
         "loads": case["loads"],
         "mesh_size": case["mesh_size"],
         "output": str(marker_path),
+        "run_directory": str(run_dir),
     }
     # JSON is data, not Python source: the generated job loads it as a literal.
     job_json = json.dumps(job)
-    script = f'''import json, os, sys, time, math
+    script = f'''import json, os, re, shutil, sys, time, math
 import FreeCAD as App, Part, Import, ObjectsFem
 from femmesh.gmshtools import GmshTools
 from femtools.ccxtools import CcxTools
@@ -228,7 +229,7 @@ def run():
             geom.Placement=source.Placement
         a=ObjectsFem.makeAnalysis(doc, "Analysis")
         solver=ObjectsFem.makeSolverCalculiXCcxTools(doc, "CalculiXCcxTools")
-        solver.AnalysisType="static"; solver.GeometricalNonlinearity="linear"; solver.WorkingDir=os.path.dirname(JOB["output"]); solver.SplitInputWriter=False; a.addObject(solver)
+        solver.AnalysisType="static"; solver.GeometricalNonlinearity="linear"; solver.WorkingDir=os.path.dirname(JOB["output"]); solver.SplitInputWriter=False; solver.MatrixSolverType="spooles"; a.addObject(solver)
         matobj=ObjectsFem.makeMaterialSolid(doc, "Material"); mat=matobj.Material
         mat["Name"]=JOB["material"].get("name", "Case material")
         mat["YoungsModulus"]="%s MPa" % JOB["material"]["E"]
@@ -242,8 +243,27 @@ def run():
             force=ObjectsFem.makeConstraintForce(doc, "FaceForce%d" % n); force.References=selected_faces(geom, spec["selector"])
             force.Force="%.12g N" % math.sqrt(fx*fx+fy*fy+fz*fz)
             force.Direction=(direction,["Edge1"]); force.Reversed=False; a.addObject(force)
-        mesh=ObjectsFem.makeMeshGmsh(doc, "GmshMesh"); a.addObject(mesh); mesh.Shape=geom; mesh.ElementDimension="3D"; mesh.ElementOrder="2nd"; mesh.HighOrderOptimize="Elastic+Optimization"; mesh.CharacteristicLengthMax="%s mm" % JOB["mesh_size"]; mesh.CharacteristicLengthMin="%s mm" % (JOB["mesh_size"]*0.5); doc.recompute()
-        gm=GmshTools(mesh); gm.update_mesh_data(); gm.get_tmp_file_paths(solver.WorkingDir, True); gm.create_mesh(); doc.recompute()
+        mesh=ObjectsFem.makeMeshGmsh(doc, "GmshMesh"); a.addObject(mesh); mesh.Shape=geom; mesh.ElementDimension="3D"; mesh.ElementOrder="2nd"; mesh.HighOrderOptimize="Elastic"; mesh.CharacteristicLengthMax="%s mm" % JOB["mesh_size"]; mesh.CharacteristicLengthMin="%s mm" % (JOB["mesh_size"]*0.5); mesh.OptimizeStd=False; mesh.OptimizeNetgen=False; doc.recompute()
+        gm=GmshTools(mesh); gm.prepare()
+        gm.write_part_file()
+        gm.write_geo()
+        geo_path=gm.temp_file_geo
+        brep_path=gm.temp_file_geometry
+        with open(geo_path, "r", encoding="utf-8") as geo_file: source_geo=geo_file.read()
+        source_geo=re.sub(r"(?m)^//.*shape2mesh[.]geo$", "// Gmsh input file: shape2mesh.geo", source_geo)
+        source_geo=re.sub(r"(?m)^General[.]NumThreads[ \t]*=[ \t]*[^;]+;", "General.NumThreads = 1;", source_geo)
+        source_geo=re.sub(r"(?m)^Mesh[.]Optimize[ \t]*=[ \t]*[^;]+;", "Mesh.Optimize = 0;", source_geo)
+        source_geo=re.sub(r"(?m)^Mesh[.]OptimizeNetgen[ \t]*=[ \t]*[^;]+;", "Mesh.OptimizeNetgen = 0;", source_geo)
+        source_geo=re.sub(r"(?m)^Mesh[.]HighOrderOptimize[ \t]*=[ \t]*[^;]+;", "Mesh.HighOrderOptimize = 2;", source_geo)
+        source_geo=re.sub(r"(?m)^Mesh[.]RandomFactor3D[ \t]*=[ \t]*[^;]+;", "Mesh.RandomFactor3D = 0;", source_geo)
+        source_geo="Mesh.RandomSeed = 1;\\n" + source_geo
+        with open(geo_path, "w", encoding="utf-8") as geo_file: geo_file.write(source_geo)
+        mesh_inputs={{"geometry_sha256":__import__("hashlib").sha256(open(brep_path,"rb").read()).hexdigest(), "geo_sha256":__import__("hashlib").sha256(source_geo.encode("utf-8")).hexdigest()}}
+        shutil.copyfile(brep_path, os.path.join(JOB["run_directory"], "GmshGeometry.brep"))
+        shutil.copyfile(geo_path, os.path.join(JOB["run_directory"], "GmshInput.geo"))
+        gm.compute(); gm.process.waitForFinished(-1)
+        gm.update_properties()
+        doc.recompute()
         nodes=int(mesh.FemMesh.NodeCount); elements=len(mesh.FemMesh.Volumes)
         if nodes <= 0 or elements <= 0: raise RuntimeError("Gmsh produced an empty mesh")
         solver_started=time.perf_counter(); fea=CcxTools(solver); fea.reset_mesh_purge_results_checked(); fea.update_objects(); fea.setup_working_dir(solver.WorkingDir); fea.setup_ccx()
@@ -253,14 +273,21 @@ def run():
         results=next((obj for obj in a.Group if hasattr(obj, "vonMises") and hasattr(obj, "DisplacementLengths")), None)
         if results is None: raise RuntimeError("CalculiX did not produce a result object")
         stress=[float(v) for v in results.vonMises]; displacement=[float(v) for v in results.DisplacementLengths]
+        if not stress or not displacement: raise RuntimeError("solver returned no stress or displacement results")
         max_stress=max(stress); max_displacement=max(displacement); y=float(JOB["material"]["yield"])
         safety_factor=y/max_stress if max_stress else None
-        required=JOB.get("required_safety_factor")
-        warnings=[]
-        versions={{"freecad":".".join(App.Version()[:3])}}
-        result={{"run_id":JOB["run_id"], "part":JOB.get("part"), "solid_index":JOB.get("solid_index"), "max_von_mises_mpa":max_stress, "max_displacement_mm":max_displacement, "safety_factor_yield":safety_factor, "node_count":nodes, "element_count":elements, "solve_time_seconds":solve_seconds, "solver_versions":versions, "warnings":warnings, "worst_case_pose":{{"step":JOB["step"], **({{"pose":JOB["pose"]}} if JOB.get("pose") is not None else {{}})}}}}
-        result["required_safety_factor"]=required
-        result["status"]="fail" if required is not None and safety_factor is not None and safety_factor < required else "pass"
+        solver_started=time.perf_counter(); fea=CcxTools(solver); fea.reset_mesh_purge_results_checked(); fea.update_objects(); fea.setup_working_dir(solver.WorkingDir); fea.setup_ccx()
+        problems=fea.check_prerequisites()
+        if problems: raise RuntimeError("CalculiX prerequisites failed: %r" % problems)
+        fea.write_inp_file(); fea.ccx_run(); fea.load_results(); solve_seconds=time.perf_counter()-solver_started
+        result={{"run_id":JOB["run_id"], "part":JOB.get("part"), "solid_index":JOB.get("solid_index"), "max_von_mises_mpa":max_stress, "max_displacement_mm":max_displacement, "safety_factor_yield":safety_factor, "node_count":nodes, "element_count":elements, "solve_time_seconds":solve_seconds}}
+        result["solver_versions"]={{"freecad":".".join(App.Version()[:3])}}
+        result["warnings"]=[]
+        result["worst_case_pose"]={{"step":JOB["step"], **({{"pose":JOB["pose"]}} if JOB.get("pose") is not None else {{}})}}
+        result["required_safety_factor"]=JOB.get("required_safety_factor")
+        result["mesh_input_hashes"]=mesh_inputs
+        result["mesh_input_files"]=["GmshGeometry.brep", "GmshInput.geo"]
+        result["status"]="fail" if result["required_safety_factor"] is not None and safety_factor is not None and safety_factor < result["required_safety_factor"] else "pass"
         with open(JOB["output"], "w", encoding="utf-8") as f: json.dump(result,f,indent=2); f.write("\\n")
     finally:
         App.closeDocument(doc.Name)
