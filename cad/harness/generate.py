@@ -89,11 +89,10 @@ def render(agent: str, harness: str) -> str:
                 {"capability": "shell", "match": ["*"], "effect": "deny"},
                 {"capability": "subagent", "match": ["*"], "effect": "deny"},
             ]},
-            "resources": [f"skill://../../../skills/{skill}/SKILL.md"],
+            "resources": [f"skill://cad/skills/{skill}/SKILL.md"],
         }
         return json.dumps(value, indent=2, ensure_ascii=False) + "\n"
     if harness == "opencode":
-        # Format: https://opencode.ai/docs/agents/
         return (
             "---\n"
             f"description: {fields['description']}\n"

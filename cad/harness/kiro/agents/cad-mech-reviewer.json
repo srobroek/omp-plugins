@@ -38,6 +38,6 @@
     ]
   },
   "resources": [
-    "skill://../../../skills/cad-review-mech/SKILL.md"
+    "skill://cad/skills/cad-review-mech/SKILL.md"
   ]
 }

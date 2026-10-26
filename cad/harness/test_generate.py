@@ -60,7 +60,7 @@ class HarnessGeneratorTests(unittest.TestCase):
                 self.assertEqual(set(kiro), {"name", "description", "prompt", "tools", "permissions", "resources"})
                 self.assertEqual(kiro["tools"], ["read"])
                 skill = "cad-review-mech" if name == "cad-mech-reviewer" else "cad-review-dfm"
-                self.assertEqual(kiro["resources"], [f"skill://../../../skills/{skill}/SKILL.md"])
+                self.assertEqual(kiro["resources"], [f"skill://cad/skills/{skill}/SKILL.md"])
                 rules = kiro["permissions"]["rules"]
                 self.assertIn({"capability": "fs_write", "match": ["**/*"], "effect": "deny"}, rules)
                 self.assertIn({"capability": "shell", "match": ["*"], "effect": "deny"}, rules)
