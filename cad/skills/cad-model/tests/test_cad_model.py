@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""cad-model tests: a two-part project built, checked, and diffed in both kernels.
+"""cad-model tests: a two-part project built, checked, and diffed in both kernels, plus check rules.
 
 Run: python3 -m unittest discover -s cad/skills/cad-model/tests -v
 Needs `uv`; the first run creates three uv environments (orchestrator, CadQuery, build123d) and
-their first OCP imports take minutes. Wall times are printed to stderr.
+their first OCP imports take minutes. Wall times are printed to stderr. The rule tests import
+cadmodel directly and need neither uv nor OCP.
 """
 
 from __future__ import annotations
@@ -19,11 +20,18 @@ import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 FIXTURES = HERE / "fixtures"
-CLI = HERE.parent / "scripts" / "cad_model.py"
+SCRIPTS = HERE.parent / "scripts"
+CLI = SCRIPTS / "cad_model.py"
 KERNELS = ("cadquery", "build123d")
+FINDING_KEYS = {"pn", "check", "type", "message", "where"}
+
+sys.path.insert(0, str(SCRIPTS))
+from cadmodel import build, check, diff, occ  # noqa: E402 - stdlib-only imports; OCP loads on first use
+
 AP242 = "AP242_MANAGED_MODEL_BASED_3D_ENGINEERING"
 
 ASSEMBLY = """joints:
@@ -172,7 +180,8 @@ class KernelChecks:
             self.assertEqual(manifest["parts"]["TST-0002"]["kernel"], self.kernel)
             self.assertIn(self.kernel, manifest["tools"][self.kernel])
             self.assertEqual(manifest["pose"]["values"], {"J-001": 90.0})
-            self.assertEqual(manifest["joint_pairs"], [["TST-0001", "TST-0002"]])
+            self.assertEqual(manifest["joint_pairs"], [{"pair": ["TST-0001", "TST-0002"], "joint": "J-001",
+                                                        "type": "revolute"}])
         sources = {json.loads((hw / "versions" / v / "manifest.json").read_text())["parts"]["TST-0002"]["source_sha256"]
                    for v in ("v1", "v2", "v3", "v4")}
         self.assertEqual(len(sources), 4, "each arm edit has its own source hash")
@@ -195,6 +204,7 @@ class KernelChecks:
         proc, result, _ = cli("run", str(self.runs["hw"]), "--label", "v9", "--kernel", other)
         self.assertEqual(proc.returncode, 1, proc.stderr[-2000:])
         self.assertEqual({(f["pn"], f["check"]) for f in result["findings"]}, {("TST-0001", "kernel"), ("TST-0002", "kernel")})
+        self.assertTrue(all(f.keys() == FINDING_KEYS for f in result["findings"]), result["findings"])
         self.assertFalse((self.runs["hw"] / "versions" / "v9").exists())
 
     def test_metrics_volumes_and_mass(self) -> None:
@@ -264,7 +274,8 @@ class KernelChecks:
     def test_diff_reports_the_arm_extension(self) -> None:
         proc, result, _ = self.runs["diff"]
         self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
-        self.assertEqual((result["added"], result["removed"], result["changed"]), ([], [], ["TST-0002"]))
+        self.assertEqual((result["added"], result["removed"], result["changed"], result["error"]),
+                         ([], [], ["TST-0002"], []))
         arm, base = result["parts"]["TST-0002"], result["parts"]["TST-0001"]
         self.assertAlmostEqual(arm["volume_delta_mm3"], 20 * 20 * 5, places=4)
         for got, want in zip(arm["bbox_delta_mm"]["size"], [20.0, 0.0, 0.0]):
@@ -287,6 +298,7 @@ class KernelChecks:
         found = {f["pn"]: f for f in result["findings"]}
         self.assertEqual(sorted(found), sorted(expected))
         for pn, text in expected.items():
+            self.assertEqual(found[pn].keys(), FINDING_KEYS)
             self.assertEqual(found[pn]["type"], "SafeEditError", found[pn])
             self.assertIn(text, found[pn]["message"])
             self.assertTrue(found[pn]["where"].startswith("model.py:"), found[pn])
@@ -317,6 +329,193 @@ class CrossKernelTests(unittest.TestCase):
         self.assertEqual(checks[0].keys(), checks[1].keys())
         self.assertEqual(checks[0]["checks"].keys(), checks[1]["checks"].keys())
         self.assertEqual(runs[KERNELS[0]]["v1"][1].keys(), runs[KERNELS[1]]["v1"][1].keys())
+
+
+@unittest.skipUnless(shutil.which("uv"), "uv is required for the kernel environments")
+class AttachedPartTests(unittest.TestCase):
+    """An --attach part 1 mm from its parent floats with no movable joint to excuse it (CadQuery only)."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.hw = two_part_project(Path(cls.tmp.name), "cadquery")
+        set_arm(cls.hw, "cadquery")
+        # The arm template at z0 -6: a plate z -6..-1 under the base block (z 0..20), a 1 mm gap.
+        set_model(cls.hw, "TST-0003", "cadquery", "arm.py", {**ARM, "z0": -6.0}, "Spacer plate", "PETG")
+        cls.built = cli("run", str(cls.hw), "--label", "v1", "--attach", "TST-0003=TST-0001")
+        cls.checked = cli("check", "v1", "--hw", str(cls.hw))
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls.tmp.cleanup()
+
+    def test_attached_part_floating_from_its_parent_fails_connection(self) -> None:
+        self.assertEqual(self.built[0].returncode, 0, self.built[0].stderr[-3000:])
+        manifest = json.loads((self.hw / "versions" / "v1" / "manifest.json").read_text(encoding="utf-8"))
+        self.assertIn({"pair": ["TST-0001", "TST-0003"], "joint": "attach:TST-0003", "type": "fixed"},
+                      manifest["joint_pairs"])
+        proc, result, _ = self.checked
+        self.assertEqual(proc.returncode, 1, proc.stderr[-2000:])
+        self.assertEqual(result["blocking_failures"], ["connection"])
+        rows = result["checks"]["connection"]["parts"]
+        spacer = rows["TST-0003"]
+        self.assertEqual((spacer["status"], spacer["nearest"], spacer["joint"], spacer["ok"]),
+                         ("floating", "TST-0001", None, False))
+        self.assertAlmostEqual(spacer["distance_mm"], 1.0, places=6)
+        self.assertEqual((rows["TST-0002"]["status"], rows["TST-0002"]["ok"]), ("touching", True))
+        attached = result["checks"]["connection"]["fixed_joints"]
+        self.assertEqual([(f["joint"], f["ok"]) for f in attached], [("attach:TST-0003", False)])
+        self.assertAlmostEqual(attached[0]["distance_mm"], 1.0, places=6)
+
+    def test_model_folder_without_a_pn_name_is_a_contract_finding(self) -> None:
+        stray = self.hw / "parts" / "spare_bracket"
+        stray.mkdir()
+        shutil.copy(self.hw / "parts" / "TST-0001" / "model.py", stray / "model.py")
+        try:
+            proc, result, _ = cli("run", str(self.hw), "--label", "v2", "--attach", "TST-0003=TST-0001")
+        finally:
+            shutil.rmtree(stray)
+        self.assertEqual(proc.returncode, 1, proc.stderr[-2000:])
+        self.assertEqual([(f["pn"], f["check"], f["type"], f["where"]) for f in result["findings"]],
+                         [("spare_bracket", "contract", "ContractError", None)])
+        self.assertEqual(result["findings"][0].keys(), FINDING_KEYS)
+        self.assertFalse((self.hw / "versions" / "v2").exists())
+
+
+BASE, ARM_PN, PIN = "TST-0001", "TST-0002", "TST-0003"
+
+
+def joints(*specs: tuple[str, str, str, str]) -> list[dict]:
+    """manifest.json `joint_pairs` entries from (joint id, type, parent, child)."""
+    return [{"pair": sorted([a, b]), "joint": jid, "type": kind} for jid, kind, a, b in specs]
+
+
+def gaps(pairs: dict[tuple[str, str], float | None]) -> dict:
+    """check's pair geometry from clearances; no shared volume, none measured where the gap is None."""
+    return {pair: {"clearance_mm": gap, "interference_mm3": None if gap is None else 0.0} for pair, gap in pairs.items()}
+
+
+class CheckRuleTests(unittest.TestCase):
+    """check's verdicts on given measurements; needs no OCP."""
+
+    def test_an_allowed_pair_whose_measurement_failed_still_fails(self) -> None:
+        geometry = gaps({(BASE, ARM_PN): None})
+        geometry[(BASE, ARM_PN)]["error"] = "Standard_Failure"
+        result = check.interference(geometry, None, set(), {(BASE, ARM_PN)})
+        self.assertEqual((result["status"], result["pairs"][0]["ok"]), ("fail", False))
+
+    def test_a_declared_fit_naming_an_unknown_part_fails(self) -> None:
+        result = check.interference(gaps({(BASE, ARM_PN): 0.0}), None, set(), {(BASE, "TST-0009")})
+        self.assertEqual((result["status"], result["unknown_allowed"]), ("fail", [[BASE, "TST-0009"]]))
+
+    def test_expected_solids_naming_an_unknown_part_fails(self) -> None:
+        result = check.solid_structure({}, {"TST-0009": 1}, None, None)
+        self.assertEqual((result["status"], result["unknown_parts"]), ("fail", ["TST-0009"]))
+
+    def test_a_float_across_a_movable_joint_is_its_clearance(self) -> None:
+        result = check.connection(gaps({(BASE, ARM_PN): 0.1}), [BASE, ARM_PN],
+                                  joints(("J-001", "revolute", BASE, ARM_PN)))
+        row = result["parts"][ARM_PN]
+        self.assertEqual((result["status"], row["status"], row["joint"]), ("pass", "floating", "J-001"))
+
+    def test_a_float_to_a_rigidly_attached_parent_fails(self) -> None:
+        result = check.connection(gaps({(BASE, ARM_PN): 0.0, (BASE, PIN): 1.0, (ARM_PN, PIN): 5.0}),
+                                  [BASE, ARM_PN, PIN],
+                                  joints(("J-001", "revolute", BASE, ARM_PN), (f"attach:{PIN}", "fixed", BASE, PIN)))
+        row = result["parts"][PIN]
+        self.assertEqual((result["status"], row["status"], row["joint"], row["ok"]), ("fail", "floating", None, False))
+
+    def test_a_pin_fixed_in_the_parent_carries_the_joint_clearance(self) -> None:
+        # The pin is pressed into the base; the arm turns on it with 0.1 mm clearance, 0.5 mm above the base.
+        result = check.connection(gaps({(BASE, ARM_PN): 0.5, (BASE, PIN): 0.0, (ARM_PN, PIN): 0.1}),
+                                  [BASE, ARM_PN, PIN],
+                                  joints(("J-001", "revolute", BASE, ARM_PN), ("J-002", "fixed", BASE, PIN)))
+        row = result["parts"][ARM_PN]
+        self.assertEqual((result["status"], row["nearest"], row["joint"]), ("pass", PIN, "J-001"))
+
+    def test_a_fixed_pin_with_clearance_in_its_parent_fails_though_it_floats_on_the_joint(self) -> None:
+        # The record fixes the pin to the base, but it sits 0.108 mm clear of the base and 0.0125 mm in the arm.
+        result = check.connection(gaps({(BASE, ARM_PN): 0.5, (BASE, PIN): 0.108, (ARM_PN, PIN): 0.0125}),
+                                  [BASE, ARM_PN, PIN],
+                                  joints(("J-001", "revolute", BASE, ARM_PN), ("J-002", "fixed", BASE, PIN)))
+        self.assertEqual((result["parts"][PIN]["joint"], result["parts"][PIN]["ok"]), ("J-001", True))
+        self.assertEqual([(f["joint"], f["ok"]) for f in result["fixed_joints"]], [("J-002", False)])
+        self.assertEqual(result["status"], "fail")
+
+
+class VersionLabelTests(unittest.TestCase):
+    def test_a_label_at_or_below_the_newest_version_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            hw = Path(tmp)
+            (hw / "versions" / "v3").mkdir(parents=True)
+            (hw / "versions" / "v3" / "manifest.json").write_text("{}", encoding="utf-8")
+            with self.assertRaisesRegex(build.UsageError, "pick v4"):
+                build.run(hw, "v2", "auto", [])
+
+
+class DiffRuleTests(unittest.TestCase):
+    def test_a_kernel_failure_is_an_error_not_a_change(self) -> None:
+        metrics = {"volume_mm3": 100.0, "bbox_mm": {"min": [0.0] * 3, "max": [1.0] * 3, "size": [1.0] * 3}, "solids": 1}
+        with mock.patch.object(occ, "occupied", side_effect=occ.GeometryError("occupied-volume partition failed")):
+            row = diff.compare_part(metrics, metrics, object(), object())
+        self.assertEqual((row["status"], row["a_only_mm3"]), ("error", None))
+        self.assertIn("partition failed", row["error"])
+
+
+FAKE_RUNNER = """# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
+import json, pathlib, sys, time
+part = json.load(sys.stdin)["parts"][0]
+{body}
+print(json.dumps({{"kernel": "fake", "tools": {{}}, "import_s": 0.0, "parts": {{}}}}))
+"""
+FAKE_BODIES = {
+    "waits_for_peer": "deadline = time.monotonic() + 30\n"
+                      "while not pathlib.Path(part['marker']).exists():\n"
+                      "    if time.monotonic() > deadline:\n"
+                      "        sys.exit(3)\n"
+                      "    time.sleep(0.05)",
+    "signals_peer": "pathlib.Path(part['marker']).touch()",
+    "fails": "sys.exit(2)",
+    "writes_late": "time.sleep(4)\npathlib.Path(part['step']).parent.mkdir(parents=True, exist_ok=True)\n"
+                   "pathlib.Path(part['step']).write_text('late')",
+}
+
+
+@unittest.skipUnless(shutil.which("uv"), "uv is required to start the runners")
+class RunnerLifecycleTests(unittest.TestCase):
+    """`run_kernels` with stand-in runners: they run at once, and a failure stops the others."""
+
+    def runners(self, root: Path, cadquery: str, build123d: str) -> dict[str, Path]:
+        paths = {}
+        for kernel, body in (("cadquery", cadquery), ("build123d", build123d)):
+            paths[kernel] = root / f"{body}.py"
+            paths[kernel].write_text(FAKE_RUNNER.format(body=FAKE_BODIES[body]), encoding="utf-8")
+        return paths
+
+    def test_each_runner_gets_its_request_without_waiting_for_the_other(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            marker = str(root / "build123d-started")
+            with mock.patch.dict(build.RUNNERS, self.runners(root, "waits_for_peer", "signals_peer")):
+                results = build.run_kernels({"cadquery": [{"pn": "TST-0001", "marker": marker}],
+                                             "build123d": [{"pn": "TST-0002", "marker": marker}]})
+        self.assertEqual(sorted(results), ["build123d", "cadquery"])
+
+    def test_a_failed_runner_stops_the_other_before_it_writes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            late = root / ".v1.partial" / "parts" / "TST-0002.step"
+            with mock.patch.dict(build.RUNNERS, self.runners(root, "fails", "writes_late")):
+                started = time.monotonic()
+                with self.assertRaisesRegex(build.UsageError, "cadquery runner exited 2"):
+                    build.run_kernels({"cadquery": [{"pn": "TST-0001"}],
+                                       "build123d": [{"pn": "TST-0002", "step": str(late)}]})
+                self.assertLess(time.monotonic() - started, 4.0)
+            time.sleep(6)
+            self.assertFalse(late.parent.exists(), "the stopped runner recreated the partial folder")
 
 
 @unittest.skipUnless(shutil.which("uv"), "uv is required for the trimesh environment")

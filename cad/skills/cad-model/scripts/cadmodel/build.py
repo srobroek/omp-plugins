@@ -3,18 +3,20 @@
 from __future__ import annotations
 
 import ast
+import contextlib
 import hashlib
 import json
 import os
 import platform
-import re
 import shutil
+import signal
 import subprocess
 import time
+from concurrent.futures import FIRST_EXCEPTION, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 
 from cadmodel import holes, mesh, occ
 from cadmodel.motion import load_pose
@@ -23,8 +25,6 @@ SCRIPTS = Path(__file__).resolve().parents[1]
 MATERIALS = SCRIPTS.parent / "assets" / "materials.yaml"
 KERNELS = ("cadquery", "build123d")
 RUNNERS = {kernel: SCRIPTS / f"run_{kernel}.py" for kernel in KERNELS}
-LABEL = re.compile(r"^v([1-9][0-9]*)$")
-PN = re.compile(r"^[A-Z]{2,5}-\d{4}$")
 ORCHESTRATOR_DISTS = ("cadquery-ocp-novtk", "trimesh", "numpy", "pyyaml")
 
 
@@ -46,8 +46,18 @@ class PartSource:
         return f"{self.pn} {self.title}"
 
 
+def is_pn(text: str) -> bool:
+    """A part number exactly: cad-motion's PN prefix and nothing after it."""
+    return load_pose().PN_PREFIX.fullmatch(text) is not None
+
+
+def finding(pn: str, check: str, message: str, kind: str = "ContractError", where: str | None = None) -> dict[str, Any]:
+    """One `run` failure finding, the shape references/outputs.md documents."""
+    return {"pn": pn, "check": check, "type": kind, "message": message, "where": where}
+
+
 def label_number(label: str) -> int:
-    match = LABEL.match(label)
+    match = load_pose().VERSION_LABEL.match(label)
     if not match:
         raise UsageError(f"version label must look like v1, v2, ...; got {label!r}")
     return int(match.group(1))
@@ -70,13 +80,16 @@ def declared_kernel(model: Path) -> str | None:
     return None
 
 
-def discover(hw: Path) -> list[PartSource]:
+def discover(hw: Path) -> tuple[list[PartSource], list[dict[str, Any]]]:
+    """Every hw/parts/<PN>/model.py, plus a contract finding per model folder not named by a PN."""
     import yaml
 
-    parts = []
+    parts, findings = [], []
     for model in sorted((hw / "parts").glob("*/model.py")):
         pn = model.parent.name
-        if not PN.match(pn):
+        if not is_pn(pn):
+            findings.append(finding(pn, "contract", f"hw/parts/{pn}/ holds a model.py but {pn!r} is not a part "
+                                                    "number like LMP-0001; name the folder by its PN"))
             continue
         try:
             record = yaml.safe_load((model.parent / "part.yaml").read_text(encoding="utf-8"))
@@ -88,9 +101,9 @@ def discover(hw: Path) -> list[PartSource]:
         parts.append(PartSource(pn, record["title"], record.get("material"),
                                 float(target) if isinstance(target, (int, float)) else None,
                                 model.resolve(), declared_kernel(model)))
-    if not parts:
+    if not parts and not findings:
         raise UsageError(f"no hw/parts/<PN>/model.py under {hw}")
-    return parts
+    return parts, findings
 
 
 def load_densities() -> dict[str, float]:
@@ -110,39 +123,74 @@ def select_kernels(parts: list[PartSource], requested: str) -> tuple[dict[str, l
     findings = []
     for part in parts:
         if part.kernel not in KERNELS:
-            findings.append({"pn": part.pn, "check": "contract",
-                             "message": f"KERNEL is {part.kernel!r}; declare KERNEL = \"cadquery\" or \"build123d\""})
+            findings.append(finding(part.pn, "contract",
+                                    f"KERNEL is {part.kernel!r}; declare KERNEL = \"cadquery\" or \"build123d\""))
         elif requested != "auto" and part.kernel != requested:
-            findings.append({"pn": part.pn, "check": "kernel",
-                             "message": f"declares KERNEL = {part.kernel!r} but --kernel {requested} was requested"})
+            findings.append(finding(part.pn, "kernel",
+                                    f"declares KERNEL = {part.kernel!r} but --kernel {requested} was requested"))
         else:
             groups.setdefault(part.kernel, []).append(part)
     return groups, findings
 
 
-def run_kernels(groups: dict[str, list[PartSource]], parts_dir: Path) -> dict[str, dict[str, Any]]:
-    """Start one runner subprocess per kernel (concurrently) and collect their JSON results."""
+def run_kernels(requests: Mapping[str, list[dict[str, str]]]) -> dict[str, dict[str, Any]]:
+    """Run every kernel's runner subprocess at once and collect their JSON results.
+
+    `requests` maps a kernel to its request parts, `{pn, name, model, step}` (protocol in runner.py).
+    Each runner is fed and drained by its own thread, so no runner waits for another to finish. When
+    one fails, every runner still running is killed with its process group (uv and the kernel's
+    Python) before this raises, so none writes a STEP after the caller removes its output folder.
+    """
     if shutil.which("uv") is None:
         raise UsageError("uv is required to run the kernel environments")
-    procs = {}
-    for kernel, members in groups.items():
-        request = {"parts": [{"pn": p.pn, "name": p.product, "model": str(p.model),
-                              "step": str(parts_dir / f"{p.pn}.step")} for p in members]}
-        proc = subprocess.Popen(["uv", "run", "--quiet", "--script", str(RUNNERS[kernel])],
-                                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        procs[kernel] = (proc, json.dumps(request), time.perf_counter())
-    results = {}
-    for kernel, (proc, request, started) in procs.items():
-        stdout, stderr = proc.communicate(request)  # no timeout: a cold OCP import takes minutes
-        if proc.returncode != 0 or not stdout.strip():
-            raise UsageError(f"{kernel} runner exited {proc.returncode}: {stderr[-3000:]}")
+    procs: dict[str, tuple[subprocess.Popen[str], float]] = {}
+    try:
+        for kernel in requests:
+            proc = subprocess.Popen(["uv", "run", "--quiet", "--script", str(RUNNERS[kernel])],
+                                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                    text=True, start_new_session=True)
+            procs[kernel] = (proc, time.perf_counter())
+    except BaseException:
+        _stop(proc for proc, _ in procs.values())
+        raise
+    with ThreadPoolExecutor(max_workers=len(procs)) as pool:
+        futures = {pool.submit(_runner_result, kernel, proc, started, requests[kernel]): kernel
+                   for kernel, (proc, started) in procs.items()}
         try:
-            results[kernel] = json.loads(stdout.strip().splitlines()[-1])
-        except ValueError as error:
-            raise UsageError(f"{kernel} runner wrote no JSON result: {stdout[-1000:]}") from error
-        results[kernel]["wall_s"] = round(time.perf_counter() - started, 3)
-        results[kernel]["stderr_tail"] = stderr[-2000:]
-    return results
+            done, _ = wait(futures, return_when=FIRST_EXCEPTION)
+            for future in done:
+                future.result()
+        except BaseException:
+            _stop(proc for proc, _ in procs.values())
+            raise
+    return {kernel: future.result() for future, kernel in futures.items()}
+
+
+def _runner_result(kernel: str, proc: subprocess.Popen[str], started: float, parts: list[dict[str, str]]) -> dict[str, Any]:
+    stdout, stderr = proc.communicate(json.dumps({"parts": parts}))  # no timeout: a cold OCP import takes minutes
+    if proc.returncode != 0 or not stdout.strip():
+        raise UsageError(f"{kernel} runner exited {proc.returncode}: {stderr[-3000:]}")
+    try:
+        result = json.loads(stdout.strip().splitlines()[-1])
+    except ValueError as error:
+        raise UsageError(f"{kernel} runner wrote no JSON result: {stdout[-1000:]}") from error
+    result["wall_s"] = round(time.perf_counter() - started, 3)
+    result["stderr_tail"] = stderr[-2000:]
+    return result
+
+
+def _stop(procs: Iterable[subprocess.Popen[str]]) -> None:
+    """Kill each runner still running, with every process in its session, and reap it."""
+    procs = list(procs)
+    for proc in procs:
+        if proc.poll() is None:
+            if os.name == "posix":
+                with contextlib.suppress(ProcessLookupError):
+                    os.killpg(proc.pid, signal.SIGKILL)
+            else:
+                proc.kill()
+    for proc in procs:
+        proc.wait()
 
 
 def orchestrator_tools() -> dict[str, str]:
@@ -194,11 +242,15 @@ def run(hw: Path, label: str, kernel: str, attach: Iterable[str]) -> tuple[int, 
     final = versions / label
     if final.exists():
         raise UsageError(f"{final} exists; versions are immutable, pick the next label")
-    sources = discover(hw)
+    newest = max(built_numbers(hw), default=0)
+    if number <= newest:
+        raise UsageError(f"{label} is not after the newest version v{newest}; labels increase, pick v{newest + 1}")
+    sources, findings = discover(hw)
     by_pn = {p.pn: p for p in sources}
     assembly = pose.load_assembly(hw)
     joints = [*assembly.joints, *pose.attach_joints(attach)]
-    groups, findings = select_kernels(sources, kernel)
+    groups, kernel_findings = select_kernels(sources, kernel)
+    findings += kernel_findings
     if findings:
         return 1, {"status": "fail", "label": label, "findings": findings}
 
@@ -206,10 +258,12 @@ def run(hw: Path, label: str, kernel: str, attach: Iterable[str]) -> tuple[int, 
     shutil.rmtree(work, ignore_errors=True)
     (work / "parts").mkdir(parents=True)
     try:
-        results = run_kernels(groups, work / "parts")
+        results = run_kernels({k: [{"pn": p.pn, "name": p.product, "model": str(p.model),
+                                    "step": str(work / "parts" / f"{p.pn}.step")} for p in members]
+                               for k, members in groups.items()})
         timings["kernels_s"] = round(time.perf_counter() - started, 3)
-        failed = [{"pn": pn, "kernel": k, "check": "build", **res["error"]}
-                  for k, result in results.items() for pn, res in result["parts"].items() if not res["ok"]]
+        failed = [finding(pn, "build", res["error"]["message"], res["error"]["type"], res["error"]["where"])
+                  for result in results.values() for pn, res in result["parts"].items() if not res["ok"]]
         if failed:
             return 1, {"status": "fail", "label": label, "findings": failed,
                        "runners": {k: {"import_s": r["import_s"], "wall_s": r["wall_s"]} for k, r in results.items()}}
@@ -250,7 +304,8 @@ def run(hw: Path, label: str, kernel: str, attach: Iterable[str]) -> tuple[int, 
             "assembly_yaml_sha256": sha256(hw / "assembly.yaml"),
             "attach": list(attach),
             "pose": {"values": values, "transforms": {pn: transforms[pn].rows(9) for pn in chain.parts}},
-            "joint_pairs": sorted(sorted([j.parent, j.child]) for j in joints),
+            "joint_pairs": sorted(({"pair": sorted([j.parent, j.child]), "joint": j.id, "type": j.type} for j in joints),
+                                  key=lambda entry: (entry["pair"], entry["joint"])),
             "ground": chain.root,
             "glb": glb_info,
             "tools": {"orchestrator": orchestrator_tools(),
@@ -300,13 +355,20 @@ def version_dir(hw: Path, label: str) -> Path:
     return folder
 
 
+def built_numbers(hw: Path) -> list[int]:
+    """The label numbers of the built versions (manifest.json present) under hw/versions/."""
+    label = load_pose().VERSION_LABEL
+    found = []
+    for folder in (hw / "versions").glob("v*"):
+        match = label.match(folder.name)
+        if match and (folder / "manifest.json").is_file():
+            found.append(int(match.group(1)))
+    return found
+
+
 def previous_label(hw: Path, label: str) -> str | None:
     number = label_number(label)
-    earlier = []
-    for folder in (hw / "versions").glob("v*"):
-        match = LABEL.match(folder.name)
-        if match and int(match.group(1)) < number and (folder / "manifest.json").is_file():
-            earlier.append(int(match.group(1)))
+    earlier = [n for n in built_numbers(hw) if n < number]
     return f"v{max(earlier)}" if earlier else None
 
 

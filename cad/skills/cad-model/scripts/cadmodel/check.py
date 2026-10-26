@@ -15,7 +15,6 @@ AP242 = "AP242_MANAGED_MODEL_BASED_3D_ENGINEERING"
 READBACK_REL = 1e-6          # STEP read-back volume vs the kernel's in-memory volume
 CONTACT_MM = 0.01            # distance at or below which two parts touch
 FLOAT_GAP_MM = 2.0           # beyond this a part is disconnected rather than floating
-INTERFERENCE_MM3 = 1e-3      # shared volume above this is interference
 SLIVER_FACE_MM2 = 1e-3       # faces smaller than this are slivers (advisory)
 LOOSE_TOLERANCE_MM = 0.01    # vertex/edge/face tolerance above this is loose (advisory)
 SCHEMA_LINE = re.compile(r"FILE_SCHEMA\s*\(\s*\(\s*'([^']+)'")
@@ -86,6 +85,7 @@ def brep_validity(parts: dict[str, Any], manifest: dict[str, Any]) -> dict[str, 
 
 def solid_structure(parts: dict[str, Any], expected: dict[str, int], baseline: dict[str, Any] | None,
                     baseline_label: str | None) -> dict[str, Any]:
+    unknown = sorted(set(expected) - set(parts))
     rows = {}
     for pn, part in sorted(parts.items()):
         solids, shells = occ.count(part.shape, "SOLID"), occ.count(part.shape, "SHELL")
@@ -97,19 +97,20 @@ def solid_structure(parts: dict[str, Any], expected: dict[str, int], baseline: d
             want, source = None, None
         rows[pn] = {"solids": solids, "shells": shells, "expected_solids": want, "baseline": source,
                     "ok": solids > 0 and (want is None or solids == want)}
-    return {"status": _status(all(r["ok"] for r in rows.values())), "blocking": True, "parts": rows}
+    return {"status": _status(all(r["ok"] for r in rows.values()) and not unknown), "blocking": True,
+            "unknown_parts": unknown, "parts": rows}
 
 
 def pair_geometry(placed: dict[str, Any]) -> dict[tuple[str, str], dict[str, Any]]:
-    """Clearance and shared volume for every pair at the nominal pose; `error` when OCP fails."""
+    """Clearance and shared volume of every pair at the nominal pose; `error` when OCP fails.
+
+    The measurement is cad-motion's `pose.interference`, the rule `sweep.py` applies to every pose.
+    """
+    pose = load_pose()
     found: dict[tuple[str, str], dict[str, Any]] = {}
     for a, b in itertools.combinations(sorted(placed), 2):
-        sa, sb = placed[a].shape, placed[b].shape
         try:
-            gap = occ.distance(sa, sb)
-            shared = 0.0
-            if gap <= CONTACT_MM and occ.boxes_overlap(sa, sb, CONTACT_MM):
-                shared = max(0.0, occ.volume(occ.boolean("common", sa, [sb])))
+            gap, shared = pose.interference(placed[a].shape, placed[b].shape)
         except Exception as error:  # noqa: BLE001 - OCP raises Standard_Failure on broken input
             found[(a, b)] = {"clearance_mm": None, "interference_mm3": None, "error": str(error) or type(error).__name__}
             continue
@@ -119,32 +120,60 @@ def pair_geometry(placed: dict[str, Any]) -> dict[tuple[str, str], dict[str, Any
 
 def interference(geometry: dict[tuple[str, str], dict[str, Any]], named: list[tuple[str, str]] | None,
                  joint_pairs: set[tuple[str, str]], allowed: set[tuple[str, str]]) -> dict[str, Any]:
+    """Shared volume per pair; a declared fit excuses a measured interference, never a failed measurement."""
+    threshold = load_pose().INTERFERENCE_MM3
     pairs = sorted(geometry) if named is None else sorted({tuple(sorted(p)) for p in named})
     unknown = [list(p) for p in pairs if p not in geometry]
+    unknown_allowed = [list(p) for p in sorted(allowed) if p not in geometry]
     rows: dict[str, list[dict[str, Any]]] = {"pairs": [], "joint_pairs": []}
     for pair in pairs:
         if pair not in geometry:
             continue
         g = geometry[pair]
-        hit = g["interference_mm3"] is None or g["interference_mm3"] > INTERFERENCE_MM3
+        measured = g["interference_mm3"] is not None
+        hit = not measured or g["interference_mm3"] > threshold
         entry = {"pair": list(pair), **g, "interferes": hit, "allowed": pair in allowed,
-                 "ok": not hit or pair in allowed}
+                 "ok": not hit or (measured and pair in allowed)}
         rows["joint_pairs" if pair in joint_pairs else "pairs"].append(entry)
     every = rows["pairs"] + rows["joint_pairs"]
-    measured = [e for e in every if e["clearance_mm"] is not None]
-    smallest = min(measured, key=lambda e: e["clearance_mm"], default=None)
-    ok = all(e["ok"] for e in every) and not unknown
+    measured_rows = [e for e in every if e["clearance_mm"] is not None]
+    smallest = min(measured_rows, key=lambda e: e["clearance_mm"], default=None)
+    ok = all(e["ok"] for e in every) and not unknown and not unknown_allowed
     return {"status": _status(ok), "blocking": True, "selection": "all" if named is None else "named",
-            "threshold_mm3": INTERFERENCE_MM3, "unknown_pairs": unknown,
+            "threshold_mm3": threshold, "unknown_pairs": unknown, "unknown_allowed": unknown_allowed,
             "min_clearance": {"pair": smallest["pair"], "clearance_mm": smallest["clearance_mm"]} if smallest else None,
             **rows}
 
 
+def rigid_bodies(pns: Iterable[str], joints: Iterable[dict[str, Any]]) -> dict[str, str]:
+    """Each part's rigid body, named by its smallest PN: a fixed joint (or --attach) welds its two parts."""
+    parent = {pn: pn for pn in pns}
+
+    def root(pn: str) -> str:
+        while parent.setdefault(pn, pn) != pn:
+            pn = parent[pn]
+        return pn
+
+    for joint in joints:
+        if joint["type"] == "fixed":
+            low, high = sorted(root(pn) for pn in joint["pair"])
+            parent[high] = low
+    return {pn: root(pn) for pn in list(parent)}
+
+
 def connection(geometry: dict[tuple[str, str], dict[str, Any]], pns: Iterable[str],
-               joint_pairs: set[tuple[str, str]]) -> dict[str, Any]:
+               joints: list[dict[str, Any]]) -> dict[str, Any]:
+    """Whether each part is held: fixed pairs touch, and each part touches or floats across a movable joint.
+
+    Parts welded by fixed joints or --attach form one rigid body: the two parts of every fixed joint
+    must touch, and a gap within a body is never a joint clearance. A float (CONTACT_MM to
+    FLOAT_GAP_MM) passes only when a movable joint links the part's body to the nearest part's body.
+    """
+    pns = sorted(pns)
+    body = rigid_bodies(pns, joints)
+    links = {frozenset((body[j["pair"][0]], body[j["pair"][1]])): j["joint"] for j in joints if j["type"] != "fixed"}
     rows = {}
-    jointed = {pn for pair in joint_pairs for pn in pair}
-    for pn in sorted(pns):
+    for pn in pns:
         near = [(g["clearance_mm"], b if a == pn else a) for (a, b), g in geometry.items()
                 if pn in (a, b) and g["clearance_mm"] is not None]
         if not near:
@@ -152,10 +181,19 @@ def connection(geometry: dict[tuple[str, str], dict[str, Any]], pns: Iterable[st
             continue
         dist, other = min(near)
         status = "touching" if dist <= CONTACT_MM else ("floating" if dist <= FLOAT_GAP_MM else "disconnected")
-        ok = status == "touching" or (status == "floating" and pn in jointed)
-        rows[pn] = {"status": status, "nearest": other, "distance_mm": dist, "joint_connected": pn in jointed, "ok": ok}
-    return {"status": _status(all(r["ok"] for r in rows.values())), "blocking": True,
-            "contact_mm": CONTACT_MM, "float_gap_mm": FLOAT_GAP_MM, "parts": rows}
+        joint = links.get(frozenset((body[pn], body[other])))
+        ok = status == "touching" or (status == "floating" and joint is not None)
+        rows[pn] = {"status": status, "nearest": other, "distance_mm": dist, "joint_connected": joint is not None,
+                    "joint": joint, "ok": ok}
+    fixed = []
+    for j in joints:
+        if j["type"] == "fixed":
+            gap = geometry.get(tuple(j["pair"]), {}).get("clearance_mm")
+            fixed.append({"joint": j["joint"], "pair": j["pair"], "distance_mm": gap,
+                          "ok": gap is not None and gap <= CONTACT_MM})
+    ok = all(r["ok"] for r in rows.values()) and all(f["ok"] for f in fixed)
+    return {"status": _status(ok), "blocking": True, "contact_mm": CONTACT_MM, "float_gap_mm": FLOAT_GAP_MM,
+            "parts": rows, "fixed_joints": fixed}
 
 
 def slivers_and_tolerances(parts: dict[str, Any]) -> dict[str, Any]:
@@ -186,14 +224,15 @@ def check(hw: Path, label: str, named: list[tuple[str, str]] | None, allowed: It
     placed = pose.load_parts(hw, step=folder / "assembly.step")
     previous = build.previous_label(hw, label)
     baseline = build.read_json(hw / "versions" / previous / "metrics.json")["parts"] if previous else None
-    joint_pairs = {tuple(p) for p in manifest["joint_pairs"]}
+    joints = manifest["joint_pairs"]
+    joint_pairs = {tuple(entry["pair"]) for entry in joints}
     geometry = pair_geometry(placed)
     checks = {
         "step_readback": step_readback(folder, manifest, parts, placed),
         "brep_validity": brep_validity(parts, manifest),
         "solid_structure": solid_structure(parts, expected_solids, baseline, previous),
         "interference": interference(geometry, named, joint_pairs, {tuple(sorted(p)) for p in allowed}),
-        "connection": connection(geometry, placed, joint_pairs),
+        "connection": connection(geometry, placed, joints),
         "slivers_tolerances": slivers_and_tolerances(parts),
         "mesh_watertight": mesh_watertight(folder, manifest["parts"]),
     }

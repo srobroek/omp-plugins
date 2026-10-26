@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import json
 import math
-import re
 import struct
 from pathlib import Path
 from typing import Any, Iterable
 
 from cadmodel import occ
+from cadmodel.motion import load_pose
 
-PN_PREFIX = re.compile(r"^([A-Z]{2,5}-\d{4})(?![0-9])")
+PN_PREFIX = load_pose().PN_PREFIX  # a GLB node belongs to the part whose PN starts its name
 # Tessellation: chord deviation relative to the assembly diagonal, clamped; angular deflection in rad.
 LINEAR_RELATIVE, LINEAR_MIN_MM, LINEAR_MAX_MM, ANGULAR_RAD = 5e-4, 0.01, 0.2, 0.25
 

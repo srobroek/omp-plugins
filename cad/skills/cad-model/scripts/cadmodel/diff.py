@@ -26,6 +26,28 @@ def _delta(a: list[float], b: list[float]) -> list[float]:
     return [b[i] - a[i] for i in range(3)]
 
 
+def compare_part(a: dict[str, Any], b: dict[str, Any], shape_a: Any, shape_b: Any) -> dict[str, Any]:
+    """The diff row of a part in both versions, from its metrics and zero-pose shapes.
+
+    `error` when the exact Booleans failed: the part may or may not have changed.
+    """
+    va, vb = a["volume_mm3"], b["volume_mm3"]
+    exact = _exact(shape_a, shape_b)
+    if "error" in exact:
+        status = "error"
+    else:
+        slack = occ.volume_slack(va, vb) * 10
+        status = "unchanged" if exact["a_only_mm3"] <= slack and exact["b_only_mm3"] <= slack else "changed"
+    box_a, box_b = a["bbox_mm"], b["bbox_mm"]
+    return {"status": status,
+            "volume_a_mm3": va, "volume_b_mm3": vb, "volume_delta_mm3": vb - va,
+            "volume_delta_rel": (vb - va) / va if va else None,
+            "bbox_delta_mm": {"min": _delta(box_a["min"], box_b["min"]), "max": _delta(box_a["max"], box_b["max"]),
+                              "size": _delta(box_a["size"], box_b["size"])},
+            "solids_a": a["solids"], "solids_b": b["solids"],
+            **exact}
+
+
 def diff(hw: Path, label_a: str, label_b: str) -> tuple[int, dict[str, Any]]:
     pose = load_pose()
     started = time.perf_counter()
@@ -40,26 +62,13 @@ def diff(hw: Path, label_a: str, label_b: str) -> tuple[int, dict[str, Any]]:
             rows[pn] = {"status": "removed", "volume_a_mm3": ma[pn]["volume_mm3"], "volume_b_mm3": 0.0,
                         "volume_delta_mm3": -ma[pn]["volume_mm3"], "shared_mm3": 0.0,
                         "a_only_mm3": ma[pn]["volume_mm3"], "b_only_mm3": 0.0}
-            continue
-        if pn not in ma:
+        elif pn not in ma:
             rows[pn] = {"status": "added", "volume_a_mm3": 0.0, "volume_b_mm3": mb[pn]["volume_mm3"],
                         "volume_delta_mm3": mb[pn]["volume_mm3"], "shared_mm3": 0.0,
                         "a_only_mm3": 0.0, "b_only_mm3": mb[pn]["volume_mm3"]}
-            continue
-        va, vb = ma[pn]["volume_mm3"], mb[pn]["volume_mm3"]
-        exact = _exact(shapes[label_a][pn].shape, shapes[label_b][pn].shape)
-        slack = occ.volume_slack(va, vb) * 10
-        unchanged = (exact.get("a_only_mm3") is not None and exact["a_only_mm3"] <= slack and exact["b_only_mm3"] <= slack)
-        box_a, box_b = ma[pn]["bbox_mm"], mb[pn]["bbox_mm"]
-        rows[pn] = {"status": "unchanged" if unchanged else "changed",
-                    "volume_a_mm3": va, "volume_b_mm3": vb, "volume_delta_mm3": vb - va,
-                    "volume_delta_rel": (vb - va) / va if va else None,
-                    "bbox_delta_mm": {"min": _delta(box_a["min"], box_b["min"]), "max": _delta(box_a["max"], box_b["max"]),
-                                      "size": _delta(box_a["size"], box_b["size"])},
-                    "solids_a": ma[pn]["solids"], "solids_b": mb[pn]["solids"],
-                    **exact}
-    return 0, {"a": label_a, "b": label_b, "frame": "assembly coordinates at the zero pose",
-               "added": sorted(pn for pn, r in rows.items() if r["status"] == "added"),
-               "removed": sorted(pn for pn, r in rows.items() if r["status"] == "removed"),
-               "changed": sorted(pn for pn, r in rows.items() if r["status"] == "changed"),
+        else:
+            rows[pn] = compare_part(ma[pn], mb[pn], shapes[label_a][pn].shape, shapes[label_b][pn].shape)
+    listed = {status: sorted(pn for pn, r in rows.items() if r["status"] == status)
+              for status in ("added", "removed", "changed", "error")}
+    return 0, {"a": label_a, "b": label_b, "frame": "assembly coordinates at the zero pose", **listed,
                "parts": rows, "timings_s": {"total_s": round(time.perf_counter() - started, 3)}}

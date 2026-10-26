@@ -3,7 +3,8 @@
 ## Version layout (`run`)
 
 `hw/versions/vN/`, written to a hidden partial folder and renamed when complete; a failed run
-leaves nothing.
+leaves nothing. Labels increase: `run` refuses an existing label and any label at or below the
+newest built version.
 
 | File | Content |
 |---|---|
@@ -12,7 +13,7 @@ leaves nothing.
 | `assembly.glb` | binary glTF 2.0 of `assembly.step`: metres, +Y up, node and mesh names = product names, one mesh per part |
 | `part-map.json` | `parts.<PN>`: `product`, `nodes`, `node_indices`, `meshes` in the GLB |
 | `metrics.json` | `parts.<PN>`: `volume_mm3`, `area_mm2`, `bbox_mm` {min, max, size}, `centre_of_volume_mm`, `solids`, `shells`, `faces`, `holes`, `material`, `density_g_cm3`, `mass_g`, `mass_target_g`; `totals` |
-| `manifest.json` | `parts.<PN>`: `kernel`, `model`, `source_sha256`, `params`, `kernel_volume_mm3`, `kernel_solids`, `kernel_valid`, `kernel_errors`; `tools` per environment with `import_s`; `pose` (values, transforms); `joint_pairs`; `ground`; `glb` tessellation; `files` sha256 |
+| `manifest.json` | `parts.<PN>`: `kernel`, `model`, `source_sha256`, `params`, `kernel_volume_mm3`, `kernel_solids`, `kernel_valid`, `kernel_errors`; `tools` per environment with `import_s`; `pose` (values, transforms); `joint_pairs` (`pair`, `joint` id, `type`: revolute, prismatic, or fixed; `--attach` joints are fixed, id `attach:<PN>`); `ground`; `glb` tessellation; `files` sha256 |
 
 Metrics and bboxes are in assembly coordinates at the zero pose, read back from the per-part STEP.
 Every volume is BRepGProp's adaptive integration to 1e-9 relative (cad-motion `pose.VOLUME_EPS`,
@@ -69,8 +70,11 @@ part when its name starts with the PN.
 
 `run` stdout: `status`, `label`, `version_dir`, per-part `kernel`/`volume_mm3`/`solids`/`mass_g`,
 `timings_s` (`<kernel>_import_s`, `<kernel>_runner_wall_s`, `glb_s`, `total_s`). On exit 1:
-`findings`, one per failed part: `pn`, `check` (`contract`, `kernel`, `build`), `type`, `message`,
-`where` (`model.py:<line> in <function>`).
+`findings`, one per failed part: `pn`, `check`, `type`, `message`, `where`, plus `runners` timings
+when the kernels ran. `check` is `contract` (a model folder not named by its PN, or a missing or
+unsupported `KERNEL`; `type` `ContractError`, `where` null), `kernel` (the part's `KERNEL` differs
+from `--kernel`; `ContractError`, `where` null), or `build` (the runner's exception `type`, `where`
+= `model.py:<line> in <function>`, null when the failure is not in model.py).
 
 ## Check result (`check`)
 
@@ -82,13 +86,16 @@ Top level: `status` pass|fail, `label`, `pose: nominal`, `baseline` (previous la
 |---|---|---|
 | `step_readback` | yes | a STEP schema is not AP242; a product name differs from `"<PN> <title>"` in the part or assembly STEP; the top product is missing; a read-back volume differs from the kernel volume by more than 1e-6 relative; the read-back solid count differs from the kernel's |
 | `brep_validity` | yes | BRepCheck rejects the kernel's in-memory shape or the STEP read-back |
-| `solid_structure` | yes | a part has no solid, or its solid count differs from `--expect-solids` or else from the previous version |
-| `interference` | yes | two parts share more than 1e-3 mm^3 at the nominal pose, unless `--allow-interference` names the pair; joint-connected pairs are listed under `joint_pairs`, others under `pairs`; `min_clearance` names the closest pair |
-| `connection` | yes | a part is `disconnected` (nearest part > 2.0 mm away) or `floating` (0.01 to 2.0 mm) without a joint; `touching` is <= 0.01 mm |
+| `solid_structure` | yes | a part has no solid, or its solid count differs from `--expect-solids` or else from the previous version; `--expect-solids` naming a PN outside the version fails (`unknown_parts`) |
+| `interference` | yes | two parts share more than 1e-3 mm^3 at the nominal pose, unless `--allow-interference` names the pair; a pair whose measurement failed (`error`, `interference_mm3` null) fails even when allowed; `--pair` or `--allow-interference` naming a PN outside the version fails (`unknown_pairs`, `unknown_allowed`); joint-connected pairs are listed under `joint_pairs`, others under `pairs`; `min_clearance` names the closest pair |
+| `connection` | yes | the two parts of a fixed joint or `--attach` are more than 0.01 mm apart (`fixed_joints`: `joint`, `pair`, `distance_mm`, `ok`); or a part is `disconnected` (nearest part > 2.0 mm away), or `floating` (0.01 to 2.0 mm) without a movable joint (revolute, prismatic) linking its rigid body to the nearest part's; `touching` is <= 0.01 mm. Fixed joints weld their parts into one rigid body, so a float to a part of the same body is never a joint clearance. Each `parts` row has `nearest`, `distance_mm`, `joint` (the movable joint between the two bodies, else null), `joint_connected` |
 | `mesh_watertight` | yes | a part's GLB triangles, welded by position, are not a closed 2-manifold (trimesh); triangles whose corners weld to fewer than three vertices (BRepMesh emits one at a sphere pole on a face boundary) are dropped first and counted in `collapsed_triangles` |
 | `slivers_tolerances` | no (warn) | a face is smaller than 1e-3 mm^2, or a vertex/edge/face tolerance exceeds 0.01 mm |
 
 `--pair PN:PN` restricts `interference` to the named pairs; every pair still feeds `connection`.
+Clearance and shared volume come from cad-motion's `pose.interference`, the rule `sweep.py` applies
+at every pose: BRepExtrema minimum distance, and within 1e-6 mm the non-destructive Boolean common
+(fuzzy 1e-7 mm) measured with the adaptive volume rule.
 
 A tolerant B-rep fails `step_readback` on purpose: when filleted edges carry tolerances of
 0.01 to 0.1 mm, a STEP round trip rebuilds their face boundaries and moves the volume by about
@@ -97,8 +104,10 @@ not the bound.
 
 ## Diff result (`diff`)
 
-`a`, `b`, `added`, `removed`, `changed`, and `parts.<PN>`: `status`
-(unchanged|changed|added|removed), `volume_a_mm3`, `volume_b_mm3`, `volume_delta_mm3`,
+`a`, `b`, `added`, `removed`, `changed`, `error`, and `parts.<PN>`: `status`
+(unchanged|changed|added|removed|error), `volume_a_mm3`, `volume_b_mm3`, `volume_delta_mm3`,
 `volume_delta_rel`, `bbox_delta_mm` {min, max, size}, `solids_a`, `solids_b`, and the exact
 Boolean volumes `shared_mm3`, `a_only_mm3`, `b_only_mm3` of the zero-pose part shapes. A part is
-`unchanged` when both exclusive volumes are within 1e-6 relative of zero.
+`unchanged` when both exclusive volumes are within 1e-6 relative of zero. When the kernel fails
+on those Booleans the part is `error`, its exact volumes are null and `error` carries the
+message; whether it changed is unknown.

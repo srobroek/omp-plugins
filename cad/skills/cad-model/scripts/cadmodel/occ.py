@@ -9,8 +9,9 @@ from __future__ import annotations
 import io
 from typing import Any, Iterable
 
-# Boolean fuzzy value in mm: the kernel's own precision, so a Boolean never glues distinct faces.
-FUZZY_MM = 1e-7
+from cadmodel.motion import load_pose
+
+FUZZY_MM = load_pose().FUZZY_MM  # the Boolean fuzzy value of cad-motion's interference rule
 
 
 class GeometryError(ValueError):
@@ -78,8 +79,6 @@ def count(shape: Any, kind: str) -> int:
 
 
 def _volume_props(shape: Any) -> Any:
-    from cadmodel.motion import load_pose
-
     return load_pose().volume_properties(shape)  # the one volume rule, shared with cad-motion
 
 
@@ -114,11 +113,6 @@ def bbox(shape: Any) -> tuple[tuple[float, float, float], tuple[float, float, fl
         raise GeometryError("shape has no extent")
     low, high = box.CornerMin(), box.CornerMax()  # Get() has no Python binding in OCP 8.0
     return (low.X(), low.Y(), low.Z()), (high.X(), high.Y(), high.Z())
-
-
-def boxes_overlap(a: Any, b: Any, gap: float) -> bool:
-    (a0, a1), (b0, b1) = bbox(a), bbox(b)
-    return all(a0[i] - gap <= b1[i] and b0[i] - gap <= a1[i] for i in range(3))
 
 
 def is_valid(shape: Any) -> bool:
@@ -169,16 +163,6 @@ def face_areas(shape: Any) -> list[float]:
     return [abs(area(face)) for face in subshapes(shape, "FACE")]
 
 
-def distance(a: Any, b: Any) -> float:
-    """Minimum distance between two shapes; 0 when they touch or overlap."""
-    from OCP.BRepExtrema import BRepExtrema_DistShapeShape
-
-    measure = BRepExtrema_DistShapeShape(a, b)
-    if not measure.IsDone():
-        raise GeometryError("distance computation failed")
-    return measure.Value()
-
-
 def copy(shape: Any) -> Any:
     from OCP.BRepBuilderAPI import BRepBuilderAPI_Copy
 
@@ -197,18 +181,6 @@ def _messages(operation: Any, method: str) -> list[str]:
     return [line.strip() for line in stream.getvalue().decode("utf-8", "replace").splitlines() if line.strip()]
 
 
-def _shape_list(shapes: Iterable[Any]) -> Any:
-    try:  # OCP 8.0 binds NCollection lists under OCP.collections and drops TopTools_ListOfShape
-        from OCP.collections import List_TopoDS_Shape as ShapeList
-    except ImportError:  # OCP 7.9
-        from OCP.TopTools import TopTools_ListOfShape as ShapeList
-
-    result = ShapeList()
-    for shape in shapes:
-        result.Append(shape)
-    return result
-
-
 OPERATIONS = ("cut", "fuse", "common")
 
 
@@ -218,8 +190,9 @@ def boolean(operation: str, argument: Any, tools: Iterable[Any], fuzzy: float = 
 
     kinds = {"cut": BOPAlgo_CUT, "fuse": BOPAlgo_FUSE, "common": BOPAlgo_COMMON}
     op = BOPAlgo_BOP()
-    op.SetArguments(_shape_list([copy(argument)]))
-    op.SetTools(_shape_list([copy(tool) for tool in tools]))
+    shape_list = load_pose().shape_list
+    op.SetArguments(shape_list([copy(argument)]))
+    op.SetTools(shape_list([copy(tool) for tool in tools]))
     op.SetOperation(kinds[operation])
     op.SetNonDestructive(True)
     op.SetFuzzyValue(fuzzy)
