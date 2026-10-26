@@ -7,4 +7,4 @@ finish: Passivated
 mass_target: 5.1
 make_buy: buy
 supplier: null
-decisions: [DR-002]
+decisions: [DR-002, DR-003]

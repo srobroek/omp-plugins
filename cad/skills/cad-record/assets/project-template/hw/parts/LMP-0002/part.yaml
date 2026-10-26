@@ -7,4 +7,4 @@ finish: Bead-blast and clear anodize
 mass_target: 153
 make_buy: make
 supplier: null
-decisions: [DR-002]
+decisions: [DR-002, DR-003]

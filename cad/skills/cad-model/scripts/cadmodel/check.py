@@ -2,14 +2,22 @@
 
 from __future__ import annotations
 
+import importlib.util
 import itertools
 import re
+import sys
 import time
+from decimal import Decimal, InvalidOperation
+from functools import cache
 from pathlib import Path
 from typing import Any, Iterable
 
+import yaml
+
 from cadmodel import build, mesh, occ
 from cadmodel.motion import load_pose
+
+FITS_SCRIPT = Path(__file__).resolve().parents[5] / "cad" / "skills" / "cad-fits" / "scripts" / "fits.py"
 
 AP242 = "AP242_MANAGED_MODEL_BASED_3D_ENGINEERING"
 READBACK_REL = 1e-6          # STEP read-back volume vs the kernel's in-memory volume
@@ -118,13 +126,74 @@ def pair_geometry(placed: dict[str, Any]) -> dict[tuple[str, str], dict[str, Any
     return found
 
 
+@cache
+def _fits_module() -> Any:
+    """Load cad-fits' single ISO 286 classifier for check-time record interpretation."""
+    spec = importlib.util.spec_from_file_location("cadmodel_fit_classifier", FITS_SCRIPT)
+    if spec is None or spec.loader is None:
+        raise build.UsageError(f"cannot load fit classifier at {FITS_SCRIPT}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def declared_press_fits(hw: Path) -> list[dict[str, Any]]:
+    """Read press-fit pair declarations and classify them with cad-fits' ISO 286 tables."""
+    path = hw / "interfaces.yaml"
+    try:
+        document = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return []
+    except (OSError, yaml.YAMLError) as error:
+        raise build.UsageError(f"{path}: cannot read interfaces: {error}") from error
+    if not isinstance(document, dict) or not isinstance(document.get("interfaces"), list):
+        raise build.UsageError(f"{path}: expected an interfaces list")
+
+    fits = _fits_module()
+    declared = []
+    for index, interface in enumerate(document["interfaces"]):
+        if not isinstance(interface, dict):
+            continue
+        limits = interface.get("limits")
+        press = limits.get("press_fit") if isinstance(limits, dict) else None
+        if press is None:
+            continue
+        source = f"interfaces.yaml#/interfaces/{index}/limits/press_fit"
+        if not isinstance(press, dict):
+            raise build.UsageError(f"{path}:{source}: expected a fit and part pair")
+        designation = press.get("fit")
+        pair = press.get("pair")
+        if (not isinstance(designation, str) or not isinstance(pair, list) or len(pair) != 2
+                or not all(isinstance(pn, str) and pn for pn in pair) or pair[0] == pair[1]):
+            raise build.UsageError(f"{path}:{source}: expected fit and two distinct part numbers")
+        parts = designation.split(maxsplit=1)
+        if len(parts) != 2:
+            raise build.UsageError(f"{path}:{source}: fit must contain a nominal size and ISO fit")
+        try:
+            fit_data = fits.evaluate(Decimal(parts[0]), parts[1]).get("fit")
+            if not isinstance(fit_data, dict):
+                raise build.UsageError(f"{path}:{source}: expected an ISO hole/shaft fit, got {designation!r}")
+            classified = fit_data["type"]
+        except (InvalidOperation, ValueError, fits.FitError, KeyError) as error:
+            raise build.UsageError(f"{path}:{source}: cannot classify {designation!r}: {error}") from error
+        declared.append({"pair": sorted(tuple(pair)), "fit": designation, "classification": classified,
+                         "interface": interface.get("id"), "source": source})
+    return declared
+
+
 def interference(geometry: dict[tuple[str, str], dict[str, Any]], named: list[tuple[str, str]] | None,
-                 joint_pairs: set[tuple[str, str]], allowed: set[tuple[str, str]]) -> dict[str, Any]:
-    """Shared volume per pair; a declared fit excuses a measured interference, never a failed measurement."""
+                 joint_pairs: set[tuple[str, str]], allowed: set[tuple[str, str]],
+                 declared: Iterable[dict[str, Any]] = ()) -> dict[str, Any]:
+    """Only a classified declared interference fit excuses overlap; clearance mismatches fail."""
     threshold = load_pose().INTERFERENCE_MM3
-    pairs = sorted(geometry) if named is None else sorted({tuple(sorted(p)) for p in named})
+    declarations = sorted(declared, key=lambda item: (item["pair"], item["source"]))
+    declared_allowed = {tuple(item["pair"]) for item in declarations if item["classification"] == "interference"}
+    effective_allowed = allowed | declared_allowed
+    pairs = sorted(set(geometry) if named is None else {tuple(sorted(p)) for p in named})
+    selected = set(pairs)
     unknown = [list(p) for p in pairs if p not in geometry]
-    unknown_allowed = [list(p) for p in sorted(allowed) if p not in geometry]
+    unknown_allowed = [list(p) for p in sorted(effective_allowed) if p not in geometry]
     rows: dict[str, list[dict[str, Any]]] = {"pairs": [], "joint_pairs": []}
     for pair in pairs:
         if pair not in geometry:
@@ -132,15 +201,26 @@ def interference(geometry: dict[tuple[str, str], dict[str, Any]], named: list[tu
         g = geometry[pair]
         measured = g["interference_mm3"] is not None
         hit = not measured or g["interference_mm3"] > threshold
-        entry = {"pair": list(pair), **g, "interferes": hit, "allowed": pair in allowed,
-                 "ok": not hit or (measured and pair in allowed)}
+        entry = {"pair": list(pair), **g, "interferes": hit, "allowed": pair in effective_allowed,
+                 "ok": not hit or (measured and pair in effective_allowed)}
         rows["joint_pairs" if pair in joint_pairs else "pairs"].append(entry)
+    declared_fit_findings = []
+    for item in declarations:
+        pair = tuple(item["pair"])
+        if item["classification"] != "interference" or pair not in selected:
+            continue
+        measurement = geometry.get(pair)
+        if measurement is not None and measurement["interference_mm3"] is not None \
+                and measurement["interference_mm3"] <= threshold:
+            declared_fit_findings.append({**item, "type": "declared_fit_not_realized", **measurement,
+                                          "threshold_mm3": threshold})
     every = rows["pairs"] + rows["joint_pairs"]
     measured_rows = [e for e in every if e["clearance_mm"] is not None]
     smallest = min(measured_rows, key=lambda e: e["clearance_mm"], default=None)
-    ok = all(e["ok"] for e in every) and not unknown and not unknown_allowed
+    ok = all(e["ok"] for e in every) and not unknown and not unknown_allowed and not declared_fit_findings
     return {"status": _status(ok), "blocking": True, "selection": "all" if named is None else "named",
             "threshold_mm3": threshold, "unknown_pairs": unknown, "unknown_allowed": unknown_allowed,
+            "declared_pairs": declarations, "declared_fit_findings": declared_fit_findings,
             "min_clearance": {"pair": smallest["pair"], "clearance_mm": smallest["clearance_mm"]} if smallest else None,
             **rows}
 
@@ -227,11 +307,12 @@ def check(hw: Path, label: str, named: list[tuple[str, str]] | None, allowed: It
     joints = manifest["joint_pairs"]
     joint_pairs = {tuple(entry["pair"]) for entry in joints}
     geometry = pair_geometry(placed)
+    declared = declared_press_fits(hw)
     checks = {
         "step_readback": step_readback(folder, manifest, parts, placed),
         "brep_validity": brep_validity(parts, manifest),
         "solid_structure": solid_structure(parts, expected_solids, baseline, previous),
-        "interference": interference(geometry, named, joint_pairs, {tuple(sorted(p)) for p in allowed}),
+        "interference": interference(geometry, named, joint_pairs, {tuple(sorted(p)) for p in allowed}, declared),
         "connection": connection(geometry, placed, joints),
         "slivers_tolerances": slivers_and_tolerances(parts),
         "mesh_watertight": mesh_watertight(folder, manifest["parts"]),

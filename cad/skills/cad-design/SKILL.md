@@ -25,7 +25,7 @@ TRIGGER
    `PARAMS` dict in mm and degrees, `build(params)` returning one part in place at the zero pose.
 3. Start from the matching reference in `assets/reference/lamp-arm/<kernel>/<PN>.py` (CadQuery
    2.8 and build123d 0.13, same PARAMS keys): base puck, tapered clevis links, revolved head,
-   shoulder pins as bought.
+   shoulder pins as stepped parts, bought to their drawing.
 4. On "commit batch" from L1 onward, review the batch with realistic renders through the
    `cad-render` step (later; until it exists, report it as missing, not done). For the
    reference arm, `uv run --script scripts/review_render.py --out DIR` writes an iso view and

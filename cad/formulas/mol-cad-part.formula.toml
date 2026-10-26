@@ -43,7 +43,7 @@ title = "CHECK {{subassembly}} and its affected dependents"
 type = "task"
 needs = ["build-part"]
 labels = ["cad", "phase:parts"]
-description = "For the just-built version vN, run `uv run --script skill://cad-model/scripts/cad_model.py check vN --hw hw --out checks-vN.json`. A blocking check failure stops the batch; do not render or proceed. At/after LAYOUT freeze, run skill://cad-recheck for the changed parts and dependents, including all applicable earlier-stage checks; record the results and repair only authorized findings."
+description = "For the just-built version vN, run `uv run --script skill://cad-model/scripts/cad_model.py check vN --hw hw [--out FILE]`. Press fits declared in `hw/interfaces.yaml` are automatically allowed. A blocking check failure stops the batch; do not render or proceed. At/after LAYOUT freeze, run skill://cad-recheck for the changed parts and dependents, including all applicable earlier-stage checks; record the results and repair only authorized findings."
 
 [steps.metadata]
 skill_hints = "cad-recheck, cad-record"
