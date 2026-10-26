@@ -1,0 +1,9 @@
+id: desk-lamp
+title: Desk lamp, articulated arm
+rigor: pro
+units: mm
+regime: iso
+general_tolerance: ISO 2768-m
+flow:
+  stage: parts
+  recheck_from: layout

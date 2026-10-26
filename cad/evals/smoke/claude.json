@@ -1,0 +1,52 @@
+{
+  "argv": [
+    "claude",
+    "-p",
+    "--model",
+    "global.anthropic.claude-haiku-5-5",
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--permission-mode",
+    "bypassPermissions",
+    "--strict-mcp-config",
+    "--bare",
+    "Create a file named hello.txt whose entire content is the word ok, then reply with the single word DONE."
+  ],
+  "at": "2026-10-26T09:58:05+00:00",
+  "file_written": true,
+  "harness": "claude",
+  "latency_s": 7.982,
+  "ok": true,
+  "reparsed_with_current_adapter": {
+    "error": null,
+    "served_matches": true,
+    "served_model": "claude-haiku-5-5",
+    "text": "DONE",
+    "tools": [
+      "Bash"
+    ],
+    "usage": {
+      "cacheRead": 1664,
+      "cacheWrite": 1778,
+      "cost_usd": 0.00029449,
+      "input": 6,
+      "output": 110
+    }
+  },
+  "requested_model": "global.anthropic.claude-haiku-5-5",
+  "served_matches": false,
+  "served_model": "claude-haiku-5-5",
+  "text": "DONE",
+  "tools": [
+    "Bash"
+  ],
+  "transcript_entries": 3,
+  "usage": {
+    "cacheRead": 1664,
+    "cacheWrite": 1778,
+    "cost_usd": 0.00029449,
+    "input": 6,
+    "output": 110
+  }
+}

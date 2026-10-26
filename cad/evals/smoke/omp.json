@@ -1,0 +1,53 @@
+{
+  "argv": [
+    "omp",
+    "-p",
+    "--model",
+    "amazon-bedrock/global.anthropic.claude-haiku-5-5",
+    "--mode",
+    "json",
+    "--no-title",
+    "--auto-approve",
+    "--profile",
+    "cad-eval",
+    "--session-dir",
+    "<trial>/state",
+    "Create a file named hello.txt whose entire content is the word ok, then reply with the single word DONE."
+  ],
+  "at": "2026-10-26T09:57:43+00:00",
+  "file_written": true,
+  "harness": "omp",
+  "latency_s": 6.535,
+  "ok": true,
+  "reparsed_with_current_adapter": {
+    "error": null,
+    "served_matches": true,
+    "served_model": "global.anthropic.claude-haiku-5-5",
+    "text": "DONE",
+    "tools": [
+      "write"
+    ],
+    "usage": {
+      "cacheRead": 11950,
+      "cacheWrite": 12160,
+      "cost_usd": 0.001728,
+      "input": 6,
+      "output": 176
+    }
+  },
+  "requested_model": "amazon-bedrock/global.anthropic.claude-haiku-5-5",
+  "served_matches": true,
+  "served_model": "global.anthropic.claude-haiku-5-5",
+  "text": "DONE",
+  "tools": [
+    "write"
+  ],
+  "transcript_entries": 5,
+  "usage": {
+    "cacheRead": 11950,
+    "cacheWrite": 12160,
+    "cost_usd": 0.001728,
+    "input": 6,
+    "output": 176
+  }
+}

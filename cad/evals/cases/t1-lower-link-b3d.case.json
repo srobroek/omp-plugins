@@ -1,0 +1,17 @@
+{
+  "id": "t1-lower-link-b3d",
+  "tier": "T1",
+  "tags": ["T1-build123d", "T1", "build123d", "fdm", "holes"],
+  "kernel": "build123d",
+  "prompt": "This repository is a hardware project whose design record lives in hw/. Use the cad plugin's single-part flow to add one part to it.\n\nPart: PN LAL-0001, rev X1, title \"Lamp arm lower link\", process fdm, material PETG, make_buy make.\nKernel: build123d 0.13.\nGeometry: a flat link 6 mm thick and 16 mm wide with fully rounded (semicircular) ends. Two Ø5.5 mm through pin holes, one at the centre of each rounded end, 120 mm apart centre to centre. No other features.\n\nDeliver hw/parts/LAL-0001/part.yaml and hw/parts/LAL-0001/model.py, run the model, and export the solid as STEP AP242 to hw/parts/LAL-0001/LAL-0001.step.",
+  "gate_answers": [
+    {
+      "when": "(?i)\\b(approve|approval|confirm|proceed|go ahead|shall i|should i|ready to|commit batch)\\b",
+      "reply": "Approved. Commit batch and continue through to the exported STEP without further questions.",
+      "max_uses": 3
+    }
+  ],
+  "seed": "desk-lamp",
+  "deliverables": {"pn": "LAL-0001", "step": "hw/parts/LAL-0001/LAL-0001.step"},
+  "truth": "truth/t1-lower-link-b3d"
+}

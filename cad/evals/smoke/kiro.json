@@ -1,0 +1,49 @@
+{
+  "argv": [
+    "kiro-cli",
+    "chat",
+    "--no-interactive",
+    "--agent-engine",
+    "v3",
+    "--model",
+    "claude-haiku-5.5",
+    "--output-format",
+    "stream-json",
+    "--trust-tools=fs_read,fs_write,execute_bash,glob,grep",
+    "--trust-workspace",
+    "Create a file named hello.txt whose entire content is the word ok, then reply with the single word DONE."
+  ],
+  "at": "2026-10-26T09:59:43+00:00",
+  "file_written": true,
+  "harness": "kiro",
+  "latency_s": 25.898,
+  "ok": true,
+  "reparsed_with_current_adapter": {
+    "error": null,
+    "served_matches": true,
+    "served_model": "claude-haiku-5.5",
+    "text": "DONE",
+    "tools": [
+      "Write File"
+    ],
+    "usage": {
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "credits": 0.160723,
+      "input": 0,
+      "output": 0
+    }
+  },
+  "requested_model": "claude-haiku-5.5",
+  "served_matches": false,
+  "served_model": null,
+  "text": "",
+  "tools": [],
+  "transcript_entries": 0,
+  "usage": {
+    "cacheRead": 0,
+    "cacheWrite": 0,
+    "input": 0,
+    "output": 0
+  }
+}

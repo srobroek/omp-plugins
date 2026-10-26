@@ -1,0 +1,9 @@
+PN: LBP-0001
+rev: X1
+title: Lamp base plate
+material: aluminium 6061-T6
+process: cnc
+finish: bead blasted, clear anodised
+mass_target: 85 g
+make_buy: make
+supplier: null
