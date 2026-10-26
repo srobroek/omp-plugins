@@ -129,6 +129,13 @@ jobs:
           done < <(git ls-files '*/skills/*/test_*.py')
           exit $status
 
+      # Claude Code, Kiro and OpenCode agent files are generated from the canonical
+      # OMP agents; a hand edit or a stale render fails here.
+      - name: CAD harness agents are current
+        run: |
+          python3 -m unittest cad/harness/test_generate.py -v
+          python3 cad/harness/generate.py --check
+
       # Every extension module must at least parse and bundle. Committed dist/
       # bundles must match a fresh build (git installs run no install step on the
       # consumer's machine); the check fails when a bundle is stale.
