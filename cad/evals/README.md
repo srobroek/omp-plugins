@@ -128,7 +128,7 @@ python3 cad/evals/run.py inventory --harness omp --model amazon-bedrock/global.a
 
 # One cheap live call in a clean trial: served model, usage, inventory, leaks, raw stream, and what the trial
 # left on the host (shared temp entries, user-store changes). Exits 0 only when isolation is clean and the
-# host shows no change.
+# host shows no change, and 2 without a call when the harness's preflight refuses (Kiro login too close to expiry).
 python3 cad/evals/run.py smoke --harness omp --model amazon-bedrock/global.anthropic.claude-haiku-5-5 --out /tmp/smoke
 ```
 
@@ -137,7 +137,7 @@ A rerun into the same `--out` resumes:
 - a `(case, rep)` with a row in `results.jsonl` is skipped;
 - a slot that only errored runs again.
 
-To retry a whole cell, delete its directory. `--keep-sandboxes` keeps each trial directory for inspection, and `--concurrency` overrides the matrix value.
+To retry a whole cell, delete its directory. `--keep-sandboxes` keeps each trial directory for inspection, and `--concurrency` overrides the matrix value. A harness whose preflight refuses has none of its cells started: the reason goes to stderr and the pending slots count as `not_started`. A trial refused later in a long run lands in `errors.jsonl` as `auth_error`, and a rerun picks it up.
 
 The pilot writes traces for every pilot case because no split exists yet. A ratchet variant run must pass `--train-ids`, one case id per line, so that test cases never get transcripts.
 
@@ -148,7 +148,7 @@ The pilot writes traces for every pilot case because no split exists yet. A ratc
   - `grade` (the metric map above), `explanation`, `status` (`ok`, or `truncated` when the turns ran out or the model hit its length limit);
   - `model` (the served id, read from the stream), `usage`, `latency_s`;
   - `harness`, `requested_model`, `turns`, `retries`;
-  - `isolation` (`clean` or `contaminated`), `leaks`, `inventory` and `isolation_mechanism`. `inventory` holds what the harness reported loading, the harness `version` when it reports one, and `baseline`: the bundled items this run loaded that no supported setting removes (`loaded`) and the harness version that list was declared for (`declared_for`).
+  - `isolation` (`clean` or `contaminated`), `leaks`, `inventory` and `isolation_mechanism`. `inventory` holds what the harness reported loading; the harness `version`, from its stream (Claude Code's `system/init`) or its CLI (`omp --version`, `kiro-cli --version`, `opencode --version`), run model-free after the turn; and `baseline`: the bundled items this run loaded that no supported setting removes (`loaded`) and the harness version that list was declared for (`declared_for`).
 - `errors.jsonl`: attempts with nothing scorable, each with a `failure_class`:
 
   | Class | Meaning |
@@ -160,7 +160,7 @@ The pilot writes traces for every pilot case because no split exists yet. A ratc
   | `model_unverified` | The stream carried no served model |
   | `truth_leak` | The stream mentions the hidden truth directory |
   | `plugin_missing` | The staged plugin lacks what the harness loads |
-  | `auth_error` | AWS credentials could not be exported from the `[auth]` profile |
+  | `auth_error` | AWS credentials could not be exported from the `[auth]` profile, or the Kiro login a trial would copy expires too soon |
   | `grader_error` | A grader could not run |
   | `runner_error` | An unexpected runner exception |
 
@@ -174,7 +174,7 @@ The pilot writes traces for every pilot case because no split exists yet. A ratc
 
 Trials are comparable only if each harness loads the cad plugin and nothing else of the user's. Every child process gets an environment built from an allowlist (`PATH`, locale, user, uv cache locations); nothing else of the user's shell is inherited. `TMPDIR`, `TMP` and `TEMP` point at the trial's own `tmp/`, which is removed with the trial; Claude Code also gets `CLAUDE_CODE_TMPDIR`, because its own temp root is `/tmp` on macOS whatever `TMPDIR` says ([env vars](https://code.claude.com/docs/en/env-vars)). AWS credentials are exported once per window from the `[auth]` profile (`aws configure export-credentials`) and passed as environment variables, so no harness reads `~/.aws` or runs the profile's credential process.
 
-Each row then records what the harness itself reported loading, and the leaks: everything that is neither the cad plugin nor in that harness's declared baseline, plus any capability cad needs that is missing. A baseline is what a harness bundles and no supported setting removes, observed in a clean run of one harness version. Each row's `inventory.baseline` lists the baseline items it loaded and the version they were declared for, and a row whose harness reports another version leaks `baseline: declared for …`. An inventory the harness did not report counts as contaminated. `summary` and `judge` refuse contaminated cells unless `--allow-contaminated`.
+Each row then records what the harness itself reported loading, and the leaks: everything that is neither the cad plugin nor in that harness's declared baseline, plus any capability cad needs that is missing. A baseline is what a harness bundles and no supported setting removes, observed in a clean run of one harness version. Each row's `inventory.baseline` lists the baseline items it loaded and the version they were declared for. A row whose harness reports another version, or no version, leaks `baseline: declared for …` until the baseline is observed again; this holds for every harness, including those that bundle nothing. An inventory the harness did not report counts as contaminated. `summary` and `judge` refuse contaminated cells unless `--allow-contaminated`.
 
 | Harness | Mechanism | Inventory source | Smoke result (`smoke/`) |
 |---|---|---|---|
@@ -187,7 +187,9 @@ Each row then records what the harness itself reported loading, and the leaks: e
 
 **Host effects.** `run.py smoke` snapshots the shared temp directories (`$TMPDIR` and `/tmp`, two levels deep) and the harness's user stores (Kiro: `~/Library/Application Support/kiro-cli` and `~/.kiro`, with per-table row counts and digests of every SQLite file) before staging and after cleanup. It records what the harness wrote to the trial's own `TMPDIR`, attributes shared-temp additions to the trial when their path names the trial (Claude slugs the work dir) or matches a name in the trial's `TMPDIR`, lists every other addition as a concurrent process's, and reports added, removed or changed store entries, changed tables and rows that mention the trial. `host.unchanged` is strict, so a user's Kiro running beside the smoke makes it false; compare with `smoke/kiro-store-control.json`.
 
-Residue: OMP, Kiro and OpenCode report no version in their inventory, so their baselines (OMP's bundled agents and commands; none for Kiro and OpenCode) are not checked against the running version. A Kiro trial that outlives the copied access token refreshes it inside its own copy only; the user's database keeps its token, and the user's Kiro refreshes that one itself.
+**Kiro login.** A trial never refreshes the token it copies: a refresh inside the trial would leave the user's store holding an older token. Before a Kiro cell starts, and again before each Kiro trial, the runner reads the access token's expiry from the user's store (read-only) and refuses unless it outlives the trial's ceiling (`case_timeout_s`, or `--timeout` for a smoke) by 5 minutes. Kiro's tokens last about an hour. The runner never refreshes on the user's behalf. The refusal tells the user to refresh their own login: `kiro-cli logout`, then `kiro-cli login` ([CLI commands](https://kiro.dev/docs/reference/cli-commands.md); logout is user-wide). The alternative is to wait for their own Kiro to refresh the token shortly before it expires. `kiro-cli whoami` only reports the login: it left a valid token's expiry unchanged.
+
+The smoke records in `smoke/` predate the CLI version lookup, so their `inventory.version` is null for OMP, Kiro and OpenCode. The CLIs reported the declared versions (18.12.3, 2.34.0, 2.1.4) when those smokes ran.
 
 ## Adapters
 

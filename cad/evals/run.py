@@ -211,7 +211,8 @@ def cmd_inventory(args, matrix) -> int:
         if not adapter.probe(paths, args.model, []):
             print(f"{args.harness} reports its components only from a turn; use `smoke`", file=sys.stderr)
             return 2
-        result = runner.isolation_of(adapter, paths, runner.run_probe(adapter, paths, host, args.model, []), [])
+        result = runner.isolation_of(adapter, paths, runner.run_probe(adapter, paths, host, args.model, []), [],
+                                     runner.harness_version(adapter, paths, host))
     finally:
         shutil.rmtree(paths.root, ignore_errors=True)
     print(json.dumps(result, indent=2, sort_keys=True))
@@ -225,6 +226,10 @@ def cmd_smoke(args, matrix) -> int:
     changes to the harness's user stores, both of which must be none."""
     adapter = adapters.build(args.harness, matrix.harness_cfg(args.harness))
     host = runner.HostSource(matrix.raw.get("auth", {})).get()
+    refusal = adapter.preflight(host, args.timeout)
+    if refusal:
+        print(f"{args.harness}: smoke not started: {refusal}", file=sys.stderr)
+        return 2
     # Snapshots come first, so staging (the Kiro login copy) is inside the window.
     shared = sorted({Path(tempfile.gettempdir()).resolve(), Path("/tmp").resolve()})
     stores = {store: store_state(store) for store in adapter.user_stores(host)}
@@ -243,7 +248,7 @@ def cmd_smoke(args, matrix) -> int:
             "ok": True, "served_model": turn.model, "served_matches": adapters.served_matches(args.model, turn.model),
             "usage": turn.usage, "text": turn.text, "tools": turn.tools, "transcript_entries": len(turn.transcript),
             "file_written": hello.is_file() and hello.read_text().strip() == "ok",
-            **runner.isolation_of(adapter, paths, probe, raw),
+            **runner.isolation_of(adapter, paths, probe, raw, runner.harness_version(adapter, paths, host)),
         }
     except runner.TrialError as exc:
         record |= {"ok": False, "failure_class": exc.failure_class, "detail": exc.detail}

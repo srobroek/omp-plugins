@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .base import Adapter, Baseline, Host, Inventory, TrialPaths, Turn, audit, served_matches
+from .base import Adapter, Baseline, Host, Inventory, TrialPaths, Turn, audit, parse_version, served_matches
 from .claude import ClaudeAdapter
 from .kiro import KiroAdapter
 from .omp import OmpAdapter
@@ -29,4 +29,6 @@ def build(harness: str, cfg: dict) -> Adapter:
     return factory(cfg)
 
 
-__all__ = ["Adapter", "Baseline", "HARNESSES", "Host", "Inventory", "TrialPaths", "Turn", "audit", "build", "served_matches"]
+__all__ = [
+    "Adapter", "Baseline", "HARNESSES", "Host", "Inventory", "TrialPaths", "Turn", "audit", "build", "parse_version", "served_matches",
+]

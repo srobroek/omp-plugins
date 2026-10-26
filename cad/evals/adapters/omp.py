@@ -63,6 +63,12 @@ class OmpAdapter:
     def user_stores(self, host: Host) -> list[Path]:
         return []  # sessions go to --session-dir, everything else to the trial HOME
 
+    def preflight(self, host: Host, ceiling_s: float) -> str | None:
+        return None  # Bedrock credentials are re-exported per trial with margin (HostSource)
+
+    def version_command(self) -> list[str]:
+        return [self.bin, "--version"]  # `omp/18.12.3`
+
     def probe(self, paths: TrialPaths, model: str, stream_lines: list[str]) -> list[tuple[list[str], str]]:
         argv = [self.bin, "--mode", "rpc", "--no-session", "--model", model, *self._plugin_args(paths)]
         stdin = "".join(json.dumps(c) + "\n" for c in ({"id": _STATE_ID, "type": "get_state"}, {"id": _COMMANDS_ID, "type": "get_available_commands"}))

@@ -102,8 +102,9 @@ EVAL_AGENT = "cad-eval"  # the sandbox-local agent a harness is pinned to, where
 @dataclass(frozen=True)
 class Baseline:
     """What a harness bundles that no supported setting turns off, observed in a clean
-    run of one harness version. Rows may load these items; a run that reports another
-    version is not covered by the declaration and counts as a leak."""
+    run of one harness version. Rows may load these items. The declaration covers that
+    version only: a run whose harness reports another version, or no version, leaks
+    until the baseline is observed again."""
 
     version: str
     items: dict[str, frozenset[str]] = field(default_factory=dict)
@@ -120,7 +121,7 @@ class Inventory:
     context: list[str] = field(default_factory=list)  # instruction files, steering, rules, memory
     mcp: list[str] = field(default_factory=list)
     missing: list[str] = field(default_factory=list)  # capabilities cad needs that the harness withheld
-    version: str | None = None  # the harness version, when the harness reports it
+    version: str | None = None  # the harness version: from its stream (Claude Code) or its CLI
     observed: bool = False  # the harness reported its components; False means nothing to verify
 
     def as_dict(self) -> dict[str, list[str]]:
@@ -141,13 +142,22 @@ def _bare(name: str) -> str:
     return name
 
 
+_VERSION = re.compile(r"\d+\.\d+\.\d+")
+
+
+def parse_version(text: str) -> str | None:
+    """`omp/18.12.3`, `kiro-cli 2.34.0`, `opencode v2.1.4` -> the bare `x.y.z`."""
+    match = _VERSION.search(text or "")
+    return match.group(0) if match else None
+
+
 def audit(inventory: Inventory, paths: TrialPaths, baseline: Baseline) -> tuple[list[str], dict[str, list[str]]]:
     """(leaks, bundled). Leaks: every loaded component that is neither the cad plugin
     nor in the harness's baseline, every capability cad needs that is missing, and a
-    baseline used under a harness version it was not declared for. Instruction files
-    pass only when they are the cad plugin's own (the staged copy or `<work>/cad`).
-    Bundled: the baseline items this run loaded, by category. Fails closed: an
-    unobserved inventory leaks."""
+    harness version the baseline was not declared for (an unknown version included).
+    Instruction files pass only when they are the cad plugin's own (the staged copy or
+    `<work>/cad`). Bundled: the baseline items this run loaded, by category. Fails
+    closed: an unobserved inventory leaks."""
     if not inventory.observed:
         return ["inventory: the harness reported no loaded components to verify"], {}
     allow = cad_allowlist(paths.plugin)
@@ -166,7 +176,9 @@ def audit(inventory: Inventory, paths: TrialPaths, baseline: Baseline) -> tuple[
                 continue
             found.add(f"{cat}:{item}")
     found.update(f"missing:{m}" for m in inventory.missing)
-    if bundled and inventory.version is not None and inventory.version != baseline.version:
+    if inventory.version is None:
+        found.add(f"baseline: declared for {baseline.version}, the harness reported no version")
+    elif inventory.version != baseline.version:
         found.add(f"baseline: declared for {baseline.version}, the harness reports {inventory.version}")
     return sorted(found), {cat: sorted(items) for cat, items in sorted(bundled.items())}
 
@@ -187,6 +199,14 @@ class Adapter(Protocol):
     def user_stores(self, host: Host) -> list[Path]:
         """User-level state the harness keeps outside its config (login, sessions,
         history) that a trial must leave untouched; the smoke fingerprints it."""
+
+    def preflight(self, host: Host, ceiling_s: float) -> str | None:
+        """Why no trial lasting up to `ceiling_s` may start now (a reason for the user),
+        or None. Kiro: the login a trial would copy must outlive the trial."""
+
+    def version_command(self) -> list[str]:
+        """Model-free argv whose stdout names the harness version; [] when the turn's
+        own stream reports it (Claude Code's `system/init`)."""
 
     def probe(self, paths: TrialPaths, model: str, stream_lines: list[str]) -> list[tuple[list[str], str]]:
         """Model-free commands (argv, stdin), run after the trial's first turn, whose

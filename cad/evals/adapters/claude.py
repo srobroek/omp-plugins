@@ -167,6 +167,12 @@ class ClaudeAdapter:
     def user_stores(self, host: Host) -> list[Path]:
         return []  # sessions and history follow CLAUDE_CONFIG_DIR into the trial
 
+    def preflight(self, host: Host, ceiling_s: float) -> str | None:
+        return None  # Bedrock credentials are re-exported per trial with margin (HostSource)
+
+    def version_command(self) -> list[str]:
+        return []  # system/init reports `claude_code_version`
+
     def probe(self, paths: TrialPaths, model: str, stream_lines: list[str]) -> list[tuple[list[str], str]]:
         return []  # system/init in the first turn's stream is the inventory
 
