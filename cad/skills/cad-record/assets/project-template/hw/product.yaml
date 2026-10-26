@@ -4,5 +4,5 @@ units: mm
 regime: iso
 general_tolerance: "ISO 2768-m"
 flow:
-  stage: L1_LAYOUT
+  stage: layout
   recheck_from: layout
