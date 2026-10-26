@@ -117,6 +117,10 @@ jobs:
           python3 scripts/test-checker-contracts.py
       - name: Files duplicated across plugins are identical
         run: python3 scripts/check-shared-detector.py
+      # `uv`/`uvx` are not preinstalled on GitHub runners. Skill tests run PEP 723
+      # scripts through `uv run --script`, so uv is installed before them.
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+
       - name: Skill Python tests
         run: |
           status=0
@@ -179,9 +183,6 @@ jobs:
           done < <(git ls-files '*/rules/*.test.ts' | xargs -rn1 dirname | sort -u)
       - name: Bash gate-chain latency benchmark
         run: if [ -f scripts/bench-bash-gates.ts ]; then bun run bench:gates; else echo "bench:gates fixture not present yet"; fi
-
-      # `uvx` is not preinstalled on GitHub runners.
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
 
       # The Dependabot policy is a cross-file contract: the group name that
       # dependabot-automerge.yml merges on, its wait for this workflow and the
