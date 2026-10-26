@@ -1,0 +1,153 @@
+# cad-touch: ECO-style change to a released part, with an explicit revision bump.
+# Pour with product, scope, part, from_rev, to_rev, decision, and change vars.
+formula = "cad-touch"
+description = "ECO-style released-part change for {{product}} / {{part}}: record impact, bump revision, recheck affected design, and release"
+type = "workflow"
+
+[vars.product]
+required = true
+description = "hardware product id"
+
+[vars.scope]
+required = true
+description = "hardware project paths this change may affect"
+
+[vars.part]
+required = true
+pattern = "^[A-Z]{2,5}-[0-9]{4}$"
+description = "released part number"
+
+[vars.from_rev]
+required = true
+pattern = "^[A-HJ-NPRTUVWY]$"
+description = "current released revision of the part"
+
+[vars.to_rev]
+required = true
+pattern = "^[A-HJ-NPRTUVWY]$"
+description = "next valid released revision; must be the immediate revision successor"
+
+[vars.decision]
+required = true
+pattern = "^DR-[0-9]{3}$"
+description = "design-record decision entry used as the ECO change record"
+
+[vars.change]
+required = true
+description = "approved requested change and reason"
+
+[vars.kernel]
+default = "cadquery"
+pattern = "^(cadquery|build123d)$"
+description = "modeling kernel environment; keep the two kernel environments separate"
+
+[vars.process_default]
+default = "fdm"
+pattern = "^(fdm|cnc)$"
+description = "default manufacturing process"
+
+[[steps]]
+id = "eco-impact"
+title = "Record ECO {{decision}} and impact for {{part}}"
+type = "task"
+priority = 1
+labels = ["cad", "phase:eco"]
+description = "Run skill://cad-record and skill://cad-recheck on the released baseline for {{product}}. Record {{change}} as decisions/{{decision}}. Identify the changed part and only its affected dependents from assembly/interfaces/BOM; state the baseline {{from_rev}} and proposed immediate successor {{to_rev}}. This is a released design after LAYOUT and DESIGN freeze, so never rerun or reopen unaffected parts."
+
+[steps.metadata]
+skill_hints = "cad-record, cad-recheck, cad-flow"
+
+[[steps]]
+id = "intent-gate"
+title = "INTENT gate: approve ECO {{decision}}"
+type = "task"
+needs = ["eco-impact"]
+labels = ["cad", "phase:gate"]
+description = "Present the ECO rationale, changed part, impact set, and proposed revision bump. Obtain explicit approval of this intent and its affected-part/dependent set. Do not treat the original release or a recommendation as consent. Only bd gate resolve closes this human gate."
+
+[steps.gate]
+type = "human"
+timeout = "72h"
+
+[[steps]]
+id = "revise-part"
+title = "Revise {{part}} from {{from_rev}} to {{to_rev}}"
+type = "task"
+needs = ["intent-gate"]
+labels = ["cad", "phase:eco", "phase:l2-parts"]
+description = "Change only {{part}} and the explicitly impacted dependent parts. Update part.yaml to {{to_rev}} and make the corresponding model.py change in the selected {{kernel}} environment; {{to_rev}} must be the immediate successor of {{from_rev}} under the design-record rev sequence. Keep unaffected part files and revisions unchanged. Draft and render live; no checks run during the preview. Commit the decision/design-record entry and bead note for the approved batch."
+
+[steps.metadata]
+skill_hints = "cad-model, cad-record, cad-flow"
+execution_mode = "interactive"
+
+[[steps]]
+id = "recheck-detail-analysis"
+title = "Recheck L3-L4 and dependencies for the ECO impact set"
+type = "task"
+needs = ["revise-part"]
+labels = ["cad", "phase:l3-detail", "phase:l4-analysis"]
+description = "Run skill://cad-fits and skill://cad-drawings for impacted parts, then skill://cad-analysis at the worst-case pose. Recheck L3 detail, tolerances, fasteners, FDM/CNC rules, drawing, BOM, interference, clearance, stack-up, kinematic sweep when applicable, and static FEA for {{part}} plus its affected dependents. Use skill://cad-recheck: post-LAYOUT changes re-run this stage's checks and every earlier applicable check only for the changed/affected set; preserve evidence for all untouched parts. Update verification.csv and the ECO record."
+
+[steps.metadata]
+skill_hints = "cad-fits, cad-drawings, cad-bom, cad-analysis, cad-recheck, cad-record"
+
+[[steps]]
+id = "mech-critique"
+title = "CRITIQUE ECO mechanical change"
+type = "task"
+needs = ["recheck-detail-analysis"]
+labels = ["cad", "phase:critique"]
+description = "Spawn cad-mech-reviewer read-only in the SAME parallel batch as dfm-critique. Review the delta, load paths, interfaces, tolerances, failure modes, and changed verification evidence only. Return PASS, MINOR, or MAJOR with named evidence; do not edit files or ask the user."
+
+[steps.metadata]
+skill_hints = "cad-review-mech"
+execution_agent_type = "cad-mech-reviewer"
+execution_mode = "subagent"
+
+[[steps]]
+id = "dfm-critique"
+title = "CRITIQUE ECO manufacturability"
+type = "task"
+needs = ["recheck-detail-analysis"]
+labels = ["cad", "phase:critique"]
+description = "Spawn cad-dfm-reviewer read-only in the SAME parallel batch as mech-critique. Review only affected parts: process, access, stock/tool access, tolerances, material, finish, and drawing. Return PASS, MINOR, or MAJOR with named evidence; do not edit files or ask the user."
+
+[steps.metadata]
+skill_hints = "cad-review-dfm"
+execution_agent_type = "cad-dfm-reviewer"
+execution_mode = "subagent"
+
+[[steps]]
+id = "reconcile"
+title = "Reconcile ECO findings and update release records"
+type = "task"
+needs = ["mech-critique", "dfm-critique"]
+labels = ["cad", "phase:reconcile"]
+description = "Reconcile both critiques against the ECO delta and test evidence. Resolve reproducible MAJOR and agreed MINOR findings; report unreproduced findings. Update BOM and verification records for affected parts only, preserve unaffected release evidence, and record the final disposition in decisions/{{decision}}."
+
+[steps.metadata]
+skill_hints = "cad-record, cad-bom, cad-recheck"
+
+[[steps]]
+id = "release-package"
+title = "Assemble and validate ECO release {{to_rev}}"
+type = "task"
+needs = ["reconcile"]
+labels = ["cad", "phase:release"]
+description = "Run skill://cad-record, skill://cad-bom, and skill://cad-drawings to update the release manifest, STEP AP242, drawings, EBOM, verification matrix, and docs for the affected revision/dependent set. Preserve unchanged part artifacts. Validate the revision transition {{from_rev}} -> {{to_rev}}, ECO decision {{decision}}, and all release evidence. Use FreeCAD 1.1.4 only; no slicer, CAM, or machine tooling."
+
+[steps.metadata]
+skill_hints = "cad-record, cad-bom, cad-drawings"
+
+[[steps]]
+id = "release-gate"
+title = "RELEASE gate: approve ECO {{decision}}"
+type = "task"
+needs = ["release-package"]
+labels = ["cad", "phase:gate"]
+description = "Present the ECO record, immediate revision bump, impact set, revised artifacts, and validation. Obtain explicit user approval to release the change; leave unresolved otherwise. Only bd gate resolve closes this human gate."
+
+[steps.gate]
+type = "human"
+timeout = "72h"
