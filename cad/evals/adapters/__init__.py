@@ -11,7 +11,7 @@ from .opencode import OpencodeAdapter
 _FACTORIES = {
     "omp": lambda cfg: OmpAdapter(bin=cfg.get("bin", "omp"), extra_env=cfg.get("env", {})),
     "claude": lambda cfg: ClaudeAdapter(
-        bin=cfg.get("bin", "claude"), bare=cfg.get("bare", False), bypass_launcher=cfg.get("bypass_launcher", True),
+        bin=cfg.get("bin", "claude"), bare=cfg.get("bare", False),
         setting_sources=cfg.get("setting_sources", "project,local"), extra_env=cfg.get("env", {}),
     ),
     "kiro": lambda cfg: KiroAdapter(bin=cfg.get("bin", "kiro-cli"), extra_env=cfg.get("env", {})),

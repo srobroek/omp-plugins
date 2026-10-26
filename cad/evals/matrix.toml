@@ -17,7 +17,7 @@ cases = ["t1-lower-link-cq", "t1-lower-link-b3d", "t1-base-plate-cq"]
 reps = 1
 
 [auth]                   # trials get no ~/.aws: credentials are exported from this profile into env
-# aws_profile = "<profile>"   # default: $AWS_PROFILE
+# aws_profile = "<profile>"   # a dedicated Bedrock-only profile (README "Credentials"); --aws-profile overrides; default: $AWS_PROFILE
 aws_region = "us-east-1"
 
 [judge]                  # pairwise blind judge; must differ from every model under test
@@ -45,14 +45,13 @@ models = [
   "amazon-bedrock/global.moonshotai.kimi-k3",
 ]
 
-[harness.kiro]          # runs with --trust-all-tools inside the sandbox, like the other harnesses' bypass modes
+[harness.kiro]          # --trust-all-tools pre-approves every tool, like the other harnesses' bypass modes; nothing confines it to the trial
 bin = "kiro-cli"
 models = ["claude-opus-5.5", "kimi-k3"]
 
 [harness.claude]
-bin = "claude"
+bin = "claude"           # an Amazon toolbox launcher runs as the real binary behind it; without one, the cells are refused
 bare = false             # --bare drops the Skill, Task, Write, Glob and Grep tools: cad skills become unreachable
-bypass_launcher = true   # run the real binary behind the Amazon toolbox launcher, which injects builder rules
 setting_sources = "project,local"   # user settings (enabledPlugins, hooks, env) never load
 models = ["global.anthropic.claude-opus-5-5"]
 

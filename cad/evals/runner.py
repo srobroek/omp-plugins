@@ -25,6 +25,7 @@ import tempfile
 import threading
 import time
 import tomllib
+from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -123,16 +124,71 @@ def load_matrix(path: Path) -> Matrix:
 _HOST_KEEP = ("PATH", "LANG", "LC_ALL", "LC_CTYPE", "USER", "LOGNAME", "SHELL")
 _GIT_ENV = {"GIT_TERMINAL_PROMPT": "0", "PAGER": "cat", "GIT_PAGER": "cat", "TERM": "dumb"}
 _CRED_MARGIN_S = 35 * 60  # longer than the default case ceiling
+_CRED_KEYS = ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN")
+TRIAL_PREFIX = "cad-eval-"  # every trial root is mkdtemp(prefix=TRIAL_PREFIX) in the temp directory
+
+
+def _forms(path: Path) -> list[str]:
+    """`path` as given and resolved (macOS `/var` is `/private/var`), longest first."""
+    return sorted({str(path), str(path.resolve())}, key=len, reverse=True)
+
+
+def _whole(path: str) -> str:
+    """A regex for `path` as a whole path, never the prefix of a longer name."""
+    return re.escape(path) + r"(?![\w.-])"
+
+
+class Redactor:
+    """The one scrub every record writer applies: results and errors rows, traces, raw
+    streams, and the smoke, probe and judge records. A credential value the runner
+    exported becomes `<redacted>`, a trial root `<trial>`, the temp directory `$TMPDIR`
+    and the user's home `~`, so a model that prints its environment, or a harness that
+    echoes paths, leaves neither a secret nor the user's layout on disk."""
+
+    def __init__(self, home: Path):
+        temp = _forms(Path(tempfile.gettempdir()))
+        self._paths = [
+            (re.compile("|".join(re.escape(f"{t}/{TRIAL_PREFIX}") + "[A-Za-z0-9_]+" for t in temp)), "<trial>"),
+            (re.compile("|".join(map(_whole, temp))), "$TMPDIR"),
+            (re.compile("|".join(map(_whole, _forms(home)))), "~"),
+        ]
+        self._secrets: set[str] = set()
+        self._lock = threading.Lock()
+
+    def add_secrets(self, values: Iterable[str]) -> None:
+        with self._lock:
+            self._secrets.update(v for v in values if v)
+
+    def __call__(self, value):
+        with self._lock:
+            secrets = sorted(self._secrets, key=len, reverse=True)
+        return self._scrub(value, secrets)
+
+    def _scrub(self, value, secrets: list[str]):
+        if isinstance(value, str):
+            for secret in secrets:
+                value = value.replace(secret, "<redacted>")
+            for pattern, replacement in self._paths:
+                value = pattern.sub(replacement, value)
+            return value
+        if isinstance(value, dict):
+            return {self._scrub(k, secrets): self._scrub(v, secrets) for k, v in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [self._scrub(v, secrets) for v in value]
+        return value
 
 
 class HostSource:
     """Builds the `Host` handed to adapters, re-exporting AWS credentials when they
     near expiry. Credentials are exported from the host profile once per window, so
-    the harness never reads ~/.aws or runs the profile's credential_process itself."""
+    the harness never reads ~/.aws or runs the profile's credential_process itself.
+    Only temporary credentials are accepted, and every value exported is registered
+    with `redact`, the scrub all records pass through."""
 
     def __init__(self, auth: dict):
         self.profile = auth.get("aws_profile") or os.environ.get("AWS_PROFILE")
         self.region = auth.get("aws_region", "us-east-1")
+        self.redact = Redactor(Path.home())
         self._lock = threading.Lock()
         self._aws: dict[str, str] = {}
         self._expires = 0.0
@@ -159,14 +215,21 @@ class HostSource:
             creds = json.loads(done.stdout)
         except (OSError, subprocess.SubprocessError, json.JSONDecodeError) as exc:
             raise TrialError("auth_error", f"could not export AWS credentials for profile {self.profile}: {exc}") from exc
+        expiry = creds.get("Expiration")
+        if not expiry:  # long-lived access keys: a trial would hold them with no end
+            raise TrialError("auth_error", (
+                f"profile {self.profile} exports credentials with no Expiration (long-lived access keys); trials take"
+                " temporary credentials only. Use a dedicated Bedrock-only SSO or role profile (cad/evals/README.md,"
+                " \"Credentials\") through [auth] aws_profile or --aws-profile"
+            ))
         self._aws = {
             "AWS_ACCESS_KEY_ID": creds["AccessKeyId"], "AWS_SECRET_ACCESS_KEY": creds["SecretAccessKey"],
             "AWS_REGION": self.region, "AWS_DEFAULT_REGION": self.region,
         }
         if creds.get("SessionToken"):
             self._aws["AWS_SESSION_TOKEN"] = creds["SessionToken"]
-        expiry = creds.get("Expiration")
-        self._expires = datetime.fromisoformat(expiry).timestamp() if expiry else float("inf")
+        self.redact.add_secrets(self._aws[key] for key in _CRED_KEYS if key in self._aws)
+        self._expires = datetime.fromisoformat(expiry).timestamp()
 
     def get(self) -> adapters.Host:
         with self._lock:
@@ -179,31 +242,40 @@ class HostSource:
 
 
 def stage_trial(case: dict | None, adapter, host: adapters.Host, *, require_plugin: bool) -> TrialPaths:
-    root = Path(tempfile.mkdtemp(prefix="cad-eval-"))
+    root = Path(tempfile.mkdtemp(prefix=TRIAL_PREFIX))
     paths = TrialPaths(root=root, work=root / "work", plugin=root / "cad", state=root / "state", home=root / "home")
-    if PLUGIN_ROOT.is_dir():
-        shutil.copytree(PLUGIN_ROOT, paths.plugin, ignore=_STAGE_IGNORE)
-    else:
-        paths.plugin.mkdir()
-    if require_plugin and not (paths.plugin / adapter.plugin_marker).exists():
+    try:
+        if PLUGIN_ROOT.is_dir():
+            shutil.copytree(PLUGIN_ROOT, paths.plugin, ignore=_STAGE_IGNORE)
+        else:
+            paths.plugin.mkdir()
+        if require_plugin and not (paths.plugin / adapter.plugin_marker).exists():
+            raise TrialError("plugin_missing", f"{adapter.name} needs {adapter.plugin_marker} under {PLUGIN_ROOT}")
+        paths.work.mkdir()
+        paths.home.mkdir()
+        paths.tmp.mkdir()
+        if case is not None:
+            shutil.copytree(case["_seed"], paths.work, dirs_exist_ok=True)
+        adapter.prepare(paths, host)
+        # The baseline commit includes the harness files prepare() placed in the sandbox,
+        # so the agent's own changes are the only diff.
+        _git(paths, host, "init", "-q")
+        _git(paths, host, "add", "-A")
+        _git(paths, host, "-c", "user.name=cad-eval", "-c", "user.email=cad-eval@invalid", "-c", "commit.gpgsign=false",
+             "-c", f"core.hooksPath={os.devnull}", "commit", "-q", "--allow-empty", "-m", "seed")
+    except BaseException:
+        # A trial that never started still holds what prepare() copied in (the Kiro login).
         shutil.rmtree(root, ignore_errors=True)
-        raise TrialError("plugin_missing", f"{adapter.name} needs {adapter.plugin_marker} under {PLUGIN_ROOT}")
-    paths.work.mkdir()
-    paths.home.mkdir()
-    paths.tmp.mkdir()
-    if case is not None:
-        shutil.copytree(case["_seed"], paths.work, dirs_exist_ok=True)
-    adapter.prepare(paths, host)
-    # The baseline commit includes the harness files prepare() placed in the sandbox,
-    # so the agent's own changes are the only diff.
-    _git(paths.work, "init", "-q")
-    _git(paths.work, "add", "-A")
-    _git(paths.work, "-c", "user.name=cad-eval", "-c", "user.email=cad-eval@invalid", "commit", "-q", "--allow-empty", "-m", "seed")
+        raise
     return paths
 
 
-def _git(cwd: Path, *args: str) -> None:
-    subprocess.run(["git", *args], cwd=cwd, env={**os.environ, **_GIT_ENV}, check=True, capture_output=True)
+def _git(paths: TrialPaths, host: adapters.Host, *args: str) -> None:
+    """git in the trial's work tree with none of the user's git setup: no global or
+    system config (hooksPath, gpgsign, templates, excludes) and only the host
+    allowlist in the environment, so no inherited GIT_DIR or GIT_INDEX_FILE."""
+    env = {**host.base_env, "HOME": str(paths.home), "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+    subprocess.run(["git", *args], cwd=paths.work, env=env, check=True, capture_output=True)
 
 
 def run_probe(adapter, paths: TrialPaths, host: adapters.Host, model: str, first_stream: list[str],
@@ -248,12 +320,13 @@ def run_turn(adapter, argv: list[str], paths: TrialPaths, host: adapters.Host, t
         )
     except OSError as exc:
         raise TrialError("adapter_error", f"could not start {argv[0]}: {exc}") from exc
-    with proc:  # closes the pipes and reaps the process on every exit path, the timeout included
+    with proc:  # closes the pipes and reaps the leader on every exit path, the timeout included
         try:
             stdout, stderr = proc.communicate(timeout=timeout_s)
         except subprocess.TimeoutExpired:
-            _kill_group(proc)
             raise TrialError("timeout", f"turn exceeded the {timeout_s:.0f}s remaining in the case ceiling") from None
+        finally:
+            _end_group(proc)
     lines = stdout.splitlines()
     turn = adapter.complete(adapter.parse(lines), lines, paths, env)
     if turn.error:
@@ -285,17 +358,120 @@ def isolation_of(adapter, paths: TrialPaths, probe_outputs: list[str], first_str
     }
 
 
-def _kill_group(proc: subprocess.Popen) -> None:
+def _end_group(proc: subprocess.Popen, grace_s: float = 2.0) -> None:
+    """SIGTERM, then SIGKILL after `grace_s`, to the turn's whole process group, whether
+    the leader timed out or already exited: what the harness left running in its group
+    dies with the turn. The leader is only polled (reaped once it exits), never waited on."""
+    deadline = time.monotonic() + grace_s
     for sig in (signal.SIGTERM, signal.SIGKILL):
         try:
             os.killpg(proc.pid, sig)
-        except ProcessLookupError:
+        except (ProcessLookupError, PermissionError):
             return
+        while time.monotonic() < deadline:
+            proc.poll()
+            try:
+                os.killpg(proc.pid, 0)
+            except (ProcessLookupError, PermissionError):
+                return
+            time.sleep(0.05)
+
+
+def trial_processes(root: Path) -> list[tuple[int, int]]:
+    """(pid, pgid) of every other process whose command line names the trial root."""
+    try:
+        listing = subprocess.run(["ps", "-ax", "-ww", "-o", "pid=", "-o", "pgid=", "-o", "command="],
+                                 capture_output=True, text=True, timeout=30, check=False).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    names = re.compile("|".join(map(_whole, _forms(root))))
+    found = []
+    for line in listing.splitlines():
+        fields = line.split(None, 2)
+        if len(fields) == 3 and fields[0].isdigit() and fields[1].isdigit() and names.search(fields[2]):
+            if int(fields[0]) != os.getpid():
+                found.append((int(fields[0]), int(fields[1])))
+    return found
+
+
+def _signal(pid: int, pgid: int, sig: int) -> None:
+    """Signal a process, or the whole group when it leads one of its own (a detached
+    viewer host, whose OCP viewers and Chromium share its group)."""
+    try:
+        if pid == pgid and pgid != os.getpgrp():
+            os.killpg(pgid, sig)
+        else:
+            os.kill(pid, sig)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def sweep_trial_processes(root: Path, grace_s: float = 2.0) -> None:
+    """SIGTERM, then SIGKILL after `grace_s`, to every process still naming the trial
+    root, with the groups they lead: what escaped the turn's own group, such as a
+    detached cad-viewer host or a cad-concept server started from the trial's plugin."""
+    found = trial_processes(root)
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        for pid, pgid in found:
+            _signal(pid, pgid, sig)
+        deadline = time.monotonic() + grace_s
+        while found and time.monotonic() < deadline:
+            time.sleep(0.1)
+            found = trial_processes(root)
+        if not found:
+            return
+
+
+VIEWER = Path("skills", "cad-viewer", "scripts", "viewer.py")
+
+
+def stop_trial_processes(paths: TrialPaths, env: dict[str, str]) -> None:
+    """Stop what a trial left running once its turns are over. `viewer.py stop`, run
+    with the trial's environment, finds the trial's own viewer session and shuts its
+    host down cleanly; `stop` is the script's stdlib-only path, so the runner's own
+    interpreter runs it without building a uv environment. The sweep then ends
+    whatever still names the trial root."""
+    viewer = paths.plugin / VIEWER
+    if viewer.is_file():
         try:
-            proc.wait(timeout=10)
-            return
-        except subprocess.TimeoutExpired:
-            continue
+            subprocess.run([sys.executable, str(viewer), "stop"], cwd=paths.work, env=env,
+                           capture_output=True, timeout=60, check=False)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    sweep_trial_processes(paths.root)
+
+
+def token_refreshed(harness: str) -> str:
+    """The failure class of a trial that refreshed its copy of the user's login. The
+    trial is recorded as an error and no further trial of that harness starts."""
+    return f"{harness}_token_refreshed"
+
+
+def end_trial(paths: TrialPaths, adapter, host: adapters.Host, *, keep: bool) -> None:
+    """Close a trial: stop what it left running, have the adapter check and delete its
+    copy of the user's login, then remove the trial directory, or keep it and say
+    where. Raises `token_refreshed` afterwards when the trial refreshed that copy."""
+    stop_trial_processes(paths, adapter.env(paths, host))
+    refreshed = adapter.release_login(paths)
+    if keep:
+        print(f"kept sandbox {paths.root}", file=sys.stderr)
+    else:
+        shutil.rmtree(paths.root, ignore_errors=True)
+    if refreshed:
+        print(f"{adapter.name}: {refreshed}", file=sys.stderr)
+        raise TrialError(token_refreshed(adapter.name), refreshed)
+
+
+def _links(directory: str, names: list[str]) -> set[str]:
+    return {name for name in names if os.path.islink(os.path.join(directory, name))}
+
+
+def collect_artifacts(src: Path, dst: Path) -> None:
+    """Copy the case's deliverables for the judge. Symlinks are left out, `src` itself
+    included, so a link the agent made (hw/x -> ~/.aws, or -> /) copies nothing from
+    outside the trial."""
+    if src.is_dir() and not src.is_symlink():
+        shutil.copytree(src, dst, ignore=_links, dirs_exist_ok=True)
 
 
 @dataclass
@@ -373,9 +549,7 @@ def attempt(case: dict, cell: Cell, adapter, cfg: dict, artifact_dir: Path, keep
             graded = grade_trial(case, paths.work, load_truth(case), VALIDATOR if VALIDATOR.is_file() else None)
         except GraderError as exc:
             raise TrialError("grader_error", str(exc)) from exc
-        collect = paths.work / case["deliverables"].get("collect", "hw")
-        if collect.is_dir():
-            shutil.copytree(collect, artifact_dir, dirs_exist_ok=True)
+        collect_artifacts(paths.work / case["deliverables"].get("collect", "hw"), artifact_dir)
         row = {
             "prompt": case["prompt"],
             "tags": case["tags"],
@@ -392,34 +566,38 @@ def attempt(case: dict, cell: Cell, adapter, cfg: dict, artifact_dir: Path, keep
         }
         return Scored(row, conv.transcript, conv.raw)
     finally:
-        if keep:
-            print(f"kept sandbox {paths.root}")
-        else:
-            shutil.rmtree(paths.root, ignore_errors=True)
+        end_trial(paths, adapter, host, keep=keep)
 
 
 # ---------------------------------------------------------------- slots and sinks
 
 
 class Sink:
-    """Thread-safe append-only JSONL writers for one cell directory."""
+    """The writer of one cell directory: thread-safe append-only JSONL rows, and the
+    traces and raw streams of traced slots. Every record passes `redact` first."""
 
-    def __init__(self, out: Path):
+    def __init__(self, out: Path, redact: Redactor):
         self.out = out
+        self.redact = redact
         out.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
 
     def append(self, name: str, row: dict) -> None:
-        line = json.dumps(row, sort_keys=True, ensure_ascii=False)
+        line = json.dumps(self.redact(row), sort_keys=True, ensure_ascii=False)
         with self._lock, (self.out / name).open("a", encoding="utf-8") as fh:
             fh.write(line + "\n")
 
-    def done_slots(self) -> set[tuple[str, int]]:
-        path = self.out / "results.jsonl"
-        if not path.is_file():
-            return set()
-        rows = (json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip())
-        return {(r["prompt_id"], r["rep"]) for r in rows}
+    def trace(self, slot: str, scored: Scored) -> None:
+        (self.out / "traces").mkdir(exist_ok=True)
+        transcript = json.dumps(self.redact(scored.transcript), ensure_ascii=False, indent=1)
+        (self.out / "traces" / f"{slot}.json").write_text(transcript, encoding="utf-8")
+        (self.out / "raw").mkdir(exist_ok=True)
+        for n, lines in enumerate(self.redact(scored.raw), 1):
+            (self.out / "raw" / f"{slot}_t{n}.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def done_slots(cell_dir: Path) -> set[tuple[str, int]]:
+    return {(r["prompt_id"], r["rep"]) for r in read_rows(cell_dir)}
 
 
 def backoff_s(attempt_no: int, retry: dict, rng: random.Random) -> float:
@@ -452,18 +630,10 @@ def run_slot(case: dict, rep: int, cell: Cell, adapter, cfg: dict, sink: Sink, *
             return error.failure_class
         row = {"prompt_id": case["id"], "rep": rep, **scored.row, "retries": attempt_no - 1}
         if trace:
-            _write_trace(sink.out, slot, scored)
+            sink.trace(slot, scored)
         sink.append("results.jsonl", row)
         return "ok"
     raise AssertionError("unreachable: the last attempt always records")
-
-
-def _write_trace(out: Path, slot: str, scored: Scored) -> None:
-    (out / "traces").mkdir(exist_ok=True)
-    (out / "traces" / f"{slot}.json").write_text(json.dumps(scored.transcript, ensure_ascii=False, indent=1), encoding="utf-8")
-    (out / "raw").mkdir(exist_ok=True)
-    for n, lines in enumerate(scored.raw, 1):
-        (out / "raw" / f"{slot}_t{n}.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def _now() -> str:
@@ -474,7 +644,7 @@ def plan_slots(cells: list[Cell], cases: list[dict], reps: int, out: Path) -> li
     """Every (cell, case, rep) not already scored; errored slots are retried on resume."""
     slots = []
     for cell in cells:
-        done = Sink(out / cell.slug).done_slots()
+        done = done_slots(out / cell.slug)
         slots += [(cell, case, rep) for case in cases for rep in range(1, reps + 1) if (case["id"], rep) not in done]
     return slots
 
@@ -487,12 +657,14 @@ def run_matrix(matrix: Matrix, cells: list[Cell], cases: list[dict], reps: int, 
     `trace_ids=None` writes traces for every case (pilot, before a split exists);
     otherwise only ids in the set (the ratchet train split) get traces. A harness whose
     preflight refuses (Kiro: a login that would expire within a trial) has none of its
-    cells started; the reason goes to stderr and the slots count as `not_started`.
+    cells started; the reason goes to stderr and the slots count as `not_started`. A
+    trial that refreshes its copy of the user's login (`token_refreshed`) stops that
+    harness the same way: its slots still queued count as `not_started`.
     """
     cfg = {key: matrix.raw.get(key, default) for key, default in (("case_timeout_s", 1800), ("max_turns", 4), ("retry", {}))}
-    sinks = {cell.slug: Sink(out / cell.slug) for cell in cells}
-    built = {cell.harness: adapters.build(cell.harness, matrix.harness_cfg(cell.harness)) for cell in cells}
     host_source = host_source or HostSource(matrix.raw.get("auth", {}))
+    sinks = {cell.slug: Sink(out / cell.slug, host_source.redact) for cell in cells}
+    built = {cell.harness: adapters.build(cell.harness, matrix.harness_cfg(cell.harness)) for cell in cells}
     rng = random.Random(seed)
     pending = plan_slots(cells, cases, reps, out)
     host = host_source.get()
@@ -502,15 +674,24 @@ def run_matrix(matrix: Matrix, cells: list[Cell], cases: list[dict], reps: int, 
         print(f"{harness}: cells not started: {reason}", file=sys.stderr)
     slots = [(*slot, rng.random()) for slot in pending if slot[0].harness not in refused]
     counts: dict[str, int] = {"not_started": len(pending) - len(slots)} if refused else {}
+    halted: set[str] = set()
     lock = threading.Lock()
 
     def one(slot):
         cell, case, rep, slot_seed = slot
-        trace = trace_ids is None or case["id"] in trace_ids
-        outcome = run_slot(case, rep, cell, built[cell.harness], cfg, sinks[cell.slug], trace=trace, keep=keep,
-                           rng=random.Random(slot_seed), host_source=host_source)
+        with lock:
+            stopped = cell.harness in halted
+        if stopped:
+            outcome = "not_started"
+        else:
+            trace = trace_ids is None or case["id"] in trace_ids
+            outcome = run_slot(case, rep, cell, built[cell.harness], cfg, sinks[cell.slug], trace=trace, keep=keep,
+                               rng=random.Random(slot_seed), host_source=host_source)
         with lock:
             counts[outcome] = counts.get(outcome, 0) + 1
+            if outcome == token_refreshed(cell.harness) and cell.harness not in halted:
+                halted.add(cell.harness)
+                print(f"{cell.harness}: remaining cells not started after {outcome}", file=sys.stderr)
 
     with ThreadPoolExecutor(max_workers=max(1, concurrency)) as pool:
         list(pool.map(one, slots))

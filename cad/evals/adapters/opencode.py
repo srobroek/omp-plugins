@@ -107,6 +107,9 @@ class OpencodeAdapter:
     def preflight(self, host: Host, ceiling_s: float) -> str | None:
         return None  # Bedrock credentials are re-exported per trial with margin (HostSource)
 
+    def release_login(self, paths: TrialPaths) -> str | None:
+        return None  # no login is copied into the trial
+
     def version_command(self) -> list[str]:
         return [self.bin, "--version"]  # `opencode v2.1.4`
 

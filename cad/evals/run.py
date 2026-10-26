@@ -12,6 +12,9 @@
   run.py inventory  --harness H --model MODEL                       model-free isolation check (OMP)
   run.py smoke      --harness H --model MODEL --out DIR             one cheap live call: isolation, parse, host effects
 
+Before the command, `--aws-profile PROFILE` names the dedicated Bedrock-only profile
+whose temporary credentials trials get, overriding the matrix `[auth] aws_profile`.
+
 The runner and adapters need only the standard library; graders run their OCCT
 and YAML probes through `uv run --script`.
 """
@@ -24,7 +27,6 @@ import json
 import os
 import random
 import re
-import shutil
 import sqlite3
 import sys
 import tempfile
@@ -49,6 +51,8 @@ SMOKE_PROMPT = (
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="run.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--matrix", type=Path, default=runner.EVALS / "matrix.toml")
+    parser.add_argument("--aws-profile", metavar="PROFILE",
+                        help="the dedicated Bedrock-only profile whose credentials trials get (overrides [auth] aws_profile)")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     for name in ("plan", "run"):
@@ -90,6 +94,8 @@ def main(argv: list[str]) -> int:
 
     args = parser.parse_args(argv[1:])
     matrix = runner.load_matrix(args.matrix)
+    if args.aws_profile:
+        matrix.raw["auth"] = {**matrix.raw.get("auth", {}), "aws_profile": args.aws_profile}
     commands = {"plan": cmd_plan, "run": cmd_run, "grade": cmd_grade, "summary": cmd_summary, "judge": cmd_judge,
                 "inventory": cmd_inventory, "smoke": cmd_smoke}
     try:
@@ -168,7 +174,7 @@ def _judge_call(matrix, host_source: runner.HostSource):
             turn, _, _ = runner.run_turn(adapter, argv, paths, host, float(cfg.get("timeout_s", 300)))
             return turn
         finally:
-            shutil.rmtree(paths.root, ignore_errors=True)
+            runner.end_trial(paths, adapter, host, keep=False)
 
     return call
 
@@ -177,7 +183,8 @@ def cmd_judge(args, matrix) -> int:
     runner.require_comparable([args.a, args.b], args.allow_contaminated)
     a_rows = {(r["prompt_id"], r["rep"]): r for r in runner.read_rows(args.a)}
     b_rows = {(r["prompt_id"], r["rep"]): r for r in runner.read_rows(args.b)}
-    call = _judge_call(matrix, runner.HostSource(matrix.raw.get("auth", {})))
+    host_source = runner.HostSource(matrix.raw.get("auth", {}))
+    call = _judge_call(matrix, host_source)
     rng = random.Random(args.seed)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     failures = 0
@@ -198,14 +205,15 @@ def cmd_judge(args, matrix) -> int:
                     "grade": {"win_a": verdict.score_a}, "winner": verdict.winner, "order": verdict.order,
                     "explanation": verdict.reason, "judge_model": verdict.judge_model, "judge_usage": verdict.judge_usage,
                 }
-            fh.write(json.dumps(row, sort_keys=True, ensure_ascii=False) + "\n")
+            fh.write(json.dumps(host_source.redact(row), sort_keys=True, ensure_ascii=False) + "\n")
     return 1 if failures else 0
 
 
 def cmd_inventory(args, matrix) -> int:
     """Model-free: stage a trial, run the adapter's probe, print what loaded."""
     adapter = adapters.build(args.harness, matrix.harness_cfg(args.harness))
-    host = runner.HostSource(matrix.raw.get("auth", {})).get()
+    host_source = runner.HostSource(matrix.raw.get("auth", {}))
+    host = host_source.get()
     paths = runner.stage_trial(None, adapter, host, require_plugin=True)
     try:
         if not adapter.probe(paths, args.model, []):
@@ -214,8 +222,8 @@ def cmd_inventory(args, matrix) -> int:
         result = runner.isolation_of(adapter, paths, runner.run_probe(adapter, paths, host, args.model, []), [],
                                      runner.harness_version(adapter, paths, host))
     finally:
-        shutil.rmtree(paths.root, ignore_errors=True)
-    print(json.dumps(result, indent=2, sort_keys=True))
+        runner.end_trial(paths, adapter, host, keep=False)
+    print(json.dumps(host_source.redact(result), indent=2, sort_keys=True))
     return 0 if result["isolation"] == "clean" else 1
 
 
@@ -225,7 +233,8 @@ def cmd_smoke(args, matrix) -> int:
     left on the host (`host`): entries it added to the shared temp directories and
     changes to the harness's user stores, both of which must be none."""
     adapter = adapters.build(args.harness, matrix.harness_cfg(args.harness))
-    host = runner.HostSource(matrix.raw.get("auth", {})).get()
+    host_source = runner.HostSource(matrix.raw.get("auth", {}))
+    host = host_source.get()
     refusal = adapter.preflight(host, args.timeout)
     if refusal:
         print(f"{args.harness}: smoke not started: {refusal}", file=sys.stderr)
@@ -241,7 +250,7 @@ def cmd_smoke(args, matrix) -> int:
     probe: list[str] = []
     started = time.monotonic()
     try:
-        turn, raw, stderr = runner.run_turn(adapter, argv, paths, host, args.timeout)
+        turn, raw, _ = runner.run_turn(adapter, argv, paths, host, args.timeout)
         probe = runner.run_probe(adapter, paths, host, args.model, raw)
         hello = paths.work / "hello.txt"
         record |= {
@@ -256,13 +265,15 @@ def cmd_smoke(args, matrix) -> int:
         record["latency_s"] = round(time.monotonic() - started, 3)
         trial_side = {
             "tmpdir": sorted(os.path.relpath(p, paths.tmp) for p in tree(paths.tmp)),
-            "stores": {str(s): len(tree(paths.home / s.relative_to(host.real_home))) for s in stores},
+            "stores": {str(s): len(tree(paths.home / s.relative_to(host.real_home)))
+                       for s in stores if s.is_dir() and s.is_relative_to(host.real_home)},
         }
-        if args.keep_sandbox:
-            record["sandbox"] = str(paths.root)
-        else:
-            shutil.rmtree(paths.root, ignore_errors=True)
+        try:
+            runner.end_trial(paths, adapter, host, keep=args.keep_sandbox)
+        except runner.TrialError as exc:  # the trial refreshed its copy of the user's login
+            record |= {"ok": False, "failure_class": exc.failure_class, "detail": exc.detail}
     record["host"] = host_effects(paths.root, trial_side, shared, shared_before, stores)
+    record, raw, probe = (host_source.redact(part) for part in (record, raw, probe))
     args.out.mkdir(parents=True, exist_ok=True)
     (args.out / f"{args.harness}.json").write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     (args.out / f"{args.harness}.raw.jsonl").write_text("\n".join(raw) + ("\n" if raw else ""), encoding="utf-8")
@@ -319,6 +330,15 @@ def _sqlite(path: Path, marker: str | None = None) -> dict:
 
 
 def store_state(store: Path, marker: str | None = None) -> dict:
+    """A user store's fingerprint. A directory: entry mtimes and per-table SQLite
+    digests. A file (an executable a trial reaches through a link): its size, mtime
+    and SHA-256, so an updater writing through the link shows as a change."""
+    if store.is_file():
+        stat = store.stat()
+        with store.open("rb") as fh:
+            digest = hashlib.file_digest(fh, "sha256").hexdigest()
+        file = {"size": stat.st_size, "mtime_ns": stat.st_mtime_ns, "sha256": digest}
+        return {"entries": {str(store): file}, "sqlite": {}, "file": file}
     return {"entries": tree(store), "sqlite": {p.name: _sqlite(p, marker) for p in sorted(store.glob("*.sqlite3"))}}
 
 
@@ -327,8 +347,9 @@ def host_effects(root: Path, trial_side: dict, shared: list[Path], shared_before
     the trial count against it when their path names the trial (as is, or slugged the
     way Claude names per-directory folders) or they share a name with something the
     harness wrote to the trial's own TMPDIR; other additions come from concurrent
-    processes and are listed for review. A user store must show no added, removed or
-    changed entry, no changed table and no row naming the trial."""
+    processes and are only counted, since their names are other tools' business. A user
+    store must show no added, removed or changed entry, no changed table and no row
+    naming the trial; a file store also reports its fingerprint after the trial."""
     own = (str(root), str(root.resolve()))
     inside = tuple(p + "/" for p in own)
     markers = {root.name, re.sub(r"[^A-Za-z0-9]", "-", root.name)}
@@ -338,7 +359,7 @@ def host_effects(root: Path, trial_side: dict, shared: list[Path], shared_before
     report: dict = {
         "trial_tmpdir": trial_side["tmpdir"],
         "shared_temp": {"roots": [str(r) for r in shared], "added_by_trial": by_trial,
-                        "added_by_other_processes": [p for p in added if p not in by_trial]},
+                        "added_by_other_processes": len(added) - len(by_trial)},
         "user_stores": {},
     }
     unchanged = not by_trial
@@ -358,6 +379,7 @@ def host_effects(root: Path, trial_side: dict, shared: list[Path], shared_before
                 for name, state in after["sqlite"].items()
             },
             "trial_counterpart_entries": trial_side["stores"].get(str(store), 0),
+            **({"fingerprint": after["file"]} if "file" in after else {}),
         }
         report["user_stores"][str(store)] = diff
         unchanged = unchanged and not (diff["added"] or diff["removed"] or diff["changed"]) and all(

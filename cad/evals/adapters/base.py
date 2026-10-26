@@ -72,7 +72,7 @@ class Host:
     reaches the harness: adapters build the child environment from this alone."""
 
     base_env: dict[str, str]  # allowlisted variables: PATH, locale, user, toolchain caches
-    aws_env: dict[str, str]  # short-lived Bedrock credentials exported from the host profile
+    aws_env: dict[str, str]  # temporary credentials of the [auth] profile: as broad as its role, not Bedrock by itself
     real_home: Path
 
 
@@ -198,11 +198,18 @@ class Adapter(Protocol):
 
     def user_stores(self, host: Host) -> list[Path]:
         """User-level state the harness keeps outside its config (login, sessions,
-        history) that a trial must leave untouched; the smoke fingerprints it."""
+        history) that a trial must leave untouched: directories, and the host files a
+        trial reaches through a link (Kiro's executables). The smoke fingerprints them."""
 
     def preflight(self, host: Host, ceiling_s: float) -> str | None:
         """Why no trial lasting up to `ceiling_s` may start now (a reason for the user),
         or None. Kiro: the login a trial would copy must outlive the trial."""
+
+    def release_login(self, paths: TrialPaths) -> str | None:
+        """Called once the trial's processes have stopped. Deletes any copy of the
+        user's login prepare() placed in the trial, so a kept sandbox holds none, and
+        returns what the user must do when the trial refreshed that copy (their own
+        store then holds a grant the harness superseded), or None. Only Kiro copies one."""
 
     def version_command(self) -> list[str]:
         """Model-free argv whose stdout names the harness version; [] when the turn's

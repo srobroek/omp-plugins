@@ -18,10 +18,12 @@ import json
 import os
 import random
 import shutil
+import signal
 import sqlite3
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 import warnings
 from datetime import datetime, timedelta, timezone
@@ -94,13 +96,70 @@ def grade(case: dict, work: Path):
 
 
 class StaticHost:
-    """A HostSource stand-in: no AWS export, PATH only."""
+    """A HostSource stand-in: no AWS export, PATH only, and its own redactor."""
 
     def __init__(self, home: Path):
         self.home = home
+        self.redact = runner.Redactor(home)
 
     def get(self) -> adapters.Host:
         return adapters.Host(base_env={"PATH": os.environ["PATH"], **runner._GIT_ENV}, aws_env={}, real_home=self.home)
+
+
+def exported_source(creds: dict) -> runner.HostSource:
+    """A real HostSource whose `aws configure export-credentials` answers `creds`."""
+    real_run = subprocess.run
+
+    def run(argv, *args, **kwargs):
+        if argv[:3] == ["aws", "configure", "export-credentials"]:
+            return subprocess.CompletedProcess(argv, 0, stdout=json.dumps(creds), stderr="")
+        return real_run(argv, *args, **kwargs)
+
+    source = runner.HostSource({"aws_profile": "cad-eval-test"})
+    with mock.patch.object(subprocess, "run", side_effect=run):
+        source.get()
+    return source
+
+
+def gone(pid: int, timeout_s: float = 10) -> bool:
+    """True once `pid` no longer exists (init reaps an orphan's zombie)."""
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        time.sleep(0.05)
+    return False
+
+
+def kill_if_running(pid: int) -> None:
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+
+
+def make_kiro_login(home: Path) -> Path:
+    """A user Kiro store as `kiro-cli login` leaves it (token row, sign-in state, history); returns the database."""
+    store = home.joinpath("Library", "Application Support", "kiro-cli")
+    store.mkdir(parents=True)
+    db = store / "data.sqlite3"
+    con = sqlite3.connect(db)
+    con.executescript("""
+        CREATE TABLE migrations (id INTEGER PRIMARY KEY, version INTEGER NOT NULL, migration_time INTEGER NOT NULL);
+        CREATE TABLE auth_kv (key TEXT PRIMARY KEY, value TEXT);
+        CREATE TABLE state (key TEXT PRIMARY KEY, value BLOB);
+        CREATE TABLE conversations_v2 (key TEXT NOT NULL, conversation_id TEXT NOT NULL, value TEXT NOT NULL,
+                                       PRIMARY KEY (key, conversation_id));
+        CREATE INDEX idx_conversations_v2_key ON conversations_v2(key);
+        INSERT INTO migrations VALUES (1, 1, 0);
+        INSERT INTO auth_kv VALUES ('kirocli:odic:token', '{"access_token": "a"}');
+        INSERT INTO state VALUES ('auth.idc.region', '"us-east-1"'), ('api.codewhisperer.profile', '{}'), ('telemetryClientId', '"x"');
+        INSERT INTO conversations_v2 VALUES ('/user/project', 'c1', '{}');
+    """)
+    con.close()
+    return db
 
 
 @geometry
@@ -244,7 +303,7 @@ class FakeHarness(unittest.TestCase):
         return adapters.build("omp", {"bin": str(FAKE_AGENT), "env": {"FAKE_AGENT_MODE": mode, "FAKE_AGENT_PROBE": probe, **env}})
 
     def slot(self, mode: str, *, trace=False, cfg=None, probe="clean", out="out", **env: str):
-        sink = runner.Sink(self.tmp / out / self.cell.slug)
+        sink = runner.Sink(self.tmp / out / self.cell.slug, self.host.redact)
         outcome = runner.run_slot(self.case, 1, self.cell, self.adapter(mode, probe, **env), cfg or self.cfg, sink,
                                   trace=trace, keep=False, rng=random.Random(0), host_source=self.host)
         return outcome, sink
@@ -312,8 +371,8 @@ class FakeHarness(unittest.TestCase):
         self.assertEqual(row["leaks"], ["context:rule:user-rule", "skills:user-skill"])
 
     def test_a_harness_version_change_is_a_leak_until_re_observed(self):
-        self.slot("quiet", out="declared")
-        [row] = self.rows(runner.Sink(self.tmp / "declared" / self.cell.slug), "results.jsonl")
+        _, declared = self.slot("quiet", out="declared")
+        [row] = self.rows(declared, "results.jsonl")
         self.assertEqual((row["isolation"], row["inventory"]["version"]), ("clean", "18.12.3"))
         outcome, sink = self.slot("quiet", out="updated", FAKE_AGENT_VERSION="18.13.0")
         [row] = self.rows(sink, "results.jsonl")
@@ -342,11 +401,11 @@ class FakeHarness(unittest.TestCase):
         self.assertEqual(row["isolation"], "clean")
 
     def test_comparisons_refuse_contaminated_cells(self):
-        self.slot("quiet", out="cmp")
-        clean_dir = self.tmp / "cmp" / self.cell.slug
+        _, clean = self.slot("quiet", out="cmp")
+        clean_dir = clean.out
         dirty_dir = self.tmp / "cmp" / "omp--leaky"
-        runner.Sink(dirty_dir)
-        rows = self.rows(runner.Sink(clean_dir), "results.jsonl")
+        dirty_dir.mkdir()
+        rows = self.rows(clean, "results.jsonl")
         (dirty_dir / "results.jsonl").write_text(json.dumps({**rows[0], "isolation": "contaminated", "leaks": ["skills:user-skill"]}) + "\n")
         summary = runner.summarize(self.tmp / "cmp", allow_contaminated=False)
         self.assertEqual([c["cell"] for c in summary["cells"]], [self.cell.slug])
@@ -397,7 +456,7 @@ class FakeHarness(unittest.TestCase):
     def test_every_harness_gets_a_temp_dir_inside_the_trial(self):
         for harness in adapters.HARNESSES:
             with self.subTest(harness=harness):
-                adapter = adapters.build(harness, {"bin": "true", "bypass_launcher": False})
+                adapter = adapters.build(harness, {"bin": "true"})
                 paths = runner.stage_trial(None, adapter, self.host.get(), require_plugin=True)
                 self.addCleanup(shutil.rmtree, paths.root, True)
                 env = adapter.env(paths, self.host.get())
@@ -407,23 +466,8 @@ class FakeHarness(unittest.TestCase):
                     self.assertEqual(env["CLAUDE_CODE_TMPDIR"], str(paths.tmp))
 
     def test_kiro_trial_gets_a_copy_of_the_login_only(self):
-        store = self.tmp.joinpath("Library", "Application Support", "kiro-cli")
-        store.mkdir(parents=True)
-        user_db = store / "data.sqlite3"
-        con = sqlite3.connect(user_db)
-        con.executescript("""
-            CREATE TABLE migrations (id INTEGER PRIMARY KEY, version INTEGER NOT NULL, migration_time INTEGER NOT NULL);
-            CREATE TABLE auth_kv (key TEXT PRIMARY KEY, value TEXT);
-            CREATE TABLE state (key TEXT PRIMARY KEY, value BLOB);
-            CREATE TABLE conversations_v2 (key TEXT NOT NULL, conversation_id TEXT NOT NULL, value TEXT NOT NULL,
-                                           PRIMARY KEY (key, conversation_id));
-            CREATE INDEX idx_conversations_v2_key ON conversations_v2(key);
-            INSERT INTO migrations VALUES (1, 1, 0);
-            INSERT INTO auth_kv VALUES ('kirocli:odic:token', '{"access_token": "a"}');
-            INSERT INTO state VALUES ('auth.idc.region', '"us-east-1"'), ('api.codewhisperer.profile', '{}'), ('telemetryClientId', '"x"');
-            INSERT INTO conversations_v2 VALUES ('/user/project', 'c1', '{}');
-        """)
-        con.close()
+        user_db = make_kiro_login(self.tmp)
+        store = user_db.parent
         before = (user_db.read_bytes(), user_db.stat().st_mtime_ns)
         adapter = adapters.build("kiro", {"bin": "true"})
         paths = runner.stage_trial(None, adapter, self.host.get(), require_plugin=True)
@@ -438,6 +482,118 @@ class FakeHarness(unittest.TestCase):
         self.assertEqual(trial.execute("SELECT count(*) FROM migrations").fetchone(), (1,))
         self.assertEqual((user_db.read_bytes(), user_db.stat().st_mtime_ns), before)
         self.assertIn(store, adapter.user_stores(self.host.get()))
+
+    def test_kiro_login_copy_never_outlives_the_trial(self):
+        make_kiro_login(self.tmp)
+        adapter = adapters.build("kiro", {"bin": "true"})
+        kept = runner.stage_trial(None, adapter, self.host.get(), require_plugin=True)
+        self.addCleanup(shutil.rmtree, kept.root, True)
+        copy = kept.home.joinpath("Library", "Application Support", "kiro-cli", "data.sqlite3")
+        self.assertTrue(copy.is_file())
+        with mock.patch("sys.stderr", new=io.StringIO()) as err:
+            runner.end_trial(kept, adapter, self.host.get(), keep=True)
+        self.assertTrue(kept.work.is_dir())  # kept for inspection, without the login
+        self.assertEqual(list(copy.parent.glob("data.sqlite3*")), [])
+        self.assertIn(f"kept sandbox {kept.root}", err.getvalue())
+
+        refreshed = runner.stage_trial(None, adapter, self.host.get(), require_plugin=True)
+        con = sqlite3.connect(refreshed.home.joinpath("Library", "Application Support", "kiro-cli", "data.sqlite3"))
+        con.execute("UPDATE auth_kv SET value = '{\"access_token\": \"b\"}' WHERE key = 'kirocli:odic:token'")
+        con.commit()
+        con.close()
+        with mock.patch("sys.stderr", new=io.StringIO()) as err, self.assertRaises(runner.TrialError) as caught:
+            runner.end_trial(refreshed, adapter, self.host.get(), keep=False)
+        self.assertEqual(caught.exception.failure_class, "kiro_token_refreshed")
+        self.assertIn("`kiro-cli logout`, then `kiro-cli login`", caught.exception.detail)
+        self.assertIn(caught.exception.detail, err.getvalue())  # the user is told at once
+        self.assertFalse(refreshed.root.exists())  # cleanup ran before the error
+
+    def test_a_refreshed_login_stops_the_harness(self):
+        matrix = runner.Matrix({"harness": {"omp": {"bin": str(FAKE_AGENT), "env": {"FAKE_AGENT_MODE": "quiet"}}}, **self.cfg}, [self.cell])
+        with mock.patch.object(adapters.OmpAdapter, "release_login", return_value="sign in again"), \
+                mock.patch("sys.stderr", new=io.StringIO()) as err:
+            counts = runner.run_matrix(matrix, [self.cell], [self.case], 3, self.tmp / "halt", trace_ids=set(),
+                                       concurrency=1, keep=False, host_source=self.host)
+        self.assertEqual(counts, {"omp_token_refreshed": 1, "not_started": 2})
+        [error] = [json.loads(line) for line in (self.tmp / "halt" / self.cell.slug / "errors.jsonl").read_text().splitlines()]
+        self.assertEqual((error["failure_class"], error["detail"]), ("omp_token_refreshed", "sign in again"))
+        self.assertIn("sign in again", err.getvalue())
+        self.assertFalse((self.tmp / "halt" / self.cell.slug / "results.jsonl").exists())
+
+    def test_no_process_outlives_its_trial(self):
+        viewer = runner.PLUGIN_ROOT / runner.VIEWER  # a stand-in that logs how the runner stops it
+        viewer.parent.mkdir(parents=True)
+        viewer.write_text("import os, sys\nwith open(os.environ['FAKE_VIEWER_LOG'], 'a') as fh:\n"
+                          "    fh.write(' '.join([*sys.argv[1:], os.environ['XDG_STATE_HOME']]) + '\\n')\n")
+        pids, log = self.tmp / "pids", self.tmp / "viewer.log"
+        outcome, _ = self.slot("linger", FAKE_AGENT_PIDS=str(pids), FAKE_VIEWER_LOG=str(log))
+        self.assertEqual(outcome, "ok")
+        in_group, detached = map(int, pids.read_text().split())
+        for pid in (in_group, detached):
+            self.addCleanup(kill_if_running, pid)
+        self.assertTrue(gone(in_group), "a child left in the turn's process group still runs")
+        self.assertTrue(gone(detached), "a detached child naming the trial still runs")
+        command, state = log.read_text().split()
+        self.assertEqual(command, "stop")
+        self.assertTrue(state.endswith("/home/.local/state") and runner.TRIAL_PREFIX in state, state)
+
+    def test_every_record_is_scrubbed(self):
+        secret, token = "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY", "IQoJb3JpZ2luX2VjEXAMPLETOKEN"
+        source = exported_source({"Version": 1, "AccessKeyId": "ASIAEXAMPLEKEYID", "SecretAccessKey": secret,
+                                  "SessionToken": token, "Expiration": "2099-01-01T00:00:00+00:00"})
+        echo = Path.home() / "Documents" / "notes"
+        for mode in ("leak", "leak-fail"):
+            sink = runner.Sink(self.tmp / mode / self.cell.slug, source.redact)
+            runner.run_slot(self.case, 1, self.cell, self.adapter(mode, FAKE_AGENT_ECHO=str(echo)), self.cfg, sink,
+                            trace=True, keep=False, rng=random.Random(0), host_source=source)
+        written = {p.relative_to(self.tmp).as_posix(): p.read_text() for mode in ("leak", "leak-fail")
+                   for p in (self.tmp / mode).rglob("*.json*") if "artifacts" not in p.parts}
+        self.assertEqual(sorted(written), [
+            f"leak-fail/{self.cell.slug}/errors.jsonl", f"leak/{self.cell.slug}/raw/t1-lower-link-cq_rep1_t1.jsonl",
+            f"leak/{self.cell.slug}/results.jsonl", f"leak/{self.cell.slug}/traces/t1-lower-link-cq_rep1.json",
+        ])
+        for name, text in written.items():
+            for value in (secret, token, str(Path.home()), runner.TRIAL_PREFIX):
+                self.assertNotIn(value, text, name)
+        expected = "key=<redacted> token=<redacted> cwd=<trial>/work echo=~/Documents/notes"
+        self.assertIn(expected, written[f"leak/{self.cell.slug}/traces/t1-lower-link-cq_rep1.json"])
+        self.assertIn(expected, written[f"leak/{self.cell.slug}/raw/t1-lower-link-cq_rep1_t1.jsonl"])
+        self.assertIn(expected, written[f"leak-fail/{self.cell.slug}/errors.jsonl"])
+        self.assertEqual(source.redact([f"{Path.home()}x", "us-east-1"]), [f"{Path.home()}x", "us-east-1"])  # whole paths only
+
+    def test_credentials_without_expiration_are_refused(self):
+        with self.assertRaises(runner.TrialError) as caught:
+            exported_source({"Version": 1, "AccessKeyId": "AKIAEXAMPLEKEYID", "SecretAccessKey": "long-lived"})
+        self.assertEqual(caught.exception.failure_class, "auth_error")
+        self.assertIn("no Expiration", caught.exception.detail)
+
+    def test_seed_commit_ignores_the_users_git_setup(self):
+        hook = self.tmp / "hooks" / "pre-commit"
+        hook.parent.mkdir()
+        hook.write_text("#!/bin/sh\nexit 1\n")
+        hook.chmod(0o755)
+        config = self.tmp / "gitconfig"
+        config.write_text(f"[commit]\n\tgpgsign = true\n[gpg]\n\tprogram = false\n[core]\n\thooksPath = {hook.parent}\n")
+        with mock.patch.dict(os.environ, {"GIT_CONFIG_GLOBAL": str(config), "GIT_DIR": str(self.tmp / "elsewhere.git")}):
+            paths = runner.stage_trial(self.case, self.adapter("quiet"), self.host.get(), require_plugin=True)
+        self.addCleanup(shutil.rmtree, paths.root, True)
+        log = subprocess.run(["git", "log", "--format=%s"], cwd=paths.work, capture_output=True, text=True, check=True,
+                             env={"PATH": os.environ["PATH"], "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"})
+        self.assertEqual(log.stdout.strip(), "seed")
+        self.assertFalse((self.tmp / "elsewhere.git").exists())
+
+    def test_a_trial_that_fails_to_stage_leaves_no_directory(self):
+        made, real_mkdtemp = [], tempfile.mkdtemp
+
+        def mkdtemp(*args, **kwargs):
+            made.append(Path(real_mkdtemp(*args, **kwargs)))
+            return str(made[-1])
+
+        with mock.patch.object(tempfile, "mkdtemp", side_effect=mkdtemp), \
+                mock.patch.object(adapters.OmpAdapter, "prepare", side_effect=RuntimeError("prepare failed")), \
+                self.assertRaises(RuntimeError):
+            runner.stage_trial(None, self.adapter("quiet"), self.host.get(), require_plugin=True)
+        self.assertEqual([p.exists() for p in made], [False])
 
     def test_unexportable_aws_profile_is_an_auth_error(self):
         with self.assertRaises(runner.TrialError) as caught:
@@ -476,6 +632,33 @@ class PairwiseJudge(unittest.TestCase):
     def test_unparseable_verdict_raises(self):
         with self.assertRaises(judge.JudgeError):
             judge.pairwise("t", "x", "y", call=lambda p: Turn(text="I don't know"), rng=random.Random(0))
+
+
+class Artifacts(unittest.TestCase):
+    """Collected deliverables, and what the judge reads of them, stay inside the trial."""
+
+    def test_symlinks_are_neither_copied_nor_followed(self):
+        base = Path(tempfile.mkdtemp(prefix="cad-eval-art-"))
+        self.addCleanup(shutil.rmtree, base, True)
+        outside = base / "outside"  # stands for ~/.aws
+        outside.mkdir()
+        (outside / "credentials.txt").write_text("SECRET")
+        hw = base / "work" / "hw"
+        (hw / "parts").mkdir(parents=True)
+        (hw / "part.yaml").write_text("pn: LAL-0001\n")
+        (hw / "aws").symlink_to(outside)
+        (hw / "parts" / "notes.txt").symlink_to(outside / "credentials.txt")
+        artifacts = base / "artifacts"
+        runner.collect_artifacts(hw, artifacts)
+        self.assertEqual(sorted(p.relative_to(artifacts).as_posix() for p in artifacts.rglob("*")), ["part.yaml", "parts"])
+        rendered = judge.render_candidate(hw)  # a directory holding links is read without following them
+        self.assertIn("pn: LAL-0001", rendered)
+        self.assertNotIn("SECRET", rendered)
+        linked = base / "work" / "linked"
+        linked.symlink_to(outside)
+        runner.collect_artifacts(linked, base / "linked-artifacts")
+        self.assertFalse((base / "linked-artifacts").exists())
+        self.assertEqual(judge.render_candidate(linked), "")
 
 
 class CaseSchema(unittest.TestCase):
@@ -553,7 +736,7 @@ class HostEffects(unittest.TestCase):
         (root / "tmp" / "scratch").mkdir()  # inside the trial: never counted
         report = run.host_effects(root, {"tmpdir": ["scratch"], "stores": {}}, [shared], shared_before, stores)
         self.assertEqual(report["shared_temp"]["added_by_trial"], [str(slug)])
-        self.assertEqual(report["shared_temp"]["added_by_other_processes"], [str(shared / "TemporaryDirectory.x")])
+        self.assertEqual(report["shared_temp"]["added_by_other_processes"], 1)  # counted, never named
         self.assertFalse(report["unchanged"])
         slug.rmdir()
         con = sqlite3.connect(store / "data.sqlite3")
@@ -563,6 +746,56 @@ class HostEffects(unittest.TestCase):
         changed = run.host_effects(root, {"tmpdir": [], "stores": {}}, [shared], shared_before, stores)
         self.assertEqual(changed["user_stores"][str(store)]["sqlite"]["data.sqlite3"]["tables_changed"], ["t"])
         self.assertFalse(changed["unchanged"])
+
+    def test_a_write_through_a_linked_kiro_executable_is_seen(self):
+        base = Path(tempfile.mkdtemp(prefix="cad-eval-kirobin-")).resolve()
+        self.addCleanup(shutil.rmtree, base, True)
+        home, install = base / "home", base / "install" / "kiro-cli-chat"
+        (home / ".local" / "bin").mkdir(parents=True)
+        install.parent.mkdir()
+        install.write_bytes(b"v1")
+        (home / ".local" / "bin" / "kiro-cli-chat").symlink_to(install)
+        host = StaticHost(home).get()
+        adapter = adapters.build("kiro", {"bin": "true"})
+        stores = {store: run.store_state(store) for store in adapter.user_stores(host)}
+        root = base / "trial"
+        paths = adapters.TrialPaths(root, root / "work", root / "cad", root / "state", root / "home")
+        for directory in (paths.plugin / "skills", paths.work, paths.home):
+            directory.mkdir(parents=True)
+        adapter.prepare(paths, host)
+        (paths.home / ".local" / "bin" / "kiro-cli-chat").write_bytes(b"v2")  # an updater writing through the trial's link
+        report = run.host_effects(root, {"tmpdir": [], "stores": {}}, [], {}, stores)
+        entry = report["user_stores"][str(install)]
+        self.assertEqual(entry["changed"], [str(install)])
+        self.assertEqual(entry["fingerprint"]["sha256"], hashlib.sha256(b"v2").hexdigest())
+        self.assertFalse(report["unchanged"])
+
+
+class ClaudeLauncher(unittest.TestCase):
+    """The toolbox launcher runs as the real binary behind it, or no Claude trial starts."""
+
+    def test_a_launcher_without_its_binary_is_refused(self):
+        root = Path(tempfile.mkdtemp(prefix="cad-eval-toolbox-"))
+        self.addCleanup(shutil.rmtree, root, True)
+        launcher = root / "tools" / "toolbox" / "1.0" / "toolbox-exec"
+        launcher.parent.mkdir(parents=True)
+        launcher.write_text("#!/bin/sh\n")
+        launcher.chmod(0o755)
+        (root / "bin").mkdir()
+        (root / "bin" / "claude").symlink_to(launcher)
+        host = StaticHost(root).get()
+        with mock.patch.dict(os.environ, {"PATH": f"{root / 'bin'}{os.pathsep}{os.environ['PATH']}"}):
+            refused = adapters.build("claude", {}).preflight(host, 60)
+            tool = root / "tools" / "claude-code"
+            real = tool / "2.1.310" / "claude"
+            real.parent.mkdir(parents=True)
+            real.write_text("#!/bin/sh\n")
+            real.chmod(0o755)
+            (tool / "info.json").write_text(json.dumps({"CurrentVersion": {"Version": "2.1.310"}}))
+            resolved = adapters.build("claude", {})
+        self.assertIn("toolbox launcher", refused)
+        self.assertEqual(Path(resolved.bin).resolve(), real.resolve())
+        self.assertIsNone(resolved.preflight(host, 60))
 
 
 class RecordedStreams(unittest.TestCase):
@@ -640,7 +873,7 @@ class RecordedStreams(unittest.TestCase):
     def test_claude_pins_the_model_through_trial_settings(self):
         self.assertEqual(canonical_model("global.anthropic.claude-opus-5-5"), "claude-opus-5-5")
         demo = adapters.TrialPaths(Path("/t"), Path("/t/work"), Path("/t/cad"), Path("/t/state"), Path("/t/home"))
-        argv = adapters.build("claude", {"bypass_launcher": False}).command(model="global.anthropic.claude-opus-5-5", prompt="p", paths=demo, resume=False)
+        argv = adapters.build("claude", {}).command(model="global.anthropic.claude-opus-5-5", prompt="p", paths=demo, resume=False)
         self.assertEqual(argv[argv.index("--model") + 1], "claude-opus-5-5")
         settings = json.loads(argv[argv.index("--settings") + 1])
         self.assertEqual(settings["modelOverrides"], {"claude-opus-5-5": "global.anthropic.claude-opus-5-5"})

@@ -19,13 +19,7 @@
   "harness": "omp",
   "host": {
     "shared_temp": {
-      "added_by_other_processes": [
-        "/private/tmp/mcs-telemetry-l1-1793022378.2379398_32523.log.sb-f405e7ea-RDIT3K",
-        "/private/tmp/mcs-telemetry-l2-1793022378_32523.log",
-        "$TMPDIR/toolbox-telemetry-emf1097683230",
-        "$TMPDIR/toolbox-telemetry-emf1097683230/toolbox-telemetry-wrapper-metrics2324213465",
-        "$TMPDIR/toolbox-telemetry-emf280605458"
-      ],
+      "added_by_other_processes": 5,
       "added_by_trial": [],
       "roots": [
         "/private/tmp",
