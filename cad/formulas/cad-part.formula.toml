@@ -121,7 +121,7 @@ title = "L3 DETAIL: fits, fasteners, tolerances, rules, and drawing"
 type = "task"
 needs = ["parts"]
 labels = ["cad", "phase:detail"]
-description = "Run skill://cad-fits and skill://cad-drawings. Specify fit classes, fasteners, tolerances, datums, and applicable FDM or CNC design rules; produce the part drawing. Draft and preview before feedback. A committed post-freeze batch rechecks this part and dependents at L3 and all earlier stages. Record each design-record change and bead note."
+description = "Run skill://cad-fits for fits/stack-ups and skill://cad-drawings for detail and release drawings. Specify fit classes, fasteners, tolerances, datums, and process rules. Before the L3 gate, form_check must pass at F3. Generate the drawing with `uv run --script skill://cad-drawings/scripts/drawing.py <step> --part <part.yaml> --product <product.yaml> --output-dir <dir> [--scale <ratio>]`."
 
 [steps.metadata]
 skill_hints = "cad-fits, cad-drawings, cad-recheck, cad-record, cad-flow"
@@ -143,10 +143,10 @@ title = "L4 ANALYSIS: verify the worst-case design"
 type = "task"
 needs = ["bom"]
 labels = ["cad", "phase:analysis"]
-description = "Run skill://cad-analysis for interference, clearance, tolerance stack-up, kinematic sweep where applicable, and static FEA at the worst-case pose. State assumptions and criteria, capture reproducible evidence, and record verification.csv results. On commit batch, recheck changed parts plus dependents from this stage back through all earlier stages. No slicer, CAM, or machine tooling."
+description = "Run `uv run --script skill://cad-motion/scripts/sweep.py ... --worst-step worst.step` for kinematics and `uv run --script skill://cad-analysis/scripts/fea_static.py <case.yaml>` for static FEA at the worst-case pose. Record assumptions, criteria, results, and evidence in verification.csv. Recheck affected parts/dependents after commit. No slicer, CAM, or machine tooling."
 
 [steps.metadata]
-skill_hints = "cad-analysis, cad-record, cad-recheck, cad-flow"
+skill_hints = "cad-analysis, cad-motion, cad-record, cad-recheck, cad-flow"
 
 [[steps]]
 id = "mech-critique"
@@ -203,10 +203,10 @@ title = "RELEASE: assemble and validate the package"
 type = "task"
 needs = ["design-freeze-gate"]
 labels = ["cad", "phase:release"]
-description = "Run skill://cad-record, skill://cad-bom, skill://cad-drawings, and skill://cad-analysis to assemble and validate the release package: STEP AP242, drawings, EBOM, verification matrix, and documentation. Include a GitBuilding guide, DIN SPEC 3105-1 checklist, and Open Know-How manifest. Validate referenced part records and evidence against the frozen design. Use FreeCAD 1.1.4 as the only CAD application; no slicer, CAM, or machine tooling. Record the manifest under hw/releases/."
+description = "Run skill://cad-record, skill://cad-bom, and skill://cad-drawings to assemble STEP AP242, drawings, EBOM, verification, and documentation. Generate drawings with `uv run --script skill://cad-drawings/scripts/drawing.py <step> --part <part.yaml> --product <product.yaml> --output-dir <dir> [--scale <ratio>]`. Include GitBuilding, DIN SPEC 3105-1, and Open Know-How docs. Validate records and evidence. Use FreeCAD 1.1.4 only. No slicer, CAM, or machine tooling. Write `hw/releases/<rev>/manifest.json`."
 
 [steps.metadata]
-skill_hints = "cad-record, cad-bom, cad-drawings, cad-analysis"
+skill_hints = "cad-record, cad-bom, cad-drawings"
 
 [[steps]]
 id = "release-gate"
