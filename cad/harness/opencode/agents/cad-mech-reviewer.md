@@ -2,9 +2,11 @@
 description: Reviews CAD requirements, load paths, fits, joints, and FEA with measured evidence. Spawn at CRITIQUE; never edits.
 mode: subagent
 permission:
+  '*': deny
   read: allow
   glob: allow
   grep: allow
+  skill: allow
   edit: deny
   bash: deny
   task: deny

@@ -70,6 +70,7 @@ class HarnessGeneratorTests(unittest.TestCase):
                 self.assertIn("model: inherit", claude)
                 opencode = (self.cad / "harness" / "opencode" / "agents" / f"{name}.md").read_text(encoding="utf-8")
                 self.assertIn("mode: subagent", opencode)
+                self.assertIn("'*': deny", opencode)
                 self.assertIn("edit: deny", opencode)
                 self.assertIn("bash: deny", opencode)
 

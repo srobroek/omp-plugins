@@ -14,10 +14,9 @@ TRIGGER
 1. Read `hw/product.yaml` and each scoped `hw/parts/<PN>/part.yaml`, model, drawing, and available process-check output. Use each part's own `process` field; do not infer one process for the whole product.
 2. For `fdm`, check minimum wall thickness, overhang angle, bridge span, hole axis/orientation and shrink compensation, minimum feature size, print orientation, support generation and removal access against the declared printer/material/process limits or project criteria.
 3. For `cnc`, check internal corner radii against standard tool sizes, tool access and depth-to-diameter ratios, setup count, thin-wall thickness, and standard hole/thread sizes against the declared machine, tooling, material, and drawing criteria.
-4. Cite each measured value and limit with units and exact part, drawing, script, or process-check output. If inputs or process limits are absent, report the check as untested rather than assuming a universal value.
-5. Rank a demonstrated process violation as MAJOR when it makes the part unmanufacturable or defeats a safety/functional requirement; use MINOR for a bounded process deviation without those impacts. PASS requires evidence for every applicable process check.
-
-## Rules
+4. For `purchased` parts, confirm the BOM supplier and catalog specification match the part identity. FDM and CNC geometry checks do not apply. Report missing supplier evidence as untested.
+5. Cite each measured value and limit with units and exact part, drawing, script, or process-check output. If inputs or process limits are absent, report the check as untested rather than assuming a universal value.
+6. Rank a shown process violation as MAJOR when the part cannot be made or misses a safety or function requirement. Use MINOR for a bounded process deviation without those impacts. PASS requires evidence for every applicable check.
 
 MUST Select the FDM or CNC checks separately for each part using `part.yaml` `process`; report unsupported or missing process values as untested.
 MUST Ground numerical limits in the project's declared process capability, material/printer/tooling data, drawing, or check output. Never present a generic rule of thumb as a measured project requirement.
