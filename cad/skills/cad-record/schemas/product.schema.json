@@ -16,7 +16,7 @@
       "required": ["stage", "recheck_from"],
       "properties": {
         "stage": {"$ref": "#/$defs/stage"},
-        "recheck_from": {"anyOf": [{"$ref": "#/$defs/stage"}, {"const": ""}]}
+        "recheck_from": {"$ref": "#/$defs/stage"}
       }
     }
   },
