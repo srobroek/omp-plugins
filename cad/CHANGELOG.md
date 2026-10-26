@@ -1,11 +1,5 @@
 # Changelog
 
-## Unreleased
-
-### Fixed
-
-- Fence and brace CAD skill output templates; scope generated harness agent files out of agnix checks that do not match their native discovery rules.
-
 ## 0.1.0
 
 ### Features
