@@ -44,6 +44,22 @@ ARM_V1 = 70 * 20 * 5 + math.pi * 16 * 5 - math.pi * 9 * 5
 OVERLAP_V3 = 20 * 30 * 5 - math.pi * 9 * 5
 
 
+def assert_vectors(case: unittest.TestCase, got: list[float], want: list[float], places: int) -> None:
+    case.assertEqual(len(got), len(want))
+    for g, w in zip(got, want):
+        case.assertAlmostEqual(g, w, places=places)
+
+
+def assert_same_holes(case: unittest.TestCase, got: list[dict], want: list[dict], places: int) -> None:
+    """Hole lists equal: ids, diameters, and `through` exactly; axis, position, and depth to `places`."""
+    case.assertEqual([(h["id"], h["diameter_mm"], h["through"]) for h in got],
+                     [(h["id"], h["diameter_mm"], h["through"]) for h in want])
+    for g, w in zip(got, want):
+        assert_vectors(case, g["axis"], w["axis"], places)
+        assert_vectors(case, g["position"], w["position"], places)
+        case.assertAlmostEqual(g["depth_mm"], w["depth_mm"], places=places)
+
+
 def set_model(hw: Path, pn: str, kernel: str, template: str, params: dict, title: str, material: str) -> None:
     folder = hw / "parts" / pn
     folder.mkdir(parents=True, exist_ok=True)
@@ -190,6 +206,13 @@ class KernelChecks:
         self.assertEqual(metrics["TST-0002"]["solids"], 1)
         for got, want in zip(metrics["TST-0002"]["bbox_mm"]["min"], [-10.0, -10.0, 20.0]):
             self.assertAlmostEqual(got, want, places=6)
+        # Both through bores (Ø6 x 20 in the base, Ø6 x 5 in the arm); the arm's convex boss is not a hole.
+        for pn, top, depth in (("TST-0001", 20.0, 20.0), ("TST-0002", 25.0, 5.0)):
+            found = metrics[pn]["holes"]
+            self.assertEqual([(h["id"], h["diameter_mm"], h["axis"], h["through"]) for h in found],
+                             [("H1", 6.0, [0.0, 0.0, -1.0], True)], pn)
+            assert_vectors(self, found[0]["position"], [0.0, 0.0, top], places=6)
+            self.assertAlmostEqual(found[0]["depth_mm"], depth, places=6)
 
     def test_ap242_header_and_product_names_read_back(self) -> None:
         folder = self.runs["hw"] / "versions" / "v1"
@@ -289,6 +312,7 @@ class CrossKernelTests(unittest.TestCase):
         for pn in a["parts"]:
             self.assertEqual(a["parts"][pn].keys(), b["parts"][pn].keys())
             self.assertLess(abs(a["parts"][pn]["volume_mm3"] - b["parts"][pn]["volume_mm3"]) / BASE_V, 1e-6)
+            assert_same_holes(self, a["parts"][pn]["holes"], b["parts"][pn]["holes"], places=3)
         checks = [runs[k]["checks"]["v1"][1] for k in KERNELS]
         self.assertEqual(checks[0].keys(), checks[1].keys())
         self.assertEqual(checks[0]["checks"].keys(), checks[1]["checks"].keys())
@@ -307,6 +331,25 @@ class MeshWatertightTests(unittest.TestCase):
         report = json.loads(proc.stdout)
         self.assertEqual((report["TST-0001"]["watertight"], report["TST-0001"]["collapsed_triangles"]), (True, 1))
         self.assertEqual((report["TST-0002"]["watertight"], report["TST-0002"]["collapsed_triangles"]), (False, 1))
+
+
+@unittest.skipUnless(shutil.which("uv"), "uv is required for the OCP environment")
+class HoleMetricsTests(unittest.TestCase):
+    """Bores are read from the STEP read-back: a through and a blind hole are listed, a boss is not."""
+
+    def test_through_and_blind_holes_are_listed_and_a_boss_is_not(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = subprocess.run(["uv", "run", "--quiet", "--script", str(FIXTURES / "holes_probe.py"), tmp],
+                                  capture_output=True, text=True, check=False)
+        self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+        report = json.loads(proc.stdout)
+        assert_same_holes(self, report["TST-0001"], [
+            {"id": "H1", "diameter_mm": 3.0, "axis": [0.0, 0.0, -1.0], "position": [30.0, 15.0, 8.0],
+             "depth_mm": 4.0, "through": False},
+            {"id": "H2", "diameter_mm": 5.0, "axis": [0.0, 0.0, -1.0], "position": [10.0, 15.0, 8.0],
+             "depth_mm": 8.0, "through": True},
+        ], places=6)
+        self.assertEqual(report["TST-0002"], [])
 
 
 if __name__ == "__main__":

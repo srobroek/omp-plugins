@@ -21,7 +21,6 @@ HERE = Path(__file__).resolve().parent
 SCRIPTS = HERE.parent / "scripts"
 BUILDER = HERE / "fixtures" / "build_fixtures.py"
 TEMPLATE_HW = HERE.parents[1] / "cad-record" / "assets" / "project-template" / "hw"
-LAMP_ATTACH = ["--attach", "LMP-0005=LMP-0001", "--attach", "LMP-0006=LMP-0002", "--attach", "LMP-0007=LMP-0003"]
 
 
 def load(name: str, path: Path):
@@ -207,7 +206,7 @@ class StepTests(unittest.TestCase):
     def test_assembly_step_input_poses_the_lamp_arm(self) -> None:
         out = self.root / "lamp-posed.step"
         proc, result = self.run_script("pose.py", "--hw", str(TEMPLATE_HW), "--step", str(self.lamp / "lamp-arm.step"),
-                                       *LAMP_ATTACH, "--set", "J-002=-90", "--out", str(out))
+                                       "--set", "J-002=-90", "--out", str(out))
         self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
         self.assertEqual(sorted(result["placements"]), [f"LMP-000{n}" for n in range(1, 8)])
         self.assertIn("PRODUCT('LMP-0003 Upper link'", out.read_text(encoding="utf-8"))

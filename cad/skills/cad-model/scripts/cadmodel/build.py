@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
-from cadmodel import mesh, occ
+from cadmodel import holes, mesh, occ
 from cadmodel.motion import load_pose
 
 SCRIPTS = Path(__file__).resolve().parents[1]
@@ -174,6 +174,7 @@ def part_metrics(shape: Any, source: PartSource, table: dict[str, float]) -> dic
         "solids": occ.count(shape, "SOLID"),
         "shells": occ.count(shape, "SHELL"),
         "faces": occ.count(shape, "FACE"),
+        "holes": holes.holes(shape),
     }
 
 
