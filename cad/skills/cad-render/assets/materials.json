@@ -1,0 +1,117 @@
+{
+  "about": "PBR looks for hw/parts/<PN>/part.yaml material and finish. render.py takes the FIRST rule whose `material` regex matches part.yaml `material` and, when the rule has one, whose `finish` regex matches part.yaml `finish`; both are case-insensitive Python regexes searched anywhere in the string. `pbr` keys are three.js MeshPhysicalMaterial properties; colours are sRGB hex. Values are visual approximations for review renders, not measured BRDFs.",
+  "rules": [
+    {
+      "id": "painted",
+      "label": "Painted or powder coated",
+      "material": ".",
+      "finish": "paint|powder[ -]?coat|lacquer",
+      "pbr": {"color": "#4a5a68", "metalness": 0.0, "roughness": 0.42, "clearcoat": 0.6, "clearcoatRoughness": 0.25}
+    },
+    {
+      "id": "aluminium-anodised-black",
+      "label": "Aluminium, black anodised",
+      "material": "alumin(i)?um|\\bal\\s?\\d{4}",
+      "finish": "black.*anodi[sz]|anodi[sz]\\w*\\s+black",
+      "pbr": {"color": "#2b2d31", "metalness": 0.85, "roughness": 0.42, "clearcoat": 0.15, "clearcoatRoughness": 0.4}
+    },
+    {
+      "id": "aluminium-anodised-clear",
+      "label": "Aluminium, bead-blasted clear anodised",
+      "material": "alumin(i)?um|\\bal\\s?\\d{4}",
+      "finish": "anodi[sz]",
+      "pbr": {"color": "#a9b0b8", "metalness": 1.0, "roughness": 0.42, "clearcoat": 0.2, "clearcoatRoughness": 0.45}
+    },
+    {
+      "id": "aluminium-machined",
+      "label": "Aluminium, machined",
+      "material": "alumin(i)?um|\\bal\\s?\\d{4}",
+      "pbr": {"color": "#d2d5d8", "metalness": 1.0, "roughness": 0.28}
+    },
+    {
+      "id": "stainless-steel",
+      "label": "Stainless steel, passivated",
+      "material": "stainless|\\bA[24]\\b|1\\.4[34]\\d\\d|AISI\\s?3\\d\\d",
+      "pbr": {"color": "#b4b8bc", "metalness": 1.0, "roughness": 0.22}
+    },
+    {
+      "id": "steel-black-oxide",
+      "label": "Steel, black oxide",
+      "material": "steel",
+      "finish": "black[ -]?oxide|blued|black",
+      "pbr": {"color": "#262729", "metalness": 0.8, "roughness": 0.38}
+    },
+    {
+      "id": "steel-zinc",
+      "label": "Steel, zinc plated",
+      "material": "steel",
+      "finish": "zinc|galvani[sz]",
+      "pbr": {"color": "#c9cdd2", "metalness": 1.0, "roughness": 0.3}
+    },
+    {
+      "id": "steel",
+      "label": "Steel, bare",
+      "material": "steel",
+      "pbr": {"color": "#8e9196", "metalness": 1.0, "roughness": 0.34}
+    },
+    {
+      "id": "brass",
+      "label": "Brass",
+      "material": "brass|CW6\\d\\dN",
+      "pbr": {"color": "#c8a24c", "metalness": 1.0, "roughness": 0.3}
+    },
+    {
+      "id": "copper",
+      "label": "Copper",
+      "material": "copper|Cu-ETP",
+      "pbr": {"color": "#c27a54", "metalness": 1.0, "roughness": 0.3}
+    },
+    {
+      "id": "rubber",
+      "label": "Rubber or TPU",
+      "material": "rubber|\\bTPU\\b|\\bTPE\\b|silicone|EPDM|\\bNBR\\b|neoprene",
+      "pbr": {"color": "#232426", "metalness": 0.0, "roughness": 0.88, "sheen": 0.3, "sheenRoughness": 0.8, "sheenColor": "#3a3c40"}
+    },
+    {
+      "id": "pla-matte",
+      "label": "PLA, matte print",
+      "material": "\\bPLA\\b",
+      "pbr": {"color": "#e4e1da", "metalness": 0.0, "roughness": 0.72, "sheen": 0.25, "sheenRoughness": 0.7, "sheenColor": "#ffffff"}
+    },
+    {
+      "id": "petg",
+      "label": "PETG, satin print",
+      "material": "\\bPETG\\b|\\bPET\\b",
+      "pbr": {"color": "#3b4046", "metalness": 0.0, "roughness": 0.5, "clearcoat": 0.25, "clearcoatRoughness": 0.5}
+    },
+    {
+      "id": "abs-asa",
+      "label": "ABS or ASA, matte",
+      "material": "\\bABS\\b|\\bASA\\b",
+      "pbr": {"color": "#2f3236", "metalness": 0.0, "roughness": 0.62}
+    },
+    {
+      "id": "nylon",
+      "label": "Nylon (PA), sintered or printed",
+      "material": "\\bPA\\s?\\d+|nylon",
+      "pbr": {"color": "#6a6d70", "metalness": 0.0, "roughness": 0.82}
+    },
+    {
+      "id": "pom",
+      "label": "POM (acetal)",
+      "material": "\\bPOM\\b|acetal|delrin",
+      "pbr": {"color": "#ecebe6", "metalness": 0.0, "roughness": 0.45, "clearcoat": 0.2, "clearcoatRoughness": 0.4}
+    },
+    {
+      "id": "polycarbonate",
+      "label": "Polycarbonate, clear",
+      "material": "\\bPC\\b|polycarbonate",
+      "pbr": {"color": "#f2f5f7", "metalness": 0.0, "roughness": 0.08, "transmission": 0.85, "thickness": 0.002, "ior": 1.585}
+    }
+  ],
+  "default": {
+    "id": "unmapped",
+    "label": "Unmapped material (neutral grey)",
+    "pbr": {"color": "#9a9ea3", "metalness": 0.0, "roughness": 0.6}
+  }
+}
