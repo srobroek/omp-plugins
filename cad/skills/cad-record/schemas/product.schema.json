@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://srobroek.com/cad/schemas/product.schema.json",
+  "title": "CAD product record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "rigor", "units", "regime", "general_tolerance", "flow"],
+  "properties": {
+    "id": {"type": "string", "minLength": 1, "pattern": "^[a-z0-9][a-z0-9-]*$"},
+    "rigor": {"type": "string", "enum": ["maker", "pro", "regulated"], "default": "pro"},
+    "units": {"const": "mm"},
+    "regime": {"type": "string", "enum": ["iso", "asme"]},
+    "general_tolerance": {"oneOf": [{"type": "number", "exclusiveMinimum": 0}, {"type": "string", "minLength": 1}]},
+    "flow": {
+      "type": "object", "additionalProperties": false,
+      "required": ["stage", "recheck_from"],
+      "properties": {
+        "stage": {"type": "string", "enum": ["GROUND", "INTENT", "SPECIFY", "L0_CONCEPT", "VARIANT", "L1_LAYOUT", "LAYOUT", "L2_PARTS", "L3_DETAIL", "BOM", "L4_ANALYSIS", "CRITIQUE", "RECONCILE", "DESIGN", "RELEASE", "RELEASE_GATE"]},
+        "recheck_from": {"type": "string", "enum": ["layout"]}
+      }
+    }
+  }
+}

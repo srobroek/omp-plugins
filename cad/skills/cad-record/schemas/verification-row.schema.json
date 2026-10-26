@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://srobroek.com/cad/schemas/verification-row.schema.json",
+  "title": "Verification matrix row",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["requirement_id", "method", "criteria", "result", "evidence"],
+  "properties": {
+    "requirement_id": {"type": "string", "pattern": "^REQ-[0-9]{3}$"},
+    "method": {"type": "string", "enum": ["I", "A", "D", "T"]},
+    "criteria": {"type": "string", "minLength": 1},
+    "result": {"type": "string", "enum": ["planned", "pass", "fail", "waived"]},
+    "evidence": {"type": "string"}
+  }
+}

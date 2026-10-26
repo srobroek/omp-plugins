@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://srobroek.com/cad/schemas/verification.schema.json",
+  "title": "Verification matrix",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["verification"],
+  "properties": {
+    "verification": {
+      "type": "array",
+      "items": {"$ref": "verification-row.schema.json"}
+    }
+  }
+}

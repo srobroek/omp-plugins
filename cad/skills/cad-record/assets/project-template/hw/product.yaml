@@ -1,0 +1,8 @@
+id: lamp-arm
+rigor: pro
+units: mm
+regime: iso
+general_tolerance: "ISO 2768-m"
+flow:
+  stage: L1_LAYOUT
+  recheck_from: layout

@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://srobroek.com/cad/schemas/interfaces.schema.json",
+  "title": "CAD interfaces record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["interfaces"],
+  "properties": {
+    "interfaces": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "from", "to", "type", "description"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^IF-[0-9]{3}$"},
+          "from": {"type": "string", "minLength": 1},
+          "to": {"type": "string", "minLength": 1},
+          "type": {"type": "string", "enum": ["mounting", "motion", "electrical", "thermal", "clearance", "other"]},
+          "description": {"type": "string", "minLength": 1},
+          "limits": {"type": "object"}
+        }
+      }
+    }
+  }
+}
