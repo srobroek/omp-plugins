@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """cad-viewer command-layer tests: argument parsing, version and part-map loading, check findings,
-and joint-limit rejection for `animate`. No browser, no OCP, no viewer process.
+holes, joint-limit rejection for `animate`, and the host's fan-out to both viewer pairs (against a
+stand-in ocp_viewer module). No browser, no OCP, no viewer process.
 
 Run: python3 -m unittest discover -s cad/skills/cad-viewer/tests -v  (needs PyYAML)
 """
@@ -16,15 +17,17 @@ import math
 import shutil
 import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
+from unittest import mock
 
 SKILL = Path(__file__).resolve().parent.parent
 SCRIPTS = SKILL / "scripts"
 TEMPLATE_HW = SKILL.parent / "cad-record" / "assets" / "project-template" / "hw"
 sys.path.insert(0, str(SCRIPTS))
 
-from cadviewer import LimitError, ViewerError, motion, record  # noqa: E402
+from cadviewer import LimitError, ViewerError, capture, host, motion, record  # noqa: E402
 
 
 def load(name: str, path: Path):
@@ -166,8 +169,12 @@ class PartMapLoading(Fixture):
         self.assertEqual([g.id for g in version.groups], ["base_sub", "arm_sub"])
         lower = version.part("LMP-0002")
         self.assertEqual(lower.path, "/lamp-arm/arm_sub/LMP-0002 Lower link")
-        self.assertEqual(lower.colour, record.MATERIAL_COLOURS[0][1])  # aluminium
-        self.assertEqual(version.part("LMP-0001").colour, record.PROCESS_COLOURS["fdm"])
+        # Colours are cad-render's rule for material AND finish: the clear anodize, not bare aluminium.
+        rules = json.loads((SKILL.parent / "cad-render" / "assets" / "materials.json").read_text(encoding="utf-8"))
+        colour = {r["id"]: r["pbr"]["color"] for r in rules["rules"]}
+        self.assertEqual(lower.colour, colour["aluminium-anodised-clear"])
+        self.assertEqual(version.part("LMP-0001").colour, colour["petg"])
+        self.assertEqual(record.colour_for("Unobtainium", ""), rules["default"]["pbr"]["color"])
         self.assertEqual(version.targets("base_sub"), ("LMP-0001",))
         with self.assertRaises(ViewerError):
             version.targets("LMP-9999")
@@ -221,6 +228,38 @@ class CheckFindings(Fixture):
         self.assertEqual(panel["check"]["blocking_failures"], ["interference"])
 
 
+class Holes(Fixture):
+    OVERLAY = json.loads((SKILL / "tests" / "fixtures" / "metrics-holes.json").read_text(encoding="utf-8"))
+
+    def with_holes(self) -> record.Version:
+        make_version(self.hw, "v1")
+        path = self.hw / "versions" / "v1" / "metrics.json"
+        metrics = json.loads(path.read_text(encoding="utf-8"))
+        for pn, extra in self.OVERLAY["parts"].items():
+            metrics["parts"][pn].update(extra)
+        path.write_text(json.dumps(metrics), encoding="utf-8")
+        return record.load_version(self.hw)
+
+    def test_holes_per_part_keep_order_through_and_depth(self) -> None:
+        parts = {p["pn"]: p for p in record.panel_model(self.with_holes(), None)["parts"]}
+        self.assertEqual(parts["LMP-0001"]["metrics"]["holes"], [
+            {"id": "H1", "diameter_mm": 3.4, "through": True, "depth_mm": 16.0},
+            {"id": "H2", "diameter_mm": 5.0, "through": False, "depth_mm": 13.5}])
+        self.assertEqual([h["id"] for h in parts["LMP-0002"]["metrics"]["holes"]], ["H1", "H2"])
+        self.assertEqual(parts["LMP-0003"]["metrics"]["holes"], [])
+
+    def test_a_missing_field_is_none_listed(self) -> None:
+        make_version(self.hw, "v1")
+        panel = record.panel_model(record.load_version(self.hw), None)
+        self.assertTrue(all(p["metrics"]["holes"] == [] for p in panel["parts"]))
+
+    def test_a_malformed_hole_is_a_contract_error(self) -> None:
+        for bad in ({"holes": {"H1": 5.0}}, {"holes": [{"id": "H1", "diameter_mm": 5.0}]},
+                    {"holes": [{"id": "H1", "diameter_mm": 0, "through": True}]}):
+            with self.subTest(bad=bad), self.assertRaisesRegex(ViewerError, "holes"):
+                record.holes("LMP-0002", bad["holes"])
+
+
 class AnimateLimits(Fixture):
     def setUp(self) -> None:
         super().setUp()
@@ -260,6 +299,63 @@ class AnimateLimits(Fixture):
         self.assertEqual([round(v, 9) for v in plane["point"]], [160.0, 0.0, 40.0])
         self.assertEqual([round(abs(v), 9) for v in plane["normal"]], [1.0, 0.0, 0.0])
         self.assertAlmostEqual(sum(a * b for a, b in zip(plane["normal"], plane["axis"])), 0.0)
+
+
+class ViewerPairs(unittest.TestCase):
+    """Every host change reaches the user's and the presenter's viewer; a capture's measuring moves
+    reach the presenter only. ocp_viewer is replaced by a module that records each call's port."""
+
+    PORTS = {"a": 1001, "b": 1002, "presenter_a": 2001, "presenter_b": 2002}
+
+    def setUp(self) -> None:
+        self.calls: list[tuple[int, dict]] = []
+        fake = types.ModuleType("ocp_viewer")
+        fake.set_viewer_config = lambda port=None, **values: self.calls.append((port, values))
+        fake.status = lambda port=None: {"position": [float(port), 0.0, 0.0], "quaternion": [0.0, 0.0, 0.0, 1.0],
+                                         "target": [0.0, 0.0, 0.0], "zoom": 1.0}
+        patcher = mock.patch.dict(sys.modules, {"ocp_viewer": fake})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.host = host.Host(Path("/nonexistent/session.json"), 1000, self.PORTS)
+
+    def ports(self) -> list[int]:
+        return sorted(port for port, _ in self.calls)
+
+    def test_one_change_reaches_both_pairs(self) -> None:
+        self.host.slots["a"].showing = "A"
+        self.host.studio({"environment": "studio"})
+        self.assertEqual(self.ports(), [1001, 2001])
+        self.calls.clear()
+        self.host.set_camera("a", {"zoom": 2.0})
+        self.assertEqual(self.ports(), [1001, 2001])
+        self.assertEqual(self.calls[0][1], {"zoom": 2.0})
+
+    def test_a_measuring_move_reaches_only_the_presenter(self) -> None:
+        camera = self.host.move_presenter_camera({"slot": "a", "zoom": 3.0})
+        self.assertEqual(self.ports(), [2001])
+        self.assertEqual(camera["position"], [2001.0, 0.0, 0.0])
+
+    def test_a_to_b_copies_stay_within_each_pair_and_skip_a_pair_without_a_page(self) -> None:
+        self.host.slots["b"].showing = "B"
+        for slot in self.host.slots.values():
+            slot.viewers["presenter"].connected = True
+        self.host._copy_camera("a", "b")
+        self.assertEqual([(p, v["position"]) for p, v in self.calls], [(2002, [2001.0, 0.0, 0.0])])
+        self.calls.clear()
+        self.host.slots["a"].viewers["user"].connected = True
+        self.host._copy_camera("a", "b")
+        self.assertEqual(sorted((p, v["position"][0]) for p, v in self.calls), [(1002, 1001.0), (2002, 2001.0)])
+
+    def test_session_names_every_viewer_port(self) -> None:
+        self.assertEqual({k: v for k, v in self.host.session()["ports"].items() if k != "panel"}, self.PORTS)
+        self.assertEqual(self.host.state()["slots"]["a"]["urls"],
+                         {"user": "http://127.0.0.1:1001/", "presenter": "http://127.0.0.1:2001/"})
+
+    def test_only_a_current_capture_follows_the_user_camera(self) -> None:
+        self.assertTrue(capture.follow_user_camera("current", True))
+        self.assertFalse(capture.follow_user_camera("current", False))
+        for view in ("iso", "front", "exploded", "section", "isolate:LMP-0002"):
+            self.assertFalse(capture.follow_user_camera(view, True), view)
 
 
 if __name__ == "__main__":

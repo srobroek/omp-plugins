@@ -55,7 +55,7 @@ from urllib.parse import unquote, urlsplit
 HERE = Path(__file__).resolve()
 SKILL = HERE.parent.parent
 RENDERER_DIR = SKILL / "assets" / "renderer"
-MATERIALS_PATH = SKILL / "assets" / "materials.json"
+MATERIALS_PY = HERE.parent / "materials.py"
 CONCEPT_SERVE = SKILL.parent / "cad-concept" / "scripts" / "serve.py"
 THREE_VERSION = "0.186.1"
 PLAYWRIGHT_VERSION = "1.64.1"
@@ -97,68 +97,18 @@ class InfraError(RuntimeError):
     """Usage or infrastructure failure; maps to exit 2."""
 
 
-# --------------------------------------------------------------------------- materials
+def _load_material_rules() -> Any:
+    """The stdlib-only material table module beside this script (shared with cad-viewer)."""
+    spec = importlib.util.spec_from_file_location("cad_render_materials", MATERIALS_PY)
+    if spec is None or spec.loader is None:
+        raise InfraError(f"cannot load {MATERIALS_PY}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
-@dataclass(frozen=True)
-class MaterialRule:
-    id: str
-    label: str
-    material: re.Pattern[str] | None
-    finish: re.Pattern[str] | None
-    pbr: dict[str, Any]
-
-    def matches(self, material: str, finish: str) -> bool:
-        if self.material is not None and not self.material.search(material):
-            return False
-        return self.finish is None or bool(self.finish.search(finish))
-
-
-PBR_KEYS = {"color": str, "metalness": float, "roughness": float, "clearcoat": float,
-            "clearcoatRoughness": float, "sheen": float, "sheenRoughness": float, "sheenColor": str,
-            "transmission": float, "thickness": float, "ior": float, "specularIntensity": float}
-HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
-
-
-def _rule(entry: dict[str, Any], where: str) -> MaterialRule:
-    pbr = entry.get("pbr")
-    if not isinstance(pbr, dict) or "color" not in pbr:
-        raise InfraError(f"{where}: pbr must be an object with a color")
-    for key, value in pbr.items():
-        kind = PBR_KEYS.get(key)
-        if kind is None:
-            raise InfraError(f"{where}: unknown pbr key {key!r}")
-        if kind is str and not (isinstance(value, str) and HEX.match(value)):
-            raise InfraError(f"{where}: {key} must be #rrggbb")
-        if kind is float and not (isinstance(value, (int, float)) and value >= 0):
-            raise InfraError(f"{where}: {key} must be a non-negative number")
-    flags = re.IGNORECASE
-    return MaterialRule(
-        id=str(entry["id"]), label=str(entry["label"]),
-        material=re.compile(entry["material"], flags) if "material" in entry else None,
-        finish=re.compile(entry["finish"], flags) if "finish" in entry else None,
-        pbr=dict(pbr))
-
-
-@dataclass(frozen=True)
-class MaterialTable:
-    rules: list[MaterialRule]
-    default: MaterialRule
-
-    @classmethod
-    def load(cls, path: Path = MATERIALS_PATH) -> MaterialTable:
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            rules = [_rule(r, f"{path.name} rule {i}") for i, r in enumerate(data["rules"])]
-            default = _rule(data["default"], f"{path.name} default")
-        except (OSError, ValueError, KeyError, TypeError, re.error) as exc:
-            raise InfraError(f"{path}: {exc}") from exc
-        if any(r.material is None for r in rules):
-            raise InfraError(f"{path}: every rule needs a material regex")
-        return cls(rules, default)
-
-    def resolve(self, material: str, finish: str) -> MaterialRule:
-        return next((r for r in self.rules if r.matches(material, finish)), self.default)
+material_rules = _load_material_rules()
 
 
 # --------------------------------------------------------------------------- version inputs
@@ -497,7 +447,7 @@ def parse_views(tokens: list[str], pns: list[str]) -> list[str]:
 
 
 def build_scene(hw: Path, version: Version, views: list[str], size: tuple[int, int],
-                table: MaterialTable) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+                table: material_rules.MaterialTable) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     """Returns (scene payload for the page, materials per PN, cache key)."""
     parts_map = version.part_map["parts"]
     pns = sorted(parts_map)
@@ -725,7 +675,10 @@ def run(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     size = parse_size(args.size)
     version = resolve_version(hw, args.version)
     views = parse_views(args.views, sorted(version.part_map["parts"]))
-    table = MaterialTable.load()
+    try:
+        table = material_rules.MaterialTable.load()
+    except material_rules.MaterialsError as exc:
+        raise InfraError(str(exc)) from exc
     scene, materials, keyed = build_scene(hw, version, views, size, table)
     out_dir = hw / "renders" / version.label
 

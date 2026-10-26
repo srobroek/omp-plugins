@@ -146,6 +146,14 @@ body[data-state="error"] .status {
   border: 0;
 }
 
+/* a viewer frame holding focus (Tab, or a click into the 3D view). Focus inside a cross-origin
+   frame matches no selector in this page, so panel.js sets data-focused; the ring is inset so
+   the split neighbour does not clip it */
+.viewer[data-focused="true"] {
+  outline: 2px solid var(--color-focus);
+  outline-offset: -2px;
+}
+
 .viewer-caption {
   position: absolute;
   right: var(--space-3);
@@ -329,7 +337,7 @@ h2 {
   border-radius: var(--radius-1);
   background: var(--color-accent-subtle);
   color: var(--color-accent-strong);
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
 }
 
 .finding[data-severity="fail"] {
@@ -476,6 +484,38 @@ h2 {
   font-size: var(--text-xs);
 }
 
+/* holes per part, from metrics.json */
+.hole-list,
+.hole-rows {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.hole-list {
+  gap: var(--space-2);
+}
+
+.hole-pn {
+  margin: 0 0 var(--space-1);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+}
+
+.hole-rows {
+  gap: var(--space-1);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.hole-id {
+  margin-right: var(--space-2);
+  color: var(--color-fg-muted);
+}
+
 /* tablet: narrower panel */
 @media (max-width: 960px) {
   .workspace {
@@ -484,6 +524,15 @@ h2 {
 
   .totals {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* the narrow panel gives a row's text the full width: Hide and Iso move under the name */
+  .item {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .item-actions {
+    grid-column: 2;
   }
 }
 
@@ -523,6 +572,15 @@ h2 {
 
   .totals {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  /* the panel is full width again, so a row keeps its three columns */
+  .item {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+
+  .item-actions {
+    grid-column: auto;
   }
 }
 

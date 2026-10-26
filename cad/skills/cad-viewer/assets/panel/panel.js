@@ -2,12 +2,20 @@
 // the OCP viewers through ocp_viewer's Python API, and the panel re-renders the state it returns.
 
 const POLL_MS = 2000;
-const CONNECT_DELAY_MS = 1500;
+// The host's headless presenter opens the panel with ?audience=presenter; every other tab is the
+// user's. Each audience has its own OCP viewers, as one viewer serves only its latest page.
+const AUDIENCE = new URLSearchParams(location.search).get("audience") === "presenter" ? "presenter" : "user";
+// The viewer page registers its websocket some time after its load event, and a push sent before
+// that is lost. A user's tab announces twice, as the first delay was seen to fall short under
+// SwiftShader load; the presenter announces once, and a capture re-announces it if its model is
+// missing, so no late push lands in the middle of a capture.
+const CONNECT_DELAYS_MS = AUDIENCE === "presenter" ? [1500] : [1500, 6000];
 
 const $ = (id) => document.getElementById(id);
 let state = null;
 let lastJson = "";
 let busy = false;
+let refused = false; // the last action's error stays in the status line until the next action
 
 async function api(route, body) {
   const options = body === undefined ? {} : {
@@ -54,12 +62,14 @@ function focusVersion() {
 async function act(button, route, body) {
   if (busy) return;
   busy = true;
+  refused = false;
   button?.setAttribute("aria-busy", "true");
   setStatus("Updating the viewer…");
   try {
     accept(await api(route, body));
     setStatus(statusLine());
   } catch (error) {
+    refused = true;
     setStatus(`Viewer host refused: ${error.message}`, "error");
   } finally {
     button?.removeAttribute("aria-busy");
@@ -189,25 +199,41 @@ function renderMeasure(version) {
     el("div", { class: "total" }, el("dt", { text: "Mass" }), el("dd", { text: `${fmt(totals.mass_g, 1)} g` })),
     el("div", { class: "total" }, el("dt", { text: "Volume" }), el("dd", { text: `${fmt(totals.volume_mm3 / 1000, 1)} cm³` })),
     el("div", { class: "total" }, el("dt", { text: "Bbox mm" }), el("dd", { text: size }))));
-  const withHoles = version.parts.some((p) => Array.isArray(p.metrics.holes) && p.metrics.holes.length);
   const head = el("tr", {}, el("th", { scope: "col", text: "Part" }), el("th", { scope: "col", text: "cm³" }),
-    el("th", { scope: "col", text: "g / target" }), el("th", { scope: "col", text: "Bbox mm" }),
-    withHoles ? el("th", { scope: "col", text: "Holes" }) : null);
+    el("th", { scope: "col", text: "g / target" }), el("th", { scope: "col", text: "Bbox mm" }));
   const rows = version.parts.map((p) => {
     const m = p.metrics;
     const bbox = m.bbox_mm ? m.bbox_mm.size.map((v) => fmt(v, 0)).join("×") : "—";
     const target = m.mass_target_g === null ? "" : ` / ${fmt(m.mass_target_g, 0)}`;
     return el("tr", {}, el("th", { scope: "row", text: p.pn }), el("td", { text: fmt(m.volume_mm3 / 1000, 1) }),
-      el("td", { text: `${fmt(m.mass_g, 1)}${target}` }), el("td", { text: bbox }),
-      withHoles ? el("td", { text: (m.holes || []).map((h) => (typeof h === "object" ? JSON.stringify(h) : String(h))).join(", ") }) : null);
+      el("td", { text: `${fmt(m.mass_g, 1)}${target}` }), el("td", { text: bbox }));
   });
   box.append(el("table", { class: "measure-table" },
     el("caption", { text: `metrics.json, ${version.label}, zero pose` }),
     el("thead", {}, head), el("tbody", {}, rows)));
-  if (!withHoles) box.append(el("p", { class: "measure-note", text: "metrics.json lists no holes for this version." }));
+  renderHoles(box, version);
   if (totals.parts_without_density.length) {
     box.append(el("p", { class: "measure-note", text: `No density: ${totals.parts_without_density.join(", ")}` }));
   }
+}
+
+function holeText(hole) {
+  const depth = hole.depth_mm === null ? "depth not listed" : `${fmt(hole.depth_mm, 1)} mm deep`;
+  return `Ø${fmt(hole.diameter_mm, 1)} mm · ${hole.through ? "through" : "blind"} · ${depth}`;
+}
+
+function renderHoles(box, version) {
+  const drilled = version.parts.filter((p) => p.metrics.holes.length);
+  if (!drilled.length) {
+    box.append(el("p", { class: "measure-note", text: "metrics.json lists no holes for this version." }));
+    return;
+  }
+  box.append(el("h3", { class: "list-heading", id: "holes-heading", text: "Holes" }),
+    el("ul", { class: "hole-list", "aria-labelledby": "holes-heading" }, drilled.map((p) =>
+      el("li", { class: "hole-part" },
+        el("p", { class: "hole-pn", text: `${p.pn} · ${p.metrics.holes.length} hole${p.metrics.holes.length === 1 ? "" : "s"}` }),
+        el("ul", { class: "hole-rows", "aria-label": `${p.pn} holes` },
+          p.metrics.holes.map((h) => el("li", {}, el("span", { class: "hole-id", text: h.id }), holeText(h))))))));
 }
 
 function render() {
@@ -233,7 +259,7 @@ function accept(next) {
 async function refresh() {
   try {
     accept(await api("/api/state"));
-    if (!busy) setStatus(statusLine());
+    if (!busy && !refused) setStatus(statusLine());
   } catch (error) {
     setStatus(`Viewer host not answering: ${error.message}`, "error");
   }
@@ -249,11 +275,36 @@ function loadFrame(slot) {
   const frame = $(`viewer-${slot}`);
   frame.addEventListener("load", () => {
     // OCP CAD Viewer does not replay its last model to a new page: ask the host to push it.
-    setTimeout(() => api("/api/connected", { slot }).then(refresh).catch((e) => setStatus(e.message, "error")),
-      CONNECT_DELAY_MS);
+    for (const delay of CONNECT_DELAYS_MS) {
+      setTimeout(() => api("/api/connected", { slot, audience: AUDIENCE }).then(refresh)
+        .catch((e) => setStatus(e.message, "error")), delay);
+    }
   });
-  frame.src = state.slots[slot].url;
+  frame.src = state.slots[slot].urls[AUDIENCE];
 }
+
+// Focus inside a cross-origin viewer frame matches no selector here (:focus, :focus-within and
+// :has(iframe:focus) all read false in Chromium) and fires no event on the iframe element; only
+// the window's blur reports it, with the iframe as activeElement. Mark that figure for the ring,
+// and keep reading while the window is blurred, as Tab can move on to the other frame.
+let frameWatch = null;
+
+function markFocusedFrame() {
+  const active = document.activeElement;
+  for (const figure of document.querySelectorAll(".viewer")) {
+    figure.dataset.focused = String(active?.tagName === "IFRAME" && figure.contains(active));
+  }
+}
+
+window.addEventListener("blur", () => {
+  markFocusedFrame();
+  frameWatch ??= setInterval(markFocusedFrame, 250);
+});
+window.addEventListener("focus", () => {
+  clearInterval(frameWatch);
+  frameWatch = null;
+  markFocusedFrame();
+});
 
 async function start() {
   $("show-a").addEventListener("click", (e) => act(e.currentTarget, "/api/mode", { mode: state.mode, active: "A" }));

@@ -21,10 +21,11 @@ Usage:
     uv run --script viewer.py capture --view iso|front|side|top|exploded|section|current|isolate:<PN>
         --out PNG [--joint J-002] [--zoom 4] [--crop page|viewer|canvas] [--refit|--no-refit]
 
-`serve` starts (or reuses) one detached host: two OCP viewer servers (slot a, and slot b for the
-A/B side-by-side), the panel page that embeds them, and a headless Chromium "presenter" that keeps
-that page open so captures show exactly the state the commands left. Every other command talks to
-the host through the session file ($CAD_VIEWER_SESSION, default
+`serve` starts (or reuses) one detached host: OCP viewer servers for slot a, and slot b for the
+A/B side-by-side, each twice (one for the user's tab, one for captures), the panel page that
+embeds them, and a headless Chromium "presenter" that keeps its own copy of that page open so
+captures show exactly the state the commands left. Every other command talks to the host
+through the session file ($CAD_VIEWER_SESSION, default
 ~/.local/state/cad-viewer/session.json).
 
 stdout: one JSON object per command. Exit 0 = done; 1 = a joint value outside its limits
@@ -71,7 +72,7 @@ def build_parser() -> argparse.ArgumentParser:
         serve.add_argument(flag, type=int, default=0, help="0 picks a free port")
     serve.add_argument("--width", type=int, default=1440, help="presenter page width (captures)")
     serve.add_argument("--height", type=int, default=900, help="presenter page height (captures)")
-    sub.add_parser("stop", help="stop the viewer host and both OCP viewers")
+    sub.add_parser("stop", help="stop the viewer host and its OCP viewers")
 
     show = sub.add_parser("show", help="push one version; the camera is kept on later pushes")
     show.add_argument("hw", type=Path, help="hardware record directory (hw/)")
@@ -123,8 +124,8 @@ def build_parser() -> argparse.ArgumentParser:
     host = sub.add_parser("host", help=argparse.SUPPRESS)
     host.add_argument("--session", type=Path, required=True)
     host.add_argument("--panel-port", type=int, required=True)
-    host.add_argument("--port-a", type=int, required=True)
-    host.add_argument("--port-b", type=int, required=True)
+    host.add_argument("--ports", type=json.loads, required=True,
+                      help='viewer ports by name: {"a": .., "b": .., "presenter_a": .., "presenter_b": ..}')
     host.add_argument("--width", type=int, required=True)
     host.add_argument("--height", type=int, required=True)
     return parser
@@ -176,7 +177,7 @@ def run(args: argparse.Namespace) -> int:
     if args.command == "host":
         from cadviewer import host
 
-        return host.run(args.session, args.panel_port, args.port_a, args.port_b, args.width, args.height)
+        return host.run(args.session, args.panel_port, args.ports, args.width, args.height)
     if args.command == "serve":
         data, reused = session.start(path, SCRIPT, args.panel_port, args.port_a, args.port_b,
                                      (args.width, args.height))

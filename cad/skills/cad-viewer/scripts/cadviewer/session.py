@@ -113,21 +113,28 @@ def describe(session: dict[str, Any], script: Path, reused: bool) -> dict[str, A
 
 def start(path: Path, script: Path, panel_port: int, port_a: int, port_b: int,
           viewport: tuple[int, int]) -> tuple[dict[str, Any], bool]:
-    """Reuse the live session or spawn a detached host; returns (session, reused)."""
+    """Reuse the live session or spawn a detached host; returns (session, reused).
+
+    `port_a`/`port_b` are the user's viewers (0 picks free ports); the presenter's pair always
+    takes free ports.
+    """
     existing = live_session(path)
     if existing is not None:
         return existing, True
-    ports = [p or free_port() for p in (panel_port, port_a, port_b)]
+    panel = panel_port or free_port()
+    viewers = {"a": port_a, "b": port_b, "presenter_a": 0, "presenter_b": 0}
+    viewers = {name: port or free_port() for name, port in viewers.items()}
+    ports = [panel, *viewers.values()]
     busy = [p for p in ports if port_open(p)]
-    if busy or len(set(ports)) != 3:
+    if busy or len(set(ports)) != len(ports):
         raise ViewerError(f"ports not free or not distinct: {ports}")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.unlink(missing_ok=True)  # a stale file from a host that died without `stop`
     log_path = path.with_name("host.log")
     with log_path.open("w", encoding="utf-8") as log:
         process = subprocess.Popen(
-            [sys.executable, str(script), "host", "--session", str(path), "--panel-port", str(ports[0]),
-             "--port-a", str(ports[1]), "--port-b", str(ports[2]),
+            [sys.executable, str(script), "host", "--session", str(path), "--panel-port", str(panel),
+             "--ports", json.dumps(viewers),
              "--width", str(viewport[0]), "--height", str(viewport[1])],
             stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
     deadline = time.monotonic() + START_TIMEOUT_S

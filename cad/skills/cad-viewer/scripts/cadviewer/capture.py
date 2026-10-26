@@ -33,19 +33,28 @@ SETTLE_TIMEOUT_S = 20.0
 MODEL_TIMEOUT_MS = 60_000
 GIZMO_PX = 140  # the orientation axes occupy this bottom-left square of the scene canvas
 CENTRE_TOLERANCE = 0.03  # scene centre offset from the free-area centre, as a share of its size
-# Hides everything in the viewer page but its largest canvas (the scene), or restores it.
-BARE_SCENE = """(on) => {
-    let style = document.getElementById('cad-viewer-bare-scene');
+# Adds a style sheet to a page for one scene shot, or removes it again. A canvas screenshot is a
+# crop of the composited panel page, so the viewer's chrome inside its frame and the panel's own
+# overlays on top of it (the A/B captions) are hidden; otherwise they count as scene pixels in the
+# refit. Only overlays are hidden in the panel page: hiding the panel around a viewer frame made the
+# next split-view canvas screenshot time out waiting for a stable element.
+BARE = """([on, css]) => {
+    let style = document.getElementById('cad-viewer-bare');
     if (!on) { style?.remove(); return; }
-    const main = [...document.querySelectorAll('canvas')].sort((a, b) => b.width * b.height - a.width * a.height)[0];
-    main.classList.add('cad-viewer-scene');
     if (!style) {
         style = document.createElement('style');
-        style.id = 'cad-viewer-bare-scene';
-        style.textContent = 'body * { visibility: hidden !important; } canvas.cad-viewer-scene { visibility: visible !important; }';
+        style.id = 'cad-viewer-bare';
+        style.textContent = css;
         document.head.append(style);
     }
 }"""
+SCENE_CLASS = "cad-viewer-scene"
+MARK_SCENE = f"""() => {{
+    const main = [...document.querySelectorAll('canvas')].sort((a, b) => b.width * b.height - a.width * a.height)[0];
+    main.classList.add('{SCENE_CLASS}');
+}}"""
+FRAME_CHROME_CSS = f"body * {{ visibility: hidden !important; }} canvas.{SCENE_CLASS} {{ visibility: visible !important; }}"
+PANEL_OVERLAY_CSS = ".viewer-caption { visibility: hidden !important; }"
 
 Box = tuple[int, int, int, int]
 
@@ -141,13 +150,16 @@ class Driver:
         return [tuple(int(round(v)) for v in r) for r in rects]  # type: ignore[misc]
 
     def shot(self, slot: str) -> bytes:
-        """The main canvas alone: the viewer's DOM chrome is hidden for the shot, then restored."""
+        """The main canvas alone: viewer chrome and panel overlays are hidden for the shot, then restored."""
         frame = self.frame(slot)
-        frame.evaluate(BARE_SCENE, True)
+        frame.evaluate(MARK_SCENE)
+        frame.evaluate(BARE, [True, FRAME_CHROME_CSS])
+        self.page.evaluate(BARE, [True, PANEL_OVERLAY_CSS])
         try:
             return self.canvas(slot).screenshot()
         finally:
-            frame.evaluate(BARE_SCENE, False)
+            self.page.evaluate(BARE, [False, None])
+            frame.evaluate(BARE, [False, None])
 
     def settle(self, slot: str, minimum_s: float = 0.4) -> bytes:
         """Wait until two consecutive canvas frames are identical; returns the last one."""
@@ -163,16 +175,20 @@ class Driver:
         return previous
 
     def wait_model(self, product_id: str, slot: str) -> None:
-        """Wait until the viewer frame lists the product in its tree; re-announce the page once."""
+        """Wait until the viewer frame lists the product in its tree; re-announce the page once.
+
+        The node counts once attached: the Clip and Studio tabs hide the tree, and a section
+        capture leaves the viewer on the Clip tab.
+        """
         selector = f'.tv-tree-node[data-path="/{product_id}"]'
         for attempt in range(2):
             try:
-                self.frame(slot).wait_for_selector(selector, timeout=MODEL_TIMEOUT_MS)
+                self.frame(slot).wait_for_selector(selector, state="attached", timeout=MODEL_TIMEOUT_MS)
                 return
             except Exception as error:  # noqa: BLE001 - a Playwright timeout: re-push once, then report
                 if attempt:
                     raise ViewerError(f"viewer {slot} never listed /{product_id}: {error}") from error
-                self.host.browser_connected({"slot": slot})
+                self.host.browser_connected({"slot": slot, "audience": "presenter"})
 
     def explode(self, slot: str) -> None:
         """Drive the explode slider to its end: the Python API only switches explode on."""
@@ -211,8 +227,8 @@ class Driver:
             # A scene cut by the canvas edge pans its clipped side not at all: zoom out first.
             if box[0] > 1 and box[1] > 1 and box[2] < width - 1 and box[3] < height - 1:
                 break
-            camera = self.host.move_camera({"slot": slot, **{k: camera[k] for k in ("position", "target", "quaternion")},
-                                            "zoom": camera["zoom"] * 0.6})
+            camera = self.host.move_presenter_camera({"slot": slot, **{k: camera[k] for k in ("position", "target", "quaternion")},
+                                                      "zoom": camera["zoom"] * 0.6})
             box = content_box(self.settle(slot))
             if box is None:
                 raise ViewerError("blank frame while zooming out")
@@ -230,7 +246,7 @@ class Driver:
             gx, gy = width / 2.0 + (ux - width / 2.0) / factor, height / 2.0 + (uy - height / 2.0) / factor
             dx, dy = (cx - gx) * mm_per_px, -(cy - gy) * mm_per_px
             shift = [right[i] * dx + up[i] * dy for i in range(3)]
-            camera = self.host.move_camera({
+            camera = self.host.move_presenter_camera({
                 "slot": slot, "quaternion": camera["quaternion"], "zoom": camera["zoom"] * factor,
                 "position": [camera["position"][i] + shift[i] for i in range(3)],
                 "target": [camera["target"][i] + shift[i] for i in range(3)]})
@@ -250,10 +266,10 @@ class Driver:
         restore = {"slot": slot, **{k: camera[k] for k in ("position", "target", "quaternion", "zoom")}}
         step = 10.0
         for _ in range(4):
-            self.host.move_camera({**restore, "position": [camera["position"][i] + right[i] * step for i in range(3)],
-                                   "target": [camera["target"][i] + right[i] * step for i in range(3)]})
+            self.host.move_presenter_camera({**restore, "position": [camera["position"][i] + right[i] * step for i in range(3)],
+                                             "target": [camera["target"][i] + right[i] * step for i in range(3)]})
             shifted = content_box(self.settle(slot))
-            self.host.move_camera(restore)
+            self.host.move_presenter_camera(restore)
             if shifted is not None:
                 pixels = abs((box[0] + box[2]) - (shifted[0] + shifted[2])) / 2.0
                 if pixels >= 6:
@@ -316,6 +332,15 @@ class Presenter(threading.Thread):
         self.join(timeout=30)
 
 
+def follow_user_camera(view: str, user_connected: bool) -> bool:
+    """`current` captures what the user is looking at, when a user's tab is connected.
+
+    Every other view sets its own camera (preset, section, refit), and every host camera change
+    reaches both viewer pairs, so the two cameras differ only after the user turned their view.
+    """
+    return view == "current" and user_connected
+
+
 def capture(host: Any, page: Any, request: dict[str, Any]) -> dict[str, Any]:
     """One capture on the presenter page: apply the view, refit, screenshot (runs on the presenter)."""
     view = parse_view(str(request.get("view")))
@@ -337,6 +362,10 @@ def capture(host: Any, page: Any, request: dict[str, Any]) -> dict[str, Any]:
     for slot in slots:
         driver.wait_model(product, slot)
     result: dict[str, Any] = {}
+    camera_from = "user" if follow_user_camera(view, host.user_connected()) else "presenter"
+    if camera_from == "user":
+        for slot in slots:
+            host.set_camera(slot, host.camera(slot, "user"), ("presenter",))
     if view != "current":
         result = host.apply_view({"view": view, "joint": joint, "zoom": zoom})
         for slot in slots:
@@ -360,7 +389,10 @@ def capture(host: Any, page: Any, request: dict[str, Any]) -> dict[str, Any]:
         finally:
             host.sync_hold.clear()
         if "b" in slots:  # side by side: B shows A's refitted camera
-            host.move_camera({"slot": "b", **host.camera("a")})
+            host.move_presenter_camera({"slot": "b", **host.camera("a")})
+        if host.user_connected():  # the user's tab follows the refit, as it follows every camera change
+            for slot in slots:
+                host.set_camera(slot, host.camera(slot), ("user",))
     for slot in slots:
         if slot not in frames:
             png = driver.settle(slot, minimum_s=0.6)
@@ -377,4 +409,5 @@ def capture(host: Any, page: Any, request: dict[str, Any]) -> dict[str, Any]:
     cameras = {slot: {k: v for k, v in host.camera(slot).items() if k != "target0"} for slot in slots}
     return {"status": "fail" if blank else "pass", "out": str(out), "view": view, "crop": crop,
             "viewport": [page.viewport_size["width"], page.viewport_size["height"]], "mode": state["mode"],
-            "frames": frames, "cameras": cameras, "host": result, "animation": host.state()["animation"]}
+            "camera_from": camera_from, "frames": frames, "cameras": cameras, "host": result,
+            "animation": host.state()["animation"]}

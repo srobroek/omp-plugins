@@ -1,9 +1,14 @@
-"""The viewer host: two OCP CAD Viewer processes, the side panel, and one HTTP API.
+"""The viewer host: OCP CAD Viewer processes, the side panel, and one HTTP API.
 
 Every viewer state change goes through ocp_viewer's Python API (`show`, `set_viewer_config`,
 `status`, `Animation`): the panel and the CLI only send requests here. Slot `a` shows the
 active version; slot `b` holds version B while the A/B side-by-side is on, and a sync thread
 copies the camera between the two.
+
+Each slot runs one viewer per audience. ocp_viewer serves one registered browser per port (the
+last page to connect), so the user's tab and the headless presenter page that captures read
+each get their own viewer, and every show, config, clip, animation, and camera change goes to
+both. The presenter's camera alone moves while a capture measures the frame.
 """
 
 from __future__ import annotations
@@ -42,6 +47,7 @@ VIEWER_START_S = 300.0
 SYNC_PERIOD_S = 0.2
 SYNC_COOLDOWN_S = 0.8
 CAMERA_KEYS = ("position", "quaternion", "target", "zoom")
+AUDIENCES = ("user", "presenter")  # the user's browser tab; the headless page captures read
 PRESETS = {"iso": "ISO", "front": "FRONT", "side": "RIGHT", "top": "TOP"}
 
 
@@ -56,12 +62,22 @@ class Loaded:
 
 
 @dataclass
-class Slot:
-    name: str
+class Viewer:
+    """One ocp_viewer process: a slot as one audience sees it."""
     port: int
     process: subprocess.Popen | None = None
-    showing: str | None = None  # "A" or "B"
     pushed: bool = False  # a model reached this viewer since its page last connected
+    connected: bool = False  # a panel page announced itself on this viewer
+
+
+@dataclass
+class Slot:
+    name: str
+    viewers: dict[str, Viewer]  # audience -> viewer
+    showing: str | None = None  # "A" or "B"
+
+    def ports(self) -> list[int]:
+        return [viewer.port for viewer in self.viewers.values()]
 
 
 @dataclass
@@ -99,13 +115,20 @@ def _load(hw: str, version: str, check_path: str | None) -> Loaded:
     return Loaded(loaded, check_path, panel, shown, shapes)
 
 
+def port_name(slot: str, audience: str) -> str:
+    """Session `ports` key of one viewer: `a`/`b` for the user's, `presenter_a`/`presenter_b`."""
+    return slot if audience == "user" else f"{audience}_{slot}"
+
+
 class Host:
-    def __init__(self, session_file: Path, panel_port: int, port_a: int, port_b: int,
+    def __init__(self, session_file: Path, panel_port: int, ports: dict[str, int],
                  viewport: tuple[int, int] = (1440, 900)) -> None:
+        """`ports` maps every port_name() of slots a and b to its viewer port."""
         self.session_file = session_file
         self.panel_port = panel_port
         self.viewport = viewport
-        self.slots = {"a": Slot("a", port_a), "b": Slot("b", port_b)}
+        self.slots = {name: Slot(name, {aud: Viewer(ports[port_name(name, aud)]) for aud in AUDIENCES})
+                      for name in ("a", "b")}
         self.versions: dict[str, Loaded] = {}
         self.mode = "single"  # or "split"
         self.active = "A"
@@ -117,43 +140,46 @@ class Host:
         self.halt = threading.Event()
         self.server: ThreadingHTTPServer | None = None
         self.presenter: Presenter | None = None
-        # Set while a capture moves slot a's camera to measure it: the sync thread must not copy a
-        # half-reported camera back. The capture copies a -> b itself when it is done.
+        # Set while a capture moves the presenter's slot a camera to measure it: the sync thread must
+        # not copy a half-reported camera to b. The capture copies a -> b itself when it is done.
         self.sync_hold = threading.Event()
+
+    def _viewers(self) -> list[tuple[str, str, Viewer]]:
+        return [(slot.name, aud, viewer) for slot in self.slots.values() for aud, viewer in slot.viewers.items()]
 
     # ------------------------------------------------------------------ lifecycle
 
     def start_viewers(self) -> None:
         log_dir = self.session_file.parent
-        for slot in self.slots.values():
-            log = (log_dir / f"viewer-{slot.name}.log").open("w", encoding="utf-8")
-            slot.process = subprocess.Popen(
-                [sys.executable, "-m", "ocp_viewer", "--host", HOST, "--port", str(slot.port), "--theme", "light",
+        for name, aud, viewer in self._viewers():
+            log = (log_dir / f"viewer-{port_name(name, aud)}.log").open("w", encoding="utf-8")
+            viewer.process = subprocess.Popen(
+                [sys.executable, "-m", "ocp_viewer", "--host", HOST, "--port", str(viewer.port), "--theme", "light",
                  "--tree_width", str(TREE_WIDTH)],
                 stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
         deadline = time.monotonic() + VIEWER_START_S
-        for slot in self.slots.values():
-            while not port_open(slot.port):
-                if slot.process.poll() is not None or time.monotonic() > deadline:
-                    raise ViewerError(f"ocp_viewer {slot.name} did not start on port {slot.port}")
+        for name, aud, viewer in self._viewers():
+            while not port_open(viewer.port):
+                if viewer.process.poll() is not None or time.monotonic() > deadline:
+                    raise ViewerError(f"ocp_viewer {port_name(name, aud)} did not start on port {viewer.port}")
                 time.sleep(0.5)
 
     def stop_viewers(self) -> None:
-        for slot in self.slots.values():
-            if slot.process is not None and slot.process.poll() is None:
-                slot.process.terminate()
+        for _, _, viewer in self._viewers():
+            if viewer.process is not None and viewer.process.poll() is None:
+                viewer.process.terminate()
                 try:
-                    slot.process.wait(timeout=20)
+                    viewer.process.wait(timeout=20)
                 except subprocess.TimeoutExpired:
-                    slot.process.kill()
-                    slot.process.wait()
+                    viewer.process.kill()
+                    viewer.process.wait()
 
     def session(self) -> dict[str, Any]:
-        a, b = self.slots["a"].port, self.slots["b"].port
+        user = {n: s.viewers["user"].port for n, s in self.slots.items()}
         return {"pid": os.getpid(), "panel_port": self.panel_port, "url": f"http://{HOST}:{self.panel_port}/",
-                "viewer_urls": {"a": f"http://{HOST}:{a}/", "b": f"http://{HOST}:{b}/"},
-                "ports": {"panel": self.panel_port, "a": a, "b": b},
-                "viewer_pids": {n: s.process.pid if s.process else None for n, s in self.slots.items()},
+                "viewer_urls": {n: f"http://{HOST}:{p}/" for n, p in user.items()},
+                "ports": {"panel": self.panel_port, **{port_name(n, a): v.port for n, a, v in self._viewers()}},
+                "viewer_pids": {port_name(n, a): v.process.pid if v.process else None for n, a, v in self._viewers()},
                 "log": str(self.session_file.with_name("host.log")), "session": str(self.session_file)}
 
     # ------------------------------------------------------------------ viewer calls (hold the lock)
@@ -172,30 +198,40 @@ class Host:
         children += [leaf(p) for p in version.parts if p.group is None]
         return OCP_PartGroup(children, name=version.product_id)
 
-    def _push(self, slot: Slot, key: str, camera: Any = None, **config: Any) -> None:
-        """Show version `key` in `slot`; the camera is kept once this page already holds a model."""
+    def _push(self, slot: Slot, key: str, camera: Any = None, audiences: tuple[str, ...] = AUDIENCES,
+              **config: Any) -> None:
+        """Show version `key` in `slot`; each viewer keeps its camera once its page holds a model."""
         from ocp_viewer import Camera, Collapse, show
 
         loaded = self.versions[key]
-        if camera is None:
-            camera = Camera.KEEP if slot.pushed else Camera.RESET
         settings = {"explode": False, "tab": "tree", **config}
-        show(self._tree(loaded), port=slot.port, reset_camera=camera, collapse=Collapse.NONE, axes=False,
-             axes0=False, grid=(False, False, False), ortho=True, progress="", **settings)
-        slot.showing, slot.pushed = key, True
-        self.clip = None
-        if slot.name == "a":
-            self.animation = self.animation_request = None
-        self._apply_states(slot)
+        tree = self._tree(loaded)
+        for audience in audiences:
+            viewer = slot.viewers[audience]
+            reset = camera if camera is not None else Camera.KEEP if viewer.pushed else Camera.RESET
+            show(tree, port=viewer.port, reset_camera=reset, collapse=Collapse.NONE, axes=False,
+                 axes0=False, grid=(False, False, False), ortho=True, progress="", **settings)
+            viewer.pushed = True
+        slot.showing = key
+        if set(audiences) == set(AUDIENCES):  # a new show; a replay to one reconnected page is not
+            self.clip = None
+            if slot.name == "a":
+                self.animation = self.animation_request = None
+        self._apply_states(slot, audiences)
 
-    def _apply_states(self, slot: Slot) -> None:
+    def _config(self, slot: Slot, audiences: tuple[str, ...] = AUDIENCES, **values: Any) -> None:
+        """One set_viewer_config change, sent to the slot's viewer of every audience given."""
         from ocp_viewer import set_viewer_config
 
+        for audience in audiences:
+            set_viewer_config(port=slot.viewers[audience].port, **values)
+
+    def _apply_states(self, slot: Slot, audiences: tuple[str, ...] = AUDIENCES) -> None:
         if slot.showing is None:
             return
         version = self.versions[slot.showing].version
         states = {p.path: [1, 1] if self.view.visible(p.pn) else [0, 0] for p in version.parts}
-        set_viewer_config(states=states, port=slot.port)
+        self._config(slot, audiences, states=states)
 
     def _layout(self) -> dict[str, str | None]:
         """Version key each slot must show."""
@@ -211,19 +247,21 @@ class Host:
             elif name == "b":
                 slot.showing = None
 
-    def camera(self, name: str) -> dict[str, Any]:
+    def camera(self, name: str, audience: str = "presenter") -> dict[str, Any]:
         from ocp_viewer import status
 
         with self.lock:
-            current = status(port=self.slots[name].port)
+            current = status(port=self.slots[name].viewers[audience].port)
         return {k: current.get(k) for k in (*CAMERA_KEYS, "target0")}
 
-    def set_camera(self, name: str, camera: dict[str, Any]) -> None:
-        from ocp_viewer import set_viewer_config
-
+    def set_camera(self, name: str, camera: dict[str, Any], audiences: tuple[str, ...] = AUDIENCES) -> None:
         values = {k: camera[k] for k in CAMERA_KEYS if camera.get(k) is not None}
         with self.lock:
-            set_viewer_config(port=self.slots[name].port, **values)
+            self._config(self.slots[name], audiences, **values)
+
+    def user_connected(self) -> bool:
+        """A user's panel tab announced itself on slot a's user viewer."""
+        return self.slots["a"].viewers["user"].connected
 
     # ------------------------------------------------------------------ API operations
 
@@ -232,7 +270,8 @@ class Host:
             return {"mode": self.mode, "active": self.active, "view": self.view.as_json(),
                     "versions": {k: v.panel for k, v in self.versions.items()},
                     "checks": {k: v.check_path for k, v in self.versions.items()},
-                    "slots": {n: {"url": f"http://{HOST}:{s.port}/", "showing": s.showing} for n, s in self.slots.items()},
+                    "slots": {n: {"urls": {a: f"http://{HOST}:{v.port}/" for a, v in s.viewers.items()},
+                                  "showing": s.showing} for n, s in self.slots.items()},
                     "animation": self.animation}
 
     def show_version(self, body: dict[str, Any]) -> dict[str, Any]:
@@ -305,16 +344,17 @@ class Host:
                     self._apply_states(slot)
         return self.state()
 
-    def move_camera(self, body: dict[str, Any]) -> dict[str, Any]:
+    def move_presenter_camera(self, body: dict[str, Any]) -> dict[str, Any]:
+        """A capture's measuring move: the presenter's viewer only, so the user's view stays put."""
         name = body.get("slot", "a")
         if name not in self.slots:
             raise ViewerError("slot must be a or b")
-        self.set_camera(name, body)
-        return self.camera(name)
+        self.set_camera(name, body, ("presenter",))
+        return self.camera(name, "presenter")
 
     def apply_view(self, body: dict[str, Any]) -> dict[str, Any]:
         """Camera preset, explode flag, section, or isolation for a capture."""
-        from ocp_viewer import Camera, set_viewer_config
+        from ocp_viewer import Camera
 
         view = _text(body, "view")
         with self.lock:
@@ -330,7 +370,7 @@ class Host:
                 if view == "exploded":
                     for slot in self.slots.values():
                         if slot.showing:
-                            set_viewer_config(explode=True, port=slot.port)
+                            self._config(slot, explode=True)
                 return {"view": view, "state": self.view.as_json()}
             if view != "section":
                 raise ViewerError(f"unknown view {view!r}")
@@ -354,14 +394,12 @@ class Host:
         still builds the shown model is overwritten by that show's own `tab: tree`. The plane cuts
         only while the Clip tab is active.
         """
-        from ocp_viewer import set_viewer_config
-
         with self.lock:
             if self.clip is None:
                 return None
             for slot in self.slots.values():
                 if slot.showing:
-                    set_viewer_config(port=slot.port, **self.clip)
+                    self._config(slot, **self.clip)
             return dict(self.clip)
 
     def studio(self, body: dict[str, Any]) -> dict[str, Any]:
@@ -369,15 +407,13 @@ class Host:
 
         The next push (show, view, animate) returns the viewer to the Tree tab.
         """
-        from ocp_viewer import set_viewer_config
-
         values = {f"studio_{key}": body[key] for key in STUDIO_KEYS if body.get(key) is not None}
         with self.lock:
             shown = [slot for slot in self.slots.values() if slot.showing]
             if not shown:
                 raise ViewerError("nothing shown yet; run `viewer.py show` first")
             for slot in shown:
-                set_viewer_config(tab="studio", port=slot.port, **values)
+                self._config(slot, tab="studio", **values)
         return {"tab": "studio", "settings": values}
 
     def animate(self, body: dict[str, Any]) -> dict[str, Any]:
@@ -397,7 +433,7 @@ class Host:
         return motion.plan_animation(chain, loaded.shown, _text(body, "joint"), _number(body, "from"),
                                      _number(body, "to"), steps, seconds)
 
-    def _run_animation(self, body: dict[str, Any]) -> dict[str, Any]:
+    def _run_animation(self, body: dict[str, Any], audiences: tuple[str, ...] = AUDIENCES) -> dict[str, Any]:
         """Send the tracks for the model slot a just received, then hold at `at` if given."""
         from ocp_viewer import Animation
         from ocp_viewer.config import session
@@ -407,20 +443,21 @@ class Host:
             raise ViewerError("--at must be within 0..1")
         plan = self._plan(body)
         version = self.versions[self._layout()["a"]].version
-        slot = self.slots["a"]
         animation = Animation()
         for track in plan.tracks:
             path = version.part(track.pn).path
             animation.add_track(path, "t", list(plan.times), [list(v) for v in track.translations])
             animation.add_track(path, "q", list(plan.times), [list(v) for v in track.quaternions])
-        # Animation.animate has no port keyword: address slot a through the session scope.
-        session.begin({"port": slot.port})
-        try:
-            animation.animate(speed=1)
-        finally:
-            session.clear()
-        if at is not None:
-            animation.set_relative_time(at, port=slot.port)
+        for audience in audiences:
+            port = self.slots["a"].viewers[audience].port
+            # Animation.animate has no port keyword: address the viewer through the session scope.
+            session.begin({"port": port})
+            try:
+                animation.animate(speed=1)
+            finally:
+                session.clear()
+            if at is not None:
+                animation.set_relative_time(at, port=port)
         self.animation_request = dict(body)
         self.animation = {"joint": plan.joint, "unit": plan.unit, "from": plan.start, "to": plan.end,
                           "keyframes": len(plan.times), "seconds": plan.times[-1],
@@ -429,54 +466,68 @@ class Host:
         return self.animation
 
     def browser_connected(self, body: dict[str, Any]) -> dict[str, Any]:
-        """A viewer page (re)connected: push its slot's model again, keeping the last camera.
+        """A panel page (re)connected a viewer: push its slot's model again, keeping the camera.
 
         OCP CAD Viewer does not replay the last model to a new page, so the panel announces each
-        iframe load. The camera and a running animation are restored for every connected page.
+        iframe load with its slot and audience. Only that viewer is pushed; it keeps its last camera,
+        or takes the other audience's, and a running animation is restored.
         """
-        name = body.get("slot")
-        if name not in self.slots:
-            raise ViewerError("slot must be a or b")
+        name, audience = body.get("slot"), body.get("audience", "user")
+        if name not in self.slots or audience not in AUDIENCES:
+            raise ViewerError(f"slot must be a or b and audience one of {AUDIENCES}")
         with self.lock:
             slot = self.slots[name]
+            # A viewer reports a real camera only once a page has drawn on it: that is the source.
+            source = next((a for a in (audience, *AUDIENCES) if slot.viewers[a].connected and slot.viewers[a].pushed),
+                          None)
+            slot.viewers[audience].connected = True
             key = self._layout()[name]
             if key is None or key not in self.versions:
-                return {"slot": name, "showing": None}
-            camera = self.camera(name) if slot.pushed else None
+                return {"slot": name, "audience": audience, "showing": None}
+            camera = self.camera(name, source) if source else None
             replay = self.animation_request if name == "a" else None
-            self._push(slot, key)
+            self._push(slot, key, audiences=(audience,))
             if camera is not None:
-                self.set_camera(name, camera)
+                self.set_camera(name, camera, (audience,))
             elif name == "b":
-                self._copy_camera("a", "b")
+                self._copy_camera("a", "b", (audience,))
+            if self.clip is not None:
+                self._config(slot, (audience,), **self.clip)
             if replay is not None:
-                self._run_animation(replay)
-        return {"slot": name, "showing": key}
+                self._run_animation(replay, (audience,))
+        return {"slot": name, "audience": audience, "showing": key}
 
     # ------------------------------------------------------------------ camera sync
 
-    def _copy_camera(self, source: str, target: str) -> None:
+    def _copy_camera(self, source: str, target: str, audiences: tuple[str, ...] = AUDIENCES) -> None:
+        """Slot `target` takes slot `source`'s camera, within each audience's pair."""
         if self.slots[target].showing is not None:
-            self.set_camera(target, self.camera(source))
+            for audience in audiences:
+                if self.slots[source].viewers[audience].connected:
+                    self.set_camera(target, self.camera(source, audience), (audience,))
 
     def sync_cameras(self) -> None:
-        last: dict[str, Any] | None = None
-        quiet_until = 0.0
+        """Keep A and B on one camera in split mode, separately for each audience's pair."""
+        last: dict[str, dict[str, Any] | None] = dict.fromkeys(AUDIENCES)
+        quiet_until = dict.fromkeys(AUDIENCES, 0.0)
         while not self.halt.wait(SYNC_PERIOD_S):
-            try:
-                with self.lock:
-                    if self.mode != "split" or self.slots["b"].showing is None or self.sync_hold.is_set():
-                        last = None
-                        continue
-                    a, b = self.camera("a"), self.camera("b")
-                    if last is None or _moved(a, last):
-                        self.set_camera("b", a)
-                        last, quiet_until = a, time.monotonic() + SYNC_COOLDOWN_S
-                    elif time.monotonic() > quiet_until and _moved(b, last):
-                        self.set_camera("a", b)
-                        last, quiet_until = b, time.monotonic() + SYNC_COOLDOWN_S
-            except Exception:  # noqa: BLE001 - a dropped browser must not end the sync thread
-                traceback.print_exc()
+            for audience in AUDIENCES:
+                try:
+                    with self.lock:
+                        held = audience == "presenter" and self.sync_hold.is_set()
+                        drawn = all(self.slots[n].viewers[audience].connected for n in ("a", "b"))
+                        if self.mode != "split" or self.slots["b"].showing is None or held or not drawn:
+                            last[audience] = None
+                            continue
+                        a, b = self.camera("a", audience), self.camera("b", audience)
+                        if last[audience] is None or _moved(a, last[audience]):
+                            self.set_camera("b", a, (audience,))
+                            last[audience], quiet_until[audience] = a, time.monotonic() + SYNC_COOLDOWN_S
+                        elif time.monotonic() > quiet_until[audience] and _moved(b, last[audience]):
+                            self.set_camera("a", b, (audience,))
+                            last[audience], quiet_until[audience] = b, time.monotonic() + SYNC_COOLDOWN_S
+                except Exception:  # noqa: BLE001 - a dropped browser must not end the sync thread
+                    traceback.print_exc()
 
     # ------------------------------------------------------------------ HTTP
 
@@ -484,8 +535,6 @@ class Host:
         return {
             ("GET", "/api/health"): lambda q, b: {"pid": os.getpid()},
             ("GET", "/api/state"): lambda q, b: self.state(),
-            ("GET", "/api/camera"): lambda q, b: self.camera(q.get("slot", ["a"])[0]),
-            ("POST", "/api/camera"): lambda q, b: self.move_camera(b),
             ("POST", "/api/show"): lambda q, b: self.show_version(b),
             ("POST", "/api/compare"): lambda q, b: self.compare(b),
             ("POST", "/api/mode"): lambda q, b: self.set_mode(b),
@@ -566,7 +615,7 @@ class Host:
         signal.signal(signal.SIGTERM, lambda *_: self.halt.set())
         threading.Thread(target=self.server.serve_forever, name="http", daemon=True).start()
         threading.Thread(target=self.sync_cameras, name="camera-sync", daemon=True).start()
-        self.presenter = Presenter(self, f"http://{HOST}:{self.panel_port}/", *self.viewport)
+        self.presenter = Presenter(self, f"http://{HOST}:{self.panel_port}/?audience=presenter", *self.viewport)
         self.presenter.start()
         try:
             self.presenter.submit(lambda page: None, timeout=60.0)
@@ -618,8 +667,8 @@ def _number(body: dict[str, Any], key: str) -> float:
     return float(value)
 
 
-def run(session_file: Path, panel_port: int, port_a: int, port_b: int, width: int, height: int) -> int:
-    host = Host(session_file, panel_port, port_a, port_b, (width, height))
+def run(session_file: Path, panel_port: int, ports: dict[str, int], width: int, height: int) -> int:
+    host = Host(session_file, panel_port, ports, (width, height))
     try:
         host.serve()
     finally:

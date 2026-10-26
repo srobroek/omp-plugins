@@ -22,8 +22,9 @@ TRIGGER
 
 Run every command as `uv run --script scripts/viewer.py <command>`; each prints one JSON object.
 
-1. `serve` -> starts or reuses the host: OCP viewers A and B, the panel page, and a headless
-   presenter page. Prints `url` (send it to the user), `pid`, `ports`, and the `stop` command.
+1. `serve` -> starts or reuses the host: OCP viewers A and B, once for the user's tab and once
+   for a headless presenter page that captures read, plus the panel page. Prints `url` (send it
+   to the user), `pid`, `ports`, and the `stop` command.
 2. After each cad-model `run` and `check --out FILE`: `show hw [--version vN] --check FILE`.
    The first push fits the camera; later pushes keep it. The panel lists parts and groups
    (Hide, Iso, Ghost rest), per-part findings from the check JSON, and metrics.json numbers.
@@ -35,10 +36,11 @@ Run every command as `uv run --script scripts/viewer.py <command>`; each prints 
    and pushes nothing. `--at` holds one pose for a capture.
 6. `capture --view V --out PNG [--crop page|viewer|canvas]` -> V is iso, front, side, top,
    exploded, `isolate:<PN|group>`, `section --joint J-00x` (plane along the joint axis), or
-   current (the state as left, no refit). Every view but section and current is refitted:
-   `frames.a.in_frame` true and `fill` near 0.84 mean the whole product is in frame.
-   -> read every PNG before describing it.
-7. `stop` -> stops the host, both viewers, and the presenter; reports `ports_free`.
+   current (the state as left, no refit). `current` takes the user's camera when their tab is
+   open (`camera_from: user`). Every view but section and current is refitted, and the user's
+   view follows the refit: `frames.a.in_frame` true and `fill` near 0.84 mean the whole
+   product is in frame. -> read every PNG before describing it.
+7. `stop` -> stops the host, its viewers, and the presenter; reports `ports_free`.
 
 | command output | meaning |
 |---|---|
@@ -48,12 +50,13 @@ Run every command as `uv run --script scripts/viewer.py <command>`; each prints 
 
 ## Studio look-dev
 
-Realistic renders per commit batch come from the three.js PBR renderer (`cad-render`, later);
+Realistic renders per commit batch come from the three.js PBR renderer (`skill://cad-render`);
 Studio mode is the interactive route. `studio --environment studio --tone-mapping ACES
 --exposure 1.0 [--env-intensity] [--env-rotation] [--background] [--shadow-intensity]
-[--shadow-softness] [--ao-intensity] [--texture-mapping]` switches the viewers to the Studio tab;
-the user tunes it live at the panel URL, and `capture --view current` records it. The next push
-returns the viewer to the Tree tab.
+[--shadow-softness] [--ao-intensity] [--texture-mapping]` switches both viewer pairs to the
+Studio tab, and `capture --view current` records it. Settings the user changes by hand in their
+tab stay in their tab: only `studio` flags reach captures. The next push returns the viewer to
+the Tree tab.
 
 ## Rules
 
@@ -66,10 +69,13 @@ NOT Treat the viewer, a render, or a capture as a check result; `skill://cad-mod
 ## Limits
 
 - Headless WebGL is SwiftShader in Playwright Chromium: correct pixels, slow frames (seconds per capture).
-- Colours come from part.yaml `material` and `process`; part-map.json carries names, not colours.
-- OCP CAD Viewer does not replay a model to a newly opened page: the panel asks the host to push again
-  on each viewer load, which restores the camera and a held animation pose.
-- `holes` appear in the measurements only when metrics.json lists them.
+- Colours are cad-render's `assets/materials.json` rule for part.yaml `material` and `finish`
+  (`skill://cad-render`); an unmapped material shows the table's neutral default.
+- OCP CAD Viewer does not replay a model to a newly opened page, and serves only the last page that
+  connected: the user's tab and the presenter each have their own viewers, and the panel asks the
+  host to push again on each viewer load, which restores the camera and a held animation pose.
+- Holes come from metrics.json `parts.<PN>.holes` (diameter, through or blind, depth); a missing
+  or empty field shows "no holes listed".
 
 OUTPUT
 L1 VIEWER <SERVE|SHOW|COMPARE|ANIMATE|CAPTURE|STOP>: <PASS|FAIL>, <version(s)>, <url or PNG>

@@ -2,14 +2,19 @@
 
 Kernel-free: JSON and PyYAML (`safe_load`) only. Paths follow cad-model's version layout
 (`skill://cad-model/references/outputs.md`): `latest.json` names the newest version; an older
-label resolves to the same documented layout under `versions/<label>/`.
+label resolves to the same documented layout under `versions/<label>/`. Part colours are the
+`pbr.color` of cad-render's material rule for part.yaml `material` and `finish`, so the viewer
+and the renders share one appearance table.
 """
 
 from __future__ import annotations
 
+import functools
+import importlib.util
 import json
 import math
 import re
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -19,11 +24,7 @@ from . import ViewerError
 LABEL = re.compile(r"^v[1-9][0-9]*$")
 PN_PREFIX = re.compile(r"^([A-Z]{2,5}-\d{4})(?![0-9])")
 
-# Material appearance in the 3D view (not UI chrome): the same process colours as
-# cad-design's review renders, refined by material family where part.yaml names one.
-PROCESS_COLOURS = {"fdm": "#3a3f44", "cnc": "#c4c9cf", "purchased": "#6f747a"}
-MATERIAL_COLOURS = (("alumin", "#c4c9cf"), ("stainless", "#8d939b"), ("steel", "#6f747a"), ("brass", "#b59a5b"))
-FALLBACK_COLOUR = "#9aa3ad"
+CAD_RENDER_MATERIALS = Path(__file__).resolve().parents[3] / "cad-render" / "scripts" / "materials.py"
 
 
 @dataclass(frozen=True)
@@ -142,12 +143,26 @@ def load_part_map(path: Path) -> dict[str, str]:
     return products
 
 
-def colour_for(material: str, process: str) -> str:
-    lowered = material.lower()
-    for key, colour in MATERIAL_COLOURS:
-        if key in lowered:
-            return colour
-    return PROCESS_COLOURS.get(process, FALLBACK_COLOUR)
+@functools.cache
+def material_table() -> Any:
+    """cad-render's MaterialTable over assets/materials.json, loaded once by path."""
+    spec = importlib.util.spec_from_file_location("cad_render_materials", CAD_RENDER_MATERIALS)
+    if spec is None or spec.loader is None:
+        raise ViewerError(f"cannot load {CAD_RENDER_MATERIALS}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+    except OSError as error:
+        raise ViewerError(f"cannot load {CAD_RENDER_MATERIALS}: {error}") from error
+    try:
+        return module.MaterialTable.load()
+    except module.MaterialsError as error:
+        raise ViewerError(f"cad-render material table: {error}") from error
+
+
+def colour_for(material: str, finish: str) -> str:
+    return material_table().resolve(material, finish).pbr["color"]
 
 
 def load_groups(hw: Path) -> list[tuple[str, str, list[str]]]:
@@ -179,10 +194,11 @@ def load_version(hw: Path, version: str = "latest") -> Version:
         record = read_yaml(record_path) if record_path.is_file() else {}
         record = record if isinstance(record, dict) else {}
         material, process = str(record.get("material") or ""), str(record.get("process") or "")
+        finish = str(record.get("finish") or "")
         group = grouped.get(pn)
         path = f"/{product_id}/{group}/{products[pn]}" if group else f"/{product_id}/{products[pn]}"
         title = str(record.get("title") or products[pn][len(pn):].strip())
-        parts.append(Part(pn, products[pn], title, material, process, colour_for(material, process), group, path))
+        parts.append(Part(pn, products[pn], title, material, process, colour_for(material, finish), group, path))
     return Version(hw, label, product_id, parts_dir, files, tuple(parts), tuple(groups),
                    read_json(files["metrics"]), manifest)
 
@@ -266,6 +282,27 @@ def _finite(value: Any) -> float | None:
     return float(value) if isinstance(value, (int, float)) and math.isfinite(value) else None
 
 
+def holes(pn: str, value: Any) -> list[dict[str, Any]]:
+    """metrics.json `parts.<PN>.holes` as the panel lists them: id, diameter, through or blind, depth.
+
+    A missing field and `[]` both mean none listed; cad-model's order (diameter, then position)
+    is kept. An entry without a finite positive diameter or a boolean `through` is a contract error.
+    """
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ViewerError(f"metrics.json parts.{pn}.holes must be a list")
+    rows = []
+    for index, entry in enumerate(value):
+        where = f"metrics.json parts.{pn}.holes[{index}]"
+        diameter = _finite(entry.get("diameter_mm")) if isinstance(entry, dict) else None
+        if diameter is None or diameter <= 0 or not isinstance(entry.get("through"), bool):
+            raise ViewerError(f"{where}: needs a positive diameter_mm and a boolean through")
+        rows.append({"id": str(entry.get("id") or f"H{index + 1}"), "diameter_mm": diameter,
+                     "through": entry["through"], "depth_mm": _finite(entry.get("depth_mm"))})
+    return rows
+
+
 def panel_model(version: Version, check: dict[str, Any] | None) -> dict[str, Any]:
     """The JSON the side panel renders for one version."""
     if check is not None and check.get("label") not in (None, version.label):
@@ -283,7 +320,7 @@ def panel_model(version: Version, check: dict[str, Any] | None) -> dict[str, Any
             "findings": findings.get(part.pn, []),
             "metrics": {"volume_mm3": _finite(m.get("volume_mm3")), "mass_g": _finite(m.get("mass_g")),
                         "mass_target_g": _finite(m.get("mass_target_g")), "bbox_mm": m.get("bbox_mm"),
-                        "holes": m.get("holes")},
+                        "holes": holes(part.pn, m.get("holes"))},
         })
     totals = version.metrics.get("totals") or {}
     return {
