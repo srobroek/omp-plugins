@@ -14,7 +14,9 @@ TRIGGER
 1. Prepare a case YAML with a STEP path, optional `part` PN for an assembly STEP, material properties,
    fixed-face selector, face loads, mesh size, and optional `pose`; see the input shape below.
 2. Run `scripts/fea_static.py <case.yaml>` with FreeCAD 1.1.4, Gmsh, and CalculiX available; it writes
-   `results.json` and a run-specific FreeCAD Python job in the case directory, then emits result JSON.
+   `results.json` beside the case YAML and keeps the per-run job and solver files in
+   `runs/<run_id>/`. The `run_directory` field in `results.json` names that run directory, and the
+   command also emits result JSON.
 3. For an assembly sweep, run cad-motion `sweep.py ... --worst-step worst.step`, then set
    `step: worst.step`, `part: <PN>`, and `pose` to the sweep result's `worst_case.pose` in this
    case YAML. The fixed-face and load plane selectors use that STEP's assembly coordinates.
