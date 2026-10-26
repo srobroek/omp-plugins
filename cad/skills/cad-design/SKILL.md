@@ -1,0 +1,57 @@
+---
+name: cad-design
+description: Grows CAD parts from massing blocks to realistic products through fidelity levels F0-F3, rendered every batch. Triggers on "make it look real", "detail the parts".
+---
+
+# CAD Design Fidelity
+
+Stages L1 LAYOUT to L3 DETAIL of `skill://cad-flow`: how far each part's form must have grown
+before a gate, and how to check that it no longer reads as a block.
+Paths below are relative to this skill's directory, `skill://cad-design/`.
+
+TRIGGER
++ "make it look like a real product", "these parts are just blocks", "detail the parts"
++ an L1, L2, or L3 commit batch, or an L2 PARTS or L3 DETAIL gate in `skill://cad-flow`
+- fit classes, limits, or stack-ups -> `skill://cad-fits`
+- joint posing, sweeps, or collisions -> `skill://cad-motion`
+- L0 concept variants -> `skill://cad-concept`
+
+## Workflow
+
+1. LOAD `references/fidelity.md`. Read each part's `material` and `process` from
+   `hw/parts/<PN>/part.yaml` and the joints from `hw/assembly.yaml`.
+2. Write or grow `hw/parts/<PN>/model.py` to the stage's level: F0 at L1 LAYOUT, F1 then F2
+   during L2 PARTS, F3 during L3 DETAIL. Follow the model.py contract: one `KERNEL`, a JSON
+   `PARAMS` dict in mm and degrees, `build(params)` returning one part in place at the zero pose.
+3. Start from the matching reference in `assets/reference/lamp-arm/<kernel>/<PN>.py` (CadQuery
+   2.8 and build123d 0.13, same PARAMS keys): base puck, tapered clevis links, revolved head,
+   shoulder pins as bought.
+4. On "commit batch" from L1 onward, review the batch with realistic renders through the
+   `cad-render` step (later; until it exists, report it as missing, not done). For the
+   reference arm, `uv run --script scripts/review_render.py --out DIR` writes an iso view and
+   base, elbow, and head close-ups per kernel. -> read every PNG before describing it.
+5. Export one STEP per part, then run
+   `uv run --script scripts/form_check.py --hw hw --parts-dir DIR --fidelity F2|F3`.
+   -> JSON per part (validity, area shares, blends) and per joint (bore offset); exit 0 = no
+   findings, 1 = findings, 2 = usage error.
+6. Walk the render self-check questions in `references/fidelity.md` against the renders.
+   A part that fails stays in the stage; report the level it reached.
+
+`scripts/build_reference.py --kernel cadquery|build123d --out DIR` builds the reference
+models in their kernel's uv environment and writes `<PN>.step` per part plus `build.json`.
+
+## Rules
+
+MUST Reach F2 on every made part before the L2 PARTS gate and F3 before the L3 DETAIL gate.
+MUST Treat `form_check.py` exit 1 as a gate blocker; `block_like` is never waived by a render.
+MUST Put every joint bore on its `assembly.yaml` origin and axis (form_check tolerance 0.05 mm).
+MUST Size bores from `skill://cad-fits` output and counterbores from ISO 4762 head sizes, never from memory.
+DEFAULT Model CadQuery fastener heads natively; `cq_warehouse` is not on PyPI. bd_warehouse 0.4.0 serves build123d.
+NOT Call a part detailed from code alone; a render, read back, is the evidence.
+NOT Treat a render as a check result; it is review material for the user.
+
+OUTPUT
+L1 DESIGN <stage>: <PN count> parts at <lowest level>, form_check PASS|FAIL
+   Findings -- check, part, and value per form_check finding, only if any
+   Renders -- PNG paths and one line each on what they show
+CAP 80w clean · 160w with findings
