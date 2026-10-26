@@ -20,6 +20,7 @@ import re
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -221,6 +222,20 @@ def run_probe(adapter, paths: TrialPaths, host: adapters.Host, model: str, first
     return outputs
 
 
+def harness_version(adapter, paths: TrialPaths, host: adapters.Host, timeout_s: float = 60) -> str | None:
+    """The harness version from its own CLI, run model-free in the trial's environment;
+    None when the adapter has no version command (its stream reports one) or it failed."""
+    argv = adapter.version_command()
+    if not argv:
+        return None
+    try:
+        done = subprocess.run(argv, cwd=paths.work, env=adapter.env(paths, host), capture_output=True, text=True,
+                              timeout=timeout_s, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return adapters.parse_version(done.stdout) if done.returncode == 0 else None
+
+
 def run_turn(adapter, argv: list[str], paths: TrialPaths, host: adapters.Host, timeout_s: float) -> tuple[Turn, list[str], str]:
     """Run one harness invocation; return the parsed turn, raw stdout lines and stderr."""
     if timeout_s <= 0:
@@ -233,11 +248,12 @@ def run_turn(adapter, argv: list[str], paths: TrialPaths, host: adapters.Host, t
         )
     except OSError as exc:
         raise TrialError("adapter_error", f"could not start {argv[0]}: {exc}") from exc
-    try:
-        stdout, stderr = proc.communicate(timeout=timeout_s)
-    except subprocess.TimeoutExpired:
-        _kill_group(proc)
-        raise TrialError("timeout", f"turn exceeded the {timeout_s:.0f}s remaining in the case ceiling") from None
+    with proc:  # closes the pipes and reaps the process on every exit path, the timeout included
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout_s)
+        except subprocess.TimeoutExpired:
+            _kill_group(proc)
+            raise TrialError("timeout", f"turn exceeded the {timeout_s:.0f}s remaining in the case ceiling") from None
     lines = stdout.splitlines()
     turn = adapter.complete(adapter.parse(lines), lines, paths, env)
     if turn.error:
@@ -250,11 +266,13 @@ def run_turn(adapter, argv: list[str], paths: TrialPaths, host: adapters.Host, t
     return turn, lines, stderr
 
 
-def isolation_of(adapter, paths: TrialPaths, probe_outputs: list[str], first_stream: list[str]) -> dict:
+def isolation_of(adapter, paths: TrialPaths, probe_outputs: list[str], first_stream: list[str], version: str | None = None) -> dict:
     """Row fields: `isolation` clean|contaminated, the leak list, the inventory (with
-    the bundled baseline items it loaded and the version they are declared for) and
-    the mechanism."""
+    the harness version, the bundled baseline items it loaded and the version they are
+    declared for) and the mechanism. `version` is the CLI's answer, used when the
+    stream reports none."""
     inventory = adapter.inventory(probe_outputs, first_stream, paths)
+    inventory.version = inventory.version or version
     found, bundled = adapters.audit(inventory, paths, adapter.baseline)
     return {
         "isolation": "contaminated" if found else "clean",
@@ -333,12 +351,17 @@ class Scored:
 
 def attempt(case: dict, cell: Cell, adapter, cfg: dict, artifact_dir: Path, keep: bool, host_source: HostSource) -> Scored:
     host = host_source.get()
+    ceiling_s = float(cfg["case_timeout_s"])
+    refusal = adapter.preflight(host, ceiling_s)
+    if refusal:  # checked per trial too: a long run can outlast the login it started with
+        raise TrialError("auth_error", refusal)
     paths = stage_trial(case, adapter, host, require_plugin=True)
     try:
         started = time.monotonic()
-        conv = converse(case, cell, adapter, paths, host, ceiling_s=float(cfg["case_timeout_s"]), max_turns=int(cfg["max_turns"]))
+        conv = converse(case, cell, adapter, paths, host, ceiling_s=ceiling_s, max_turns=int(cfg["max_turns"]))
         latency = round(time.monotonic() - started, 3)
         probe_outputs = run_probe(adapter, paths, host, cell.model, conv.raw[0])
+        version = harness_version(adapter, paths, host)
         served = conv.model
         if served is None:
             raise TrialError("model_unverified", f"{cell.harness} stream carried no served model")
@@ -365,7 +388,7 @@ def attempt(case: dict, cell: Cell, adapter, cfg: dict, artifact_dir: Path, keep
             "harness": cell.harness,
             "requested_model": cell.model,
             "turns": len(conv.turns),
-            **isolation_of(adapter, paths, probe_outputs, conv.raw[0]),
+            **isolation_of(adapter, paths, probe_outputs, conv.raw[0], version),
         }
         return Scored(row, conv.transcript, conv.raw)
     finally:
@@ -462,15 +485,23 @@ def run_matrix(matrix: Matrix, cells: list[Cell], cases: list[dict], reps: int, 
     """Run every pending slot with bounded concurrency; return failure-class counts.
 
     `trace_ids=None` writes traces for every case (pilot, before a split exists);
-    otherwise only ids in the set (the ratchet train split) get traces.
+    otherwise only ids in the set (the ratchet train split) get traces. A harness whose
+    preflight refuses (Kiro: a login that would expire within a trial) has none of its
+    cells started; the reason goes to stderr and the slots count as `not_started`.
     """
     cfg = {key: matrix.raw.get(key, default) for key, default in (("case_timeout_s", 1800), ("max_turns", 4), ("retry", {}))}
     sinks = {cell.slug: Sink(out / cell.slug) for cell in cells}
     built = {cell.harness: adapters.build(cell.harness, matrix.harness_cfg(cell.harness)) for cell in cells}
     host_source = host_source or HostSource(matrix.raw.get("auth", {}))
     rng = random.Random(seed)
-    slots = [(*slot, rng.random()) for slot in plan_slots(cells, cases, reps, out)]
-    counts: dict[str, int] = {}
+    pending = plan_slots(cells, cases, reps, out)
+    host = host_source.get()
+    refused = {harness: reason for harness in sorted({cell.harness for cell, _, _ in pending})
+               if (reason := built[harness].preflight(host, float(cfg["case_timeout_s"])))}
+    for harness, reason in refused.items():
+        print(f"{harness}: cells not started: {reason}", file=sys.stderr)
+    slots = [(*slot, rng.random()) for slot in pending if slot[0].harness not in refused]
+    counts: dict[str, int] = {"not_started": len(pending) - len(slots)} if refused else {}
     lock = threading.Lock()
 
     def one(slot):

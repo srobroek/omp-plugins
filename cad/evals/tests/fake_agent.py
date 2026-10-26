@@ -9,6 +9,8 @@ FAKE_AGENT_MODE selects the behaviour:
   ask-then:D  first turn asks for approval; on --continue copy directory D into cwd
   copy:D      copy directory D into cwd and answer
   quiet       answer without producing files
+
+FAKE_AGENT_VERSION sets the `--version` answer (default: the declared OMP baseline).
 """
 
 import json
@@ -61,6 +63,9 @@ def rpc_inventory() -> int:
 
 
 def main() -> int:
+    if "--version" in sys.argv:
+        print(f"omp/{os.environ.get('FAKE_AGENT_VERSION', '18.12.3')}")
+        return 0
     if "rpc" in sys.argv:
         return rpc_inventory()
     mode = os.environ.get("FAKE_AGENT_MODE", "quiet")

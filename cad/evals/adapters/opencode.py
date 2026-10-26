@@ -104,6 +104,12 @@ class OpencodeAdapter:
     def user_stores(self, host: Host) -> list[Path]:
         return []  # config, data and state all follow the trial's XDG roots
 
+    def preflight(self, host: Host, ceiling_s: float) -> str | None:
+        return None  # Bedrock credentials are re-exported per trial with margin (HostSource)
+
+    def version_command(self) -> list[str]:
+        return [self.bin, "--version"]  # `opencode v2.1.4`
+
     def _api(self, *op: str) -> list[str]:
         return [self.bin, "api", "--standalone", *op]
 

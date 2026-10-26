@@ -11,7 +11,9 @@ the fast, model-free checks. No model is called.
 from __future__ import annotations
 
 import functools
+import gc
 import hashlib
+import io
 import json
 import os
 import random
@@ -21,6 +23,8 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import warnings
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
@@ -30,6 +34,7 @@ sys.path.insert(0, str(EVALS))
 import adapters  # noqa: E402
 import run  # noqa: E402
 import runner  # noqa: E402
+from adapters import kiro  # noqa: E402
 from adapters.base import Turn  # noqa: E402
 from adapters.claude import canonical_model  # noqa: E402
 from graders import judge  # noqa: E402
@@ -37,6 +42,9 @@ from graders.score import METRICS, ap242_header, grade_trial, resolve_step  # no
 
 FAKE_AGENT = Path(__file__).with_name("fake_agent.py")
 FIXTURES = Path(__file__).with_name("fixtures")
+# What each harness's CLI reported when the fixture streams were recorded; Claude
+# Code reports its own version in system/init.
+RECORDED_VERSIONS = {"omp": "18.12.3", "kiro": "2.34.0", "opencode": "2.1.4"}
 SKIP_GEOMETRY = os.environ.get("CAD_EVALS_SKIP_GEOMETRY") == "1"
 geometry = unittest.skipIf(SKIP_GEOMETRY, "CAD_EVALS_SKIP_GEOMETRY=1")
 _SCRATCH = Path(tempfile.mkdtemp(prefix="cad-eval-test-"))
@@ -232,12 +240,12 @@ class FakeHarness(unittest.TestCase):
         self.cfg = {"case_timeout_s": 20, "max_turns": 4, "retry": {"attempts": 3, "base_s": 0, "max_s": 0}}
         self.host = StaticHost(self.tmp)
 
-    def adapter(self, mode: str, probe: str = "clean"):
-        return adapters.build("omp", {"bin": str(FAKE_AGENT), "env": {"FAKE_AGENT_MODE": mode, "FAKE_AGENT_PROBE": probe}})
+    def adapter(self, mode: str, probe: str = "clean", **env: str):
+        return adapters.build("omp", {"bin": str(FAKE_AGENT), "env": {"FAKE_AGENT_MODE": mode, "FAKE_AGENT_PROBE": probe, **env}})
 
-    def slot(self, mode: str, *, trace=False, cfg=None, probe="clean", out="out"):
+    def slot(self, mode: str, *, trace=False, cfg=None, probe="clean", out="out", **env: str):
         sink = runner.Sink(self.tmp / out / self.cell.slug)
-        outcome = runner.run_slot(self.case, 1, self.cell, self.adapter(mode, probe), cfg or self.cfg, sink,
+        outcome = runner.run_slot(self.case, 1, self.cell, self.adapter(mode, probe, **env), cfg or self.cfg, sink,
                                   trace=trace, keep=False, rng=random.Random(0), host_source=self.host)
         return outcome, sink
 
@@ -262,9 +270,14 @@ class FakeHarness(unittest.TestCase):
         self.assertEqual(error["retries"], 2)
 
     def test_timeout_is_an_error_not_a_zero(self):
-        outcome, sink = self.slot("sleep", cfg={**self.cfg, "case_timeout_s": 2})
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", ResourceWarning)
+            outcome, sink = self.slot("sleep", cfg={**self.cfg, "case_timeout_s": 2})
+            gc.collect()
         self.assertEqual(outcome, "timeout")
         self.assertEqual(self.rows(sink, "results.jsonl"), [])
+        # The killed harness's pipes are closed, not left to the garbage collector.
+        self.assertEqual([str(w.message) for w in caught if issubclass(w.category, ResourceWarning)], [])
 
     def test_served_model_mismatch_is_an_error(self):
         outcome, sink = self.slot("mismatch")
@@ -297,6 +310,27 @@ class FakeHarness(unittest.TestCase):
         [row] = self.rows(sink, "results.jsonl")
         self.assertEqual(row["isolation"], "contaminated")
         self.assertEqual(row["leaks"], ["context:rule:user-rule", "skills:user-skill"])
+
+    def test_a_harness_version_change_is_a_leak_until_re_observed(self):
+        self.slot("quiet", out="declared")
+        [row] = self.rows(runner.Sink(self.tmp / "declared" / self.cell.slug), "results.jsonl")
+        self.assertEqual((row["isolation"], row["inventory"]["version"]), ("clean", "18.12.3"))
+        outcome, sink = self.slot("quiet", out="updated", FAKE_AGENT_VERSION="18.13.0")
+        [row] = self.rows(sink, "results.jsonl")
+        self.assertEqual(row["leaks"], ["baseline: declared for 18.12.3, the harness reports 18.13.0"])
+
+    def test_a_refused_preflight_starts_no_trial(self):
+        with mock.patch.object(adapters.OmpAdapter, "preflight", return_value="login expires too soon"):
+            outcome, sink = self.slot("quiet")
+            matrix = runner.Matrix({"harness": {"omp": {"bin": str(FAKE_AGENT)}}, **self.cfg}, [self.cell])
+            with mock.patch("sys.stderr", new=io.StringIO()) as err:
+                counts = runner.run_matrix(matrix, [self.cell], [self.case], 1, self.tmp / "refused", trace_ids=set(),
+                                           concurrency=1, keep=False, host_source=self.host)
+        self.assertEqual(outcome, "auth_error")  # a single trial refuses too
+        self.assertEqual(self.rows(sink, "errors.jsonl")[0]["detail"], "login expires too soon")
+        self.assertEqual(counts, {"not_started": 1})  # the cell never starts
+        self.assertIn("login expires too soon", err.getvalue())
+        self.assertFalse((self.tmp / "refused" / self.cell.slug / "errors.jsonl").exists())
 
     def test_no_trace_for_non_train_ids(self):
         outcome, sink = self.slot("quiet", trace=False)
@@ -466,6 +500,35 @@ class CaseSchema(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stdout[-1500:])
 
 
+class KiroLogin(unittest.TestCase):
+    """A trial never refreshes the copied Kiro token, so it starts only on one that outlives it."""
+
+    def test_trials_start_only_on_a_token_that_outlives_them(self):
+        now = datetime(2026, 10, 26, 13, 0, tzinfo=timezone.utc)
+        ceiling = 1800
+        enough = now + timedelta(seconds=ceiling + kiro.REFRESH_MARGIN_S)
+        self.assertIsNone(kiro.login_refusal(enough, now, ceiling))
+        short = kiro.login_refusal(enough - timedelta(seconds=1), now, ceiling)
+        self.assertIn("`kiro-cli logout` followed by `kiro-cli login`", short)
+        self.assertIn("in 35 min", short)
+        self.assertIn("in 0 min", kiro.login_refusal(now - timedelta(minutes=1), now, ceiling))  # already expired
+        self.assertIn("no Kiro login", kiro.login_refusal(None, now, ceiling))
+
+    def test_expiry_is_read_from_the_store_without_writing_it(self):
+        base = Path(tempfile.mkdtemp(prefix="cad-eval-kiro-"))
+        self.addCleanup(shutil.rmtree, base, True)
+        db = base / "data.sqlite3"
+        con = sqlite3.connect(db)
+        con.execute("CREATE TABLE auth_kv (key TEXT PRIMARY KEY, value TEXT)")
+        con.execute("INSERT INTO auth_kv VALUES ('kirocli:odic:token', ?)", (json.dumps({"expires_at": "2026-10-26T14:52:49.713343Z"}),))
+        con.commit()
+        con.close()
+        before = (db.read_bytes(), db.stat().st_mtime_ns)
+        self.assertEqual(kiro.login_expiry(db), datetime(2026, 10, 26, 14, 52, 49, 713343, tzinfo=timezone.utc))
+        self.assertEqual((db.read_bytes(), db.stat().st_mtime_ns), before)
+        self.assertIsNone(kiro.login_expiry(base / "absent.sqlite3"))
+
+
 class HostEffects(unittest.TestCase):
     """The smoke's verdict on what a trial left outside its own directory."""
 
@@ -531,7 +594,8 @@ class RecordedStreams(unittest.TestCase):
         return turn
 
     def isolation(self, harness: str, paths, probe=(), stream=None) -> dict:
-        return runner.isolation_of(adapters.build(harness, {}), paths, list(probe), stream or self.lines(f"{harness}.raw.jsonl", paths))
+        return runner.isolation_of(adapters.build(harness, {}), paths, list(probe), stream or self.lines(f"{harness}.raw.jsonl", paths),
+                                   RECORDED_VERSIONS.get(harness))
 
     def assert_tokens(self, turn: Turn):
         self.assertGreater(turn.usage["input"] + turn.usage["cacheRead"] + turn.usage["cacheWrite"], 0)
