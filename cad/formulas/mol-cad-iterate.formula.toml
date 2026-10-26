@@ -70,7 +70,7 @@ title = "Recheck L3 detail for affected parts"
 type = "task"
 needs = ["reopen-affected"]
 labels = ["cad", "phase:detail"]
-description = "For {{affected_parts}} only, each post-freeze L3 commit batch runs `uv run --script skill://cad-model/scripts/cad_model.py run hw --label vN --kernel {{kernel}}`, then `uv run --script skill://cad-model/scripts/cad_model.py check vN --hw hw --out checks-vN.json`; a blocking check failure stops the batch. Then run `uv run --script skill://cad-render/scripts/render.py hw --version vN [--views iso front side exploded closeup-<PN>]`. Run skill://cad-fits and skill://cad-drawings for fits, fasteners, tolerances, datums, process rules, and drawings. Before the L3 gate, run `uv run --script skill://cad-design/scripts/form_check.py --hw hw --parts-dir DIR --fidelity F3`; L3 requires F3. Recheck affected parts and dependents only; preserve unaffected parts' existing evidence."
+description = "For {{affected_parts}} only, each post-freeze L3 commit batch runs `uv run --script skill://cad-model/scripts/cad_model.py run hw --label vN --kernel {{kernel}}`, then `uv run --script skill://cad-model/scripts/cad_model.py check vN --hw hw --out checks-vN.json`; a blocking check failure stops the batch. Then run `uv run --script skill://cad-render/scripts/render.py hw --version vN [--views iso front side exploded closeup-<PN>]`. Run skill://cad-fits and skill://cad-drawings for fits, fasteners, tolerances, datums, process rules, and drawings. Before the L3 gate, run `uv run --script skill://cad-design/scripts/form_check.py --hw hw --parts-dir hw/versions/vN/parts --fidelity F3`; L3 requires F3. Recheck affected parts and dependents only; preserve unaffected parts' existing evidence."
 
 [steps.metadata]
 skill_hints = "cad-fits, cad-drawings, cad-recheck, cad-record"
@@ -81,7 +81,7 @@ title = "Recheck L4 analysis for affected parts"
 type = "task"
 needs = ["detail-recheck"]
 labels = ["cad", "phase:analysis"]
-description = "For {{affected_parts}} only, run `uv run --script skill://cad-motion/scripts/sweep.py ... --worst-step worst.step` for kinematics. Run `uv run --script skill://cad-analysis/scripts/fea_static.py <case.yaml>` for static FEA at the worst-case pose. On each L4 batch, run cad-model run then check; a blocking failure stops it. Render the successful version. Apply post-LAYOUT recheck to affected parts only and preserve untouched evidence. Record verification results, design entry, and bead note."
+description = "For {{affected_parts}} only, run `uv run --script skill://cad-motion/scripts/sweep.py --hw hw --version vN --worst-step worst.step` for kinematics. Run `uv run --script skill://cad-analysis/scripts/fea_static.py <case.yaml>` for static FEA at the worst-case pose. On each L4 batch, run cad-model run then check; a blocking check failure stops it. Render the successful version. Apply post-LAYOUT recheck to affected parts only and preserve untouched evidence. Record verification results, design entry, and bead note."
 
 [steps.metadata]
 skill_hints = "cad-analysis, cad-recheck, cad-record, cad-flow"
