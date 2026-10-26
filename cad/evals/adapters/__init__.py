@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .base import Adapter, Host, Inventory, TrialPaths, Turn, leaks, served_matches
+from .base import Adapter, Baseline, Host, Inventory, TrialPaths, Turn, audit, served_matches
 from .claude import ClaudeAdapter
 from .kiro import KiroAdapter
 from .omp import OmpAdapter
@@ -14,7 +14,7 @@ _FACTORIES = {
         bin=cfg.get("bin", "claude"), bare=cfg.get("bare", False), bypass_launcher=cfg.get("bypass_launcher", True),
         setting_sources=cfg.get("setting_sources", "project,local"), extra_env=cfg.get("env", {}),
     ),
-    "kiro": lambda cfg: KiroAdapter(bin=cfg.get("bin", "kiro-cli"), trust_tools=cfg.get("trust_tools", ""), extra_env=cfg.get("env", {})),
+    "kiro": lambda cfg: KiroAdapter(bin=cfg.get("bin", "kiro-cli"), extra_env=cfg.get("env", {})),
     "opencode": lambda cfg: OpencodeAdapter(bin=cfg.get("bin", "opencode"), agent=cfg.get("agent"), extra_env=cfg.get("env", {})),
 }
 
@@ -29,4 +29,4 @@ def build(harness: str, cfg: dict) -> Adapter:
     return factory(cfg)
 
 
-__all__ = ["Adapter", "HARNESSES", "Host", "Inventory", "TrialPaths", "Turn", "build", "leaks", "served_matches"]
+__all__ = ["Adapter", "Baseline", "HARNESSES", "Host", "Inventory", "TrialPaths", "Turn", "audit", "build", "served_matches"]

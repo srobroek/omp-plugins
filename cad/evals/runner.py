@@ -117,8 +117,9 @@ def load_matrix(path: Path) -> Matrix:
 # ---------------------------------------------------------------- host environment
 
 # The only host variables a harness sees. Everything else of the user's shell
-# (OMP_*, PI_*, CLAUDE_*, ANTHROPIC_*, AWS_PROFILE, XDG_*, MISE_*) stays out.
-_HOST_KEEP = ("PATH", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR", "USER", "LOGNAME", "SHELL")
+# (OMP_*, PI_*, CLAUDE_*, ANTHROPIC_*, AWS_PROFILE, XDG_*, MISE_*) stays out, and
+# TMPDIR is the trial's own (`adapters.base.trial_temp`), never the host's.
+_HOST_KEEP = ("PATH", "LANG", "LC_ALL", "LC_CTYPE", "USER", "LOGNAME", "SHELL")
 _GIT_ENV = {"GIT_TERMINAL_PROMPT": "0", "PAGER": "cat", "GIT_PAGER": "cat", "TERM": "dumb"}
 _CRED_MARGIN_S = 35 * 60  # longer than the default case ceiling
 
@@ -188,6 +189,7 @@ def stage_trial(case: dict | None, adapter, host: adapters.Host, *, require_plug
         raise TrialError("plugin_missing", f"{adapter.name} needs {adapter.plugin_marker} under {PLUGIN_ROOT}")
     paths.work.mkdir()
     paths.home.mkdir()
+    paths.tmp.mkdir()
     if case is not None:
         shutil.copytree(case["_seed"], paths.work, dirs_exist_ok=True)
     adapter.prepare(paths, host)
@@ -249,13 +251,18 @@ def run_turn(adapter, argv: list[str], paths: TrialPaths, host: adapters.Host, t
 
 
 def isolation_of(adapter, paths: TrialPaths, probe_outputs: list[str], first_stream: list[str]) -> dict:
-    """Row fields: `isolation` clean|contaminated, the leak list, the inventory and mechanism."""
+    """Row fields: `isolation` clean|contaminated, the leak list, the inventory (with
+    the bundled baseline items it loaded and the version they are declared for) and
+    the mechanism."""
     inventory = adapter.inventory(probe_outputs, first_stream, paths)
-    found = adapters.leaks(inventory, paths, adapter.builtin)
+    found, bundled = adapters.audit(inventory, paths, adapter.baseline)
     return {
         "isolation": "contaminated" if found else "clean",
         "leaks": found,
-        "inventory": inventory.as_dict(),
+        "inventory": {
+            **inventory.as_dict(), "version": inventory.version,
+            "baseline": {"declared_for": adapter.baseline.version, "loaded": bundled},
+        },
         "isolation_mechanism": adapter.isolation,
     }
 

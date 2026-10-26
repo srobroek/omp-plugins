@@ -4,10 +4,10 @@
 completed message arrives whole in a `message_end` event. Assistant messages carry
 the served `model` and a `usage` object in OMP's own key names.
 
-Isolation: HOME, PI_CODING_AGENT_DIR and the XDG roots point into the trial, so
-no user plugin, rule, skill, extension, AGENTS.md, MCP server or memory loads;
-the cad plugin arrives through `--plugin-dir`. Bedrock credentials come from
-exported environment variables, not the user's AWS profile. The inventory is read
+Isolation: HOME, PI_CODING_AGENT_DIR, the XDG roots and TMPDIR point into the
+trial, so no user plugin, rule, skill, extension, AGENTS.md, MCP server or memory
+loads; the cad plugin arrives through `--plugin-dir`. Bedrock credentials come
+from exported environment variables, not the user's AWS profile. The inventory is read
 model-free from `omp --mode rpc` (`get_state` returns the assembled system prompt
 and tool descriptions; `get_available_commands` lists skill and extension commands).
 """
@@ -17,15 +17,16 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Iterable
 
-from .base import Host, Inventory, TrialPaths, Turn, add_usage, empty_usage, isolated_home, json_lines, tool_text
+from .base import Baseline, Host, Inventory, TrialPaths, Turn, add_usage, empty_usage, isolated_home, json_lines, tool_text, trial_temp
 
 # Bundled with OMP 18.12.3, observed in a clean isolated run (no plugins at all).
-BUILTIN = {
+BASELINE = Baseline("18.12.3", {
     "agents": frozenset({"scout", "reviewer", "security-reviewer", "seance", "task", "sonic"}),
     "commands": frozenset({"autoresearch", "green", "review", "annotate", "init"}),
-}
+})
 _STATE_ID, _COMMANDS_ID = "inventory-state", "inventory-commands"
 
 
@@ -35,8 +36,8 @@ class OmpAdapter:
     extra_env: dict[str, str] = field(default_factory=dict)
     plugin_marker: str = ".omp-plugin/plugin.json"
     name: str = "omp"
-    isolation: str = "HOME, PI_CODING_AGENT_DIR and XDG_* in the trial; cad via --plugin-dir; AWS credentials exported to env"
-    builtin: dict = field(default_factory=lambda: BUILTIN)
+    isolation: str = "HOME, PI_CODING_AGENT_DIR, XDG_* and TMPDIR in the trial; cad via --plugin-dir; AWS credentials exported to env"
+    baseline: Baseline = field(default_factory=lambda: BASELINE)
 
     def prepare(self, paths: TrialPaths, host: Host) -> None:
         paths.state.mkdir(parents=True, exist_ok=True)
@@ -55,9 +56,12 @@ class OmpAdapter:
 
     def env(self, paths: TrialPaths, host: Host) -> dict[str, str]:
         return {
-            **host.base_env, **isolated_home(paths), **host.aws_env, **self.extra_env,
+            **host.base_env, **isolated_home(paths), **trial_temp(paths), **host.aws_env, **self.extra_env,
             "PI_CODING_AGENT_DIR": str(paths.home / ".omp" / "agent"), "NO_COLOR": "1",
         }
+
+    def user_stores(self, host: Host) -> list[Path]:
+        return []  # sessions go to --session-dir, everything else to the trial HOME
 
     def probe(self, paths: TrialPaths, model: str, stream_lines: list[str]) -> list[tuple[list[str], str]]:
         argv = [self.bin, "--mode", "rpc", "--no-session", "--model", model, *self._plugin_args(paths)]

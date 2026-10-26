@@ -16,6 +16,7 @@ import json
 import os
 import random
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -27,6 +28,7 @@ EVALS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(EVALS))
 
 import adapters  # noqa: E402
+import run  # noqa: E402
 import runner  # noqa: E402
 from adapters.base import Turn  # noqa: E402
 from adapters.claude import canonical_model  # noqa: E402
@@ -346,16 +348,62 @@ class FakeHarness(unittest.TestCase):
         self.assertTrue((paths.work / ".git").is_dir())
 
     def test_child_environment_is_built_not_inherited(self):
-        with mock.patch.dict(os.environ, {"OMP_PROFILE": "user", "PI_SMOL_MODEL": "x", "AWS_PROFILE": "user-profile"}):
+        with mock.patch.dict(os.environ, {"OMP_PROFILE": "user", "PI_SMOL_MODEL": "x", "AWS_PROFILE": "user-profile", "TMPDIR": "/shared/tmp"}):
             base = runner.HostSource({"aws_profile": None})._base_env()
         self.assertNotIn("OMP_PROFILE", base)
         self.assertNotIn("PI_SMOL_MODEL", base)
         self.assertNotIn("AWS_PROFILE", base)
+        self.assertNotIn("TMPDIR", base)
         paths = runner.stage_trial(None, self.adapter("quiet"), self.host.get(), require_plugin=True)
         self.addCleanup(shutil.rmtree, paths.root, True)
         env = self.adapter("quiet").env(paths, self.host.get())
         self.assertEqual(env["HOME"], str(paths.home))
         self.assertEqual(env["PI_CODING_AGENT_DIR"], str(paths.home / ".omp" / "agent"))
+
+    def test_every_harness_gets_a_temp_dir_inside_the_trial(self):
+        for harness in adapters.HARNESSES:
+            with self.subTest(harness=harness):
+                adapter = adapters.build(harness, {"bin": "true", "bypass_launcher": False})
+                paths = runner.stage_trial(None, adapter, self.host.get(), require_plugin=True)
+                self.addCleanup(shutil.rmtree, paths.root, True)
+                env = adapter.env(paths, self.host.get())
+                self.assertTrue(paths.tmp.is_dir() and paths.tmp.parent == paths.root)
+                self.assertEqual({env[var] for var in ("TMPDIR", "TMP", "TEMP")}, {str(paths.tmp)})
+                if harness == "claude":  # Claude's own temp root defaults to /tmp on macOS, not $TMPDIR
+                    self.assertEqual(env["CLAUDE_CODE_TMPDIR"], str(paths.tmp))
+
+    def test_kiro_trial_gets_a_copy_of_the_login_only(self):
+        store = self.tmp.joinpath("Library", "Application Support", "kiro-cli")
+        store.mkdir(parents=True)
+        user_db = store / "data.sqlite3"
+        con = sqlite3.connect(user_db)
+        con.executescript("""
+            CREATE TABLE migrations (id INTEGER PRIMARY KEY, version INTEGER NOT NULL, migration_time INTEGER NOT NULL);
+            CREATE TABLE auth_kv (key TEXT PRIMARY KEY, value TEXT);
+            CREATE TABLE state (key TEXT PRIMARY KEY, value BLOB);
+            CREATE TABLE conversations_v2 (key TEXT NOT NULL, conversation_id TEXT NOT NULL, value TEXT NOT NULL,
+                                           PRIMARY KEY (key, conversation_id));
+            CREATE INDEX idx_conversations_v2_key ON conversations_v2(key);
+            INSERT INTO migrations VALUES (1, 1, 0);
+            INSERT INTO auth_kv VALUES ('kirocli:odic:token', '{"access_token": "a"}');
+            INSERT INTO state VALUES ('auth.idc.region', '"us-east-1"'), ('api.codewhisperer.profile', '{}'), ('telemetryClientId', '"x"');
+            INSERT INTO conversations_v2 VALUES ('/user/project', 'c1', '{}');
+        """)
+        con.close()
+        before = (user_db.read_bytes(), user_db.stat().st_mtime_ns)
+        adapter = adapters.build("kiro", {"bin": "true"})
+        paths = runner.stage_trial(None, adapter, self.host.get(), require_plugin=True)
+        self.addCleanup(shutil.rmtree, paths.root, True)
+        trial_store = paths.home.joinpath("Library", "Application Support", "kiro-cli")
+        self.assertFalse(trial_store.is_symlink())
+        trial = sqlite3.connect(trial_store / "data.sqlite3")
+        self.addCleanup(trial.close)
+        self.assertEqual(trial.execute("SELECT key FROM auth_kv").fetchall(), [("kirocli:odic:token",)])
+        self.assertEqual(sorted(k for (k,) in trial.execute("SELECT key FROM state")), ["api.codewhisperer.profile", "auth.idc.region"])
+        self.assertEqual(trial.execute("SELECT count(*) FROM conversations_v2").fetchone(), (0,))
+        self.assertEqual(trial.execute("SELECT count(*) FROM migrations").fetchone(), (1,))
+        self.assertEqual((user_db.read_bytes(), user_db.stat().st_mtime_ns), before)
+        self.assertIn(store, adapter.user_stores(self.host.get()))
 
     def test_unexportable_aws_profile_is_an_auth_error(self):
         with self.assertRaises(runner.TrialError) as caught:
@@ -418,6 +466,42 @@ class CaseSchema(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stdout[-1500:])
 
 
+class HostEffects(unittest.TestCase):
+    """The smoke's verdict on what a trial left outside its own directory."""
+
+    def test_writes_outside_the_trial_are_attributed(self):
+        base = Path(tempfile.mkdtemp(prefix="cad-eval-host-"))
+        self.addCleanup(shutil.rmtree, base, True)
+        shared, store = base / "shared", base / "store"
+        (shared / "claude-503").mkdir(parents=True)
+        store.mkdir()
+        root = shared / "cad-eval-a_b"  # the trial root sits in the shared temp dir, as mkdtemp puts it
+        (root / "tmp").mkdir(parents=True)
+        con = sqlite3.connect(store / "data.sqlite3")
+        con.executescript("CREATE TABLE t (k TEXT PRIMARY KEY, v TEXT); INSERT INTO t VALUES ('a', '1');")
+        con.close()
+        shared_before, stores = run.tree(shared), {store: run.store_state(store)}
+        quiet = run.host_effects(root, {"tmpdir": [], "stores": {}}, [shared], shared_before, stores)
+        self.assertTrue(quiet["unchanged"])
+        # Claude slugs the trial's work dir into a per-directory folder; another process adds its own entry.
+        slug = shared / "claude-503" / "-private-var-shared-cad-eval-a-b-work"
+        slug.mkdir()
+        (shared / "TemporaryDirectory.x").mkdir()
+        (root / "tmp" / "scratch").mkdir()  # inside the trial: never counted
+        report = run.host_effects(root, {"tmpdir": ["scratch"], "stores": {}}, [shared], shared_before, stores)
+        self.assertEqual(report["shared_temp"]["added_by_trial"], [str(slug)])
+        self.assertEqual(report["shared_temp"]["added_by_other_processes"], [str(shared / "TemporaryDirectory.x")])
+        self.assertFalse(report["unchanged"])
+        slug.rmdir()
+        con = sqlite3.connect(store / "data.sqlite3")
+        con.execute("UPDATE t SET v = '2'")
+        con.commit()
+        con.close()
+        changed = run.host_effects(root, {"tmpdir": [], "stores": {}}, [shared], shared_before, stores)
+        self.assertEqual(changed["user_stores"][str(store)]["sqlite"]["data.sqlite3"]["tables_changed"], ["t"])
+        self.assertFalse(changed["unchanged"])
+
+
 class RecordedStreams(unittest.TestCase):
     """Adapter parsers and isolation verdicts on the (sanitised) streams of the live
     smoke calls. `<trial>` in a fixture stands for the trial root."""
@@ -471,6 +555,18 @@ class RecordedStreams(unittest.TestCase):
         result = self.isolation("claude", paths)
         self.assertEqual((result["isolation"], result["leaks"]), ("clean", []))
         self.assertEqual(result["inventory"]["plugins"], ["cad"])
+        self.assertEqual(result["inventory"]["version"], "2.1.310")
+        self.assertEqual(result["inventory"]["baseline"]["declared_for"], "2.1.310")
+        self.assertIn("compact", result["inventory"]["baseline"]["loaded"]["commands"])
+        self.assertEqual(set(result["inventory"]["baseline"]["loaded"]), {"commands"})  # no bundled skill or subagent
+
+    def test_claude_bundled_components_and_other_versions_leak(self):
+        paths = self.trial()
+        stream = self.lines("claude.raw.jsonl", paths)
+        bundled = [stream[0].replace('"skills": [', '"skills": ["simplify", ', 1).replace('"agents": [', '"agents": ["Explore", ', 1), *stream[1:]]
+        self.assertTrue({"skills:simplify", "agents:Explore"} <= set(self.isolation("claude", paths, stream=bundled)["leaks"]))
+        newer = [line.replace('"claude_code_version": "2.1.310"', '"claude_code_version": "2.1.311"') for line in stream]
+        self.assertIn("baseline: declared for 2.1.310, the harness reports 2.1.311", self.isolation("claude", paths, stream=newer)["leaks"])
 
     def test_claude_bare_mode_is_flagged(self):
         paths = self.trial()
@@ -490,6 +586,9 @@ class RecordedStreams(unittest.TestCase):
         paths = self.trial()
         turn = self.check("kiro", "claude-haiku-5.5", paths)
         self.assertGreater(turn.usage["credits"], 0)  # Kiro reports credits, not tokens
+        # With --trust-all-tools, List Directory on the workspace root runs headless.
+        listing = next(e for e in turn.transcript if e["role"] == "tool_result" and e["name"] == "List Directory")
+        self.assertIn("[DIR] cad", listing["content"])
         result = self.isolation("kiro", paths)
         self.assertEqual((result["isolation"], result["leaks"]), ("clean", []))
         self.assertIn("cad-eval", result["inventory"]["agents"])

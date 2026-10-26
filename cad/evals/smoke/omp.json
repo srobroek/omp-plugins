@@ -12,11 +12,30 @@
     "<trial>/cad",
     "--session-dir",
     "<trial>/state",
-    "First, under the heading INSTRUCTIONS, list every instruction file, rule file, steering document and system-prompt section you were given (file path or section heading, one per line), other than skill bodies. Then, under the heading SKILLS, list the names of every skill available to you, one per line. Then create a file named hello.txt whose entire content is the word ok. End your reply with the single word DONE."
+    "First, under the heading INSTRUCTIONS, list every instruction file, rule file, steering document and system-prompt section you were given (file path or section heading, one per line), other than skill bodies. Then, under the heading SKILLS, list the names of every skill available to you, one per line. Then, under the heading FILES, list the entries of the current working directory, using your file or directory tool rather than a shell command. Then create a file named hello.txt whose entire content is the word ok. End your reply with the single word DONE."
   ],
-  "at": "2026-10-26T11:14:13+00:00",
+  "at": "2026-10-26T13:46:18+00:00",
   "file_written": true,
   "harness": "omp",
+  "host": {
+    "shared_temp": {
+      "added_by_other_processes": [
+        "/private/tmp/mcs-telemetry-l1-1793022378.2379398_32523.log.sb-f405e7ea-RDIT3K",
+        "/private/tmp/mcs-telemetry-l2-1793022378_32523.log",
+        "$TMPDIR/toolbox-telemetry-emf1097683230",
+        "$TMPDIR/toolbox-telemetry-emf1097683230/toolbox-telemetry-wrapper-metrics2324213465",
+        "$TMPDIR/toolbox-telemetry-emf280605458"
+      ],
+      "added_by_trial": [],
+      "roots": [
+        "/private/tmp",
+        "$TMPDIR"
+      ]
+    },
+    "trial_tmpdir": [],
+    "unchanged": true,
+    "user_stores": {}
+  },
   "inventory": {
     "agents": [
       "cad-dfm-reviewer",
@@ -28,6 +47,26 @@
       "sonic",
       "task"
     ],
+    "baseline": {
+      "declared_for": "18.12.3",
+      "loaded": {
+        "agents": [
+          "reviewer",
+          "scout",
+          "seance",
+          "security-reviewer",
+          "sonic",
+          "task"
+        ],
+        "commands": [
+          "annotate",
+          "autoresearch",
+          "green",
+          "init",
+          "review"
+        ]
+      }
+    },
     "commands": [
       "annotate",
       "autoresearch",
@@ -36,11 +75,14 @@
       "review",
       "skill:cad-bom",
       "skill:cad-concept",
+      "skill:cad-design",
       "skill:cad-fits",
       "skill:cad-flow",
+      "skill:cad-model",
       "skill:cad-motion",
       "skill:cad-recheck",
       "skill:cad-record",
+      "skill:cad-render",
       "skill:cad-review-dfm",
       "skill:cad-review-mech"
     ],
@@ -51,37 +93,38 @@
     "skills": [
       "cad-bom",
       "cad-concept",
+      "cad-design",
       "cad-fits",
       "cad-flow",
+      "cad-model",
       "cad-motion",
       "cad-recheck",
       "cad-record",
+      "cad-render",
       "cad-review-dfm",
       "cad-review-mech"
-    ]
+    ],
+    "version": null
   },
   "isolation": "clean",
-  "isolation_mechanism": "HOME, PI_CODING_AGENT_DIR and XDG_* in the trial; cad via --plugin-dir; AWS credentials exported to env",
-  "isolation_with_current_adapter": {
-    "isolation": "clean",
-    "leaks": []
-  },
-  "latency_s": 11.091,
+  "isolation_mechanism": "HOME, PI_CODING_AGENT_DIR, XDG_* and TMPDIR in the trial; cad via --plugin-dir; AWS credentials exported to env",
+  "latency_s": 11.55,
   "leaks": [],
   "ok": true,
   "requested_model": "amazon-bedrock/global.anthropic.claude-haiku-5-5",
   "served_matches": true,
   "served_model": "global.anthropic.claude-haiku-5-5",
-  "text": "INSTRUCTIONS\n\u00a7 Role\n\u00a7 Runtime\n\u00a7 Tool Policy\n\u00a7 Workflow\n\u00a7 Delivery\n\u00a7 Critical\nproject-context\nxd:// Tool Devices (xd://ast_edit, xd://debug, xd://lsp; read on demand)\n\nSKILLS\ncad-bom\ncad-concept\ncad-fits\ncad-flow\ncad-motion\ncad-recheck\ncad-record\ncad-review-dfm\ncad-review-mech\n\nhello.txt was written with content `ok` (2 bytes).\n\nDONE",
+  "text": "INSTRUCTIONS\n§ Role\n§ Runtime\n§ Tool Policy\n§ Workflow\n§ Delivery\n§ Critical\nproject-context (workstation details)\n\nSKILLS\ncad-bom\ncad-concept\ncad-design\ncad-fits\ncad-flow\ncad-model\ncad-motion\ncad-recheck\ncad-record\ncad-render\ncad-review-dfm\ncad-review-mech\n\nFILES\n(empty directory: no entries)\n\nDONE",
   "tools": [
+    "read",
     "write"
   ],
-  "transcript_entries": 5,
+  "transcript_entries": 7,
   "usage": {
-    "cacheRead": 12653,
-    "cacheWrite": 13277,
-    "cost_usd": 0.002173,
+    "cacheRead": 12820,
+    "cacheWrite": 13604,
+    "cost_usd": 0.002256,
     "input": 6,
-    "output": 771
+    "output": 854
   }
 }

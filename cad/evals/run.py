@@ -10,7 +10,7 @@
   run.py summary    --out DIR [--allow-contaminated]                per-cell comparison table
   run.py judge      --a DIR --b DIR --out FILE [--allow-contaminated]   pairwise blind judge
   run.py inventory  --harness H --model MODEL                       model-free isolation check (OMP)
-  run.py smoke      --harness H --model MODEL --out DIR             one cheap live call: isolation + parse
+  run.py smoke      --harness H --model MODEL --out DIR             one cheap live call: isolation, parse, host effects
 
 The runner and adapters need only the standard library; graders run their OCCT
 and YAML probes through `uv run --script`.
@@ -19,10 +19,15 @@ and YAML probes through `uv run --script`.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import os
 import random
+import re
 import shutil
+import sqlite3
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -35,6 +40,8 @@ SMOKE_PROMPT = (
     "First, under the heading INSTRUCTIONS, list every instruction file, rule file, steering document and"
     " system-prompt section you were given (file path or section heading, one per line), other than skill bodies."
     " Then, under the heading SKILLS, list the names of every skill available to you, one per line."
+    " Then, under the heading FILES, list the entries of the current working directory, using your file or"
+    " directory tool rather than a shell command."
     " Then create a file named hello.txt whose entire content is the word ok. End your reply with the single word DONE."
 )
 
@@ -213,9 +220,15 @@ def cmd_inventory(args, matrix) -> int:
 
 def cmd_smoke(args, matrix) -> int:
     """One cheap live call in a clean trial: records argv, served model, usage, the
-    loaded-component inventory and its leaks, and the raw stream."""
+    loaded-component inventory and its leaks, the raw stream, and what the trial
+    left on the host (`host`): entries it added to the shared temp directories and
+    changes to the harness's user stores, both of which must be none."""
     adapter = adapters.build(args.harness, matrix.harness_cfg(args.harness))
     host = runner.HostSource(matrix.raw.get("auth", {})).get()
+    # Snapshots come first, so staging (the Kiro login copy) is inside the window.
+    shared = sorted({Path(tempfile.gettempdir()).resolve(), Path("/tmp").resolve()})
+    stores = {store: store_state(store) for store in adapter.user_stores(host)}
+    shared_before = {path: m for root in shared for path, m in tree(root).items()}
     paths = runner.stage_trial(None, adapter, host, require_plugin=True)
     argv = adapter.command(model=args.model, prompt=SMOKE_PROMPT, paths=paths, resume=False)
     record = {"harness": args.harness, "requested_model": args.model, "argv": argv, "at": runner._now()}
@@ -236,17 +249,116 @@ def cmd_smoke(args, matrix) -> int:
         record |= {"ok": False, "failure_class": exc.failure_class, "detail": exc.detail}
     finally:
         record["latency_s"] = round(time.monotonic() - started, 3)
+        trial_side = {
+            "tmpdir": sorted(os.path.relpath(p, paths.tmp) for p in tree(paths.tmp)),
+            "stores": {str(s): len(tree(paths.home / s.relative_to(host.real_home))) for s in stores},
+        }
         if args.keep_sandbox:
             record["sandbox"] = str(paths.root)
         else:
             shutil.rmtree(paths.root, ignore_errors=True)
+    record["host"] = host_effects(paths.root, trial_side, shared, shared_before, stores)
     args.out.mkdir(parents=True, exist_ok=True)
     (args.out / f"{args.harness}.json").write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     (args.out / f"{args.harness}.raw.jsonl").write_text("\n".join(raw) + ("\n" if raw else ""), encoding="utf-8")
     if probe:
         (args.out / f"{args.harness}.probe.json").write_text(json.dumps(probe, indent=1) + "\n", encoding="utf-8")
-    print(json.dumps({k: record.get(k) for k in ("ok", "served_model", "isolation", "leaks", "inventory", "text", "file_written")}, indent=2))
-    return 0 if record.get("ok") and record.get("isolation") == "clean" else 1
+    print(json.dumps({k: record.get(k) for k in ("ok", "served_model", "isolation", "leaks", "inventory", "text", "file_written", "host")}, indent=2))
+    return 0 if record.get("ok") and record.get("isolation") == "clean" and record["host"]["unchanged"] else 1
+
+
+# ---------------------------------------------------------------- host effects (smoke proofs)
+
+
+def tree(root: Path, depth: int = 2) -> dict[str, int]:
+    """Path -> mtime_ns of every entry up to `depth` levels below `root`. A changed
+    directory mtime also reveals an entry added or removed one level deeper."""
+    found: dict[str, int] = {}
+    pending = [(str(root), 1)]
+    while pending:
+        folder, level = pending.pop()
+        try:
+            entries = list(os.scandir(folder))
+        except OSError:
+            continue
+        for entry in entries:
+            try:
+                found[entry.path] = entry.stat(follow_symlinks=False).st_mtime_ns
+            except OSError:
+                continue
+            if level < depth and entry.is_dir(follow_symlinks=False):
+                pending.append((entry.path, level + 1))
+    return found
+
+
+def _sqlite(path: Path, marker: str | None = None) -> dict:
+    """Per table, read-only: row count and an order-independent digest of its rows (the
+    sum of the rows' SHA-256 values); with `marker`, also how many rows mention it."""
+    con = sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True, timeout=30)
+    try:
+        tables: dict = {}
+        mentions = 0
+        for (t,) in con.execute("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").fetchall():
+            digest = count = 0
+            for row in con.execute(f'SELECT * FROM "{t}"'):
+                digest = (digest + int.from_bytes(hashlib.sha256(repr(row).encode()).digest(), "big")) % (1 << 256)
+                count += 1
+            tables[t] = {"rows": count, "digest": f"{digest:064x}"}
+            if marker:
+                columns = [c[1] for c in con.execute(f'PRAGMA table_info("{t}")')]
+                where = " OR ".join(f'CAST("{c}" AS TEXT) LIKE ?' for c in columns)
+                mentions += con.execute(f'SELECT count(*) FROM "{t}" WHERE {where}', [f"%{marker}%"] * len(columns)).fetchone()[0]
+        return {"tables": tables, **({"rows_mentioning_trial": mentions} if marker else {})}
+    finally:
+        con.close()
+
+
+def store_state(store: Path, marker: str | None = None) -> dict:
+    return {"entries": tree(store), "sqlite": {p.name: _sqlite(p, marker) for p in sorted(store.glob("*.sqlite3"))}}
+
+
+def host_effects(root: Path, trial_side: dict, shared: list[Path], shared_before: dict[str, int], stores: dict[Path, dict]) -> dict:
+    """What one trial left outside its own directory. Shared temp entries added during
+    the trial count against it when their path names the trial (as is, or slugged the
+    way Claude names per-directory folders) or they share a name with something the
+    harness wrote to the trial's own TMPDIR; other additions come from concurrent
+    processes and are listed for review. A user store must show no added, removed or
+    changed entry, no changed table and no row naming the trial."""
+    own = (str(root), str(root.resolve()))
+    inside = tuple(p + "/" for p in own)
+    markers = {root.name, re.sub(r"[^A-Za-z0-9]", "-", root.name)}
+    own_names = {Path(p).name for p in trial_side["tmpdir"]}
+    added = sorted(p for temp in shared for p in tree(temp) if p not in shared_before and p not in own and not p.startswith(inside))
+    by_trial = [p for p in added if any(m in p for m in markers) or Path(p).name in own_names]
+    report: dict = {
+        "trial_tmpdir": trial_side["tmpdir"],
+        "shared_temp": {"roots": [str(r) for r in shared], "added_by_trial": by_trial,
+                        "added_by_other_processes": [p for p in added if p not in by_trial]},
+        "user_stores": {},
+    }
+    unchanged = not by_trial
+    for store, before in stores.items():
+        after = store_state(store, root.name)
+        old, new = before["entries"], after["entries"]
+        diff = {
+            "added": sorted(new.keys() - old.keys()), "removed": sorted(old.keys() - new.keys()),
+            "changed": sorted(p for p in old.keys() & new.keys() if old[p] != new[p]),
+            "sqlite": {
+                name: {
+                    "rows": {t: v["rows"] for t, v in state["tables"].items()},
+                    "tables_changed": sorted(t for t, v in state["tables"].items()
+                                             if before["sqlite"].get(name, {}).get("tables", {}).get(t) != v),
+                    "rows_mentioning_trial": state["rows_mentioning_trial"],
+                }
+                for name, state in after["sqlite"].items()
+            },
+            "trial_counterpart_entries": trial_side["stores"].get(str(store), 0),
+        }
+        report["user_stores"][str(store)] = diff
+        unchanged = unchanged and not (diff["added"] or diff["removed"] or diff["changed"]) and all(
+            not s["tables_changed"] and not s["rows_mentioning_trial"] for s in diff["sqlite"].values())
+    report["unchanged"] = unchanged
+    return report
 
 
 if __name__ == "__main__":
