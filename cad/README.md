@@ -19,7 +19,7 @@ Install a Beads workspace for the workflow formulas and approval gates. Plugin i
 
 ## Flow
 
-`cad-flow` leads GROUND → INTENT → SPECIFY → L0 CONCEPT → VARIANT gate → L1 LAYOUT → LAYOUT freeze → L2 PARTS → L3 DETAIL → BOM → L4 ANALYSIS → parallel CRITIQUE → RECONCILE → DESIGN freeze → RELEASE → RELEASE gate. On each L1 to L4 commit batch, run `cad-model run`, then `cad-model check`; a blocking failure stops it. Then run `cad-render` for that version and show images at the gate. Use OCP CAD Viewer for interactive inspection and Studio look-dev. Run kinematic sweeps with `cad-motion`; static FEA uses `cad-analysis`. Before L2, form_check must pass at F2 and later; before L3, it must pass at F3. Recheck at the layout threshold, when the user says “commit”, or from the hardware git pre-commit hook.
+`cad-flow` leads GROUND → INTENT → SPECIFY → L0 CONCEPT → VARIANT gate → L1 LAYOUT → LAYOUT freeze → L2 PARTS → L3 DETAIL → BOM → L4 ANALYSIS → parallel CRITIQUE → RECONCILE → DESIGN freeze → RELEASE → RELEASE gate. On each L1 to L4 commit batch, run `cad-model run`, then `cad-model check`; a blocking failure stops it. Then run `cad-render` for that version and show images at the gate. Before L2, `form_check` must pass at F2 or higher. Before L3, it must pass at F3. The layout threshold, user “commit”, or hardware git pre-commit hook starts the broader changed-parts/dependents recheck.
 
 ## Skills
 
@@ -35,12 +35,13 @@ The table lists every directory under `cad/skills/`, including the OCP viewer an
 | `cad-motion` | Available | Pose assemblies, sweep joint motion, and select worst-case poses |
 | `cad-render` | Available | Automated three.js PBR version renders and gate imagery |
 | `cad-viewer` | Available | Interactive OCP CAD Viewer inspection and Studio look-dev |
-| `cad-recheck` | Available | Recheck changed parts and dependents at the configured threshold |
-| `cad-fits` | Available | Calculate fit limits and tolerance stack-ups |
+| `cad-analysis` | Available | Static finite-element analysis at worst-case poses |
 | `cad-bom` | Available | Roll up the engineering bill of materials |
-| `cad-review-mech` | Available | Evidence-based read-only mechanical design critique |
+| `cad-drawings` | Available | Create engineering drawings from STEP and design-record data |
+| `cad-fits` | Available | Calculate fit limits and tolerance stack-ups |
+| `cad-recheck` | Available | Recheck changed parts and dependents at the configured threshold |
 | `cad-review-dfm` | Available | Evidence-based read-only FDM/CNC manufacturability critique |
-## Agents
+| `cad-review-mech` | Available | Evidence-based read-only mechanical design critique |
 
 | Agent | Status | Role |
 |---|---|---|

@@ -65,7 +65,7 @@ title = "Check form fidelity for {{subassembly}}"
 type = "task"
 needs = ["render-part"]
 labels = ["cad", "phase:parts"]
-description = "Before the L2 gate, run `uv run --script skill://cad-design/scripts/form_check.py --hw hw --parts-dir DIR --fidelity F2` on affected parts. Every made part needs F2 or later. At L3 DETAIL, run the same command with `--fidelity F3` before the gate. Every made part needs F3. Record JSON evidence; findings block the gate."
+description = "Before the L2 gate, run `uv run --script skill://cad-design/scripts/form_check.py --hw hw --parts-dir hw/versions/vN/parts --fidelity F2` on affected parts. Every made part needs F2 or later. At L3 DETAIL, run the same command with `--fidelity F3` before the gate. Every made part needs F3. Record JSON evidence; findings block the gate."
 
 [steps.metadata]
 skill_hints = "cad-design, cad-record"

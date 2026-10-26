@@ -29,7 +29,7 @@ title = "GROUND the product and existing design record"
 type = "task"
 priority = 1
 labels = ["cad", "phase:ground"]
-description = "Run skill://cad-flow and skill://cad-record over {{scope}}. Establish product context, requirements, units, rigor, regime, constraints, and record gaps from the existing hw/ files. For each stage use DRAFT -> live preview with no checks -> user feedback; on 'commit batch', COMMIT the design-record entry and a bead note. Before LAYOUT freeze commit batches build and render only. At or after LAYOUT freeze, run skill://cad-recheck on changed parts plus dependents: this stage's checks and every earlier stage's checks. Ask 'More detail?'; otherwise request that stage's human gate."
+description = "Run skill://cad-flow and skill://cad-record over {{scope}}. Establish product context, requirements, units, rigor, regime, constraints, and record gaps from the existing hw/ files. For each stage, draft, preview live, and gather user feedback; on 'commit batch', commit the design-record entry and bead note. For each L1 to L4 batch, run cad-model run, then cad-model check (a blocking failure stops the batch), then cad-render for the same version. Before LAYOUT freeze, defer the broader recheck; at or after LAYOUT freeze, run skill://cad-recheck on changed parts plus dependents with this stage's checks and every earlier stage's checks. Ask 'More detail?'; otherwise request that stage's human gate."
 
 [steps.metadata]
 skill_hints = "cad-flow, cad-record"
@@ -63,7 +63,7 @@ title = "L0 CONCEPT: draft 2-4 three.js variants"
 type = "task"
 needs = ["specify"]
 labels = ["cad", "phase:concept"]
-description = "Run skill://cad-concept to create 2-4 distinct, labelled three.js concepts that meet SPECIFY. Render a live preview, invite feedback, then refine, merge, or drop variants in response. No engineering checks run before LAYOUT freeze; a pre-freeze 'commit batch' builds and renders only. Record the chosen candidate and its design-record entry after feedback."
+description = "Run skill://cad-concept to create 2-4 distinct, labelled three.js concepts that meet SPECIFY. Render a live preview and invite feedback. Refine, merge, or drop variants in response. Before LAYOUT freeze, concept commit batches save screenshots and defer the broader recheck. Record the chosen candidate and its design-record entry after feedback."
 
 [steps.metadata]
 skill_hints = "cad-concept, cad-flow"
@@ -87,7 +87,7 @@ title = "L1 LAYOUT: define the single-part envelope and interfaces"
 type = "task"
 needs = ["variant-gate"]
 labels = ["cad", "phase:layout"]
-description = "Run skill://cad-model and skill://cad-record. Define the one-part subassembly, labelled interfaces, envelope, datums, constraints, joints and motion limits when applicable, plus an EBOM skeleton. Preview the layout live. Until LAYOUT freeze, 'commit batch' builds and renders only, with no checks."
+description = "Run skill://cad-model and skill://cad-record. After explicit VARIANT selection, export the chosen concept with `uv run --script skill://cad-concept/scripts/concept.py handoff <scene> --out hw/concept/handoff.json`. Define the one-part subassembly, labelled interfaces, envelope, datums, constraints, joints and motion limits when applicable, plus an EBOM skeleton. Preview the layout live. For each L1 commit batch, run `uv run --script skill://cad-model/scripts/cad_model.py run hw --label vN --kernel {{kernel}}`, then `uv run --script skill://cad-model/scripts/cad_model.py check vN --hw hw --out checks-vN.json`; a blocking failure stops the batch. Render the successful version with `uv run --script skill://cad-render/scripts/render.py hw --version vN`. Before LAYOUT freeze, defer the broader recheck; on or after freeze, recheck changed parts and dependents with this stage's checks and all earlier stages' checks."
 
 [steps.metadata]
 skill_hints = "cad-model, cad-record, cad-flow"
@@ -110,7 +110,7 @@ title = "L2 PARTS: model the single part"
 type = "task"
 needs = ["layout-freeze-gate"]
 labels = ["cad", "phase:parts"]
-description = "Run `uv run --script skill://cad-model/scripts/cad_model.py run hw --label vN --kernel {{kernel}}`, then `uv run --script skill://cad-model/scripts/cad_model.py check vN --hw hw --out checks-vN.json`. A blocking failure stops the batch. Then run `uv run --script skill://cad-render/scripts/render.py hw --version vN [--views iso front side exploded closeup-<PN>]` and show renders at the gate. Run `cad-viewer show hw [--version vN] --check FILE` after the build/check for interactive inspection. At L2, run `uv run --script skill://cad-design/scripts/form_check.py --hw hw --parts-dir DIR --fidelity F2` before the gate; require F2 or later. Capture/compare versions in OCP Viewer as part of gate inspection. After LAYOUT freeze, run the broader `cad-recheck` for changed parts and dependents, then record evidence."
+description = "Run `uv run --script skill://cad-model/scripts/cad_model.py run hw --label vN --kernel {{kernel}}`, then `uv run --script skill://cad-model/scripts/cad_model.py check vN --hw hw --out checks-vN.json`. A blocking failure stops the batch. Then run `uv run --script skill://cad-render/scripts/render.py hw --version vN [--views iso front side exploded closeup-<PN>]` and show renders at the gate. Run `cad-viewer show hw [--version vN] --check FILE` after the build/check for interactive inspection. At L2, run `uv run --script skill://cad-design/scripts/form_check.py --hw hw --parts-dir hw/versions/vN/parts --fidelity F2` before the gate; require F2 or later. Capture/compare versions in OCP Viewer as part of gate inspection. At or after LAYOUT freeze, run the broader `cad-recheck` for changed parts and dependents using this stage's checks and every earlier stage's checks, then record evidence."
 
 [steps.metadata]
 skill_hints = "cad-model, cad-recheck, cad-record, cad-flow"
@@ -121,7 +121,7 @@ title = "L3 DETAIL: fits, fasteners, tolerances, rules, and drawing"
 type = "task"
 needs = ["parts"]
 labels = ["cad", "phase:detail"]
-description = "Run skill://cad-fits for fits/stack-ups and skill://cad-drawings for detail and release drawings. Specify fit classes, fasteners, tolerances, datums, and process rules. Before the L3 gate, form_check must pass at F3. Generate the drawing with `uv run --script skill://cad-drawings/scripts/drawing.py <step> --part <part.yaml> --product <product.yaml> --output-dir <dir> [--scale <ratio>]`."
+description = "Run skill://cad-fits for fits/stack-ups and skill://cad-drawings for detail and release drawings. Specify fit classes, fasteners, tolerances, datums, and process rules. For each L3 commit batch, run `uv run --script skill://cad-model/scripts/cad_model.py run hw --label vN --kernel {{kernel}}`, then `uv run --script skill://cad-model/scripts/cad_model.py check vN --hw hw --out checks-vN.json`; a blocking failure stops the batch. Render the successful version with `uv run --script skill://cad-render/scripts/render.py hw --version vN`. Before the L3 gate, run `uv run --script skill://cad-design/scripts/form_check.py --hw hw --parts-dir hw/versions/vN/parts --fidelity F3`; require F3. Generate the drawing with `uv run --script skill://cad-drawings/scripts/drawing.py <step> --part <part.yaml> --product <product.yaml> --output-dir <dir> [--scale <ratio>]`."
 
 [steps.metadata]
 skill_hints = "cad-fits, cad-drawings, cad-recheck, cad-record, cad-flow"
@@ -143,7 +143,7 @@ title = "L4 ANALYSIS: verify the worst-case design"
 type = "task"
 needs = ["bom"]
 labels = ["cad", "phase:analysis"]
-description = "Run `uv run --script skill://cad-motion/scripts/sweep.py ... --worst-step worst.step` for kinematics and `uv run --script skill://cad-analysis/scripts/fea_static.py <case.yaml>` for static FEA at the worst-case pose. Record assumptions, criteria, results, and evidence in verification.csv. Recheck affected parts/dependents after commit. No slicer, CAM, or machine tooling."
+description = "Run `uv run --script skill://cad-motion/scripts/sweep.py --hw hw --version vN --worst-step worst.step` for kinematics and `uv run --script skill://cad-analysis/scripts/fea_static.py <case.yaml>` for static FEA at the worst-case pose. Each L4 commit batch also runs cad-model run, then cad-model check; a blocking failure stops the batch. Render the successful version. Record assumptions, criteria, results, and evidence in verification.csv. Recheck affected parts/dependents after commit. No slicer, CAM, or machine tooling."
 
 [steps.metadata]
 skill_hints = "cad-analysis, cad-motion, cad-record, cad-recheck, cad-flow"
