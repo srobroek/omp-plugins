@@ -23,7 +23,8 @@ Per part (stdout JSON `parts`):
                            through <= 120 degrees (fillets, not lug ends or shafts)
     freeform_faces         B-spline, Bezier, revolved, extruded or offset faces
     min_convex_radius      smallest convex blend radius (FDM edge rule)
-    min_concave_radius     smallest concave partial-cylinder radius (CNC corner rule)
+    min_concave_radius     smallest concave cylinder radius that is no bore wall
+                           (cad-model holes.bore_walls): the CNC corner rule
 
 Checks (each failure is one `findings` entry):
     brep_invalid            any fidelity: a part is not a valid B-rep, in the STEP
@@ -63,7 +64,6 @@ BLOCK_PLANAR_FRACTION = 0.80
 BLEND_MAX_RADIUS = 10.0
 BLEND_MAX_SPAN = math.radians(120.0)  # a fillet turns through its edge angle; a lug end turns 180 degrees
 AXIS_TOL = 1e-4  # sine of the allowed angle between a cylinder axis and a joint axis
-FULL_TURN = 2.0 * math.pi - 1e-6
 
 
 def load_pose() -> Any:
@@ -160,6 +160,7 @@ def is_valid(shape: Any) -> bool:
 
 def measure(shape: Any) -> dict[str, Any]:
     """Form metrics plus the cylinders the joint check needs."""
+    from cadmodel import holes
     from OCP.GeomAbs import (
         GeomAbs_BezierSurface,
         GeomAbs_BSplineSurface,
@@ -177,6 +178,7 @@ def measure(shape: Any) -> dict[str, Any]:
     blends = freeform_count = 0
     min_convex = min_concave = math.inf
     cylinders = []
+    bores = holes.bore_walls(shape)  # a bore is drilled, not a corner a cutter leaves
     for face in faces_of(shape):
         area = face_area(face)
         total += area
@@ -199,7 +201,7 @@ def measure(shape: Any) -> dict[str, Any]:
             if convex and span <= BLEND_MAX_SPAN and radius <= BLEND_MAX_RADIUS:
                 blends += 1
                 min_convex = min(min_convex, radius)
-            elif not convex and span < FULL_TURN:
+            elif not convex and not any(face.IsSame(wall) for wall in bores):
                 min_concave = min(min_concave, radius)
         elif kind == GeomAbs_Torus:
             torus = adaptor.Torus()
