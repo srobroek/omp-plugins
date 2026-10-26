@@ -10,8 +10,10 @@ invisible to every sibling and are discarded with the clone. There is no
 git-worktree backend for native isolation, so it cannot be reconfigured into the
 worktree model, only turned off.
 
-Verify with `omp config get task.isolation.enabled --json`. Give each agent a git
-linked worktree instead, per `worktrunk-worktree-required`.
+Verify with `omp config get task.isolation.enabled --json`. The setting turns off
+only the filesystem clone. It does not restrict delegation: dispatch independent
+work to parallel subagents as usual, and give each agent its own git linked
+worktree, per `worktrunk-worktree-required`.
 
 This is the standing instruction, and it is the only thing that sets the setting
 correctly in advance. The `isolation-precheck` extension refuses a `task` call

@@ -24,6 +24,14 @@ NOT Evict module/package DOWNLOAD stores (pnpm store, go-modules, uv wheels, npm
 
 MUST Regenerable build output (Rust `target/`, `node_modules`, `.venv`, `dist/`, `__pycache__`) is not redirected into a machine-global writable directory. Rust target output is repository-scoped; other mutable output is worktree-local and reclaimable with the checkout.
 
+MUST build Rust in the repository-scoped target that Worktrunk configures. Do not set `CARGO_TARGET_DIR` or pass `--target-dir` for an ordinary build. If an inherited `CARGO_TARGET_DIR` points inside the linked worktree, unset it for that build command.
+
+Only explicit verification may use an isolated target. After that verification:
+
+- Confirm that no live process and no unique evidence depends on the isolated target.
+- Remove only compiler output that the current task owns.
+- Keep output that other actors own.
+
 ## Knobs (env)
 
 DEFAULT `DEVELOPMENT_CACHE_HOME` managed root (`~/.cache/development` fallback) · `SCCACHE_CACHE_SIZE` sccache cap (`20G`).

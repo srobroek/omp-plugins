@@ -6,6 +6,21 @@
 
 - Require Beads `blocks` dependencies to encode true prerequisites so independent work remains parallelizable.
 
+## [4.1.8](https://github.com/srobroek/omp-plugins/compare/beads--v4.1.7...beads--v4.1.8) (2026-10-22)
+
+
+### Bug Fixes
+
+* **beads:** scope stealth mode to bd's Dolt git sync ([97c1694](https://github.com/srobroek/omp-plugins/commit/97c16942c09bd349e5a7a7649c4fdaa7b9b743a0))
+
+## [4.1.7](https://github.com/srobroek/omp-plugins/compare/beads--v4.1.6...beads--v4.1.7) (2026-10-22)
+
+
+### Bug Fixes
+
+* **beads:** say subagents git-commit bead work, parents close beads ([6103213](https://github.com/srobroek/omp-plugins/commit/610321350a1098c70a70804f1e43095d3ae30bfb))
+* **beads:** scope the single-writer limit to bd writes, not code ([223484f](https://github.com/srobroek/omp-plugins/commit/223484f11643b3bb1a0a6d04ae3ad6566de7dfb9))
+
 ## [4.1.6](https://github.com/srobroek/omp-plugins/compare/beads--v4.1.5...beads--v4.1.6) (2026-10-20)
 
 

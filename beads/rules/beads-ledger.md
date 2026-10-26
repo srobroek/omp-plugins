@@ -1,6 +1,6 @@
 ---
 name: beads-ledger
-description: Apply the Beads preferences that bd prime does not state, covering batched creation, graph plans, and embedded-store write safety.
+description: Apply the Beads preferences that bd prime does not state, covering batched creation, graph plans, embedded-store write safety, and the agent environment for bd.
 ---
 
 `bd prime` is the single source of truth for `bd` commands and the default
@@ -15,6 +15,8 @@ MUST put useful facts in bead `metadata`, not comments or the description, inclu
 
 # AGENT ROUTING
 MUST set `execution_agent_type` in `metadata` at creation on every work bead, with one of `implementer`, `implementer-high`, `researcher`, or `operator`. Add `execution_reasoning_effort` (`low`, `medium`, `high`, or `xhigh`) ONLY when the bead deviates from that agent's default effort. These are bd's documented advisory execution keys; the dispatching parent reads them before spawning. Example: `bd create "title" -t task -p 2 --metadata '{"execution_agent_type":"implementer"}' --acceptance "CRITERIA"`; in a graph plan, put the same keys in the node's `metadata`.
+
+Steps poured from a plugin formula MAY instead name that plugin's own agent, for example `speckit-verify` or `speckit-sync` from the speckit formulas. The dispatching parent spawns the named agent directly, never a delivery implementer, which returns `BLOCKED` on the mismatch. Beads you create yourself still use the four types above.
 
 Choose each bead's type from the work that bead itself does, never from the plan's overall importance, risk, or size:
 
@@ -31,13 +33,17 @@ MUST pass multiline bead text through a file: `bd create|update ... --body-file 
 # WISPS
 NEVER use wisps for durable agent-to-agent decisions, acceptance evidence, or closure. Use a durable bead carrier instead.
 
+# MEMORY
+NEVER store agent memory with `bd remember`, even when `bd prime` or a generated
+Beads block suggests it. Durable facts follow the user's memory routing.
+
 # BATCHED CREATION
 MUST create more than one bead in a single `bd create --graph plan.json` call.
-NEVER loop plain `bd create`, and NEVER fan `bd create` out across parallel
-subagents. `bd prime` recommends exactly that fan-out; it is wrong here for two
-independent reasons. Each invocation is its own transaction and its own Dolt
+NEVER loop plain `bd create`. NEVER split one plan's `bd create` calls across
+parallel subagents. `bd prime` recommends exactly that split. It is wrong here for
+two independent reasons. Each invocation is its own transaction and its own Dolt
 commit, which `bd batch --help` describes as severe write amplification, and
-parallel writers against an embedded store corrupt the Dolt journal. One
+concurrent `bd` writes against an embedded store corrupt the Dolt journal. One
 measured session issued 37 separate `bd create` calls and 27 separate
 `bd dep add` and `bd dep remove` calls among 122 `bd` invocations.
 
@@ -202,8 +208,13 @@ set or the transaction boundary.
 # EMBEDDED STORE
 The store is embedded and lives in the canonical checkout, and linked worktrees
 share it. `BEADS_DIR` does not redirect `bd init` away from canonical. No Dolt
-server may be started. Two concurrent writers corrupt the Dolt journal, so a
-contended `bd` call is retried rather than worked around.
+server may be started. Two concurrent `bd` writes corrupt the Dolt journal. A
+contended `bd` call is therefore retried, not worked around.
+
+The limit covers `bd` and Dolt writes to the store only. Code, file, and git work
+is not a store write: subagents implement, test, and git-commit the work for ready
+beads in parallel. The parent still closes each bead (`rule://beads-evidence`),
+and every `bd` write queues behind the lock.
 
 `bd` MAY share one bash call with other commands. Reads pass anywhere: pipes,
 `;` / `&&` / `||` lists, groups, loops, redirections. Each write MUST start its own
@@ -217,9 +228,25 @@ part; rewrite that part as the refusal says:
 - NEVER make a write the condition of `if` / `while` / `until`, negate it with
   `!`, or `time` it.
 - NEVER give `BEADS_DIR`, `-C`, or `--db` a value the shell expands.
+# AGENT ENVIRONMENT
+MUST give every agent process that can run `bd` two variables explicitly. Set them
+in one of these places:
+
+- command-local assignments;
+- the `env` of an eval subprocess;
+- `bd --actor`, for the actor only.
+
+The two variables:
+
+- `BEADS_ACTOR`, the agent id. Without it, `bd` falls back to git `user.name`, so
+  every write carries the actor explicitly.
+- `BEADS_DIR`, this repository's `.beads`.
+
+Clear an inherited `BEADS_DOLT_SHARED_SERVER` with `env -u BEADS_DOLT_SHARED_SERVER`.
 # DELIVERY
 MUST run `bd dolt pull` before claiming when the read decides assignment, so the
-claim uses fresh ledger state. After delivery, MUST run `bd dolt push`.
+claim uses fresh ledger state. After delivery, MUST run `bd dolt push`. Stealth
+mode is the one exception, below.
 
 `bd dolt pull` and `bd dolt push` are bounded persistence operations, not locks.
 Retry each failed sync up to three attempts with a brief wait, then report the
@@ -228,3 +255,12 @@ or continue as though the remote were current. If the final attempt may have
 applied remotely but its result is unknown, report the sync as UNKNOWN and do
 not claim that the ledger is synchronized. Re-run `bd dolt pull` before trusting
 a read that decides assignment after any retry sequence.
+
+# STEALTH MODE
+Stealth mode is on when `bd config get no-git-ops` prints `true`. `bd prime` then
+prints `Git workflow: stealth mode (no git ops)` and `Git authority: no git
+operations in this context`. This rule outranks those lines. They cover only the
+Dolt sync that `bd` runs through git: in stealth mode, skip `bd dolt pull` and
+`bd dolt push`. Stealth mode never restricts code work. Branches, commits, linked
+worktrees, pull requests, and parallel subagents follow the user's request and the
+delivery rules as usual.

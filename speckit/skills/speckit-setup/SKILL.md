@@ -27,7 +27,7 @@ that worktree and skip each one already done:
    community catalog (`catalog.community.json`) as an install source. Never pass
    `--install-allowed` without it.
 3. Install + enable the required extensions not yet installed: `agent-context`, `bugfix`, `cleanup`,
-   `critique`, `fix-findings`, `iterate`, `qa`, `refine`, `retro`,
+   `critique`, `fix-findings`, `iterate`, `qa`, `refine`, `retro`, `review`,
    `security-review`, `status-report`, `tinyspec`. Stop and report failure if
    any required CLI step fails.
 4. `bd init --skip-hooks` if no workspace; copy every formula from
@@ -46,6 +46,11 @@ installation before formula copies. Resolve conflicts explicitly, then retry.
 
 Then start with `/speckit.specify`. Workflow order is the poured molecule;
 `bd mol current <root>` is current position.
+
+With beads active, `specs/*/tasks.md` is read-only: `/speckit.tasks`, the core
+`/speckit.converge` (it appends a convergence phase), and the bugfix, cleanup,
+iterate, reconcile, and refine extensions all try to write it, and the write is
+denied. Create child beads of the implement step instead.
 
 `specify workflow` YAML is not installed. Do not invent extension ids.
 Do not add speckit-gate or speckit-dag-hooks.

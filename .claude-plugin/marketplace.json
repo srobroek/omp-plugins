@@ -33,7 +33,7 @@
       "name": "beads",
       "description": "Beads issue tracking: dependency DAGs, formulas, and decisions recorded as beads.",
       "source": "./beads",
-      "version": "4.1.6",
+      "version": "4.1.8",
       "category": "productivity"
     },
     {
@@ -173,7 +173,7 @@
       "name": "toolchain",
       "description": "Toolchain defaults, backend services, infrastructure, and operations.",
       "source": "./toolchain",
-      "version": "1.0.2",
+      "version": "1.0.3",
       "category": "development"
     },
     {
@@ -201,7 +201,7 @@
       "name": "worktrunk",
       "description": "Refuse OMP native isolation, because a cloned checkout carries a copied .beads and forks the embedded ledger.",
       "source": "./worktrunk",
-      "version": "3.0.1",
+      "version": "3.0.2",
       "category": "development"
     },
     {

@@ -108,6 +108,14 @@ describe("decideToolCall", () => {
 		expect(decideToolCall("bash", { command: "cat specs/001/tasks.md" }, "/tmp")).toBeUndefined();
 	});
 
+	test("blocks a converge-style append of a convergence phase", () => {
+		setBeadsActiveForTests(true);
+		const append = { input: "[specs/001-x/tasks.md#AB12]\nPUT >9:\n+## Phase 4: Convergence\n+- [ ] T020 wire retry\n" };
+		expect(decideToolCall("edit", append, "/tmp")?.block).toBe(true);
+		expect(decideToolCall("bash", { command: "printf '## Phase 4: Convergence\\n' >> specs/001-x/tasks.md" }, "/tmp")?.block).toBe(true);
+		expect(decideToolCall("bash", { command: "cat >> specs/001-x/tasks.md <<'EOF'\n## Phase 4: Convergence\nEOF" }, "/tmp")?.block).toBe(true);
+	});
+
 	test("fail-open when beads probe unset and bd missing is handled by beadsActive", () => {
 		setBeadsActiveForTests(false);
 		expect(beadsActive("/no/such")).toBe(false);

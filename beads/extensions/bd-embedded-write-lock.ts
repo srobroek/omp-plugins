@@ -705,7 +705,7 @@ export function embeddedWriteTargets(command: string, cwd: string, env: NodeJS.P
 
 function refusal(problem: Problem, store: string): string {
 	if ("exact" in problem) return problem.exact;
-	return `The Beads write lock cannot run this command: ${problem.part}. ${store} is an embedded store, where two concurrent writers corrupt the Dolt journal, so every \`bd\` write to it runs under the lock's serialising runner. ${problem.fix} ${ACCEPTED_SHAPES}`;
+	return `The Beads write lock cannot run this command: ${problem.part}. ${store} is an embedded store, where two concurrent \`bd\` writes corrupt the Dolt journal, so every \`bd\` write to it runs under the lock's serialising runner. ${problem.fix} ${ACCEPTED_SHAPES}`;
 }
 
 function commandName(word: ShellWord): string {
@@ -1602,7 +1602,7 @@ export async function decideEmbeddedWrite(
 		if ("unavailable" in runner) {
 			return {
 				kind: "block",
-				reason: `${stores.join(", ")} ${stores.length > 1 ? "are embedded stores" : "is an embedded store"}, where two concurrent writers corrupt the Dolt journal, and the Beads write-lock runner that serialises writers could not be located: ${runner.unavailable} The write was refused rather than run unserialised.`,
+				reason: `${stores.join(", ")} ${stores.length > 1 ? "are embedded stores" : "is an embedded store"}, where two concurrent \`bd\` writes corrupt the Dolt journal, and the Beads write-lock runner that serialises writers could not be located: ${runner.unavailable} The write was refused rather than run unserialised.`,
 			};
 		}
 		// Prove each store is takeable before the call runs, so a stuck holder surfaces

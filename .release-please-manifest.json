@@ -2,7 +2,7 @@
   "architecture": "0.6.2",
   "authoring": "2.3.1",
   "aws": "0.2.0",
-  "beads": "4.1.6",
+  "beads": "4.1.8",
   "build": "1.1.0",
   "cad": "0.1.0",
   "chezmoi": "0.4.14",
@@ -22,9 +22,9 @@
   "session": "2.0.0",
   "speckit": "0.10.4",
   "supervisor": "0.2.0",
-  "toolchain": "1.0.2",
+  "toolchain": "1.0.3",
   "trunk-dev": "0.2.0",
   "typescript": "0.3.12",
   "whats-new": "0.4.2",
-  "worktrunk": "3.0.1"
+  "worktrunk": "3.0.2"
 }
