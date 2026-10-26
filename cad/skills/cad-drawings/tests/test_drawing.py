@@ -243,9 +243,13 @@ class DrawingContracts(unittest.TestCase):
         out.mkdir()
         (out / "drawing.pdf").write_bytes(b"stale pdf")
         (out / "drawing.svg").write_text("<svg/>", encoding="utf-8")
+        freecadcmd = self.root / "freecadcmd"  # passes the install check; the missing STEP stops the run before it
+        freecadcmd.write_text("#!/bin/sh\nexit 3\n", encoding="utf-8")
+        freecadcmd.chmod(0o755)
         result = subprocess.run(
             [sys.executable, str(SCRIPT), str(self.root / "missing.step"), "--part", str(self.part),
-             "--product", str(self.product), "--metrics", str(self.metrics), "--output-dir", str(out)], capture_output=True, text=True, timeout=20,
+             "--product", str(self.product), "--metrics", str(self.metrics), "--output-dir", str(out)],
+            env={**os.environ, "FREECADCMD": str(freecadcmd)}, capture_output=True, text=True, timeout=20,
         )
         self.assertEqual(result.returncode, 2)
         self.assertEqual(json.loads(result.stdout)["error"]["code"], "invalid_input")
