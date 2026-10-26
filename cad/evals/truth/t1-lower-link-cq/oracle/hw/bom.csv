@@ -1,0 +1,3 @@
+level,PN,rev,qty,title,material,process,make_buy,supplier,mass
+1,LSP-0001,X1,1,M5 x 30 shoulder pin,Stainless steel A2,purchased,buy,,9
+1,LAL-0001,X1,1,Lamp arm lower link,PETG,fdm,make,,16

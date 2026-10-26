@@ -1,0 +1,24 @@
+interfaces:
+  - id: IF-001
+    from: base_sub
+    to: lower_link
+    type: motion
+    description: "Base pivot axis; M5 shoulder pin retained with a circlip."
+    limits: {rotation_deg: [-10, 80]}
+  - id: IF-002
+    from: lower_link
+    to: upper_link
+    type: motion
+    description: "Elbow hinge axis; M5 shoulder pin retained with a circlip."
+    limits: {rotation_deg: [-120, 0]}
+  - id: IF-003
+    from: upper_link
+    to: head
+    type: motion
+    description: "Head tilt axis; M5 shoulder pin retained with a circlip."
+    limits: {rotation_deg: [-45, 45]}
+  - id: IF-004
+    from: base_plate
+    to: work_surface
+    type: mounting
+    description: "Base fixed using two M6 fasteners through slotted mounting holes."

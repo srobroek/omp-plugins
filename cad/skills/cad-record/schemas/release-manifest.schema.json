@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://srobroek.com/cad/schemas/release-manifest.schema.json",
+  "title": "CAD release manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["product_id", "rev", "released_at", "files", "checks"],
+  "properties": {
+    "product_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$"},
+    "rev": {"type": "string", "pattern": "^[A-HJ-NPRTUVWY]$"},
+    "released_at": {"type": "string", "format": "date-time"},
+    "files": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+    "checks": {"type": "object", "additionalProperties": {"type": "string", "enum": ["pass", "fail", "waived"]}}
+  }
+}

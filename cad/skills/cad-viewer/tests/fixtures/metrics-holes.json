@@ -1,0 +1,20 @@
+{
+  "about": "Hand-written holes overlay in the cad-model metrics.json contract (parts.<PN>.holes: id, diameter_mm, axis, position, depth_mm, through; sorted by diameter_mm then position; [] when a part has none). Values are illustrative, not measured from the template geometry.",
+  "parts": {
+    "LMP-0001": {"holes": [
+      {"id": "H1", "diameter_mm": 3.4, "axis": [0.0, 0.0, 1.0], "position": [-60.0, 0.0, 0.0], "depth_mm": 16.0, "through": true},
+      {"id": "H2", "diameter_mm": 5.0, "axis": [0.0, 0.0, 1.0], "position": [0.0, 0.0, 16.0], "depth_mm": 13.5, "through": false}
+    ]},
+    "LMP-0002": {"holes": [
+      {"id": "H1", "diameter_mm": 5.0, "axis": [0.0, 1.0, 0.0], "position": [0.0, 0.0, 40.0], "depth_mm": 10.0, "through": true},
+      {"id": "H2", "diameter_mm": 5.0, "axis": [0.0, 1.0, 0.0], "position": [160.0, 0.0, 40.0], "depth_mm": 22.0, "through": true}
+    ]},
+    "LMP-0003": {"holes": []},
+    "LMP-0004": {"holes": [
+      {"id": "H1", "diameter_mm": 4.2, "axis": [0.0, 0.0, -1.0], "position": [300.0, 0.0, 30.0], "depth_mm": 8.0, "through": false}
+    ]},
+    "LMP-0005": {"holes": []},
+    "LMP-0006": {"holes": []},
+    "LMP-0007": {"holes": []}
+  }
+}

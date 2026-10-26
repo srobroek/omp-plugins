@@ -44,6 +44,13 @@
       "category": "development"
     },
     {
+      "name": "cad",
+      "description": "Agent-assisted mechanical CAD from rapid concept through verified STEP AP242 release.",
+      "source": "./cad",
+      "version": "0.1.0",
+      "category": "development"
+    },
+    {
       "name": "chezmoi",
       "description": "Edit chezmoi-managed dotfiles at their authoritative source.",
       "source": "./chezmoi",

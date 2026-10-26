@@ -1,0 +1,23 @@
+{
+  "solids": 1,
+  "volume_mm3": 31398.189,
+  "volume_rel_tol": 0.001,
+  "bbox_mm": [
+    80.0,
+    80.0,
+    5.0
+  ],
+  "bbox_tol_mm": 0.1,
+  "holes": [
+    {
+      "diameter_mm": 4.5,
+      "count": 4
+    },
+    {
+      "diameter_mm": 8.5,
+      "count": 1
+    }
+  ],
+  "hole_tol_mm": 0.05,
+  "provenance": "Analytic from the prompt: (80*80 - 4*pi*2.25^2 - pi*4.25^2) * 5 mm3; envelope 80 by 80 by 5. Not taken from any model output; the oracle in oracle/ is checked against it."
+}

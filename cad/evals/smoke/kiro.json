@@ -1,0 +1,169 @@
+{
+  "argv": [
+    "kiro-cli",
+    "chat",
+    "--no-interactive",
+    "--agent-engine",
+    "v3",
+    "--model",
+    "claude-haiku-5.5",
+    "--output-format",
+    "stream-json",
+    "--trust-all-tools",
+    "--trust-workspace",
+    "--agent",
+    "cad-eval",
+    "First, under the heading INSTRUCTIONS, list every instruction file, rule file, steering document and system-prompt section you were given (file path or section heading, one per line), other than skill bodies. Then, under the heading SKILLS, list the names of every skill available to you, one per line. Then, under the heading FILES, list the entries of the current working directory, using your file or directory tool rather than a shell command. Then create a file named hello.txt whose entire content is the word ok. End your reply with the single word DONE."
+  ],
+  "at": "2026-10-26T13:51:20+00:00",
+  "file_written": true,
+  "harness": "kiro",
+  "host": {
+    "shared_temp": {
+      "added_by_other_processes": [
+        "/private/tmp/cad-lead-viewer",
+        "/private/tmp/cad-lead-viewer/host.log",
+        "/private/tmp/cad-lead-viewer/viewer-a.log",
+        "/private/tmp/cad-lead-viewer/viewer-b.log",
+        "/private/tmp/cad-lead-viewer/viewer-presenter_a.log",
+        "/private/tmp/cad-lead-viewer/viewer-presenter_b.log",
+        "/private/tmp/mcs-telemetry-l2-1793022678_66928.log",
+        "$TMPDIR/.LINKS/2D7E2A6C-2BD4-41BC-ABF5-6E88274D7812",
+        "$TMPDIR/proc-macro-srv10f3f-0",
+        "$TMPDIR/proc-macro-srv10f42-0",
+        "$TMPDIR/pytest-of-<user>/garbage-0d40773b-3c7c-483f-8228-8e7b34ff7437",
+        "$TMPDIR/pytest-of-<user>/garbage-28b723f1-3bc9-4bcb-99d4-078b38b9de0b",
+        "$TMPDIR/pytest-of-<user>/garbage-41e9ad03-de3f-4b11-8766-53df7f3ea05e",
+        "$TMPDIR/pytest-of-<user>/garbage-57561136-d57b-42aa-b033-c44987c163d9",
+        "$TMPDIR/pytest-of-<user>/garbage-79a892e3-e551-4489-a243-d6345b3d5060",
+        "$TMPDIR/pytest-of-<user>/garbage-a447a528-0024-4182-8bda-d2fc313364b9",
+        "$TMPDIR/pytest-of-<user>/garbage-cdb61ee6-2c21-42a8-8914-1528e0b5999a",
+        "$TMPDIR/pytest-of-<user>/garbage-d0d025c5-3388-4426-9e92-1159a120de2a",
+        "$TMPDIR/pytest-of-<user>/garbage-dd91dde4-ee67-47ee-97fa-3847bdc1acd0",
+        "$TMPDIR/pytest-of-<user>/garbage-ed029d3e-ad04-4a83-9d8a-8920aaf579d7",
+        "$TMPDIR/pytest-of-<user>/garbage-f92a250e-e037-4b7c-9248-669ec9c4e423",
+        "$TMPDIR/pytest-of-<user>/garbage-fb9eae72-c0ab-4779-8b74-3075cf1a9a27",
+        "$TMPDIR/toolbox-telemetry-emf2291540306",
+        "$TMPDIR/toolbox-telemetry-emf2932022248",
+        "$TMPDIR/toolbox-telemetry-emf321202383",
+        "$TMPDIR/toolbox-telemetry-emf321202383/toolbox-telemetry-combined-logs2901037290",
+        "$TMPDIR/toolbox-telemetry-emf321202383/toolbox-telemetry-wrapper-metrics2854794143",
+        "$TMPDIR/toolbox-telemetry-emf4147078635",
+        "$TMPDIR/uv-e22dc044b4bfa0c1.lock"
+      ],
+      "added_by_trial": [],
+      "roots": [
+        "/private/tmp",
+        "$TMPDIR"
+      ]
+    },
+    "trial_tmpdir": [
+      "kiro-cli-updates-503",
+      "kiro-log",
+      "kiro-log/kiro-chat.log",
+      "kiro-log/lsp.log",
+      "kiro-log/mcp.log"
+    ],
+    "unchanged": false,
+    "user_stores": {
+      "~/.kiro": {
+        "added": [],
+        "changed": [],
+        "removed": [],
+        "sqlite": {},
+        "trial_counterpart_entries": 12
+      },
+      "~/Library/Application Support/kiro-cli": {
+        "added": [],
+        "changed": [
+          "~/Library/Application Support/kiro-cli/data.sqlite3"
+        ],
+        "removed": [],
+        "sqlite": {
+          "data.sqlite3": {
+            "rows": {
+              "auth_kv": 2,
+              "conversations": 0,
+              "conversations_v2": 417,
+              "extracted_kas_versions": 6,
+              "history": 1877,
+              "migrations": 11,
+              "pinned_bin_versions": 5,
+              "state": 42
+            },
+            "rows_mentioning_trial": 0,
+            "tables_changed": [
+              "extracted_kas_versions"
+            ]
+          }
+        },
+        "trial_counterpart_entries": 12
+      }
+    }
+  },
+  "inventory": {
+    "agents": [
+      "cad-dfm-reviewer",
+      "cad-eval",
+      "cad-mech-reviewer"
+    ],
+    "baseline": {
+      "declared_for": "2.34.0",
+      "loaded": {}
+    },
+    "commands": [],
+    "context": [
+      "file://<trial>/work/cad/skills/cad-bom/SKILL.md",
+      "file://<trial>/work/cad/skills/cad-concept/SKILL.md",
+      "file://<trial>/work/cad/skills/cad-design/SKILL.md",
+      "file://<trial>/work/cad/skills/cad-fits/SKILL.md",
+      "file://<trial>/work/cad/skills/cad-flow/SKILL.md",
+      "file://<trial>/work/cad/skills/cad-model/SKILL.md",
+      "file://<trial>/work/cad/skills/cad-motion/SKILL.md",
+      "file://<trial>/work/cad/skills/cad-recheck/SKILL.md",
+      "file://<trial>/work/cad/skills/cad-record/SKILL.md",
+      "file://<trial>/work/cad/skills/cad-render/SKILL.md",
+      "file://<trial>/work/cad/skills/cad-review-dfm/SKILL.md",
+      "file://<trial>/work/cad/skills/cad-review-mech/SKILL.md"
+    ],
+    "mcp": [],
+    "missing": [],
+    "plugins": [],
+    "skills": [
+      "cad-bom",
+      "cad-concept",
+      "cad-design",
+      "cad-fits",
+      "cad-flow",
+      "cad-model",
+      "cad-motion",
+      "cad-recheck",
+      "cad-record",
+      "cad-render",
+      "cad-review-dfm",
+      "cad-review-mech"
+    ],
+    "version": null
+  },
+  "isolation": "clean",
+  "isolation_mechanism": "HOME, XDG_* and TMPDIR in the trial; a trial-own Kiro database holding a copy of the user's login only; --agent cad-eval (sandbox-local, cad skills only); --trust-all-tools inside the sandbox; cad copied to <work>/cad",
+  "latency_s": 18.271,
+  "leaks": [],
+  "ok": true,
+  "requested_model": "claude-haiku-5.5",
+  "served_matches": true,
+  "served_model": "claude-haiku-5.5",
+  "text": "INSTRUCTIONS\nKIRO - System Prompt (top-level system prompt)\nSecurity, trust and safety\nWork guidelines\nUnderstand before acting\nMake safe, scoped changes\nCommunication Guide\nStructure and style\nSubstance and words\n\nSKILLS\ncad-bom\ncad-concept\ncad-design\ncad-fits\ncad-flow\ncad-model\ncad-motion\ncad-recheck\ncad-record\ncad-render\ncad-review-dfm\ncad-review-mech\n\nFILES\n.git\n.kiro\ncad\n\nDONE",
+  "tools": [
+    "List Directory",
+    "Write File"
+  ],
+  "transcript_entries": 6,
+  "usage": {
+    "cacheRead": 0,
+    "cacheWrite": 0,
+    "credits": 0.024163,
+    "input": 0,
+    "output": 0
+  }
+}

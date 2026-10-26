@@ -1,0 +1,7 @@
+{
+  "product_id": "lamp-arm",
+  "rev": "A",
+  "released_at": "2026-10-26T00:00:00Z",
+  "files": ["hw/product.yaml", "hw/requirements.yaml", "hw/interfaces.yaml", "hw/assembly.yaml", "hw/bom.csv", "hw/verification.csv", "hw/decisions/DR-001.md", "hw/decisions/DR-002.md"],
+  "checks": {"record-validation": "pass", "layout-review": "pass"}
+}

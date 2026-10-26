@@ -1,0 +1,159 @@
+#!/usr/bin/env python3
+"""EBOM roll-up tests: pure tree logic, plus an AP242 round trip through OCP XDE."""
+
+from __future__ import annotations
+
+import csv
+import importlib.util
+import json
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+
+HERE = Path(__file__).parent
+BOM_SCRIPT = HERE / "scripts" / "bom.py"
+BUILDER = HERE / "fixtures" / "build_assembly.py"
+SPEC = importlib.util.spec_from_file_location("cad_bom", BOM_SCRIPT)
+assert SPEC and SPEC.loader
+bom = importlib.util.module_from_spec(SPEC)
+sys.modules["cad_bom"] = bom
+SPEC.loader.exec_module(bom)
+
+PARTS = {
+    "BASE-0001": "rev: X2\ntitle: Base plate\nmaterial: PETG\nprocess: fdm\nmake_buy: make\nmass_target: 40\n",
+    "PIN-0001": (
+        "rev: X1\ntitle: Dowel pin 4x12\nmaterial: 1.3505 steel\nprocess: purchased\n"
+        "make_buy: buy\nsupplier: Misumi\nmass_target: 1.2\n"
+    ),
+    "BRK-0002": "rev: X1\ntitle: Bracket\nmaterial: 6082-T6\nprocess: cnc\nmake_buy: make\nmass_target: 3.5\n",
+    "SCR-0001": "rev: A\ntitle: Screw M3x8\nmaterial: A2-70\nprocess: purchased\nmake_buy: buy\nmass_target: 0.6\n",
+}
+
+
+def write_parts(hw: Path, parts: dict[str, str]) -> None:
+    for pn, text in parts.items():
+        folder = hw / "parts" / pn
+        folder.mkdir(parents=True)
+        (folder / "part.yaml").write_text(text, encoding="utf-8")
+
+
+def rows_by_level_pn(path: Path) -> dict[tuple[str, str], dict[str, str]]:
+    with path.open(encoding="utf-8", newline="") as handle:
+        return {(row["level"], row["PN"]): row for row in csv.DictReader(handle)}
+
+
+class RollUpTests(unittest.TestCase):
+    """Tree semantics on hand-built product trees; needs no OCP."""
+
+    def test_repeated_part_counts_instances_per_parent(self) -> None:
+        pin = bom.Node("PIN-0001", False)
+        top = bom.Node("ASM-0001", True, [(pin, 2)])
+        result = bom.roll_up([top], {"PIN-0001": {"rev": "X1"}})
+        self.assertEqual([(r["level"], r["PN"], r["qty"]) for r in result["rows"]], [("0", "ASM-0001", "1"), ("1", "PIN-0001", "2")])
+
+    def test_repeated_subassembly_multiplies_totals_not_rows(self) -> None:
+        pin = bom.Node("PIN-0001", False)
+        sub = bom.Node("SUB-0001", True, [(pin, 3)])
+        top = bom.Node("ASM-0001", True, [(sub, 2)])
+        result = bom.roll_up([top], {"PIN-0001": {}})
+        self.assertEqual([(r["level"], r["PN"], r["qty"]) for r in result["rows"]], [("0", "ASM-0001", "1"), ("1", "SUB-0001", "2"), ("2", "PIN-0001", "3")])
+        self.assertEqual(result["total_qty"]["PIN-0001"], 6)
+
+    def test_phantom_group_merges_into_parent(self) -> None:
+        pin = bom.Node("PIN-0001", False)
+        group = bom.Node("pins", True, [(pin, 2)])
+        top = bom.Node("ASM-0001", True, [(pin, 1), (group, 2)])
+        result = bom.roll_up([top], {"PIN-0001": {}})
+        self.assertEqual([(r["level"], r["PN"], r["qty"]) for r in result["rows"]], [("0", "ASM-0001", "1"), ("1", "PIN-0001", "5")])
+
+    def test_unnumbered_leaf_is_reported(self) -> None:
+        top = bom.Node("ASM-0001", True, [(bom.Node("Body001", False), 1)])
+        self.assertEqual(bom.roll_up([top], {})["unidentified"], ["Body001"])
+
+    def test_part_number_must_end_at_four_digits(self) -> None:
+        self.assertEqual(bom.Node("PIN-0001 pin", False).pn, "PIN-0001")
+        self.assertIsNone(bom.Node("PIN-00012", False).pn)
+        self.assertIsNone(bom.Node("pin-0001", False).pn)
+
+
+@unittest.skipUnless(shutil.which("uv"), "uv is required to build and read STEP through OCP")
+class StepRoundTripTests(unittest.TestCase):
+    """Builds an AP242 assembly with OCP, then rolls it up with bom.py."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.step = Path(cls.tmp.name) / "assembly.step"
+        proc = subprocess.run(
+            ["uv", "run", "--quiet", "--script", str(BUILDER), str(cls.step)],
+            capture_output=True, text=True, check=False, timeout=900,
+        )
+        if proc.returncode != 0:
+            raise RuntimeError(f"fixture build failed: {proc.stderr}")
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls.tmp.cleanup()
+
+    def run_bom(self, hw: Path) -> tuple[subprocess.CompletedProcess[str], dict]:
+        proc = subprocess.run(
+            ["uv", "run", "--quiet", "--script", str(BOM_SCRIPT), str(self.step), "--hw", str(hw)],
+            capture_output=True, text=True, check=False, timeout=900,
+        )
+        return proc, json.loads(proc.stdout) if proc.stdout else {}
+
+    def test_fixture_is_ap242(self) -> None:
+        self.assertIn("AP242_MANAGED_MODEL_BASED_3D_ENGINEERING", self.step.read_text(encoding="utf-8")[:2000])
+
+    def test_complete_record_rolls_up_with_qty_2_for_repeated_pin(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            hw = Path(directory)
+            write_parts(hw, PARTS)
+            proc, summary = self.run_bom(hw)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertEqual(summary["status"], "pass")
+            with (hw / "bom.csv").open(encoding="utf-8") as handle:
+                self.assertEqual(handle.readline().strip(), ",".join(bom.COLUMNS))
+            rows = rows_by_level_pn(hw / "bom.csv")
+        pin = rows[("1", "PIN-0001")]
+        self.assertEqual(pin["qty"], "2")
+        self.assertEqual(
+            {k: pin[k] for k in ("rev", "title", "material", "process", "make_buy", "supplier", "mass")},
+            {"rev": "X1", "title": "Dowel pin 4x12", "material": "1.3505 steel", "process": "purchased",
+             "make_buy": "buy", "supplier": "Misumi", "mass": "1.2"},
+        )
+        self.assertEqual(rows[("0", "ASM-0001")]["title"], "Test assembly")
+        self.assertEqual(rows[("1", "BASE-0001")]["qty"], "1")
+        self.assertEqual(rows[("1", "SUB-0001")]["qty"], "1")
+        self.assertEqual(rows[("2", "PIN-0001")]["qty"], "1")
+        self.assertEqual(rows[("2", "BRK-0002")]["qty"], "1")
+        self.assertEqual(rows[("1", "SCR-0001")]["qty"], "2")  # phantom "fasteners" group merged up
+        self.assertEqual(summary["total_qty"]["PIN-0001"], 3)
+
+    def test_mismatches_are_reported_both_ways(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            hw = Path(directory)
+            parts = {pn: text for pn, text in PARTS.items() if pn != "BRK-0002"}
+            parts["NUT-0001"] = "rev: A\ntitle: Nut M3\n"
+            write_parts(hw, parts)
+            proc, summary = self.run_bom(hw)
+            self.assertTrue((hw / "bom.csv").is_file())
+        self.assertEqual(proc.returncode, 1, proc.stderr)
+        self.assertEqual(summary["status"], "fail")
+        self.assertEqual(summary["missing_part_yaml"], ["BRK-0002"])
+        self.assertEqual(summary["missing_in_step"], ["NUT-0001"])
+
+    def test_missing_step_exits_2(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            proc = subprocess.run(
+                ["uv", "run", "--quiet", "--script", str(BOM_SCRIPT), str(Path(directory) / "none.step"), "--hw", directory],
+                capture_output=True, text=True, check=False, timeout=900,
+            )
+        self.assertEqual(proc.returncode, 2)
+
+
+if __name__ == "__main__":
+    unittest.main()

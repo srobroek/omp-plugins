@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://srobroek.com/cad/schemas/assembly.schema.json",
+  "title": "CAD assembly record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["subassemblies", "joints"],
+  "properties": {
+    "subassemblies": {
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "title", "parts"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^[a-z][a-z0-9_-]*$"},
+          "title": {"type": "string", "minLength": 1},
+          "parts": {"type": "array", "minItems": 1, "items": {"type": "string", "pattern": "^[A-Z]{2,5}-[0-9]{4}$"}}
+        }
+      }
+    },
+    "joints": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "type", "parent", "child", "axis", "origin", "min", "max", "nominal"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^J-[0-9]{3}$"},
+          "type": {"type": "string", "enum": ["revolute", "prismatic", "cylindrical", "ball", "fixed"]},
+          "parent": {"type": "string", "pattern": "^[A-Z]{2,5}-[0-9]{4}$"},
+          "child": {"type": "string", "pattern": "^[A-Z]{2,5}-[0-9]{4}$"},
+          "axis": {"$ref": "#/$defs/vector"},
+          "origin": {"$ref": "#/$defs/vector"},
+          "min": {"type": "number"},
+          "max": {"type": "number"},
+          "nominal": {"type": "number"}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "vector": {"type": "array", "prefixItems": [{"type": "number"}, {"type": "number"}, {"type": "number"}], "minItems": 3, "maxItems": 3}
+  }
+}

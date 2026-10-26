@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://srobroek.com/cad/schemas/product.schema.json",
+  "title": "CAD product record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "rigor", "units", "regime", "general_tolerance", "flow"],
+  "properties": {
+    "id": {"type": "string", "minLength": 1, "pattern": "^[a-z0-9][a-z0-9-]*$"},
+    "rigor": {"type": "string", "enum": ["maker", "pro", "regulated"], "default": "pro"},
+    "units": {"const": "mm"},
+    "regime": {"type": "string", "enum": ["iso", "asme"]},
+    "general_tolerance": {"oneOf": [{"type": "number", "exclusiveMinimum": 0}, {"type": "string", "minLength": 1}]},
+    "flow": {
+      "type": "object", "additionalProperties": false,
+      "required": ["stage", "recheck_from"],
+      "properties": {
+        "stage": {"$ref": "#/$defs/stage"},
+        "recheck_from": {"$ref": "#/$defs/stage"}
+      }
+    }
+  },
+  "$defs": {
+    "stage": {"type": "string", "enum": ["ground", "intent", "specify", "concept", "layout", "parts", "detail", "bom", "analysis", "critique", "reconcile", "design_freeze", "release"]}
+  }
+}

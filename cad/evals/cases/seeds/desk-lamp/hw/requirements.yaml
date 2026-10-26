@@ -1,0 +1,17 @@
+requirements:
+  - id: REQ-001
+    text: The arm links pivot on Ø5 mm steel pins with a running clearance fit.
+    rationale: Smooth, repeatable articulation without play the user can feel.
+    source: design brief
+    priority: must
+    verification:
+      method: I
+      criteria: Pin holes measure Ø5.5 mm ±0.05 on the released model.
+  - id: REQ-002
+    text: The base plate mounts to the weighted base with four M4 screws and passes the cable through its centre.
+    rationale: Standard fasteners; hidden cable route.
+    source: design brief
+    priority: must
+    verification:
+      method: I
+      criteria: Four Ø4.5 mm clearance holes on a 64 mm square and one Ø8.5 mm centre hole.

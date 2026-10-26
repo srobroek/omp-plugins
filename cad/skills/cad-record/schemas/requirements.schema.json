@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://srobroek.com/cad/schemas/requirements.schema.json",
+  "title": "CAD requirements record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["requirements"],
+  "properties": {
+    "requirements": {
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "text", "rationale", "source", "priority", "verification"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^REQ-[0-9]{3}$"},
+          "text": {"type": "string", "minLength": 1},
+          "rationale": {"type": "string", "minLength": 1},
+          "source": {"type": "string", "minLength": 1},
+          "priority": {"type": "string", "enum": ["must", "should", "could", "MUST", "SHOULD", "COULD"]},
+          "verification": {
+            "type": "object", "additionalProperties": false,
+            "required": ["method", "criteria"],
+            "properties": {
+              "method": {"type": "string", "enum": ["I", "A", "D", "T"]},
+              "criteria": {"type": "string", "minLength": 1}
+            }
+          }
+        }
+      }
+    }
+  }
+}

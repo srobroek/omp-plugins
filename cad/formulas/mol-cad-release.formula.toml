@@ -1,0 +1,72 @@
+# mol-cad-release: assemble and validate the release package for a frozen design.
+# Bond after DESIGN freeze; release approval is always a human gate.
+formula = "mol-cad-release"
+description = "Assemble and validate {{product}} release {{release_rev}}: STEP AP242, drawings, EBOM, verification matrix, and docs"
+type = "workflow"
+
+[vars.product]
+required = true
+description = "hardware product id"
+
+[vars.scope]
+required = true
+description = "frozen hardware project paths"
+
+[vars.release_rev]
+required = true
+pattern = "^[A-HJ-NPRTUVWY]$"
+description = "released revision letter; excludes I, O, Q, S, X, and Z"
+
+[vars.kernel]
+default = "cadquery"
+pattern = "^(cadquery|build123d)$"
+description = "source model kernel; CadQuery 2.8 and build123d 0.13 have separate environments"
+
+[vars.process_default]
+default = "fdm"
+pattern = "^(fdm|cnc)$"
+description = "product process default"
+
+[[steps]]
+id = "gather-release-inputs"
+title = "Gather frozen release inputs for {{product}}"
+type = "task"
+labels = ["cad", "phase:release"]
+description = "Run skill://cad-record to collect the frozen product, requirements, interfaces, assembly, part revisions, BOM, drawings, verification evidence, and critique dispositions from {{scope}}. Confirm that all required checks passed for the release revision {{release_rev}}; a missing or stale input blocks packaging."
+
+[steps.metadata]
+skill_hints = "cad-record, cad-recheck"
+
+[[steps]]
+id = "assemble-package"
+title = "Assemble STEP, drawings, EBOM, verification, and docs"
+type = "task"
+needs = ["gather-release-inputs"]
+labels = ["cad", "phase:release"]
+description = "Run skill://cad-drawings and skill://cad-bom. Assemble STEP AP242, drawings, EBOM, verification matrix, and release docs under hw/releases/{{release_rev}}/. Generate drawings with `uv run --script skill://cad-drawings/scripts/drawing.py <step> --part <part.yaml> --product <product.yaml> --output-dir <dir> [--scale <ratio>]`. Include GitBuilding, DIN SPEC 3105-1, and Open Know-How docs. Use FreeCAD 1.1.4 and separate CadQuery/build123d environments. Do not add slicer, CAM, or machine tooling."
+
+[steps.metadata]
+skill_hints = "cad-drawings, cad-bom, cad-record"
+
+[[steps]]
+id = "validate-package"
+title = "Validate release manifest and package completeness"
+type = "task"
+needs = ["assemble-package"]
+labels = ["cad", "phase:release"]
+description = "Run skill://cad-record, skill://cad-bom, skill://cad-drawings, and skill://cad-analysis to validate revisions, manifest, STEP AP242, drawings, EBOM, verification, and docs. Static FEA uses `uv run --script skill://cad-analysis/scripts/fea_static.py <case.yaml>`. Confirm the manifest references the frozen design. Record machine-checkable results and all failures."
+
+[steps.metadata]
+skill_hints = "cad-record, cad-bom, cad-drawings, cad-analysis, cad-motion"
+
+[[steps]]
+id = "release-gate"
+title = "RELEASE gate for {{product}} revision {{release_rev}}"
+type = "task"
+needs = ["validate-package"]
+labels = ["cad", "phase:gate"]
+description = "Present the release manifest and validated artifacts, along with verification and documentation evidence. Obtain explicit user approval to release revision {{release_rev}}. Missing artifacts or failed checks keep this human gate open; only bd gate resolve closes it."
+
+[steps.gate]
+type = "human"
+timeout = "72h"
