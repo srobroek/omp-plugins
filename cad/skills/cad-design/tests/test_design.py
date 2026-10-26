@@ -1,0 +1,138 @@
+#!/usr/bin/env python3
+"""cad-design tests: reference lamp-arm models in both kernels, and the block-like detector.
+
+Run: python3 -m unittest discover -s cad/skills/cad-design/tests -v
+Needs `uv`; the first run creates the CadQuery and build123d environments, and a cold
+OCP import can take minutes, so the builds have no short timeout.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+
+HERE = Path(__file__).resolve().parent
+SKILL = HERE.parent
+SCRIPTS = SKILL / "scripts"
+TEMPLATE_HW = SKILL.parent / "cad-record" / "assets" / "project-template" / "hw"
+FIXTURES = SKILL.parent / "cad-motion" / "tests" / "fixtures" / "build_fixtures.py"
+KERNELS = ("cadquery", "build123d")
+TEMPLATE_PARTS = sorted(p.name for p in (TEMPLATE_HW / "parts").iterdir() if (p / "part.yaml").is_file())
+MADE_PARTS = ["LMP-0001", "LMP-0002", "LMP-0003", "LMP-0004"]
+
+
+def run_json(command: list[str]) -> tuple[int, dict]:
+    result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        return result.returncode, json.loads(result.stdout)
+    except json.JSONDecodeError as error:
+        raise AssertionError(f"{command[:4]} printed no JSON (exit {result.returncode}):\n{result.stderr[-3000:]}") from error
+
+
+def form_check(parts_dir: Path, fidelity: str) -> tuple[int, dict]:
+    return run_json(["uv", "run", "--script", str(SCRIPTS / "form_check.py"), "--hw", str(TEMPLATE_HW),
+                     "--parts-dir", str(parts_dir), "--fidelity", fidelity])
+
+
+@unittest.skipUnless(shutil.which("uv"), "uv is required to build the kernel environments")
+class ReferenceModelTests(unittest.TestCase):
+    """Both kernels' reference parts: build, B-rep, contract parity, joints, and form."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.tmp = tempfile.TemporaryDirectory()
+        root = Path(cls.tmp.name)
+        cls.builds, cls.checks = {}, {}
+        for kernel in KERNELS:
+            out = root / kernel
+            code, report = run_json([sys.executable, str(SCRIPTS / "build_reference.py"), "--kernel", kernel,
+                                     "--out", str(out)])
+            cls.builds[kernel] = (code, report)
+            cls.checks[kernel] = form_check(out, "F3")
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls.tmp.cleanup()
+
+    def test_every_template_part_builds_in_both_kernels(self) -> None:
+        for kernel in KERNELS:
+            code, report = self.builds[kernel]
+            with self.subTest(kernel=kernel):
+                self.assertEqual((code, report["errors"]), (0, []))
+                self.assertEqual(sorted(report["parts"]), TEMPLATE_PARTS)
+
+    def test_step_products_are_named_pn_then_title(self) -> None:
+        for kernel in KERNELS:
+            for pn, row in self.checks[kernel][1]["parts"].items():
+                with self.subTest(kernel=kernel, part=pn):
+                    self.assertRegex(row["name"], rf"^{pn} \S")
+
+    def test_brep_is_one_valid_solid_per_part(self) -> None:
+        for kernel in KERNELS:
+            for pn, row in self.checks[kernel][1]["parts"].items():
+                with self.subTest(kernel=kernel, part=pn):
+                    self.assertTrue(row["valid"])
+                    self.assertEqual(row["solids"], 1)
+
+    def test_params_key_sets_are_equal_across_kernels(self) -> None:
+        cq, bd = (self.builds[k][1]["parts"] for k in KERNELS)
+        for pn in TEMPLATE_PARTS:
+            with self.subTest(part=pn):
+                self.assertEqual(cq[pn]["params_keys"], bd[pn]["params_keys"])
+
+    def test_volumes_agree_within_half_a_percent(self) -> None:
+        cq, bd = (self.checks[k][1]["parts"] for k in KERNELS)
+        for pn in TEMPLATE_PARTS:
+            with self.subTest(part=pn):
+                a, b = cq[pn]["volume_mm3"], bd[pn]["volume_mm3"]
+                self.assertGreater(a, 0.0)
+                self.assertLessEqual(abs(a - b) / a, 0.005, f"cadquery {a} mm3 vs build123d {b} mm3")
+
+    def test_joint_bores_sit_on_template_origins(self) -> None:
+        for kernel in KERNELS:
+            joints = self.checks[kernel][1]["joints"]
+            self.assertEqual(sorted(joints), ["J-001", "J-002", "J-003", "J-004", "J-005", "J-006"])
+            for jid, row in joints.items():
+                for pn, found in row["parts"].items():
+                    with self.subTest(kernel=kernel, joint=jid, part=pn):
+                        self.assertIsNotNone(found)
+                        self.assertLessEqual(found["offset_mm"], 0.05)
+
+    def test_no_reference_part_is_block_like_or_breaks_a_process_rule(self) -> None:
+        for kernel in KERNELS:
+            code, report = self.checks[kernel]
+            with self.subTest(kernel=kernel):
+                self.assertEqual((code, report["findings"]), (0, []))
+
+
+@unittest.skipUnless(shutil.which("uv"), "uv is required to build the cad-motion block fixtures")
+class BlockDetectorTests(unittest.TestCase):
+    """The cad-motion stand-in lamp is boxes and cylinders: every made part must be flagged."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            built = subprocess.run(["uv", "run", "--script", str(FIXTURES), tmp], capture_output=True, text=True)
+            if built.returncode != 0:
+                raise AssertionError(f"build_fixtures.py exited {built.returncode}:\n{built.stderr[-2000:]}")
+            cls.f2 = form_check(Path(tmp) / "lamp", "F2")
+            cls.f1 = form_check(Path(tmp) / "lamp", "F1")
+
+    def test_fixture_blocks_are_flagged_and_their_joints_still_pass(self) -> None:
+        code, report = self.f2
+        self.assertEqual(code, 1)
+        flagged = sorted(f["part"] for f in report["findings"] if f["check"] == "block_like")
+        self.assertEqual(flagged, MADE_PARTS)
+        self.assertEqual([f for f in report["findings"] if f["check"] != "block_like"], [])
+
+    def test_f1_does_not_judge_form(self) -> None:
+        self.assertEqual((self.f1[0], self.f1[1]["findings"]), (0, []))
+
+
+if __name__ == "__main__":
+    unittest.main()
