@@ -13,7 +13,38 @@ omp plugin marketplace add srobroek/omp-plugins
 omp plugin install cad@srobroek-omp
 ```
 
-For Claude Code, add the `srobroek/omp-plugins` marketplace in the plugin browser and install `cad`. For Kiro and OpenCode, install or link this plugin through the harness's plugin mechanism so its skills and agents are available. The workflow instructions use project files, previews, feedback, and agent delegation rather than harness-specific commands.
+For Claude Code, install it from the same marketplace, or load a checkout for one session:
+
+```sh
+claude plugin marketplace add srobroek/omp-plugins
+claude plugin install cad@srobroek-omp
+# or, from a checkout:
+claude --plugin-dir /path/to/omp-plugins/cad
+```
+
+The plugin's `.claude-plugin/plugin.json` loads the reviewers generated for Claude Code from `harness/claude/agents/`, as `cad:cad-mech-reviewer` and `cad:cad-dfm-reviewer`. The files in `agents/` are the OMP sources; Claude Code does not load them.
+
+This plugin ships no Kiro or OpenCode package, so copy its generated agents into your project. Run these commands from the project root, with `CAD` set to the `cad` directory of an omp-plugins checkout.
+
+For Kiro, link the plugin at `cad/` in the workspace root and copy the agents into `.kiro/agents/`. Each reviewer loads its skill as `skill://cad/skills/<skill>/SKILL.md`, which Kiro resolves from the workspace root, so the plugin must sit at exactly that path:
+
+```sh
+ln -s "$CAD" cad
+mkdir -p .kiro/agents
+cp cad/harness/kiro/agents/*.json .kiro/agents/
+```
+
+`kiro-cli agent list` then shows both reviewers as workspace agents. To use the workflow skills from another Kiro agent, add `skill://cad/skills/**/SKILL.md` to that agent's `resources`.
+
+For OpenCode, copy the agents into `.opencode/agents/` and the skills into `.opencode/skills/`:
+
+```sh
+mkdir -p .opencode/agents .opencode/skills
+cp "$CAD"/harness/opencode/agents/*.md .opencode/agents/
+cp -R "$CAD"/skills/. .opencode/skills/
+```
+
+Copy the files again after you update the checkout. The workflow instructions use project files, previews, feedback, and agent delegation rather than harness-specific commands.
 
 Install a Beads workspace for the workflow formulas and approval gates. Plugin installation takes effect in a new session.
 

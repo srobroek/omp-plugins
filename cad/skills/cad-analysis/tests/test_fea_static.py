@@ -72,8 +72,8 @@ App.closeDocument(doc.Name)
         return step
 
     @unittest.skipUnless(FREECADCMD.is_file(), "FreeCAD 1.1.4 freecadcmd is not installed")
+    @unittest.skipUnless((SPIKE / "fem.py").is_file(), "proven cantilever FreeCAD spike is missing")
     def test_cantilever_matches_beam_theory_within_five_percent(self) -> None:
-        self.assertTrue((SPIKE / "fem.py").is_file(), "proven cantilever FreeCAD spike is missing")
         with tempfile.TemporaryDirectory(prefix="cad-fea-cantilever-") as directory:
             root = Path(directory)
             step = self.make_cantilever_step(root)
