@@ -242,6 +242,14 @@ class KernelChecks:
         self.assertEqual(part_map["TST-0002"]["nodes"], ["TST-0002 Swing arm"])
         self.assertEqual(part_map["TST-0002"]["meshes"], ["TST-0002 Swing arm"])
 
+
+    def test_clean_check_lists_template_declared_press_pairs(self) -> None:
+        checks = self.runs["checks"]["v1"][1]["checks"]["interference"]
+        declared = checks["declared_pairs"]
+        self.assertEqual({tuple(item["pair"]) for item in declared}, {
+            ("LMP-0002", "LMP-0005"), ("LMP-0002", "LMP-0006"), ("LMP-0003", "LMP-0007")})
+        self.assertTrue(all(item["classification"] == "interference" for item in declared))
+        self.assertTrue(all("interfaces.yaml#/interfaces/" in item["source"] for item in declared))
     def test_clean_versions_pass_check(self) -> None:
         for label in ("v1", "v2"):
             proc, result, _ = self.runs["checks"][label]
@@ -397,6 +405,68 @@ def gaps(pairs: dict[tuple[str, str], float | None]) -> dict:
 
 class CheckRuleTests(unittest.TestCase):
     """check's verdicts on given measurements; needs no OCP."""
+
+    def test_missing_interfaces_file_means_no_declared_fits(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(check.declared_press_fits(Path(tmp)), [])
+    def test_malformed_interfaces_remains_a_usage_finding(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            hw = Path(tmp)
+            (hw / "interfaces.yaml").write_text("interfaces: [\n", encoding="utf-8")
+            with self.assertRaisesRegex(build.UsageError, "cannot read interfaces"):
+                check.declared_press_fits(hw)
+
+
+
+    def test_declared_interference_fit_allows_overlap_and_reports_source(self) -> None:
+        pair = (BASE, ARM_PN)
+        declared = [{"pair": list(pair), "fit": "5 H7/p6", "classification": "interference",
+                     "interface": "IF-001", "source": "interfaces.yaml#/interfaces/0/limits/press_fit"}]
+        geometry = {pair: {"clearance_mm": -0.01, "interference_mm3": 0.1}}
+        with mock.patch.object(check, "load_pose", return_value=mock.Mock(INTERFERENCE_MM3=0.001)):
+            result = check.interference(geometry, None, set(), set(), declared)
+        self.assertEqual(result["status"], "pass")
+        self.assertEqual(result["declared_pairs"], declared)
+        self.assertTrue(result["pairs"][0]["allowed"])
+
+    def test_undeclared_overlap_still_fails(self) -> None:
+        geometry = {(BASE, ARM_PN): {"clearance_mm": -0.01, "interference_mm3": 0.1}}
+        with mock.patch.object(check, "load_pose", return_value=mock.Mock(INTERFERENCE_MM3=0.001)):
+            result = check.interference(geometry, None, set(), set())
+        self.assertEqual((result["status"], result["pairs"][0]["ok"]), ("fail", False))
+
+    def test_declared_interference_fit_with_clearance_is_a_finding(self) -> None:
+        pair = (BASE, ARM_PN)
+        declared = [{"pair": list(pair), "fit": "5 H7/p6", "classification": "interference",
+                     "interface": "IF-001", "source": "interfaces.yaml#/interfaces/0/limits/press_fit"}]
+        geometry = {pair: {"clearance_mm": 0.01, "interference_mm3": 0.0}}
+        with mock.patch.object(check, "load_pose", return_value=mock.Mock(INTERFERENCE_MM3=0.001)):
+            result = check.interference(geometry, None, set(), set(), declared)
+        self.assertEqual(result["status"], "fail")
+        self.assertEqual(result["declared_fit_findings"][0]["type"], "declared_fit_not_realized")
+        self.assertEqual(result["declared_fit_findings"][0]["source"], declared[0]["source"])
+
+    def test_press_fit_record_is_classified_by_cad_fits(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            hw = Path(tmp)
+            (hw / "interfaces.yaml").write_text(
+                "interfaces:\n"
+                "  - id: IF-001\n"
+                "    limits:\n"
+                "      press_fit: {fit: 5 H7/p6, pair: [TST-0001, TST-0002]}\n",
+                encoding="utf-8",
+            )
+            declared = check.declared_press_fits(hw)
+        self.assertEqual(declared, [{"pair": [BASE, ARM_PN], "fit": "5 H7/p6", "classification": "interference",
+                                    "interface": "IF-001",
+                                    "source": "interfaces.yaml#/interfaces/0/limits/press_fit"}])
+
+    def test_template_press_pairs_are_declared_and_classified(self) -> None:
+        template = HERE.parents[1] / "cad-record" / "assets" / "project-template"
+        declared = check.declared_press_fits(template / "hw")
+        self.assertEqual({tuple(item["pair"]) for item in declared}, {
+            ("LMP-0002", "LMP-0005"), ("LMP-0002", "LMP-0006"), ("LMP-0003", "LMP-0007")})
+        self.assertTrue(all(item["classification"] == "interference" for item in declared))
 
     def test_an_allowed_pair_whose_measurement_failed_still_fails(self) -> None:
         geometry = gaps({(BASE, ARM_PN): None})

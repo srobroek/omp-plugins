@@ -60,7 +60,7 @@ note; a part whose interfaces change drops back to F1 until the new interface is
 | Internal vertical corners | Radius >= tool radius (default 1 mm; pockets here use 3-4 mm) |
 | Pockets | Floor web >= 3 mm; depth <= 4 x tool diameter; stadium ends at the tool radius |
 | Clevis slots | Open-ended; slot end radius = slot width / 2; slot depth clears the mating link through its full joint range |
-| Pin bores | Model at the mid-limit of the `cad-fits` class (H8 for running pins); 0.5 mm 45-degree entry chamfers |
+| Pin bores | Use H7 for declared 5 H7/p6 press-fit holders and the declared `cad-fits` class for running bores; 0.5 mm 45-degree entry chamfers |
 | Exterior edges | 1-1.5 mm fillets on silhouettes; break remaining edges 0.2-0.5 mm by drawing note, not in the model |
 | Channels | Ball-end cut: full-radius floor and spherical ends |
 
