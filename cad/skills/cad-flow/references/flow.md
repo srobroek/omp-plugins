@@ -4,72 +4,38 @@
 
 Keep the source of truth in the hardware project's `hw/` design record. Every decision, requirement, interface, revision, check result, and release artifact must identify its source or evidence. Preserve millimetres and the product's declared ISO or ASME regime. Stage ordering is intentional: do not detail parts before the layout freezes their interfaces, or release before analysis and critique are reconciled.
 
-| Stage | Work and user gate | Design-record output | Skill |
+| Stage | Work and user gate | Design-record output | Skill / command |
 |---|---|---|---|
-| GROUND | Inspect the project and existing hardware, needs, constraints, and source material. | `product.yaml` identity, rigor (default `pro`), units `mm`, regime `iso` or `asme`, general tolerance, flow state; initial `requirements.yaml` and `interfaces.yaml` evidence. | `cad-record` (later) |
-| INTENT | Present the understood product purpose, users, operating envelope, constraints, and unknowns; wait for approval. | Approved intent and requirement sources/rationales/priorities in `requirements.yaml`; record the gate decision. | `cad-record` (later) |
-| SPECIFY | Turn approved intent into measurable requirements and verification criteria. | `requirements.yaml`, using `REQ-###`, text, rationale, source, priority, and verification method `I`, `A`, `D`, or `T` with criteria; update `interfaces.yaml`. | `cad-record` (later) |
-| L0 CONCEPT | Build 2–4 rapid three.js visual variants; let the user refine, merge, or drop them. | Concept options and the selected variant/decision in `decisions/DR-###.md`; concept preview is not a verified CAD model. | `cad-concept` |
-| VARIANT gate | Obtain explicit selection/approval of the concept direction. | Selected concept and gate evidence in the design workflow record and a `DR-###` decision. | `cad-concept` |
-| L1 LAYOUT | Define labelled subassemblies, envelopes, interfaces, joints and limits, plus a BOM skeleton. | `assembly.yaml`: subassemblies and part references; joints with id, type, parent/child, axis, origin in mm, min/max and nominal. Update `interfaces.yaml` and preliminary `bom.csv`. | `cad-record` (later) |
-| LAYOUT freeze | Present the layout, interfaces, and BOM skeleton for explicit approval. | Frozen layout decision and gate evidence; set `product.yaml` flow stage and `flow.recheck_from: layout`. | `cad-record` (later) |
-| L2 PARTS | Develop one subassembly per loop; independent subassemblies can proceed in parallel, with revision history per run. | `parts/<PN>/part.yaml` plus `model.py` per part: PN matching `^[A-Z]{2,5}-\d{4}$`, rev, title, material, process (`fdm`, `cnc`, or `purchased`), finish, mass target, make/buy, supplier. | `cad-record` and `mol-cad-part` (later) |
-| L3 DETAIL | Apply fits, fasteners, tolerances, FDM/CNC design rules, and prepare drawings. | Part revisions and tolerance/fit decisions in the part record and `decisions/DR-###.md`; drawings and their revision/evidence references. | `cad-fits`; `cad-drawings` is later |
-| BOM | Reconcile part numbers, revisions, quantities, make/buy, suppliers, and assemblies. | Released-intent `bom.csv` EBOM. | `cad-bom` |
-| L4 ANALYSIS | Run the required interference, clearance, stack-up, kinematic sweep, and static FEA at the worst-case pose. | `verification.csv` results linked to requirements and configurations; analysis artifacts and assumptions. | `cad-analysis` is later |
-| CRITIQUE | Spawn `cad-mech-reviewer` and `cad-dfm-reviewer` in ONE parallel batch, both read-only. Each reports findings with paths/configuration and evidence. | Preserve each verdict and evidence in the workflow record; do not let one reviewer see or wait for the other's result before returning. | `cad-review-mech`, `cad-review-dfm` (later) |
-| RECONCILE | The lead resolves every critique finding: fix it, demonstrate why it does not apply, or record a decision. Re-run affected checks after changes. | Updated `decisions/DR-###.md`, `verification.csv`, part revisions, and finding dispositions. | `cad-flow`; `cad-recheck` is later |
-| DESIGN freeze | Present the reconciled design, analyses, and record for explicit approval. | Frozen design decision and gate evidence; affected-part-only reopening applies after freeze. | `cad-record` (later) |
-| RELEASE | Prepare and inspect the release package and its traceability. | `releases/<rev>/manifest.json`, final `bom.csv`, `verification.csv`, drawings, STEP AP242, and documentation. Revision matches `^(X[1-9]\d*|[A-HJ-NPRTUVWY])$`: prototypes use `X1`, `X2`, …; released revisions exclude `I`, `O`, `Q`, `S`, `X`, and `Z`. | `cad-record` and `cad-bom` (later); `cad-drawings` is later |
-| RELEASE gate | Show release contents and verification status; obtain explicit user approval before calling it released. | Gate decision and release manifest/status. | `cad-record` (later) |
+| GROUND | Inspect needs and existing hardware. | Product identity, rigor, units, regime, tolerances; initial requirements and interface evidence. | `cad-record`: `uv run --script <path-to-cad-record>/scripts/validate.py <project-dir>` |
+| INTENT | Present purpose, users, envelope, constraints, unknowns; wait for approval. | Approved intent, requirement sources, rationales, priorities, and gate decision. | `cad-record`: `uv run --script <path-to-cad-record>/scripts/validate.py <project-dir>` |
+| SPECIFY | Set measurable requirements and verification criteria. | `requirements.yaml` with REQ-###, rationale, source, priority, verification method and criteria; updated `interfaces.yaml`. | `cad-record`: `uv run --script <path-to-cad-record>/scripts/validate.py <project-dir>` |
+| concept | Build 2-4 rapid three.js variants. Refine, merge, or drop by feedback. | `hw/concept/<product-id>.scene.json`; options and selection in `decisions/DR-###.md`. Preview is not verified CAD. | `cad-concept`: `uv run --script skill://cad-concept/scripts/concept.py check <scene>`; handoff: `uv run --script skill://cad-concept/scripts/concept.py handoff <scene> --out hw/concept/handoff.json` |
+| VARIANT gate | Get explicit concept selection. | Selected concept and gate evidence in workflow record and `DR-###`. | `cad-concept`: `uv run --script skill://cad-concept/scripts/concept.py handoff <scene> --out hw/concept/handoff.json` |
+| layout | Define subassemblies, interfaces, joints/limits, BOM skeleton. | `assembly.yaml`, `interfaces.yaml`, preliminary `bom.csv`. | `cad-record`: `uv run --script skill://cad-record/scripts/validate.py <project-dir>`; `cad-model`: `uv run --script skill://cad-model/scripts/cad_model.py run hw --label vN [--kernel auto]`, then `uv run --script skill://cad-model/scripts/cad_model.py check vN --hw hw [--out FILE]`; `cad-render`: `uv run --script skill://cad-render/scripts/render.py hw [--version latest|vN] [--views iso front side exploded closeup-<PN>]` |
+| LAYOUT freeze | Present layout, interfaces, BOM skeleton for approval. | Frozen decision and gate evidence; `flow.recheck_from: layout`. | `cad-viewer`: `uv run --script scripts/viewer.py serve`; then `uv run --script scripts/viewer.py show hw [--version vN] --check FILE`; compare: `uv run --script scripts/viewer.py compare vA vB --hw hw --check-a FA --check-b FB`. |
+| parts | Develop one subassembly per loop. Independent loops may proceed in parallel. | `parts/<PN>/part.yaml` and `model.py`; PN, revision, material, process, finish, mass target, make/buy, supplier. | Run `cad-model run`, `cad-model check`, and `cad-render` with the LAYOUT commands. Before L2, run `cad-design` `form_check` with `--fidelity F2`. Use `cad-viewer show hw [--version vN] --check FILE` after build/check. At gates, compare versions, animate joint limits, and capture iso. Capture a revolute section with `uv run --script scripts/viewer.py capture --view 'section --joint J-00x' --out PNG`. |
+| detail | Apply fits, fasteners, tolerances, process rules, and drawings. | Part revisions, fit decisions, drawings, and evidence. | `cad-fits`: `uv run --script skill://cad-fits/scripts/fits.py SIZE FIT [--expect TYPE]` and `uv run --script skill://cad-fits/scripts/stackup.py STACK.yaml`; `cad-design`: run `uv run --script skill://cad-design/scripts/form_check.py --hw hw --parts-dir DIR --fidelity F3` before L3 gate; L3 requires F3. Use the layout model/check/render commands for each L3 batch. |
+| bom | Reconcile part numbers, revisions, quantities, make/buy, suppliers, and assemblies. | Released-intent EBOM `bom.csv`. | `cad-bom`: `uv run --script skill://cad-bom/scripts/bom.py ASSEMBLY.step --hw hw [--out hw/bom.csv]` |
+| analysis | Check interference, clearance, stack-up, kinematics, static FEA at worst pose. | `verification.csv` tied to requirements/configurations; analysis artifacts and assumptions. | Kinematic sweep `cad-motion`: `uv run --script skill://cad-motion/scripts/sweep.py ... --worst-step worst.step`; static FEA uses separate, not-yet-merged `cad-freecad` workflow. Leave its route unchanged. L4 batch uses the LAYOUT model/check/render commands. |
+| critique | Spawn mechanical and DFM reviewers in one parallel read-only batch. | Preserve both verdicts and evidence in workflow record. Neither reviewer waits for the other. | `cad-review-mech`; `cad-review-dfm` |
+| reconcile | Resolve critique findings. Rerun affected checks. | Updated `decisions/DR-###.md`, `verification.csv`, revisions, dispositions. | `cad-flow`; `cad-recheck`: `uv run --script skill://cad-recheck/scripts/stamp.py --stage <stage> --checks <json-file> --passed` only when checks pass. |
+| design_freeze | Present reconciled design, analyses, record for approval. | Frozen decision and gate evidence. Reopen affected parts/dependents only after freeze. | `cad-record`: `uv run --script skill://cad-record/scripts/validate.py <project-dir>`; OCP Studio look-dev: `uv run --script scripts/viewer.py studio --environment studio --tone-mapping ACES --exposure 1.0 [--env-intensity] [--env-rotation] [--background] [--shadow-intensity] [--shadow-softness] [--ao-intensity] [--texture-mapping]` |
+| release | Prepare and inspect a traceable release package. | `releases/<rev>/manifest.json`, BOM, verification, drawings, STEP AP242, docs. | `cad-record`: `uv run --script skill://cad-record/scripts/validate.py <project-dir>`; `cad-bom`: `uv run --script skill://cad-bom/scripts/bom.py ASSEMBLY.step --hw hw [--out hw/bom.csv]` |
+| RELEASE gate | Show contents and verification. Get approval before release. | Gate decision and release manifest/status. | Capture a release view with `cad-viewer capture --view iso --out PNG`. On session end run `cad-viewer stop`; record `ports_free`. |
+
+The canonical `product.yaml` stage enum uses lowercase values: `ground`, `intent`, `specify`, `concept`, `layout`, `parts`, `detail`, `bom`, `analysis`, `critique`, `reconcile`, `design_freeze`, `release`. Prose may use uppercase or L0 to L4; record values use these enum strings.
 
 The full endpoint is STEP AP242 plus drawings, EBOM, verification matrix, and docs. Designs target FDM or CNC, but stop before slicing, CAM, or machine-tool generation. FreeCAD 1.1.4 is the only CAD application. CadQuery 2.8 and build123d 0.13 each run in a separate environment.
 
 ## Stage loop and recheck boundary
 
-For every stage, draft the requested change, show the live preview with no checks, and ask for user feedback. Keep iterating inside that stage until the user says “commit batch.” Never run checks on each edit.
+Draft, show live previews without checks, and collect feedback. Continue until the user says “commit” or “commit batch”. Do not check on every edit.
 
-- Before LAYOUT freeze, “commit batch” means build and render only; it does not trigger recheck or imply design approval.
-- At or after LAYOUT freeze, use `product.yaml` `flow.recheck_from` as the earliest stage to recheck. Recheck the changed parts and all dependent parts/assemblies once for the batch, including checks from that stage and all earlier stages. Do not omit a dependent merely because its file was not edited.
-- Record the batch's changed items, dependents, checks run, and results. If another edit occurs, keep drafting and previewing; the next “commit batch” defines the next recheck boundary.
-- After DESIGN freeze, reopen only affected parts and their dependents. Preserve unaffected parts and their existing evidence.
-- A preview or build/render result is not a check result. Report checks only when executed and tied to the design revision/configuration.
-
-## Formula routing
-
-Poured formulas create workflow roots; `mol-` formulas are bondable subprocesses. Do not pour a `mol-` formula or bond a poured tier.
-
-| Action | Formula | When |
-|---|---|---|
-| Pour | `cad-product` | New product: lead the product from GROUND through the release gate. |
-| Pour | `cad-part` | A standalone part/subassembly task with an established product/layout scope. |
-| Pour | `cad-touch` | A bounded change to an existing design, rather than restarting the product flow. |
-| Bond | `mol-cad-concept` | Attach a concept exploration/refinement when a product workflow reaches L0 CONCEPT. |
-| Bond | `mol-cad-part` | Attach a subassembly's L2 PARTS loop to the product workflow; use one loop per subassembly. |
-| Bond | `mol-cad-iterate` | Attach an approved iteration to the affected stage/design node. Record changed scope and invalidated evidence; follow the stage-loop recheck rule. |
-| Bond | `mol-cad-release` | Attach release preparation after DESIGN freeze, before the RELEASE gate. |
-
-Choose the narrowest poured root that matches the requested work. Do not use a part or touch tier to bypass product gates when the requested scope is a new end-to-end product.
-
-## Skill routing
-
-Use the named skill when available. “Later” means the implementation is not part of batch 1; keep the work at its reachable boundary and report the missing skill rather than pretending it loaded.
-
-| Stage/work | Skill | Availability |
-|---|---|---|
-| Lead orchestration and gates | `cad-flow` | Batch 1 |
-| Product/design record, requirements, interfaces, assembly, revisions, release manifest | `cad-record` | Later |
-| L0 visual concepts and variant choice | `cad-concept` | Later |
-| Fits, fasteners, tolerances, FDM/CNC design rules | `cad-fits` | Later |
-| Drawings | `cad-drawings` | Later |
-| EBOM | `cad-bom` | Later |
-| Batched recheck | `cad-recheck` | Later |
-| Mechanical critique | `cad-review-mech` | Later |
-| DFM critique | `cad-review-dfm` | Later |
-| Interference, clearance, stack-up, kinematics, FEA | `cad-analysis` | Later |
-| Parametric CAD modeling | `cad-model` | Later |
-| 3D viewing | `cad-viewer` | Later |
-| Motion visualization | `cad-motion` | Later |
+- Each L1 to L4 commit batch runs `cad-model run` and then `cad-model check`. Stop if that check has a blocking failure. Render the successful version with `cad-render`. Show its renders at the stage gate.
+- The user's commit, the layout threshold, or the hardware git pre-commit hook triggers the broader changed-parts/dependents recheck. Use `flow.recheck_from` and all applicable earlier-stage checks. `cad-recheck` stamps the exact staged `hw/` tree. Use `--passed` only after every required check passes.
+- Record changed items, dependents, checks, results, and artifacts. A later edit starts a new batch on the next commit.
+- After DESIGN freeze, reopen only affected parts and dependents. Preserve unaffected parts and evidence.
+- A preview or render is not a check result. Tie reported checks to a design revision/configuration.
 
 ## Gate control
 

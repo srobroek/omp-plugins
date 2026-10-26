@@ -19,29 +19,33 @@ Install a Beads workspace for the workflow formulas and approval gates. Plugin i
 
 ## Flow
 
-`cad-flow` leads GROUND → INTENT → SPECIFY → L0 CONCEPT → VARIANT gate → L1 LAYOUT → LAYOUT freeze → L2 PARTS → L3 DETAIL → BOM → L4 ANALYSIS → parallel CRITIQUE → RECONCILE → DESIGN freeze → RELEASE → RELEASE gate. Each stage drafts, previews live without checks, and incorporates user feedback. “Commit batch” builds and renders before LAYOUT freeze; at or after the freeze it runs one batched recheck over changed parts and their dependents. A stage gate follows the commit. The user can request more detail to loop within the stage.
+`cad-flow` leads GROUND → INTENT → SPECIFY → L0 CONCEPT → VARIANT gate → L1 LAYOUT → LAYOUT freeze → L2 PARTS → L3 DETAIL → BOM → L4 ANALYSIS → parallel CRITIQUE → RECONCILE → DESIGN freeze → RELEASE → RELEASE gate. On each L1 to L4 commit batch, run `cad-model run`, then `cad-model check`; a blocking failure stops it. Then run `cad-render` for that version and show images at the gate. Use OCP CAD Viewer for interactive inspection and Studio look-dev. Run kinematic sweeps with `cad-motion`; static FEA stays with the separate cad-freecad workflow. Before L2, form_check must pass at F2 and later; before L3, it must pass at F3. Recheck at the layout threshold, when the user says “commit”, or from the hardware git pre-commit hook.
 
 ## Skills
 
-Batch 1 includes these skills; only `cad-flow` ships in this initial skeleton. The others are planned for later batches.
+The table lists every directory under `cad/skills/`. The `cad-viewer` implementation remains on its own work branch until integration.
 
 | Skill | Status | Responsibility |
 |---|---|---|
 | `cad-flow` | Available | Lead procedure, stage loops, formula routing, gates, and release boundary |
-| `cad-record` | Later | Create and maintain the structured hardware design record |
-| `cad-concept` | Later | Explore and compare rapid visual concepts |
-| `cad-review-mech` | Later | Mechanical critique method and evidence |
-| `cad-review-dfm` | Later | FDM/CNC design-for-manufacture critique method and evidence |
-| `cad-recheck` | Later | Batched changed-parts-and-dependents verification |
-| `cad-fits` | Later | Fits, fasteners, tolerances, and process design rules |
-| `cad-bom` | Later | EBOM and item/revision consistency |
-
+| `cad-record` | Available | Create and maintain the structured hardware design record |
+| `cad-concept` | Available | Explore and compare rapid visual concepts |
+| `cad-model` | Available | Build, check, and diff parametric CadQuery/build123d models |
+| `cad-design` | Available | F0 to F3 product fidelity and form-check gates |
+| `cad-motion` | Available | Pose assemblies, sweep joint motion, and select worst-case poses |
+| `cad-render` | Available | Automated three.js PBR version renders and gate imagery |
+| `cad-viewer` | In integration | Interactive OCP CAD Viewer inspection and Studio look-dev |
+| `cad-recheck` | Available | Recheck changed parts and dependents at the configured threshold |
+| `cad-fits` | Available | Calculate fit limits and tolerance stack-ups |
+| `cad-bom` | Available | Roll up the engineering bill of materials |
+| `cad-review-mech` | Available | Evidence-based read-only mechanical design critique |
+| `cad-review-dfm` | Available | Evidence-based read-only FDM/CNC manufacturability critique |
 ## Agents
 
 | Agent | Status | Role |
 |---|---|---|
-| `cad-mech-reviewer` | Later | Read-only mechanical design critique |
-| `cad-dfm-reviewer` | Later | Read-only FDM/CNC design-for-manufacture critique |
+| `cad-mech-reviewer` | Available | Read-only mechanical design critique |
+| `cad-dfm-reviewer` | Available | Read-only FDM/CNC design-for-manufacture critique |
 
 The lead spawns both reviewers in the same parallel batch during CRITIQUE. Neither reviewer changes the design record or CAD files.
 

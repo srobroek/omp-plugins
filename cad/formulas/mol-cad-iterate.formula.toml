@@ -69,8 +69,8 @@ id = "detail-recheck"
 title = "Recheck L3 detail for affected parts"
 type = "task"
 needs = ["reopen-affected"]
-labels = ["cad", "phase:l3-detail"]
-description = "For {{affected_parts}} only, run skill://cad-fits and skill://cad-drawings: update fits, fasteners, tolerances, datums, applicable FDM/CNC rules, and drawings. Recheck L3 criteria for each changed part and affected dependent. Keep unchanged parts frozen with their existing evidence."
+labels = ["cad", "phase:detail"]
+description = "For {{affected_parts}} only, each post-freeze L3 commit batch runs `uv run --script skill://cad-model/scripts/cad_model.py run hw --label vN --kernel {{kernel}}`, then `uv run --script skill://cad-model/scripts/cad_model.py check vN --hw hw --out checks-vN.json`; a blocking check failure stops the batch. Then run `uv run --script skill://cad-render/scripts/render.py hw --version vN [--views iso front side exploded closeup-<PN>]`. Run skill://cad-fits and skill://cad-drawings for fits, fasteners, tolerances, datums, process rules, and drawings. Before the L3 gate, run `uv run --script skill://cad-design/scripts/form_check.py --hw hw --parts-dir DIR --fidelity F3`; L3 requires F3. Recheck affected parts and dependents only; preserve unaffected parts' existing evidence."
 
 [steps.metadata]
 skill_hints = "cad-fits, cad-drawings, cad-recheck, cad-record"
@@ -80,8 +80,8 @@ id = "analysis-recheck"
 title = "Recheck L4 analysis for affected parts"
 type = "task"
 needs = ["detail-recheck"]
-labels = ["cad", "phase:l4-analysis"]
-description = "For {{affected_parts}} only, run skill://cad-analysis for interference, clearance, stack-up, kinematic sweep where applicable, and static FEA at the worst-case pose. Apply the post-LAYOUT recheck rule to this iteration: recheck only L3-L4 for the affected set and preserve all untouched part evidence. Record verification results and COMMIT the design-record entry plus bead note."
+labels = ["cad", "phase:analysis"]
+description = "For {{affected_parts}} only, run the kinematic sweep using `uv run --script skill://cad-motion/scripts/sweep.py ... --worst-step worst.step`; pass `worst_case.pose` and `worst.step` to the separate cad-freecad static FEA workflow, not yet merged. For an L4 commit batch, run `uv run --script skill://cad-model/scripts/cad_model.py run hw --label vN --kernel {{kernel}}`, then `uv run --script skill://cad-model/scripts/cad_model.py check vN --hw hw --out checks-vN.json`; a blocking check failure stops the batch. Then render with `uv run --script skill://cad-render/scripts/render.py hw --version vN [--views iso front side exploded closeup-<PN>]`. Apply post-LAYOUT recheck only to the affected set; preserve untouched-part evidence and record verification results plus the design entry/bead note."
 
 [steps.metadata]
 skill_hints = "cad-analysis, cad-recheck, cad-record, cad-flow"

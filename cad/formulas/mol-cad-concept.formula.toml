@@ -31,8 +31,8 @@ description = "default manufacturing process"
 id = "draft-concept-round"
 title = "DRAFT L0 concept round {{round}}"
 type = "task"
-labels = ["cad", "phase:l0-concept"]
-description = "Read the current requirements, concept, and feedback. Run skill://cad-concept to draft 2-4 three.js variants; render a live preview and refine, merge, or drop only as directed. Ask for user feedback before committing. Since this precedes LAYOUT freeze, a commit batch builds and renders only and runs no engineering checks. Record the design-record entry and bead note."
+labels = ["cad", "phase:concept"]
+description = "Read current requirements, concept, and feedback. Draft variants at `hw/concept/<product-id>.scene.json`. Check each edit with `uv run --script skill://cad-concept/scripts/concept.py check <scene>`; serve preview with `uv run --script skill://cad-concept/scripts/serve.py --scene-dir hw/concept --port 8765`. After feedback, refine/merge/drop as directed. On commit, check and save one screenshot per live variant; no engineering checks before LAYOUT freeze. After explicit VARIANT selection, export with `uv run --script skill://cad-concept/scripts/concept.py handoff <scene> --out hw/concept/handoff.json`. Record design entry and bead note."
 
 [steps.metadata]
 skill_hints = "cad-concept, cad-flow, cad-record"
@@ -55,7 +55,7 @@ id = "record-variant"
 title = "COMMIT selected variant round {{round}}"
 type = "task"
 needs = ["variant-gate"]
-labels = ["cad", "phase:l0-concept"]
+labels = ["cad", "phase:concept"]
 description = "Record the selected concept id, user direction, variant disposition, preview location, and resulting decision in the design record and bead note. Keep LAYOUT unfrozen until its separate human gate; no engineering checks are implied by this concept approval."
 
 [steps.metadata]
