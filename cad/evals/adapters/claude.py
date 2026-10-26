@@ -9,9 +9,13 @@ Isolation: CLAUDE_CONFIG_DIR points into the trial (no user settings,
 enabledPlugins, skills, agents, CLAUDE.md or ~/.claude.json MCP servers),
 `--setting-sources project,local` drops user settings, `--strict-mcp-config` with
 an empty `--mcp-config` file allows no MCP server, and `--plugin-dir` loads cad.
-HOME stays real because the installed `claude` is a launcher that resolves its
-own install from it. Bedrock auth: `CLAUDE_CODE_USE_BEDROCK` plus exported AWS
-credentials. The `system/init` event lists what loaded and is the inventory.
+What Claude Code bundles is switched off through its documented switches
+(`BUNDLED_OFF`); the built-in commands no switch removes are the version's
+declared `BASELINE`. TMPDIR and CLAUDE_CODE_TMPDIR (Claude's own temp root, `/tmp`
+by default on macOS) point into the trial. HOME stays real only behind the toolbox
+launcher, which resolves its own install from it. Bedrock auth:
+`CLAUDE_CODE_USE_BEDROCK` plus exported AWS credentials. The `system/init` event
+lists what loaded and is the inventory.
 """
 
 from __future__ import annotations
@@ -23,28 +27,42 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable
 
-from .base import Host, Inventory, TrialPaths, Turn, copy_tree, isolated_home, json_lines, tool_text
+from .base import Baseline, Host, Inventory, TrialPaths, Turn, copy_tree, isolated_home, json_lines, tool_text, trial_temp
 
 REQUIRED_TOOLS = ("Skill",)  # without it the agent cannot load a cad skill
 
-# Bundled with Claude Code 2.1.310 (ASBX build), observed in a clean run whose
-# CLAUDE_CONFIG_DIR was empty: they ship in the binary, not in user config.
-BUILTIN: dict[str, frozenset[str]] = {
-    "plugins": frozenset({"cc-plugin-agents-md@builtin", "cc-plugin-plugin-authoring@builtin"}),
-    "skills": frozenset({
-        "batch", "claude-api", "code-review", "dataviz", "debug", "deep-research", "doctor", "fewer-permission-prompts",
-        "loop", "plugin-authoring", "run", "run-skill-generator", "simplify", "update-config", "verify", "workflow-authoring",
-    }),
-    "agents": frozenset({"Explore", "Plan", "claude", "general-purpose", "statusline-setup"}),
-    "commands": frozenset({
-        "__remote-workflow", "agents", "auto-mode-setup", "autocompact", "batch", "claude-api", "clear", "code-review",
-        "color", "compact", "config", "context", "dataviz", "debug", "deep-research", "doctor", "effort", "fast",
-        "fewer-permission-prompts", "focus", "goal", "heapdump", "init", "insights", "list-agents", "loop", "mcp", "model",
-        "output-style", "plugin-authoring", "recap", "reload-plugins", "reload-skills", "rename", "run",
-        "run-skill-generator", "security-review", "simplify", "team-onboarding", "update-config", "usage", "verify",
-        "workflow-authoring", "workflow-launch-exec",
-    }),
+# Plugins compiled into Claude Code 2.1.310; only `enabledPlugins` turns them off.
+BUILTIN_PLUGINS = ("cc-plugin-agents-md@builtin", "cc-plugin-plugin-authoring@builtin")
+
+# Every documented switch that removes a bundled skill, subagent or command
+# (code.claude.com/docs/en/env-vars, settings-reference, sub-agents, skills).
+# `--disable-slash-commands` is not used: it also removes the cad skills.
+BUNDLED_OFF = {
+    "CLAUDE_CODE_DISABLE_BUNDLED_SKILLS": "1",  # bundled skills and workflows; built-in commands hidden from the model
+    "CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS": "1",  # every built-in subagent type, general-purpose included (-p only)
+    "CLAUDE_CODE_DISABLE_WORKFLOWS": "1",  # dynamic workflows and their bundled commands
+    "CLAUDE_CODE_DISABLE_POLICY_SKILLS": "1",  # skills from the system-wide managed skills directory
+    "DISABLE_DOCTOR_COMMAND": "1",  # /doctor, which disableBundledSkills leaves typable
+    "DISABLE_FEEDBACK_COMMAND": "1",  # /feedback, /bug, /share
+    "DISABLE_EXTRA_USAGE_COMMAND": "1",
+    "DISABLE_INSTALL_GITHUB_APP_COMMAND": "1",
+    "DISABLE_LOGIN_COMMAND": "1",
+    "DISABLE_LOGOUT_COMMAND": "1",
+    "DISABLE_UPGRADE_COMMAND": "1",
 }
+
+# What Claude Code 2.1.310 still lists with BUNDLED_OFF applied, observed in a clean
+# run whose CLAUDE_CONFIG_DIR was empty: built-in commands only (no bundled skill,
+# subagent or plugin remains). No supported switch removes them; with bundled
+# skills off they stay typable but are hidden from the model.
+BASELINE = Baseline("2.1.310", {
+    "commands": frozenset({
+        "__remote-workflow", "agents", "auto-mode-setup", "autocompact", "clear", "color", "compact", "config",
+        "context", "effort", "fast", "focus", "goal", "heapdump", "init", "insights", "list-agents", "mcp", "model",
+        "output-style", "recap", "reload-plugins", "reload-skills", "rename", "security-review", "team-onboarding",
+        "usage", "workflow-launch-exec",
+    }),
+})
 
 
 def canonical_model(model: str) -> str:
@@ -96,9 +114,11 @@ class ClaudeAdapter:
     isolation: str = (
         "real Claude Code binary (toolbox launcher bypassed); CLAUDE_CONFIG_DIR in the trial;"
         " --setting-sources project,local; trial --settings pins the model and disables bundled plugins;"
-        " --strict-mcp-config with an empty --mcp-config; cad via --plugin-dir; AWS credentials exported to env"
+        " bundled skills, subagents, workflows and hideable commands switched off (BUNDLED_OFF);"
+        " TMPDIR and CLAUDE_CODE_TMPDIR in the trial; --strict-mcp-config with an empty --mcp-config;"
+        " cad via --plugin-dir; AWS credentials exported to env"
     )
-    builtin: dict = field(default_factory=lambda: BUILTIN)
+    baseline: Baseline = field(default_factory=lambda: BASELINE)
 
     def __post_init__(self) -> None:
         if self.bypass_launcher:
@@ -117,7 +137,7 @@ class ClaudeAdapter:
 
     def command(self, *, model: str, prompt: str, paths: TrialPaths, resume: bool) -> list[str]:
         canonical = canonical_model(model)
-        settings: dict = {"enabledPlugins": {name: False for name in BUILTIN["plugins"]}}
+        settings: dict = {"enabledPlugins": {name: False for name in BUILTIN_PLUGINS}}
         if canonical != model:
             settings["modelOverrides"] = {canonical: model}
         argv = [
@@ -140,9 +160,12 @@ class ClaudeAdapter:
         # no HOME of the user's, so it gets the isolated one.
         home = {"HOME": str(host.real_home)} if self.via_launcher else isolated_home(paths)
         return {
-            **host.base_env, **home, **host.aws_env, **self.extra_env,
-            "CLAUDE_CONFIG_DIR": str(paths.home / ".claude"), "NO_COLOR": "1",
+            **host.base_env, **home, **trial_temp(paths), **host.aws_env, **BUNDLED_OFF, **self.extra_env,
+            "CLAUDE_CONFIG_DIR": str(paths.home / ".claude"), "CLAUDE_CODE_TMPDIR": str(paths.tmp), "NO_COLOR": "1",
         }
+
+    def user_stores(self, host: Host) -> list[Path]:
+        return []  # sessions and history follow CLAUDE_CONFIG_DIR into the trial
 
     def probe(self, paths: TrialPaths, model: str, stream_lines: list[str]) -> list[tuple[list[str], str]]:
         return []  # system/init in the first turn's stream is the inventory
@@ -156,6 +179,7 @@ class ClaudeAdapter:
         if init is None:
             return inv
         inv.observed = True
+        inv.version = init.get("claude_code_version")
         # Instruction files Claude reads from its config dir; init does not list them.
         config = paths.home / ".claude"
         inv.context += [str(p) for p in sorted(config.glob("rules/**/*.md")) + sorted(config.glob("CLAUDE.md"))]

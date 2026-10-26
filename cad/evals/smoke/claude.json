@@ -18,59 +18,103 @@
     "{\"enabledPlugins\": {\"cc-plugin-agents-md@builtin\": false, \"cc-plugin-plugin-authoring@builtin\": false}, \"modelOverrides\": {\"claude-haiku-5-5\": \"global.anthropic.claude-haiku-5-5\"}}",
     "--plugin-dir",
     "<trial>/cad",
-    "First, under the heading INSTRUCTIONS, list every instruction file, rule file, steering document and system-prompt section you were given (file path or section heading, one per line), other than skill bodies. Then, under the heading SKILLS, list the names of every skill available to you, one per line. Then create a file named hello.txt whose entire content is the word ok. End your reply with the single word DONE."
+    "First, under the heading INSTRUCTIONS, list every instruction file, rule file, steering document and system-prompt section you were given (file path or section heading, one per line), other than skill bodies. Then, under the heading SKILLS, list the names of every skill available to you, one per line. Then, under the heading FILES, list the entries of the current working directory, using your file or directory tool rather than a shell command. Then create a file named hello.txt whose entire content is the word ok. End your reply with the single word DONE."
   ],
-  "at": "2026-10-26T11:03:43+00:00",
+  "at": "2026-10-26T13:44:53+00:00",
   "file_written": true,
   "harness": "claude",
+  "host": {
+    "shared_temp": {
+      "added_by_other_processes": [
+        "$TMPDIR/opencode/spike-wt",
+        "$TMPDIR/toolbox-telemetry-emf867907972"
+      ],
+      "added_by_trial": [],
+      "roots": [
+        "/private/tmp",
+        "$TMPDIR"
+      ]
+    },
+    "trial_tmpdir": [
+      "cc-socks",
+      "claude-503",
+      "claude-503/-trial-work"
+    ],
+    "unchanged": true,
+    "user_stores": {}
+  },
   "inventory": {
     "agents": [
-      "Explore",
-      "Plan",
       "cad-dfm-reviewer",
       "cad-mech-reviewer",
       "cad:cad-dfm-reviewer",
-      "cad:cad-mech-reviewer",
-      "claude",
-      "general-purpose",
-      "statusline-setup"
+      "cad:cad-mech-reviewer"
     ],
+    "baseline": {
+      "declared_for": "2.1.310",
+      "loaded": {
+        "commands": [
+          "__remote-workflow",
+          "agents",
+          "auto-mode-setup",
+          "autocompact",
+          "clear",
+          "color",
+          "compact",
+          "config",
+          "context",
+          "effort",
+          "fast",
+          "focus",
+          "goal",
+          "heapdump",
+          "init",
+          "insights",
+          "list-agents",
+          "mcp",
+          "model",
+          "output-style",
+          "recap",
+          "reload-plugins",
+          "reload-skills",
+          "rename",
+          "security-review",
+          "team-onboarding",
+          "usage",
+          "workflow-launch-exec"
+        ]
+      }
+    },
     "commands": [
       "__remote-workflow",
       "agents",
       "auto-mode-setup",
       "autocompact",
-      "batch",
       "cad:cad-bom",
       "cad:cad-concept",
+      "cad:cad-design",
       "cad:cad-fits",
       "cad:cad-flow",
+      "cad:cad-model",
       "cad:cad-motion",
       "cad:cad-recheck",
       "cad:cad-record",
+      "cad:cad-render",
       "cad:cad-review-dfm",
       "cad:cad-review-mech",
-      "claude-api",
       "clear",
-      "code-review",
       "color",
       "compact",
       "config",
       "context",
-      "dataviz",
-      "debug",
-      "deep-research",
-      "doctor",
       "effort",
       "fast",
-      "fewer-permission-prompts",
       "focus",
       "goal",
       "heapdump",
       "init",
       "insights",
       "list-agents",
-      "loop",
       "mcp",
       "model",
       "output-style",
@@ -78,76 +122,53 @@
       "reload-plugins",
       "reload-skills",
       "rename",
-      "run",
-      "run-skill-generator",
       "security-review",
-      "simplify",
       "team-onboarding",
-      "update-config",
       "usage",
-      "verify",
-      "workflow-authoring",
       "workflow-launch-exec"
     ],
-    "context": [
-      "<trial>/home/.claude/projects/-trial-work/memory/"
-    ],
+    "context": [],
     "mcp": [],
     "missing": [],
     "plugins": [
       "cad"
     ],
     "skills": [
-      "batch",
       "cad:cad-bom",
       "cad:cad-concept",
+      "cad:cad-design",
       "cad:cad-fits",
       "cad:cad-flow",
+      "cad:cad-model",
       "cad:cad-motion",
       "cad:cad-recheck",
       "cad:cad-record",
+      "cad:cad-render",
       "cad:cad-review-dfm",
-      "cad:cad-review-mech",
-      "claude-api",
-      "code-review",
-      "dataviz",
-      "debug",
-      "deep-research",
-      "doctor",
-      "fewer-permission-prompts",
-      "loop",
-      "run",
-      "run-skill-generator",
-      "simplify",
-      "update-config",
-      "verify",
-      "workflow-authoring"
-    ]
+      "cad:cad-review-mech"
+    ],
+    "version": "2.1.310"
   },
-  "isolation": "contaminated",
-  "isolation_mechanism": "real Claude Code binary (toolbox launcher bypassed); CLAUDE_CONFIG_DIR in the trial; --setting-sources project,local; trial --settings pins the model and disables bundled plugins; --strict-mcp-config with an empty --mcp-config; cad via --plugin-dir; AWS credentials exported to env",
-  "isolation_with_current_adapter": {
-    "isolation": "clean",
-    "leaks": []
-  },
-  "latency_s": 11.528,
-  "leaks": [
-    "context:<trial>/home/.claude/projects/-trial-work/memory/"
-  ],
+  "isolation": "clean",
+  "isolation_mechanism": "real Claude Code binary (toolbox launcher bypassed); CLAUDE_CONFIG_DIR in the trial; --setting-sources project,local; trial --settings pins the model and disables bundled plugins; bundled skills, subagents, workflows and hideable commands switched off (BUNDLED_OFF); TMPDIR and CLAUDE_CODE_TMPDIR in the trial; --strict-mcp-config with an empty --mcp-config; cad via --plugin-dir; AWS credentials exported to env",
+  "latency_s": 15.795,
+  "leaks": [],
   "ok": true,
   "requested_model": "global.anthropic.claude-haiku-5-5",
   "served_matches": true,
   "served_model": "claude-haiku-5-5",
-  "text": "INSTRUCTIONS\nSystem prompt: Harness\nSystem prompt: Session-specific guidance\nSystem prompt: Memory\nSystem prompt: Environment\nSystem prompt: Context management\nSystem prompt: unheaded guidance on code style, pronouns, and confirming hard-to-reverse actions\nSystem reminder: gitStatus snapshot\nSystem reminder: git attribution lines for commits and PRs\n\nSKILLS\ncad:cad-bom\ncad:cad-concept\ncad:cad-fits\ncad:cad-flow\ncad:cad-motion\ncad:cad-recheck\ncad:cad-record\ncad:cad-review-dfm\ncad:cad-review-mech\ndataviz\nupdate-config\nkeybindings-help\ncode-review\nsimplify\nfewer-permission-prompts\nloop\nclaude-api\nworkflow-authoring\nrun\ninit\nsecurity-review\n\nI created `hello.txt` in the working directory with the content `ok`.\n\nDONE",
+  "text": "INSTRUCTIONS\n- System prompt section: Harness\n- System prompt section: Session-specific guidance\n- System prompt section: Memory\n- System prompt section: Environment\n- System prompt section: Context management\n- System prompt guidance on writing code (matching surrounding code's style, unlabeled section)\n- No CLAUDE.md or rule files were provided to me in this conversation.\n\nSKILLS\ncad:cad-bom\ncad:cad-concept\ncad:cad-design\ncad:cad-fits\ncad:cad-flow\ncad:cad-model\ncad:cad-motion\ncad:cad-recheck\ncad:cad-record\ncad:cad-render\ncad:cad-review-dfm\ncad:cad-review-mech\n\nFILES\nThe file tool failed on the directory: `Read` returns EISDIR for directories, and none of my other tools list directories. I fell back to `ls -A`, which is a deviation from your instruction. Entries:\n- .claude\n- .git\n- hello.txt\n\nI created `hello.txt` in the working directory with the content `ok`.\n\nDONE",
   "tools": [
-    "Write"
+    "Read",
+    "Write",
+    "Bash"
   ],
-  "transcript_entries": 4,
+  "transcript_entries": 9,
   "usage": {
-    "cacheRead": 18136,
-    "cacheWrite": 18990,
-    "cost_usd": 0.00308201,
-    "input": 4,
-    "output": 1053
+    "cacheRead": 28683,
+    "cacheWrite": 15127,
+    "cost_usd": 0.0028328050000000003,
+    "input": 6,
+    "output": 1309
   }
 }

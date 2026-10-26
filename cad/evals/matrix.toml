@@ -45,9 +45,8 @@ models = [
   "amazon-bedrock/global.moonshotai.kimi-k3",
 ]
 
-[harness.kiro]
+[harness.kiro]          # runs with --trust-all-tools inside the sandbox, like the other harnesses' bypass modes
 bin = "kiro-cli"
-trust_tools = "fs_read,fs_write,execute_bash,glob,grep"   # Kiro built-in tool ids, as used by Kiro agent configs
 models = ["claude-opus-5.5", "kimi-k3"]
 
 [harness.claude]

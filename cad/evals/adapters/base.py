@@ -60,13 +60,18 @@ class TrialPaths:
     state: Path  # harness session/state directory, inside the trial root
     home: Path  # isolated HOME / config root the harness reads instead of the user's
 
+    @property
+    def tmp(self) -> Path:
+        """The trial's TMPDIR, removed with the trial root."""
+        return self.root / "tmp"
+
 
 @dataclass(frozen=True)
 class Host:
     """What a trial may take from the host. Nothing else of the user's environment
     reaches the harness: adapters build the child environment from this alone."""
 
-    base_env: dict[str, str]  # allowlisted variables: PATH, locale, TMPDIR, user, toolchain caches
+    base_env: dict[str, str]  # allowlisted variables: PATH, locale, user, toolchain caches
     aws_env: dict[str, str]  # short-lived Bedrock credentials exported from the host profile
     real_home: Path
 
@@ -83,8 +88,25 @@ def isolated_home(paths: TrialPaths) -> dict[str, str]:
     }
 
 
+def trial_temp(paths: TrialPaths) -> dict[str, str]:
+    """TMPDIR, TMP and TEMP pointed into the trial, so a harness's temp files (Bun's
+    extracted native libraries, logs, shell scratch) neither land in nor are read
+    from the shared temp directory. Every adapter's environment includes these."""
+    return {var: str(paths.tmp) for var in ("TMPDIR", "TMP", "TEMP")}
+
+
 CATEGORIES = ("plugins", "skills", "agents", "commands", "context", "mcp")
 EVAL_AGENT = "cad-eval"  # the sandbox-local agent a harness is pinned to, where it needs one
+
+
+@dataclass(frozen=True)
+class Baseline:
+    """What a harness bundles that no supported setting turns off, observed in a clean
+    run of one harness version. Rows may load these items; a run that reports another
+    version is not covered by the declaration and counts as a leak."""
+
+    version: str
+    items: dict[str, frozenset[str]] = field(default_factory=dict)
 
 
 @dataclass
@@ -98,6 +120,7 @@ class Inventory:
     context: list[str] = field(default_factory=list)  # instruction files, steering, rules, memory
     mcp: list[str] = field(default_factory=list)
     missing: list[str] = field(default_factory=list)  # capabilities cad needs that the harness withheld
+    version: str | None = None  # the harness version, when the harness reports it
     observed: bool = False  # the harness reported its components; False means nothing to verify
 
     def as_dict(self) -> dict[str, list[str]]:
@@ -118,40 +141,52 @@ def _bare(name: str) -> str:
     return name
 
 
-def leaks(inventory: Inventory, paths: TrialPaths, builtin: dict[str, frozenset[str]]) -> list[str]:
-    """Every loaded component that is neither the cad plugin nor on the harness's
-    bundled list, plus every capability cad needs that is missing. Instruction files
+def audit(inventory: Inventory, paths: TrialPaths, baseline: Baseline) -> tuple[list[str], dict[str, list[str]]]:
+    """(leaks, bundled). Leaks: every loaded component that is neither the cad plugin
+    nor in the harness's baseline, every capability cad needs that is missing, and a
+    baseline used under a harness version it was not declared for. Instruction files
     pass only when they are the cad plugin's own (the staged copy or `<work>/cad`).
-    Fails closed: an unobserved inventory leaks."""
+    Bundled: the baseline items this run loaded, by category. Fails closed: an
+    unobserved inventory leaks."""
     if not inventory.observed:
-        return ["inventory: the harness reported no loaded components to verify"]
+        return ["inventory: the harness reported no loaded components to verify"], {}
     allow = cad_allowlist(paths.plugin)
     cad_dirs = {str(p) for d in (paths.plugin, paths.work / "cad") for p in (d, d.resolve())}
-    found = set()
+    found: set[str] = set()
+    bundled: dict[str, set[str]] = {}
     for cat in CATEGORIES:
         for item in getattr(inventory, cat):
             bare = _bare(item)
-            if bare in allow.get(cat, ()) or bare in builtin.get(cat, ()):
+            if bare in allow.get(cat, ()):
+                continue
+            if bare in baseline.items.get(cat, ()):
+                bundled.setdefault(cat, set()).add(item)
                 continue
             if cat == "context" and any(d + "/" in item for d in cad_dirs):
                 continue
             found.add(f"{cat}:{item}")
     found.update(f"missing:{m}" for m in inventory.missing)
-    return sorted(found)
+    if bundled and inventory.version is not None and inventory.version != baseline.version:
+        found.add(f"baseline: declared for {baseline.version}, the harness reports {inventory.version}")
+    return sorted(found), {cat: sorted(items) for cat, items in sorted(bundled.items())}
 
 
 class Adapter(Protocol):
     name: str
     plugin_marker: str  # plugin-root-relative path whose presence means the plugin can load
     isolation: str  # one line: how ambient user config is kept out
-    builtin: dict[str, frozenset[str]]  # components the harness bundles, observed in a clean run
+    baseline: Baseline  # what the harness bundles and no supported setting removes
 
     def prepare(self, paths: TrialPaths, host: Host) -> None: ...
 
     def command(self, *, model: str, prompt: str, paths: TrialPaths, resume: bool) -> list[str]: ...
 
     def env(self, paths: TrialPaths, host: Host) -> dict[str, str]:
-        """The complete child environment; nothing else is inherited."""
+        """The complete child environment, `trial_temp` included; nothing else is inherited."""
+
+    def user_stores(self, host: Host) -> list[Path]:
+        """User-level state the harness keeps outside its config (login, sessions,
+        history) that a trial must leave untouched; the smoke fingerprints it."""
 
     def probe(self, paths: TrialPaths, model: str, stream_lines: list[str]) -> list[tuple[list[str], str]]:
         """Model-free commands (argv, stdin), run after the trial's first turn, whose

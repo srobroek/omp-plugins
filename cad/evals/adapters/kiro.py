@@ -13,51 +13,87 @@ events whose `data.update` is an ACP session update, then `runFinished` with
   spend in credits (`_meta.kiro.promptTurnSummaries[].usage`), recorded as
   `usage.credits`. Token fields stay 0.
 
-Isolation: HOME and the XDG roots point into the trial, so ~/.kiro (global agents,
-steering, skills, memories, settings incl. the default agent, MCP config) does not
-load. Kiro keeps its login in `~/Library/Application Support/kiro-cli`, which is
-symlinked into the isolated HOME: auth and Kiro's session store are shared with
-the user, configuration is not. The run is pinned to a sandbox-local agent
-(`.kiro/agents/cad-eval.json`) whose only resources are the cad skills. The plugin
-is copied to `<work>/cad/`, where the generated reviewer agents' relative
-`skill://cad/skills/...` resources resolve. The inventory is read from the turn's
-stream: active mode, available commands, context files, memory and MCP usage.
+Isolation: HOME, the XDG roots and TMPDIR point into the trial, so ~/.kiro (global
+agents, steering, skills, memories, settings incl. the default agent, MCP config)
+does not load, and V3 sessions (`~/.kiro/sessions`) and logs (`$TMPDIR/kiro-log`)
+are written inside the trial. Kiro keeps its login in the same SQLite database as
+its prompt history and runtime state (`~/Library/Application Support/kiro-cli/
+data.sqlite3`); the trial gets its own database holding a read-only copy of the
+login only (`copy_login`), so nothing a trial does is written to the user's store,
+and Kiro extracts its agent runtime into the trial's copy of that directory. The
+run is pinned to a sandbox-local agent (`.kiro/agents/cad-eval.json`) whose only
+resources are the cad skills. The plugin is copied to `<work>/cad/`, where the
+generated reviewer agents' relative `skill://cad/skills/...` resources resolve.
+The inventory is read from the turn's stream: active mode, available commands,
+context files, memory and MCP usage.
 """
 
 from __future__ import annotations
 
 import json
 import shutil
+import sqlite3
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Iterable
 
-from .base import EVAL_AGENT, Host, Inventory, TrialPaths, Turn, add_usage, copy_tree, empty_usage, isolated_home, json_lines, tool_text
+from .base import (
+    EVAL_AGENT, Baseline, Host, Inventory, TrialPaths, Turn, add_usage, copy_tree, empty_usage, isolated_home, json_lines,
+    tool_text, trial_temp,
+)
 
-BUILTIN: dict[str, frozenset[str]] = {}
+BASELINE = Baseline("2.34.0")  # the pinned agent's command list holds only what its config names
 _APP_SUPPORT = ("Library", "Application Support", "kiro-cli")
+# `state` keys that belong to the sign-in (IAM Identity Center start URL and region,
+# the CodeWhisperer profile) and the migration marker; telemetry ids and UI
+# counters stay behind.
+_LOGIN_STATE = ("auth.", "api.", "migration.")
+
+
+def copy_login(src: Path, dst: Path) -> None:
+    """Create `dst` as a Kiro database holding only the login in `src`: the schema and
+    migration record (so Kiro does not migrate again), `auth_kv` (the OIDC token and
+    client registration) and the sign-in `state` keys. `src` is opened read-only."""
+    source = sqlite3.connect(f"{src.as_uri()}?mode=ro", uri=True, timeout=30)
+    try:
+        schema = [sql for (sql,) in source.execute(
+            "SELECT sql FROM sqlite_master WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' ORDER BY type = 'index'")]
+        rows = {table: source.execute(f"SELECT * FROM {table}").fetchall() for table in ("migrations", "auth_kv", "state")}
+    finally:
+        source.close()
+    rows["state"] = [row for row in rows["state"] if row[0].startswith(_LOGIN_STATE)]
+    target = sqlite3.connect(dst)
+    try:
+        with target:
+            for sql in schema:
+                target.execute(sql)
+            for table, values in rows.items():
+                if values:
+                    target.executemany(f"INSERT INTO {table} VALUES ({', '.join('?' * len(values[0]))})", values)
+    finally:
+        target.close()
 
 
 @dataclass
 class KiroAdapter:
     bin: str = "kiro-cli"
-    trust_tools: str = ""
     extra_env: dict[str, str] = field(default_factory=dict)
     plugin_marker: str = "skills"
     name: str = "kiro"
     isolation: str = (
-        "HOME and XDG_* in the trial with only Kiro's auth store symlinked in; --agent cad-eval"
-        " (sandbox-local, cad skills only); cad copied to <work>/cad"
+        "HOME, XDG_* and TMPDIR in the trial; a trial-own Kiro database holding a copy of the user's login only;"
+        " --agent cad-eval (sandbox-local, cad skills only); --trust-all-tools inside the sandbox; cad copied to <work>/cad"
     )
-    builtin: dict = field(default_factory=lambda: BUILTIN)
+    baseline: Baseline = field(default_factory=lambda: BASELINE)
 
     def prepare(self, paths: TrialPaths, host: Host) -> None:
-        # Kiro's login store, and the sibling executables kiro-cli launches from
-        # $HOME/.local/bin, are linked in; nothing under ~/.kiro is.
-        auth = host.real_home.joinpath(*_APP_SUPPORT)
-        link = paths.home.joinpath(*_APP_SUPPORT)
-        link.parent.mkdir(parents=True, exist_ok=True)
-        if auth.is_dir():
-            link.symlink_to(auth, target_is_directory=True)
+        # The login is copied, never linked; the sibling executables kiro-cli launches
+        # from $HOME/.local/bin are linked in; nothing under ~/.kiro is.
+        store = paths.home.joinpath(*_APP_SUPPORT)
+        store.mkdir(parents=True)
+        user_db = host.real_home.joinpath(*_APP_SUPPORT, "data.sqlite3")
+        if user_db.is_file():
+            copy_login(user_db, store / "data.sqlite3")
         bin_dir = paths.home / ".local" / "bin"
         bin_dir.mkdir(parents=True, exist_ok=True)
         for exe in (host.real_home / ".local" / "bin").glob("kiro-cli*"):
@@ -76,12 +112,8 @@ class KiroAdapter:
             "name": EVAL_AGENT,
             "description": "cad plugin eval agent: the cad skills and reviewer agents only.",
             "tools": ["read", "write", "shell", "subagent"],
-            # `**/*` does not match the workspace root itself (List Directory on it
-            # asked for approval and failed in --no-interactive), so the trial's own
-            # paths are listed explicitly, under both /var and /private/var.
-            "permissions": {"rules": [
-                {"capability": "filesystem", "match": sorted({"**", f"{paths.root}/**", f"{paths.root.resolve()}/**",
-                                                              str(paths.work), str(paths.work.resolve())}), "effect": "allow"},
+            "permissions": {"rules": [  # fs patterns need `**` to cross separators; shell/subagent/skill `*` matches all
+                {"capability": "filesystem", "match": ["**"], "effect": "allow"},
                 *({"capability": capability, "match": ["*"], "effect": "allow"} for capability in ("shell", "subagent", "skill")),
             ]},
             "resources": [f"skill://{p}/SKILL.md" for p in skills],
@@ -90,9 +122,13 @@ class KiroAdapter:
         }, indent=2) + "\n", encoding="utf-8")
 
     def command(self, *, model: str, prompt: str, paths: TrialPaths, resume: bool) -> list[str]:
+        # Headless V3 treats every `ask` as a deny. The agent's allow rules did not
+        # cover List Directory on the workspace root, and `--trust-tools` takes exact
+        # V3 tool ids only, so the sandbox runs with every tool pre-approved, as the
+        # other harnesses do (bypassPermissions, --auto-approve, --auto).
         argv = [
             self.bin, "chat", "--no-interactive", "--agent-engine", "v3", "--model", model,
-            "--output-format", "stream-json", f"--trust-tools={self.trust_tools}", "--trust-workspace",
+            "--output-format", "stream-json", "--trust-all-tools", "--trust-workspace",
             "--agent", EVAL_AGENT,
         ]
         if resume:
@@ -101,7 +137,10 @@ class KiroAdapter:
         return argv
 
     def env(self, paths: TrialPaths, host: Host) -> dict[str, str]:
-        return {**host.base_env, **isolated_home(paths), **self.extra_env, "NO_COLOR": "1"}
+        return {**host.base_env, **isolated_home(paths), **trial_temp(paths), **self.extra_env, "NO_COLOR": "1"}
+
+    def user_stores(self, host: Host) -> list[Path]:
+        return [host.real_home.joinpath(*_APP_SUPPORT), host.real_home / ".kiro"]
 
     def probe(self, paths: TrialPaths, model: str, stream_lines: list[str]) -> list[tuple[list[str], str]]:
         return []  # the turn's own stream reports mode, commands and context files

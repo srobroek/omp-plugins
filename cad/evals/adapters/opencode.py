@@ -7,12 +7,14 @@ therefore reads the served model and token usage from the session's assistant
 messages through the private server (`opencode api --standalone
 session.message.list`), limited to the messages this turn's stream produced.
 
-Isolation: HOME and the XDG roots point into the trial, so `~/.config/opencode`
-(global config, agents, plugins, MCP), `~/.claude/skills`, `~/.agents/skills` and
-`~/.local/share/opencode` do not load; `--standalone` starts a private server with
-the trial's environment instead of the shared background service; Bedrock
-credentials are exported to env. The cad skills and generated agents are copied to
-`<work>/.opencode/`.
+Isolation: HOME, the XDG roots and TMPDIR point into the trial, so
+`~/.config/opencode` (global config, agents, plugins, MCP), `~/.claude/skills`,
+`~/.agents/skills` and `~/.local/share/opencode` do not load, and the native
+libraries the Bun-compiled binary extracts at startup (`.bun-<uid>-<hash>.*`)
+land in the trial rather than the shared temp directory; `--standalone` starts a
+private server with the trial's environment instead of the shared background
+service; Bedrock credentials are exported to env. The cad skills and generated
+agents are copied to `<work>/.opencode/`.
 """
 
 from __future__ import annotations
@@ -25,7 +27,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable
 
-from .base import Host, Inventory, TrialPaths, Turn, add_usage, copy_tree, empty_usage, isolated_home, json_lines
+from .base import Baseline, Host, Inventory, TrialPaths, Turn, add_usage, copy_tree, empty_usage, isolated_home, json_lines, trial_temp
+
+BASELINE = Baseline("2.1.4")  # skills and agents are read from disk, where OpenCode bundles none
 
 # bun's global bin, where `bun add -g opencode-ai` installs it; not on the agent PATH.
 BUN_GLOBAL_BIN = Path.home() / ".cache" / ".bun" / "bin" / "opencode"
@@ -71,10 +75,10 @@ class OpencodeAdapter:
     plugin_marker: str = "skills"
     name: str = "opencode"
     isolation: str = (
-        "HOME and XDG_* in the trial (temp OpenCode config/data/state); --standalone private server;"
+        "HOME, XDG_* and TMPDIR in the trial (temp OpenCode config/data/state); --standalone private server;"
         " cad skills and agents in <work>/.opencode; AWS credentials exported to env"
     )
-    builtin: dict = field(default_factory=dict)
+    baseline: Baseline = field(default_factory=lambda: BASELINE)
 
     def __post_init__(self) -> None:
         self.bin = resolve_bin(self.bin)
@@ -95,7 +99,10 @@ class OpencodeAdapter:
         return argv
 
     def env(self, paths: TrialPaths, host: Host) -> dict[str, str]:
-        return {**host.base_env, **isolated_home(paths), **host.aws_env, **self.extra_env, "NO_COLOR": "1"}
+        return {**host.base_env, **isolated_home(paths), **trial_temp(paths), **host.aws_env, **self.extra_env, "NO_COLOR": "1"}
+
+    def user_stores(self, host: Host) -> list[Path]:
+        return []  # config, data and state all follow the trial's XDG roots
 
     def _api(self, *op: str) -> list[str]:
         return [self.bin, "api", "--standalone", *op]
