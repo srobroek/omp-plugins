@@ -40,7 +40,7 @@ MUST Treat exit 1 as a check failure that blocks the stage gate.
 MUST Edit part metadata in `hw/parts/<PN>/part.yaml`, never in bom.csv; the script overwrites bom.csv.
 NOT Count parts by hand or from a viewer; quantities come from the STEP product tree.
 
-OUTPUT
-L1 BOM: <PASS|FAIL>, <rows> rows, <distinct PNs> part numbers
-   Mismatches — each non-empty list from the JSON summary
-CAP 60w clean · 120w with findings
+```text
+L1 BOM: {PASS|FAIL}, {rows} rows, {distinct PNs} part numbers
+   Mismatches -- {each non-empty list from the JSON summary}
+```

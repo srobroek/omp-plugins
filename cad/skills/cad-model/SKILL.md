@@ -50,8 +50,9 @@ DEFAULT Use `--allow-interference PN:PN` only for an undeclared, intentional ove
 NOT Put a short timeout around `run`: a cold OCP import took 170 to 320 s per fresh environment.
 NOT Hand-edit files under `hw/versions/`; rebuild under a new label.
 
-OUTPUT
-L1 MODEL <RUN|CHECK|DIFF> vN: <PASS|FAIL>, <parts> parts, <wall s>
-   Blocking: each `blocking_failures` entry with its part or pair and number
-   Changed: each changed part with volume delta, only for diff
+```text
+L1 MODEL {RUN|CHECK|DIFF} vN: {PASS|FAIL}, {parts} parts, {wall s}
+   Blocking: {each blocking_failures entry with its part or pair and number}
+   Changed: {each changed part with volume delta, only for diff}
+```
 CAP 60w clean · 140w with findings

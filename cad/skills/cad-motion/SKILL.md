@@ -60,9 +60,10 @@ MUST Report collision poses and the smallest clearances verbatim from the JSON.
 NOT Claim continuous collision freedom from a sweep.
 NOT Take the worst-case pose from intuition; it comes from `sweep.py` `worst_case`.
 
-OUTPUT
-L1 MOTION <POSE|SWEEP|FREECAD>: <PASS|FAIL>, <poses or frames>, <timing>
-   Collisions: pose and pair per entry, only if any
-   Clearance: the three smallest pairs with pose
-   Worst case: pose, reach mm, STEP path
+```text
+L1 MOTION {POSE|SWEEP|FREECAD}: {PASS|FAIL}, {poses or frames}, {timing}
+   Collisions: {pose and pair per entry, only if any}
+   Clearance: {the three smallest pairs with pose}
+   Worst case: {pose, reach mm, STEP path}
+```
 CAP 80w clean · 160w with findings

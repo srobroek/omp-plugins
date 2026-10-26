@@ -58,8 +58,9 @@ NOT Render L0 concept variants here; `cad-concept` owns them.
 NOT Hand-edit `hw/renders/`; it is derived and replaced whole on every miss.
 NOT Install Blender for this skill; a Cycles hero-shot route is a future option, not installed.
 
-OUTPUT
-L1 RENDER vN: PASS|FAIL|CACHE HIT, <views> views, <wall s>
-   Failures -- view, failure, and metric, only if any
-   Renders -- PNG path and one line each on what it shows
+```text
+L1 RENDER vN: PASS|FAIL|CACHE HIT, {views} views, {wall s}
+   Failures -- {view, failure, and metric, only if any}
+   Renders -- {PNG path and one line each on what it shows}
+```
 CAP 80w clean · 160w with failures

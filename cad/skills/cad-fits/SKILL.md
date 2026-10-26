@@ -32,7 +32,7 @@ Exit codes for both scripts: 0 pass, 1 check failure (`--expect` mismatch or req
 
 ## Coverage
 
-Hole H; shafts c d f g h js k m n p s; grades IT6–IT11; nominal sizes 0 < size ≤ 120 mm,
+Hole H; shafts c d f g h js k m n p s; grades IT6 through IT11; nominal sizes 0 < size ≤ 120 mm,
 from ISO 286-1:2010. Provenance, cross-checks and exclusions: `skill://cad-fits/data/README.md`.
 
 ## Rules
@@ -44,8 +44,9 @@ DEFAULT Express asymmetric tolerances with `tol_plus`/`tol_minus`; the script re
 NOT Report ASME B4.1 inch fits from this skill; no B4.1 table ships here.
 NOT Edit `data/iso286.json` without a cited table edition in `data/README.md`.
 
-OUTPUT
-L1 FIT <size> <fit>: <type>, clearance <max>/<min> µm | STACK <id>: <PASS|FAIL> by <method>, <min>–<max> mm
-   Limits — hole and shaft limits in mm, only for fits
-   Contributors — the largest shares, only for stack-ups that fail
+```text
+L1 FIT {size} {fit}: {type}, clearance {max}/{min} µm | STACK {id}: {PASS|FAIL} by {method}, {min} to {max} mm
+   Limits -- {hole and shaft limits in mm, only for fits}
+   Contributors -- {largest shares only for stack-ups that fail}
+```
 CAP 80w

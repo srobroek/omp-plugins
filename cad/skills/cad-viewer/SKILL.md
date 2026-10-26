@@ -87,8 +87,9 @@ NOT Treat the viewer, a render, or a capture as a check result; `skill://cad-mod
   list includes every concave full-circle cylinder, so recesses and cavities appear beside drilled
   holes; a missing or empty field shows "no cylindrical bores".
 
-OUTPUT
-L1 VIEWER <SERVE|SHOW|COMPARE|ANIMATE|CAPTURE|STOP>: <PASS|FAIL>, <version(s)>, <url or PNG>
-   Findings -- per-part check findings shown, only if any
-   Captures -- PNG path, view, in_frame, and one line on what the PNG shows
+```text
+L1 VIEWER {SERVE|SHOW|COMPARE|ANIMATE|CAPTURE|STOP}: {PASS|FAIL}, {version(s)}, {url or PNG}
+   Findings -- {per-part check findings shown, only if any}
+   Captures -- {PNG path, view, in_frame, and one line on what the PNG shows}
+```
 CAP 80w clean · 160w with findings

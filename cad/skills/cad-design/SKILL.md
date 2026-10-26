@@ -23,9 +23,8 @@ TRIGGER
 2. Write or grow `hw/parts/<PN>/model.py` to the stage's level: F0 at L1 LAYOUT, F1 then F2
    during L2 PARTS, F3 during L3 DETAIL. Follow the model.py contract: one `KERNEL`, a JSON
    `PARAMS` dict in mm and degrees, `build(params)` returning one part in place at the zero pose.
-3. Start from the matching reference in `assets/reference/lamp-arm/<kernel>/<PN>.py` (CadQuery
-   2.8 and build123d 0.13, same PARAMS keys): base puck, tapered clevis links, revolved head,
-   shoulder pins as stepped parts, bought to their drawing.
+3. Start from the matching reference model in `assets/reference/lamp-arm/`. Its filename pairs the kernel and PN, such as `cadquery-LMP-0001.py`. The reference uses CadQuery 2.8 or build123d 0.13 with matching PARAMS keys.
+   The files model a base puck, tapered clevis links, a revolved head, or stepped shoulder pins bought to their drawing.
 4. On "commit batch" from L1 onward, review the batch with realistic renders through the
    `cad-render` step (later; until it exists, report it as missing, not done). For the
    reference arm, `uv run --script scripts/review_render.py --out DIR` writes an iso view and
@@ -52,8 +51,9 @@ DEFAULT Model CadQuery fastener heads natively; `cq_warehouse` is not on PyPI. b
 NOT Call a part detailed from code alone; a render, read back, is the evidence.
 NOT Treat a render as a check result; it is review material for the user.
 
-OUTPUT
-L1 DESIGN <stage>: <PN count> parts at <lowest level>, form_check PASS|FAIL
-   Findings -- check, part, and value per form_check finding, only if any
-   Renders -- PNG paths and one line each on what they show
+```text
+L1 DESIGN {stage}: {PN count} parts at {lowest level}, form_check PASS|FAIL
+   Findings -- {check, part, and value per form_check finding, only if any}
+   Renders -- {PNG paths and one line each on what they show}
+```
 CAP 80w clean · 160w with findings
