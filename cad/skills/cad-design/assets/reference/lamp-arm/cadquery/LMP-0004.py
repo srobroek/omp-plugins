@@ -5,7 +5,10 @@ inside the upper link's clevis; a loft carries its rounded section into a round 
 which joins a revolved cap and shade. The revolved profile holds the 4 mm cap roll-over,
 a cosmetic split-line groove, the 2.4 mm shade wall (six 0.4 mm perimeters) with a
 full-round rim, the E14 lampholder seat and its M10x1 nipple boss. F3 adds a fluted grip
-band on the cap and the cable path from the arm into the socket.
+band on the cap and the cable path from the arm into the socket: a 6 mm run along the
+neck that starts on the axis of a 7 mm entry from below. Unequal radii keep the
+T-junction regular: with equal radii the two bores' intersection curves cross at two
+singular points, and this kernel's cut left an unorientable face there.
 
 Zero pose, assembly coordinates: pivot bore on (360, 0, 40) along Y; the shade axis is
 vertical through (430, 0) and opens downward.
@@ -44,6 +47,7 @@ PARAMS = {
     "grip_r": 0.8,
     "grip_z": [53.0, 60.0],
     "cable_d": 6.0,
+    "cable_entry_d": 7.0,  # 1 mm over the run, see the module docstring
     "cable_entry_x": 410.0,
 }
 
@@ -150,11 +154,11 @@ def build(params: dict) -> cq.Shape:
             .center(p["shade_axis_x"] + rc * math.cos(a), rc * math.sin(a)).circle(p["grip_r"]).extrude(z1 - z0)
         )
 
-    cable_r = p["cable_d"] / 2.0
-    run = cq.Workplane("YZ").workplane(offset=p["cable_entry_x"] - cable_r).center(0, pz).circle(cable_r).extrude(
-        p["shade_axis_x"] - p["cable_entry_x"] + cable_r
+    cable_r, entry_r = p["cable_d"] / 2.0, p["cable_entry_d"] / 2.0
+    run = cq.Workplane("YZ").workplane(offset=p["cable_entry_x"]).center(0, pz).circle(cable_r).extrude(
+        p["shade_axis_x"] - p["cable_entry_x"]
     )
-    entry = cq.Workplane("XY").workplane(offset=pz - 2 * p["neck_r"]).center(p["cable_entry_x"], 0).circle(cable_r).extrude(
+    entry = cq.Workplane("XY").workplane(offset=pz - 2 * p["neck_r"]).center(p["cable_entry_x"], 0).circle(entry_r).extrude(
         2 * p["neck_r"]
     )
     bore = cq.Workplane("XZ").center(px, pz).circle(p["pin_bore_d"] / 2.0).extrude(2 * half_t, both=True)

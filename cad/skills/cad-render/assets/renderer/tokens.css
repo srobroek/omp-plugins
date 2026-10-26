@@ -1,0 +1,23 @@
+/*
+ * Renderer-local design tokens. render.js reads the scene values (backdrop, shadow) through
+ * getComputedStyle, so the photographed backdrop and the page chrome share one source.
+ */
+:root {
+  /* scene */
+  --color-backdrop: #e6e8eb;
+  --color-shadow: #1d2530;
+  --shadow-opacity: 0.8;
+
+  /* page chrome (status line only; never inside a capture) */
+  --color-fg: #1c2330;
+  --color-fg-muted: #586271;
+  --color-danger: #a3262a;
+  --color-surface: #f6f7f8;
+
+  --space-2: 8px;
+  --space-3: 12px;
+  --radius-2: 6px;
+
+  --font-ui: "Helvetica Neue", "Segoe UI", "Noto Sans", Arial, sans-serif;
+  --text-sm: 12px;
+}

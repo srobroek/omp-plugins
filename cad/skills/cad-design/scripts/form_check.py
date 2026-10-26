@@ -10,11 +10,14 @@ Usage:
 
 Parts: one STEP per part in DIR, named `<PN>.step` (cad-motion `--parts-dir`
 rules). Process comes from hw/parts/<PN>/part.yaml (`fdm`, `cnc`, `purchased`).
-Joints: hw/assembly.yaml.
+Joints: hw/assembly.yaml. When DIR holds build_reference.py's `build.json`, its
+in-memory facts per part feed the two kernel checks below.
 
 Per part (stdout JSON `parts`):
-    valid                  BRepCheck_Analyzer verdict
+    valid                  BRepCheck_Analyzer verdict on the STEP read-back
     solids, volume_mm3, area_mm2
+    kernel_valid           BRepCheck verdict on the in-memory shape (build.json)
+    readback_rel_error     |STEP volume - in-memory volume| / in-memory volume (build.json)
     axis_planar_fraction   area share of planar faces normal to X, Y or Z
     blend_faces            convex cylinder and torus faces of radius <= 10 mm that turn
                            through <= 120 degrees (fillets, not lug ends or shafts)
@@ -23,7 +26,11 @@ Per part (stdout JSON `parts`):
     min_concave_radius     smallest concave partial-cylinder radius (CNC corner rule)
 
 Checks (each failure is one `findings` entry):
-    brep_invalid            any fidelity: a part is not a valid B-rep
+    brep_invalid            any fidelity: a part is not a valid B-rep, in the STEP
+                            read-back (`source: step`) or in memory (`source: kernel`;
+                            a STEP read-back can heal an unorientable face)
+    step_readback           any fidelity: readback_rel_error above cad-model's 1e-6;
+                            loose fillet edges (0.01 to 0.1 mm tolerance) move it ~1e-5
     joint_bore_missing      F1+: a joint's parent or child has no cylinder face whose
                             axis is parallel to the joint axis and passes within
                             --joint-tol of the joint origin; made parts need a bore
@@ -49,6 +56,8 @@ from pathlib import Path
 from typing import Any
 
 POSE_PATH = Path(__file__).resolve().parents[2] / "cad-motion" / "scripts" / "pose.py"
+CAD_MODEL_SCRIPTS = Path(__file__).resolve().parents[2] / "cad-model" / "scripts"
+KERNEL_FACTS = "build.json"
 FIDELITY = ("F0", "F1", "F2", "F3")
 BLOCK_PLANAR_FRACTION = 0.80
 BLEND_MAX_RADIUS = 10.0
@@ -138,12 +147,9 @@ def face_area(face: Any) -> float:
 
 
 def shape_volume(shape: Any) -> float:
-    from OCP.BRepGProp import BRepGProp
-    from OCP.GProp import GProp_GProps
+    from cadmodel import occ
 
-    props = GProp_GProps()
-    BRepGProp.VolumeProperties_s(shape, props)
-    return props.Mass()
+    return occ.volume(shape)  # the adaptive integration cad-model's check uses
 
 
 def is_valid(shape: Any) -> bool:
@@ -244,22 +250,44 @@ def processes(hw: Path) -> dict[str, str]:
     return found
 
 
+def kernel_facts(parts_dir: Path) -> dict[str, dict[str, Any]]:
+    path = parts_dir / KERNEL_FACTS
+    if not path.is_file():
+        return {}
+    parts = json.loads(path.read_text(encoding="utf-8")).get("parts", {})
+    return {pn: row for pn, row in parts.items() if "kernel_valid" in row and "kernel_volume_mm3" in row}
+
+
 def check(args: argparse.Namespace, pose: Any) -> dict[str, Any]:
+    from cadmodel.check import READBACK_REL
+
     level = FIDELITY.index(args.fidelity)
     loaded = pose.load_parts(args.hw, parts_dir=args.parts_dir)
     assembly = pose.load_assembly(args.hw)
     process = processes(args.hw)
+    facts = kernel_facts(args.parts_dir)
     findings: list[dict[str, Any]] = []
     parts: dict[str, Any] = {}
     cylinders: dict[str, list[dict[str, Any]]] = {}
     for pn, part in sorted(loaded.items()):
         metrics = measure(part.shape)
         cylinders[pn] = metrics.pop("_cylinders")
+        volume = shape_volume(part.shape)
         row = {"name": part.name, "process": process.get(pn), "valid": is_valid(part.shape),
-               "solids": count_solids(part.shape), "volume_mm3": round(shape_volume(part.shape), 3), **metrics}
+               "solids": count_solids(part.shape), "volume_mm3": round(volume, 3), **metrics}
         parts[pn] = row
         if not row["valid"]:
-            findings.append({"check": "brep_invalid", "part": pn})
+            findings.append({"check": "brep_invalid", "part": pn, "source": "step"})
+        if pn in facts:
+            kernel_v = facts[pn]["kernel_volume_mm3"]
+            row["kernel_valid"] = facts[pn]["kernel_valid"]
+            row["readback_rel_error"] = abs(volume - kernel_v) / max(abs(kernel_v), 1e-12)
+            if not row["kernel_valid"]:
+                findings.append({"check": "brep_invalid", "part": pn, "source": "kernel",
+                                 "errors": facts[pn].get("kernel_errors", [])})
+            if row["readback_rel_error"] > READBACK_REL:
+                findings.append({"check": "step_readback", "part": pn, "rel_error": row["readback_rel_error"],
+                                 "max": READBACK_REL, "kernel_volume_mm3": kernel_v, "step_volume_mm3": volume})
         if level < 2 or row["process"] == "purchased":
             continue
         if row["axis_planar_fraction"] >= BLOCK_PLANAR_FRACTION or row["blend_faces"] + row["freeform_faces"] == 0:
@@ -297,6 +325,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--fdm-min-radius", type=float, default=1.0)
     args = parser.parse_args(argv)
     pose = load_pose()
+    sys.path.insert(0, str(CAD_MODEL_SCRIPTS))
     try:
         with pose.stdout_to_stderr():
             report = check(args, pose)

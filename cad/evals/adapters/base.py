@@ -56,21 +56,115 @@ class TrialPaths:
 
     root: Path
     work: Path
-    plugin: Path  # staged copy of the plugin, evals/ excluded
+    plugin: Path  # staged copy of the plugin (directory named `cad`), evals/ excluded
     state: Path  # harness session/state directory, inside the trial root
+    home: Path  # isolated HOME / config root the harness reads instead of the user's
+
+
+@dataclass(frozen=True)
+class Host:
+    """What a trial may take from the host. Nothing else of the user's environment
+    reaches the harness: adapters build the child environment from this alone."""
+
+    base_env: dict[str, str]  # allowlisted variables: PATH, locale, TMPDIR, user, toolchain caches
+    aws_env: dict[str, str]  # short-lived Bedrock credentials exported from the host profile
+    real_home: Path
+
+
+def isolated_home(paths: TrialPaths) -> dict[str, str]:
+    """HOME and the XDG roots pointed into the trial, so no user-level config loads."""
+    home = paths.home
+    return {
+        "HOME": str(home),
+        "XDG_CONFIG_HOME": str(home / ".config"),
+        "XDG_DATA_HOME": str(home / ".local" / "share"),
+        "XDG_CACHE_HOME": str(home / ".cache"),
+        "XDG_STATE_HOME": str(home / ".local" / "state"),
+    }
+
+
+CATEGORIES = ("plugins", "skills", "agents", "commands", "context", "mcp")
+EVAL_AGENT = "cad-eval"  # the sandbox-local agent a harness is pinned to, where it needs one
+
+
+@dataclass
+class Inventory:
+    """Components a harness loaded for one trial, as the harness itself reports them."""
+
+    plugins: list[str] = field(default_factory=list)
+    skills: list[str] = field(default_factory=list)
+    agents: list[str] = field(default_factory=list)
+    commands: list[str] = field(default_factory=list)
+    context: list[str] = field(default_factory=list)  # instruction files, steering, rules, memory
+    mcp: list[str] = field(default_factory=list)
+    missing: list[str] = field(default_factory=list)  # capabilities cad needs that the harness withheld
+    observed: bool = False  # the harness reported its components; False means nothing to verify
+
+    def as_dict(self) -> dict[str, list[str]]:
+        return {cat: sorted(set(getattr(self, cat))) for cat in (*CATEGORIES, "missing")}
+
+
+def cad_allowlist(plugin: Path) -> dict[str, set[str]]:
+    skills = {p.name for p in (plugin / "skills").glob("*") if (p / "SKILL.md").is_file()}
+    agents = {p.stem for p in (plugin / "agents").glob("*.md")} | {EVAL_AGENT}
+    return {"plugins": {"cad"}, "skills": skills, "agents": agents, "commands": skills | agents}
+
+
+def _bare(name: str) -> str:
+    name = name.strip().lstrip("/")
+    for prefix in ("skill:", "cad:"):
+        if name.startswith(prefix):
+            name = name[len(prefix):]
+    return name
+
+
+def leaks(inventory: Inventory, paths: TrialPaths, builtin: dict[str, frozenset[str]]) -> list[str]:
+    """Every loaded component that is neither the cad plugin nor on the harness's
+    bundled list, plus every capability cad needs that is missing. Instruction files
+    pass only when they are the cad plugin's own (the staged copy or `<work>/cad`).
+    Fails closed: an unobserved inventory leaks."""
+    if not inventory.observed:
+        return ["inventory: the harness reported no loaded components to verify"]
+    allow = cad_allowlist(paths.plugin)
+    cad_dirs = {str(p) for d in (paths.plugin, paths.work / "cad") for p in (d, d.resolve())}
+    found = set()
+    for cat in CATEGORIES:
+        for item in getattr(inventory, cat):
+            bare = _bare(item)
+            if bare in allow.get(cat, ()) or bare in builtin.get(cat, ()):
+                continue
+            if cat == "context" and any(d + "/" in item for d in cad_dirs):
+                continue
+            found.add(f"{cat}:{item}")
+    found.update(f"missing:{m}" for m in inventory.missing)
+    return sorted(found)
 
 
 class Adapter(Protocol):
     name: str
     plugin_marker: str  # plugin-root-relative path whose presence means the plugin can load
+    isolation: str  # one line: how ambient user config is kept out
+    builtin: dict[str, frozenset[str]]  # components the harness bundles, observed in a clean run
 
-    def prepare(self, paths: TrialPaths) -> None: ...
+    def prepare(self, paths: TrialPaths, host: Host) -> None: ...
 
     def command(self, *, model: str, prompt: str, paths: TrialPaths, resume: bool) -> list[str]: ...
 
-    def env(self, paths: TrialPaths) -> dict[str, str]: ...
+    def env(self, paths: TrialPaths, host: Host) -> dict[str, str]:
+        """The complete child environment; nothing else is inherited."""
+
+    def probe(self, paths: TrialPaths, model: str, stream_lines: list[str]) -> list[tuple[list[str], str]]:
+        """Model-free commands (argv, stdin), run after the trial's first turn, whose
+        stdout reports loaded components; [] when the turn's own stream reports them."""
+
+    def inventory(self, probe_outputs: list[str], stream_lines: list[str], paths: TrialPaths) -> Inventory:
+        """`probe_outputs` holds one stdout per probe command, in order ('' if it failed)."""
 
     def parse(self, lines: Iterable[str]) -> Turn: ...
+
+    def complete(self, turn: Turn, lines: list[str], paths: TrialPaths, env: dict[str, str]) -> Turn:
+        """Fill what the stream lacks from the harness's own model-free record (OpenCode:
+        served model and usage from the session store). Most adapters return `turn`."""
 
 
 def json_lines(lines: Iterable[str]) -> Iterable[dict]:

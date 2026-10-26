@@ -31,10 +31,16 @@ note; a part whose interfaces change drops back to F1 until the new interface is
   the lighter end and sag or waist the span between the joints.
 - Keep the kinks of the two outlines at different stations: coincident kinks make the
   silhouette fillet fail in OCCT.
+- Keep each outline tangent-continuous wherever a silhouette fillet runs: leave a round on
+  a tangent and blend every shallow kink between straight runs (40 mm on the links). A
+  fillet rolled across a 2-5 degree kink leaves edges 0.03-0.14 mm out of tolerance, and
+  the STEP read-back volume then drifts by ~1e-5: a blocking cad-model `step_readback`.
 - Fillet every silhouette edge with one radius per part; leave tangent seams unfilleted.
 - Put axisymmetric form (puck, boss, shade, cap, socket) into one revolved profile, with
   fillets and chamfers drawn as profile arcs and lines.
 - Run cable channels along the underside, stop them with the cutter's own end form.
+- Give two bores that meet in a T different radii. With equal radii the intersection
+  curves cross at two singular points, and CadQuery 2.8 left an unorientable face there.
 
 ## FDM detailing (PETG, 0.4 mm nozzle)
 

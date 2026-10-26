@@ -126,6 +126,10 @@ def validate_project(project_dir: Path) -> list[dict[str, str]]:
                 findings.append(finding(str(part_path), f"directory name does not match PN {pn}"))
             if pn in part_records:
                 findings.append(finding(str(part_path), f"duplicate part number {pn}"))
+            for decision in part.get("decisions", []):
+                decision_path = hw / "decisions" / f"{decision}.md"
+                if not decision_path.is_file():
+                    findings.append(finding(str(part_path), f"decision {decision} does not exist at decisions/{decision}.md"))
             part_records[pn] = (part, str(part_path))
         if not part_records:
             findings.append(finding(str(parts_dir), "no part records found"))

@@ -1,10 +1,161 @@
 {"type": "runStarted", "data": {"payloadSchema": "acp", "acpProtocolVersion": 1, "engine": "v3"}}
-{"type": "sessionUpdate", "data": {"sessionId": "sess_82210b21-4b71-48bd-b437-ec8c45bafaf3", "update": {"sessionUpdate": "config_option_update", "configOptions": [{"id": "model", "name": "Model", "category": "model", "type": "select", "currentValue": "auto"}]}}}
-{"type": "sessionUpdate", "data": {"sessionId": "sess_82210b21-4b71-48bd-b437-ec8c45bafaf3", "update": {"sessionUpdate": "config_option_update", "configOptions": [{"id": "model", "name": "Model", "category": "model", "type": "select", "currentValue": "auto"}]}}}
-{"type": "sessionUpdate", "data": {"sessionId": "sess_82210b21-4b71-48bd-b437-ec8c45bafaf3", "update": {"sessionUpdate": "config_option_update", "configOptions": [{"id": "model", "name": "Model", "category": "model", "type": "select", "currentValue": "claude-haiku-5.5"}]}}}
-{"type": "sessionUpdate", "data": {"sessionId": "sess_82210b21-4b71-48bd-b437-ec8c45bafaf3", "update": {"sessionUpdate": "tool_call", "toolCallId": "toolu_bdrk_017aLJutnM9fgTXFkfbUwUVP", "title": "Write File", "kind": "edit", "status": "in_progress", "locations": [{"path": "<trial>/work/hello.txt"}], "rawInput": {"path": "<trial>/work/hello.txt", "text": "ok"}}}}
-{"type": "sessionUpdate", "data": {"sessionId": "sess_82210b21-4b71-48bd-b437-ec8c45bafaf3", "update": {"sessionUpdate": "tool_call_update", "toolCallId": "toolu_bdrk_017aLJutnM9fgTXFkfbUwUVP", "status": "pending", "locations": [{"path": "<trial>/work/hello.txt"}], "rawInput": {"path": "<trial>/work/hello.txt", "text": "ok"}}}}
-{"type": "sessionUpdate", "data": {"sessionId": "sess_82210b21-4b71-48bd-b437-ec8c45bafaf3", "update": {"sessionUpdate": "tool_call_update", "toolCallId": "toolu_bdrk_017aLJutnM9fgTXFkfbUwUVP", "status": "completed", "title": "Write File", "content": [{"type": "diff", "path": "file://<trial>/work/hello.txt", "oldText": "", "newText": "ok"}], "locations": [{"path": "<trial>/work/hello.txt"}], "rawInput": {"path": "<trial>/work/hello.txt", "text": "ok"}, "rawOutput": {"message": "Created the <trial>/work/hello.txt file."}}}}
-{"type": "sessionUpdate", "data": {"sessionId": "sess_82210b21-4b71-48bd-b437-ec8c45bafaf3", "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "DONE"}}}}
-{"type": "sessionUpdate", "data": {"sessionId": "sess_82210b21-4b71-48bd-b437-ec8c45bafaf3", "update": {"sessionUpdate": "session_info_update", "_meta": {"kiro": {"promptTurnSummaries": [{"unit": "credit", "unitPlural": "credits", "usage": 0.16072290547263682, "usedTools": ["fs_write"]}], "kind": "turn_completion"}}}}}
-{"type": "runFinished", "data": {"sessionId": "sess_82210b21-4b71-48bd-b437-ec8c45bafaf3", "status": "success", "stopReason": "end_turn", "finalText": "DONE", "finalTextTruncated": false}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "available_commands_update", "availableCommands": [{"name": "general-task-execution", "_meta": {"kiro": {"type": "custom-agent"}}}, {"name": "context-gatherer", "_meta": {"kiro": {"type": "custom-agent"}}}, {"name": "cad-dfm-reviewer", "_meta": {"kiro": {"type": "custom-agent"}}}, {"name": "cad-eval", "_meta": {"kiro": {"type": "custom-agent"}}}, {"name": "cad-mech-reviewer", "_meta": {"kiro": {"type": "custom-agent"}}}]}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "config_option_update", "configOptions": [{"id": "mode", "currentValue": "vibe"}, {"id": "model", "currentValue": "auto"}]}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "session_info_update", "_meta": {"kiro": {"contextUsage": {"breakdown": {"contextFiles": {"items": []}, "memory": null, "tools": {"mcp": null}}}}}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "available_commands_update", "availableCommands": [{"name": "general-task-execution", "_meta": {"kiro": {"type": "custom-agent"}}}, {"name": "context-gatherer", "_meta": {"kiro": {"type": "custom-agent"}}}, {"name": "cad-dfm-reviewer", "_meta": {"kiro": {"type": "custom-agent"}}}, {"name": "cad-eval", "_meta": {"kiro": {"type": "custom-agent"}}}, {"name": "cad-mech-reviewer", "_meta": {"kiro": {"type": "custom-agent"}}}]}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "available_commands_update", "availableCommands": [{"name": "cad-dfm-reviewer", "_meta": {"kiro": {"type": "custom-agent"}}}, {"name": "cad-eval", "_meta": {"kiro": {"type": "custom-agent"}}}, {"name": "cad-mech-reviewer", "_meta": {"kiro": {"type": "custom-agent"}}}, {"name": "cad-bom", "_meta": {"kiro": {"type": "skill"}}}, {"name": "cad-concept", "_meta": {"kiro": {"type": "skill"}}}, {"name": "cad-fits", "_meta": {"kiro": {"type": "skill"}}}, {"name": "cad-flow", "_meta": {"kiro": {"type": "skill"}}}, {"name": "cad-motion", "_meta": {"kiro": {"type": "skill"}}}, {"name": "cad-recheck", "_meta": {"kiro": {"type": "skill"}}}, {"name": "cad-record", "_meta": {"kiro": {"type": "skill"}}}, {"name": "cad-review-dfm", "_meta": {"kiro": {"type": "skill"}}}, {"name": "cad-review-mech", "_meta": {"kiro": {"type": "skill"}}}]}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "config_option_update", "configOptions": [{"id": "mode", "currentValue": "cad-eval"}, {"id": "model", "currentValue": "auto"}]}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "config_option_update", "configOptions": [{"id": "mode", "currentValue": "cad-eval"}, {"id": "model", "currentValue": "claude-haiku-5.5"}]}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "I"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "'m going"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": " through the system"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": " prompt's struct"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "ure to identify all the headings"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": " and sections\u2014"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "security guidelines, work"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": " guidelines with"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": " its"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": " subsections on"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": " underst"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "anding before acting and"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": " making"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": " safe changes, and the"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": " communication guide"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": " cov"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "ering structure, style, and subst"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "ance."}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "\n\n"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "I"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": " also want to check wh"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "ether there's a ."}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "k"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "i"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "ro"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "/steering"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": " direct"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "ory in the workspace since"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": " none"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": " se"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "ems expl"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "icitly loaded, and"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": " I count n"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "ine dist"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "inct skills m"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "entioned in the context"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": " dis"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "closure: cad"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "-bom"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": ", cad-conc"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "ept, cad-fits"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": ", cad-fl"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "ow, cad-mot"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "ion, cad-reche"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "ck, cad-record, c"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "ad-review-df"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "m, and cad-review-"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "mech. I'll ver"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "ify the steering directory and create"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": " the requ"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "ested file in parallel.\n\n"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "tool_call", "toolCallId": "toolu_bdrk_018rgmzMEDCDQMxJUiPFLPJd", "title": "Write File", "kind": "edit", "status": "in_progress", "locations": [{"path": "<trial>/work/hello.txt"}], "rawInput": {"path": "<trial>/work/hello.txt", "text": "ok"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "tool_call_update", "toolCallId": "toolu_bdrk_018rgmzMEDCDQMxJUiPFLPJd", "status": "pending", "locations": [{"path": "<trial>/work/hello.txt"}], "rawInput": {"path": "<trial>/work/hello.txt", "text": "ok"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "tool_call", "toolCallId": "toolu_bdrk_01H7YZEsyE4xFG2UP75U1CfR", "title": "List Directory", "kind": "search", "rawInput": {"path": "<trial>/work", "explanation": "Check the workspace for steering, rule, or instruction files.", "depth": 2}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "tool_call_update", "toolCallId": "toolu_bdrk_01H7YZEsyE4xFG2UP75U1CfR", "status": "failed", "title": "List Directory", "content": [{"type": "content", "content": {"type": "text", "text": "The permission request failed before it was answered, so this call did not run; the user did not reject it."}}], "rawInput": {"path": "<trial>/work", "explanation": "Check the workspace for steering, rule, or instruction files.", "depth": 2, "_meta": {"_isValid": true, "_activePath": [], "_completedPaths": [["path"], ["depth"], ["explanation"]]}}, "rawOutput": {"message": "The permission request failed before it was answered, so this call did not run; the user did not reject it."}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "tool_call_update", "toolCallId": "toolu_bdrk_018rgmzMEDCDQMxJUiPFLPJd", "status": "completed", "title": "Write File", "content": [{"type": "diff", "path": "file://<trial>/work/hello.txt", "oldText": "", "newText": "ok"}], "locations": [{"path": "<trial>/work/hello.txt"}], "rawInput": {"path": "<trial>/work/hello.txt", "text": "ok"}, "rawOutput": {"message": "Created the <trial>/work/hello.txt file."}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "session_info_update", "_meta": {"kiro": {"contextUsage": {"breakdown": {"contextFiles": {"items": []}, "memory": null, "tools": {"mcp": null}}}}}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "session_info_update", "_meta": {"kiro": {"contextUsage": {"breakdown": {"contextFiles": {"items": []}, "memory": null, "tools": {"mcp": null}}}}}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "The"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": " direct"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "ory listing fail"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "ed due to a"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": " permission"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": " issue, which"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": " isn't critical."}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": " I could ret"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "ry with"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": " a b"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "ash command, but it"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": " might"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": " f"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "ail too, so"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": " I'll just hon"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "estly report that"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": " I couldn't check the"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": " workspace for steering"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": " files.\n\n"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "INST"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "RUCTIONS"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "\nKiro system"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": " prompt:"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": " \""}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "KIRO - System Pr"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "ompt\""}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": " (general role stat"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "ement)\nKiro system"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": " prompt: \"Security,"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": " trust and safety\""}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "\nKiro system prompt:"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": " \"Work guidelines\""}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "\nKiro system promp"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "t: \""}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Work guidelines >"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": " Understand before acting\""}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "\nKiro system prompt"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": ": \"Work guidelines"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": " > Make safe, sco"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "ped changes\"\nKi"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "ro system prompt: \""}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Communication Guide\""}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "\nKiro system prompt:"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": " \"Communication Guide >"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": " Structure and style\""}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "\nKiro system prompt:"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": " \"Communication Guide >"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": " Substance and words\""}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "\nHook output channel section"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": " (describ"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "es how H"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "OOK_INSTR"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "UCTION bl"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "ocks are treated)\nSystem"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": " information"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": " section (O"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "S, sh"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "ell, home"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": " directory)\nWorkspace"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": " folder section (work"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "space root and where"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": " to create files)\nSession"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": " context and"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": " environ"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "ment context bl"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "ocks\n\nI could"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": " not check the workspace for `"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": ".kiro`"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": " steering or"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": " rule files because"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": " the"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": " directory listing request was"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": " denied before"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": " it "}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "ran. No steering docum"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "ents were activ"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "ated in this session.\n\nSK"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "ILLS\ncad-b"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "om\ncad-concept"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "\ncad-fits\ncad"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "-flow\ncad-mot"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "ion\ncad-recheck"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "\ncad-record"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "\ncad-review-df"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "m\ncad-review-m"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "ech\n\nI"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": " created `"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "hello.txt` in"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": " the workspace root with the"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": " content `ok`.\n\nD"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "ONE"}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "session_info_update", "_meta": {"kiro": {"contextUsage": {"breakdown": {"contextFiles": {"items": []}, "memory": null, "tools": {"mcp": null}}}}}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "session_info_update", "_meta": {"kiro": {"contextUsage": {"breakdown": {"contextFiles": {"items": []}, "memory": null, "tools": {"mcp": null}}}}}}}}
+{"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "session_info_update", "_meta": {"kiro": {"promptTurnSummaries": [{"unit": "credit", "unitPlural": "credits", "usage": 0.02389980895522388, "usedTools": ["fs_write", "list_directory"]}]}}}}}
+{"type": "runFinished", "data": {"sessionId": "sess_a9e391d1-3e15-4187-b786-3c23b6ee8bf1", "status": "success", "stopReason": "end_turn", "finalText": "INSTRUCTIONS\nKiro system prompt: \"KIRO - System Prompt\" (general role statement)\nKiro system prompt: \"Security, trust and safety\"\nKiro system prompt: \"Work guidelines\"\nKiro system prompt: \"Work guidelines > Understand before acting\"\nKiro system prompt: \"Work guidelines > Make safe, scoped changes\"\nKiro system prompt: \"Communication Guide\"\nKiro system prompt: \"Communication Guide > Structure and style\"\nKiro system prompt: \"Communication Guide > Substance and words\"\nHook output channel section (describes how HOOK_INSTRUCTION blocks are treated)\nSystem information section (OS, shell, home directory)\nWorkspace folder section (workspace root and where to create files)\nSession context and environment context blocks\n\nI could not check the workspace for `.kiro` steering or rule files because the directory listing request was denied before it ran. No steering documents were activated in this session.\n\nSKILLS\ncad-bom\ncad-concept\ncad-fits\ncad-flow\ncad-motion\ncad-recheck\ncad-record\ncad-review-dfm\ncad-review-mech\n\nI created `hello.txt` in the workspace root with the content `ok`.\n\nDONE", "finalTextTruncated": false}}

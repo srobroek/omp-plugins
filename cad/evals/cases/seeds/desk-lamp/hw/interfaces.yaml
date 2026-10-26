@@ -1,0 +1,7 @@
+interfaces:
+  - id: IF-001
+    from: base_sub
+    to: arm_sub
+    type: motion
+    description: Base pivot on an M5 shoulder pin with a running clearance fit.
+    limits: {rotation_deg: [-10, 80]}

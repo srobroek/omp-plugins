@@ -11,6 +11,10 @@ from typing import Any, Iterable
 
 # Boolean fuzzy value in mm: the kernel's own precision, so a Boolean never glues distinct faces.
 FUZZY_MM = 1e-7
+# Relative target of the adaptive volume integration. With BRepGProp's default fixed-order Gauss
+# rule the in-memory and STEP read-back volumes of one valid fluted housing (LMP-0004) differed by
+# 5.6e-6 relative, above the 1e-6 read-back bound; the adaptive rule agreed to 1.6e-11.
+VOLUME_EPS = 1e-9
 
 
 class GeometryError(ValueError):
@@ -77,22 +81,22 @@ def count(shape: Any, kind: str) -> int:
     return len(subshapes(shape, kind))
 
 
-def volume(shape: Any) -> float:
+def _volume_props(shape: Any) -> Any:
     from OCP.BRepGProp import BRepGProp
     from OCP.GProp import GProp_GProps
 
     props = GProp_GProps()
-    BRepGProp.VolumeProperties_s(shape, props)
-    return props.Mass()
+    BRepGProp.VolumeProperties_s(shape, props, VOLUME_EPS, False)
+    return props
+
+
+def volume(shape: Any) -> float:
+    return _volume_props(shape).Mass()
 
 
 def mass_properties(shape: Any) -> tuple[float, tuple[float, float, float]]:
     """(volume mm^3, centre of volume)."""
-    from OCP.BRepGProp import BRepGProp
-    from OCP.GProp import GProp_GProps
-
-    props = GProp_GProps()
-    BRepGProp.VolumeProperties_s(shape, props)
+    props = _volume_props(shape)
     centre = props.CentreOfMass()
     return props.Mass(), (centre.X(), centre.Y(), centre.Z())
 

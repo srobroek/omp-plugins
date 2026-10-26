@@ -4,6 +4,7 @@ title: Upper link
 material: Aluminum 6061-T6
 process: cnc
 finish: Bead-blast and clear anodize
-mass_target: 300
+mass_target: 138
 make_buy: make
 supplier: null
+decisions: [DR-002]

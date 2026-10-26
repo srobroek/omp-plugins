@@ -15,6 +15,8 @@ leaves nothing.
 | `manifest.json` | `parts.<PN>`: `kernel`, `model`, `source_sha256`, `params`, `kernel_volume_mm3`, `kernel_solids`, `kernel_valid`, `kernel_errors`; `tools` per environment with `import_s`; `pose` (values, transforms); `joint_pairs`; `ground`; `glb` tessellation; `files` sha256 |
 
 Metrics and bboxes are in assembly coordinates at the zero pose, read back from the per-part STEP.
+Every volume is BRepGProp's adaptive integration to 1e-9 relative (`occ.VOLUME_EPS`); the default
+fixed-order rule is off by up to ~6e-6 on revolved and filleted B-spline faces.
 Mass is solid-material mass: `volume_mm3 * density / 1000`, density from `assets/materials.yaml`.
 
 `hw/versions/latest.json` names the newest successful version, every path relative to `hw/`:
@@ -47,10 +49,15 @@ Top level: `status` pass|fail, `label`, `pose: nominal`, `baseline` (previous la
 | `solid_structure` | yes | a part has no solid, or its solid count differs from `--expect-solids` or else from the previous version |
 | `interference` | yes | two parts share more than 1e-3 mm^3 at the nominal pose, unless `--allow-interference` names the pair; joint-connected pairs are listed under `joint_pairs`, others under `pairs`; `min_clearance` names the closest pair |
 | `connection` | yes | a part is `disconnected` (nearest part > 2.0 mm away) or `floating` (0.01 to 2.0 mm) without a joint; `touching` is <= 0.01 mm |
-| `mesh_watertight` | yes | a part's GLB triangles, welded by position, are not a closed 2-manifold (trimesh) |
+| `mesh_watertight` | yes | a part's GLB triangles, welded by position, are not a closed 2-manifold (trimesh); triangles whose corners weld to fewer than three vertices (BRepMesh emits one at a sphere pole on a face boundary) are dropped first and counted in `collapsed_triangles` |
 | `slivers_tolerances` | no (warn) | a face is smaller than 1e-3 mm^2, or a vertex/edge/face tolerance exceeds 0.01 mm |
 
 `--pair PN:PN` restricts `interference` to the named pairs; every pair still feeds `connection`.
+
+A tolerant B-rep fails `step_readback` on purpose: when filleted edges carry tolerances of
+0.01 to 0.1 mm, a STEP round trip rebuilds their face boundaries and moves the volume by about
+1e-5, and again on each further trip. Fix the model (tangent-continuous outlines under fillets),
+not the bound.
 
 ## Diff result (`diff`)
 

@@ -4,6 +4,7 @@ title: M5 x 30 shoulder pin
 material: Stainless steel A2
 process: purchased
 finish: Passivated
-mass_target: 9
+mass_target: 5.8
 make_buy: buy
 supplier: null
+decisions: [DR-002]

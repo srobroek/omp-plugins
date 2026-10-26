@@ -1,0 +1,3 @@
+requirement_id,method,criteria,result,evidence
+REQ-001,I,Pin holes measure Ø5.5 mm ±0.05 on the released model.,planned,
+REQ-002,I,Four Ø4.5 mm clearance holes on a 64 mm square and one Ø8.5 mm centre hole.,planned,

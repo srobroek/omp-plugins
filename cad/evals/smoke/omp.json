@@ -8,46 +8,80 @@
     "json",
     "--no-title",
     "--auto-approve",
-    "--profile",
-    "cad-eval",
+    "--plugin-dir",
+    "<trial>/cad",
     "--session-dir",
     "<trial>/state",
-    "Create a file named hello.txt whose entire content is the word ok, then reply with the single word DONE."
+    "First, under the heading INSTRUCTIONS, list every instruction file, rule file, steering document and system-prompt section you were given (file path or section heading, one per line), other than skill bodies. Then, under the heading SKILLS, list the names of every skill available to you, one per line. Then create a file named hello.txt whose entire content is the word ok. End your reply with the single word DONE."
   ],
-  "at": "2026-10-26T09:57:43+00:00",
+  "at": "2026-10-26T11:14:13+00:00",
   "file_written": true,
   "harness": "omp",
-  "latency_s": 6.535,
-  "ok": true,
-  "reparsed_with_current_adapter": {
-    "error": null,
-    "served_matches": true,
-    "served_model": "global.anthropic.claude-haiku-5-5",
-    "text": "DONE",
-    "tools": [
-      "write"
+  "inventory": {
+    "agents": [
+      "cad-dfm-reviewer",
+      "cad-mech-reviewer",
+      "reviewer",
+      "scout",
+      "seance",
+      "security-reviewer",
+      "sonic",
+      "task"
     ],
-    "usage": {
-      "cacheRead": 11950,
-      "cacheWrite": 12160,
-      "cost_usd": 0.001728,
-      "input": 6,
-      "output": 176
-    }
+    "commands": [
+      "annotate",
+      "autoresearch",
+      "green",
+      "init",
+      "review",
+      "skill:cad-bom",
+      "skill:cad-concept",
+      "skill:cad-fits",
+      "skill:cad-flow",
+      "skill:cad-motion",
+      "skill:cad-recheck",
+      "skill:cad-record",
+      "skill:cad-review-dfm",
+      "skill:cad-review-mech"
+    ],
+    "context": [],
+    "mcp": [],
+    "missing": [],
+    "plugins": [],
+    "skills": [
+      "cad-bom",
+      "cad-concept",
+      "cad-fits",
+      "cad-flow",
+      "cad-motion",
+      "cad-recheck",
+      "cad-record",
+      "cad-review-dfm",
+      "cad-review-mech"
+    ]
   },
+  "isolation": "clean",
+  "isolation_mechanism": "HOME, PI_CODING_AGENT_DIR and XDG_* in the trial; cad via --plugin-dir; AWS credentials exported to env",
+  "isolation_with_current_adapter": {
+    "isolation": "clean",
+    "leaks": []
+  },
+  "latency_s": 11.091,
+  "leaks": [],
+  "ok": true,
   "requested_model": "amazon-bedrock/global.anthropic.claude-haiku-5-5",
   "served_matches": true,
   "served_model": "global.anthropic.claude-haiku-5-5",
-  "text": "DONE",
+  "text": "INSTRUCTIONS\n\u00a7 Role\n\u00a7 Runtime\n\u00a7 Tool Policy\n\u00a7 Workflow\n\u00a7 Delivery\n\u00a7 Critical\nproject-context\nxd:// Tool Devices (xd://ast_edit, xd://debug, xd://lsp; read on demand)\n\nSKILLS\ncad-bom\ncad-concept\ncad-fits\ncad-flow\ncad-motion\ncad-recheck\ncad-record\ncad-review-dfm\ncad-review-mech\n\nhello.txt was written with content `ok` (2 bytes).\n\nDONE",
   "tools": [
     "write"
   ],
   "transcript_entries": 5,
   "usage": {
-    "cacheRead": 11950,
-    "cacheWrite": 12160,
-    "cost_usd": 0.001728,
+    "cacheRead": 12653,
+    "cacheWrite": 13277,
+    "cost_usd": 0.002173,
     "input": 6,
-    "output": 176
+    "output": 771
   }
 }
