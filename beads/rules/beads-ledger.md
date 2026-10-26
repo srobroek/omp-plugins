@@ -16,6 +16,8 @@ MUST put useful facts in bead `metadata`, not comments or the description, inclu
 # AGENT ROUTING
 MUST set `execution_agent_type` in `metadata` at creation on every work bead, with one of `implementer`, `implementer-high`, `researcher`, or `operator`. Add `execution_reasoning_effort` (`low`, `medium`, `high`, or `xhigh`) ONLY when the bead deviates from that agent's default effort. These are bd's documented advisory execution keys; the dispatching parent reads them before spawning. Example: `bd create "title" -t task -p 2 --metadata '{"execution_agent_type":"implementer"}' --acceptance "CRITERIA"`; in a graph plan, put the same keys in the node's `metadata`.
 
+Steps poured from a plugin formula MAY instead name that plugin's own agent, for example `speckit-verify` or `speckit-sync` from the speckit formulas. The dispatching parent spawns the named agent directly, never a delivery implementer, which returns `BLOCKED` on the mismatch. Beads you create yourself still use the four types above.
+
 Choose each bead's type from the work that bead itself does, never from the plan's overall importance, risk, or size:
 
 - `implementer-high`: root-cause debugging where the cause is not yet known, concurrency or data-integrity logic, a change to a contract other modules consume, algorithmic or numeric precision rules, or acceptance that needs a design decision the bead text does not make.
