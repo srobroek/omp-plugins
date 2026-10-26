@@ -16,6 +16,7 @@ let state = null;
 let lastJson = "";
 let busy = false;
 let refused = false; // the last action's error stays in the status line until the next action
+const connectErrors = {}; // slot -> why its viewer did not get the model; kept until it does
 
 async function api(route, body) {
   const options = body === undefined ? {} : {
@@ -67,7 +68,7 @@ async function act(button, route, body) {
   setStatus("Updating the viewer…");
   try {
     accept(await api(route, body));
-    setStatus(statusLine());
+    showStatus();
   } catch (error) {
     refused = true;
     setStatus(`Viewer host refused: ${error.message}`, "error");
@@ -91,6 +92,13 @@ function statusLine() {
     : `${version.label} shown`;
   const anim = state.animation ? ` · animating ${state.animation.joint}` : "";
   return `${shown}${anim}`;
+}
+
+function showStatus() {
+  const failed = Object.entries(connectErrors).map(([slot, message]) =>
+    `Viewer ${slot.toUpperCase()} did not receive the model: ${message}`);
+  if (failed.length) setStatus(failed.join(" · "), "error");
+  else setStatus(statusLine());
 }
 
 function renderBar() {
@@ -259,7 +267,7 @@ function accept(next) {
 async function refresh() {
   try {
     accept(await api("/api/state"));
-    if (!busy && !refused) setStatus(statusLine());
+    if (!busy && !refused) showStatus();
   } catch (error) {
     setStatus(`Viewer host not answering: ${error.message}`, "error");
   }
@@ -276,8 +284,9 @@ function loadFrame(slot) {
   frame.addEventListener("load", () => {
     // OCP CAD Viewer does not replay its last model to a new page: ask the host to push it.
     for (const delay of CONNECT_DELAYS_MS) {
-      setTimeout(() => api("/api/connected", { slot, audience: AUDIENCE }).then(refresh)
-        .catch((e) => setStatus(e.message, "error")), delay);
+      setTimeout(() => api("/api/connected", { slot, audience: AUDIENCE })
+        .then(() => { delete connectErrors[slot]; return refresh(); })
+        .catch((e) => { connectErrors[slot] = e.message; if (!busy && !refused) showStatus(); }), delay);
     }
   });
   frame.src = state.slots[slot].urls[AUDIENCE];

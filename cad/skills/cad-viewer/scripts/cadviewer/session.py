@@ -2,10 +2,18 @@
 
 `serve` starts `viewer.py host` detached and records its ports and PID; every other command
 reads the session file and talks to the host over loopback HTTP. Stdlib only.
+
+The host leads its own process group (`start_new_session`), which holds its ocp_viewer servers
+and Playwright driver too: a host that has to be killed is killed with its group. A PID is only
+ever signalled once its host has answered /api/health with that PID and `ps` shows it as this
+session's `viewer.py host --session <path>`: a session file outlives reboots and crashes, and
+the PID may since belong to another process.
 """
 
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import json
 import os
 import signal
@@ -16,13 +24,15 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Iterator
 
 from . import LimitError, ViewerError
 
 HOST = "127.0.0.1"
-START_TIMEOUT_S = 300.0  # a cold ocp_viewer import plus its server start
+START_TIMEOUT_S = 720.0  # beyond the host's own limits (viewers 480 s, presenter 180 s), so it fails first
 REQUEST_TIMEOUT_S = 600.0  # a show tessellates every part
+STOP_TIMEOUT_S = 60.0  # the host closes its browser and its viewers, each given 20-30 s
+KILL_GRACE_S = 10.0  # between SIGTERM and SIGKILL to a process group
 
 
 def session_path() -> Path:
@@ -63,16 +73,21 @@ def read_session(path: Path) -> dict[str, Any] | None:
     return data if isinstance(data, dict) and isinstance(data.get("pid"), int) else None
 
 
-def live_session(path: Path) -> dict[str, Any] | None:
-    """The recorded session when its host answers /api/health, else None."""
-    data = read_session(path)
-    if data is None or not pid_alive(data["pid"]):
+def health(data: dict[str, Any]) -> dict[str, Any] | None:
+    """The host's /api/health answer when it comes from the recorded PID, else None."""
+    if not pid_alive(data["pid"]):
         return None
     try:
-        health = call(data, "GET", "/api/health", timeout=5)
+        answer = call(data, "GET", "/api/health", timeout=5)
     except ViewerError:
         return None
-    return data if health.get("pid") == data["pid"] else None
+    return answer if answer.get("pid") == data["pid"] else None
+
+
+def live_session(path: Path) -> dict[str, Any] | None:
+    """The recorded session when its host answers /api/health as the recorded PID, else None."""
+    data = read_session(path)
+    return data if data is not None and health(data) is not None else None
 
 
 def require_session(path: Path) -> dict[str, Any]:
@@ -92,10 +107,11 @@ def call(session: dict[str, Any], method: str, route: str, body: dict[str, Any] 
         with urllib.request.urlopen(request, timeout=timeout) as response:
             return json.loads(response.read() or b"{}")
     except urllib.error.HTTPError as error:
-        try:
-            answer = json.loads(error.read() or b"{}")
-        except ValueError:
-            answer = {}
+        with error:
+            try:
+                answer = json.loads(error.read() or b"{}")
+            except ValueError:
+                answer = {}
         message = answer.get("error") or f"HTTP {error.code} from {route}"
         if error.code == 422:
             raise LimitError(message, answer.get("findings") or []) from error
@@ -111,16 +127,39 @@ def describe(session: dict[str, Any], script: Path, reused: bool) -> dict[str, A
             "stop": f"uv run --script {script} stop"}
 
 
+@contextlib.contextmanager
+def _exclusive(path: Path) -> Iterator[None]:
+    """Holds an exclusive lock beside the session file: one `serve` or `stop` at a time."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path.with_name(f"{path.name}.lock"), os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)  # closing the descriptor releases the lock
+
+
 def start(path: Path, script: Path, panel_port: int, port_a: int, port_b: int,
           viewport: tuple[int, int]) -> tuple[dict[str, Any], bool]:
     """Reuse the live session or spawn a detached host; returns (session, reused).
 
     `port_a`/`port_b` are the user's viewers (0 picks free ports); the presenter's pair always
-    takes free ports.
+    takes free ports. A host whose presenter browser died is stopped and replaced, as it could
+    take no capture. Concurrent calls queue on the session lock, so a retried `serve` waits for
+    the host the first one is starting instead of spawning a second.
     """
-    existing = live_session(path)
-    if existing is not None:
-        return existing, True
+    with _exclusive(path):
+        existing = read_session(path)
+        answer = health(existing) if existing is not None else None
+        if answer is not None and answer.get("presenter"):
+            return existing, True
+        if answer is not None:
+            _stop_host(existing, path)
+        return _spawn(path, script, panel_port, port_a, port_b, viewport), False
+
+
+def _spawn(path: Path, script: Path, panel_port: int, port_a: int, port_b: int,
+           viewport: tuple[int, int]) -> dict[str, Any]:
     panel = panel_port or free_port()
     viewers = {"a": port_a, "b": port_b, "presenter_a": 0, "presenter_b": 0}
     viewers = {name: port or free_port() for name, port in viewers.items()}
@@ -128,7 +167,6 @@ def start(path: Path, script: Path, panel_port: int, port_a: int, port_b: int,
     busy = [p for p in ports if port_open(p)]
     if busy or len(set(ports)) != len(ports):
         raise ViewerError(f"ports not free or not distinct: {ports}")
-    path.parent.mkdir(parents=True, exist_ok=True)
     path.unlink(missing_ok=True)  # a stale file from a host that died without `stop`
     log_path = path.with_name("host.log")
     with log_path.open("w", encoding="utf-8") as log:
@@ -140,30 +178,108 @@ def start(path: Path, script: Path, panel_port: int, port_a: int, port_b: int,
     deadline = time.monotonic() + START_TIMEOUT_S
     while time.monotonic() < deadline:
         if process.poll() is not None:
+            _end_group(process.pid, process)  # whatever the host left behind
             raise ViewerError(f"viewer host exited {process.returncode}; see {log_path}")
         data = read_session(path)
-        if data is not None and data["pid"] == process.pid and live_session(path) is not None:
-            return data, False
+        if data is not None and data["pid"] == process.pid and health(data) is not None:
+            return data
         time.sleep(0.5)
-    process.terminate()
+    _end_group(process.pid, process)
+    path.unlink(missing_ok=True)
     raise ViewerError(f"viewer host did not answer within {START_TIMEOUT_S:.0f} s; see {log_path}")
 
 
 def stop(path: Path) -> dict[str, Any]:
-    data = read_session(path)
-    if data is None:
+    """Stop the recorded host when it proves its PID; otherwise only drop the stale file."""
+    if not path.parent.is_dir():
         return {"status": "stopped", "pid": None, "detail": f"no session file at {path}"}
-    pid = data["pid"]
-    if pid_alive(pid):
-        try:
-            call(data, "POST", "/api/stop", {}, timeout=10)
-        except ViewerError:
-            os.kill(pid, signal.SIGTERM)
-        deadline = time.monotonic() + 30
-        while pid_alive(pid) and time.monotonic() < deadline:
-            time.sleep(0.25)
-        if pid_alive(pid):
-            os.kill(pid, signal.SIGKILL)
+    with _exclusive(path):
+        data = read_session(path)
+        if data is None:
+            return {"status": "stopped", "pid": None, "detail": f"no session file at {path}"}
+        if health(data) is None:
+            path.unlink(missing_ok=True)
+            return {"status": "stale", "pid": data["pid"],
+                    "detail": f"no viewer host answered as PID {data['pid']}; nothing signalled, {path} removed"}
+        forced = _stop_host(data, path)
+        path.unlink(missing_ok=True)
     ports = data.get("ports", {})
-    path.unlink(missing_ok=True)
-    return {"status": "stopped", "pid": pid, "ports_free": {name: not port_open(p) for name, p in ports.items()}}
+    return {"status": "stopped", "pid": data["pid"], "forced": forced,
+            "ports_free": {name: not port_open(p) for name, p in ports.items()}}
+
+
+def host_command(pid: int) -> str:
+    """The command line `ps` shows for `pid`, "" when there is no such process."""
+    result = subprocess.run(["ps", "-ww", "-o", "command=", "-p", str(pid)], capture_output=True, text=True,
+                            check=False)
+    return result.stdout.strip()
+
+
+def _stop_host(data: dict[str, Any], path: Path) -> bool:
+    """Stop a host that just proved its PID; True when its process group had to be killed.
+
+    The host is asked first. Signals go only to a PID whose command line is this session's
+    `viewer.py host --session <path>`, the second proof that the PID is still the host.
+    """
+    pid = data["pid"]
+    try:
+        call(data, "POST", "/api/stop", {}, timeout=10)
+    except ViewerError:
+        _require_host_command(pid, path)
+        _send(os.kill, pid, signal.SIGTERM)  # the host's handler runs the same cleanup
+    deadline = time.monotonic() + STOP_TIMEOUT_S
+    while pid_alive(pid) and time.monotonic() < deadline:
+        time.sleep(0.25)
+    if not pid_alive(pid):
+        return False
+    _require_host_command(pid, path)
+    _end_group(pid)
+    return True
+
+
+def _require_host_command(pid: int, path: Path) -> None:
+    command = host_command(pid)
+    if "viewer.py" not in command or f" host --session {path}" not in command:
+        raise ViewerError(f"PID {pid} is not `viewer.py host --session {path}` ({command or 'no such process'!r}); "
+                          "not signalled")
+
+
+def _send(kill: Callable[[int, int], None], target: int, sig: int) -> bool:
+    """`os.kill` or `os.killpg` one target; False when it is already gone."""
+    try:
+        kill(target, sig)
+    except ProcessLookupError:
+        return False
+    except PermissionError as error:
+        raise ViewerError(f"not permitted to signal {target}: {error}") from error
+    return True
+
+
+def _end_group(pgid: int, leader: subprocess.Popen | None = None) -> None:
+    """SIGTERM the process group `pgid`, then SIGKILL whatever is left after KILL_GRACE_S.
+
+    `leader` is the group leader when it is this process's child: it is reaped while waiting,
+    so its zombie does not keep the group alive.
+    """
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        if not _send(os.killpg, pgid, sig):
+            break
+        deadline = time.monotonic() + KILL_GRACE_S
+        while not _group_gone(pgid, leader) and time.monotonic() < deadline:
+            time.sleep(0.2)
+        if _group_gone(pgid, leader):
+            break
+    if leader is not None:
+        leader.wait()
+
+
+def _group_gone(pgid: int, leader: subprocess.Popen | None) -> bool:
+    if leader is not None:
+        leader.poll()
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return True
+    except PermissionError:
+        pass  # a member this user may not signal still exists
+    return False

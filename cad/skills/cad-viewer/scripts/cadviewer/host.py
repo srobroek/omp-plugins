@@ -8,11 +8,17 @@ copies the camera between the two.
 Each slot runs one viewer per audience. ocp_viewer serves one registered browser per port (the
 last page to connect), so the user's tab and the headless presenter page that captures read
 each get their own viewer, and every show, config, clip, animation, and camera change goes to
-both. The presenter's camera alone moves while a capture measures the frame.
+both. The presenter's camera alone moves while a capture measures the frame, and no other request
+may change the viewer state until that capture is done (CaptureGuard).
+
+The API answers only requests addressed to 127.0.0.1 or localhost on its port (`Host`), from no
+page or its own (`Origin`), with a JSON body on POST: a web page the user visits can neither
+send it a simple cross-origin request nor reach it through DNS rebinding.
 """
 
 from __future__ import annotations
 
+import contextlib
 import json
 import mimetypes
 import os
@@ -26,7 +32,7 @@ from dataclasses import dataclass, field
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 from urllib.parse import parse_qs, urlsplit
 
 from . import LimitError, ViewerError, capture, motion, record
@@ -43,12 +49,65 @@ TREE_WIDTH = 300  # wide enough for "LMP-0001 Base plate and pivot boss" style p
 SECTION_ZOOM = 6.0  # close-up on the cut joint: the viewer fits the whole scene, then applies this
 STUDIO_KEYS = ("environment", "env_intensity", "env_rotation", "background", "tone_mapping", "exposure",
                "shadow_intensity", "shadow_softness", "ao_intensity", "texture_mapping")
-VIEWER_START_S = 300.0
+VIEWER_START_S = 480.0  # a cold ocp_viewer import on a loaded machine took over 240 s; within START_TIMEOUT_S
+VIEWER_STOP_S = 20.0
+CAPTURE_TIMEOUT_S = 540.0  # within the CLI's REQUEST_TIMEOUT_S, so its answer reaches the CLI
 SYNC_PERIOD_S = 0.2
 SYNC_COOLDOWN_S = 0.8
 CAMERA_KEYS = ("position", "quaternion", "target", "zoom")
 AUDIENCES = ("user", "presenter")  # the user's browser tab; the headless page captures read
 PRESETS = {"iso": "ISO", "front": "FRONT", "side": "RIGHT", "top": "TOP"}
+# POST routes that change what the viewers show: refused while a capture runs. /api/connected
+# replays the state to one reconnecting page (a capture re-announces its own), and /api/stop
+# must always work.
+CHANGES = ("/api/show", "/api/compare", "/api/mode", "/api/parts", "/api/view", "/api/animate", "/api/studio")
+
+
+class CaptureBusy(ViewerError):
+    """A request that would change the viewer state arrived during a capture; maps to HTTP 409."""
+
+
+class CaptureGuard:
+    """Keeps the viewer state still for one capture at a time.
+
+    A change (CHANGES) or a second capture that arrives while a capture runs is refused; a
+    capture waits for the changes already in flight. The guard is not `Host.lock`: the capture's
+    own host calls and the panel's GET /api/state, which the capture triggers, run meanwhile.
+    """
+
+    def __init__(self) -> None:
+        self._cond = threading.Condition()
+        self._capturing = False
+        self._changes = 0
+
+    @property
+    def capturing(self) -> bool:
+        with self._cond:
+            return self._capturing
+
+    @contextlib.contextmanager
+    def change(self) -> Iterator[None]:
+        with self._cond:
+            if self._capturing:
+                raise CaptureBusy("capture in progress; retry when it has finished")
+            self._changes += 1
+        try:
+            yield
+        finally:
+            with self._cond:
+                self._changes -= 1
+                self._cond.notify_all()
+
+    def begin_capture(self) -> None:
+        with self._cond:
+            if self._capturing:
+                raise CaptureBusy("capture in progress; retry when it has finished")
+            self._capturing = True
+            self._cond.wait_for(lambda: self._changes == 0)
+
+    def end_capture(self) -> None:
+        with self._cond:
+            self._capturing = False
 
 
 @dataclass
@@ -143,6 +202,7 @@ class Host:
         # Set while a capture moves the presenter's slot a camera to measure it: the sync thread must
         # not copy a half-reported camera to b. The capture copies a -> b itself when it is done.
         self.sync_hold = threading.Event()
+        self.guard = CaptureGuard()
 
     def _viewers(self) -> list[tuple[str, str, Viewer]]:
         return [(slot.name, aud, viewer) for slot in self.slots.values() for aud, viewer in slot.viewers.items()]
@@ -152,11 +212,11 @@ class Host:
     def start_viewers(self) -> None:
         log_dir = self.session_file.parent
         for name, aud, viewer in self._viewers():
-            log = (log_dir / f"viewer-{port_name(name, aud)}.log").open("w", encoding="utf-8")
-            viewer.process = subprocess.Popen(
-                [sys.executable, "-m", "ocp_viewer", "--host", HOST, "--port", str(viewer.port), "--theme", "light",
-                 "--tree_width", str(TREE_WIDTH)],
-                stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
+            with (log_dir / f"viewer-{port_name(name, aud)}.log").open("w", encoding="utf-8") as log:
+                viewer.process = subprocess.Popen(
+                    [sys.executable, "-m", "ocp_viewer", "--host", HOST, "--port", str(viewer.port), "--theme",
+                     "light", "--tree_width", str(TREE_WIDTH)],
+                    stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
         deadline = time.monotonic() + VIEWER_START_S
         for name, aud, viewer in self._viewers():
             while not port_open(viewer.port):
@@ -165,14 +225,17 @@ class Host:
                 time.sleep(0.5)
 
     def stop_viewers(self) -> None:
-        for _, _, viewer in self._viewers():
-            if viewer.process is not None and viewer.process.poll() is None:
-                viewer.process.terminate()
-                try:
-                    viewer.process.wait(timeout=20)
-                except subprocess.TimeoutExpired:
-                    viewer.process.kill()
-                    viewer.process.wait()
+        """Terminate every running viewer at once, then kill those still up after VIEWER_STOP_S."""
+        running = [v.process for _, _, v in self._viewers() if v.process is not None and v.process.poll() is None]
+        for process in running:
+            process.terminate()
+        deadline = time.monotonic() + VIEWER_STOP_S
+        for process in running:
+            try:
+                process.wait(timeout=max(0.0, deadline - time.monotonic()))
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
 
     def session(self) -> dict[str, Any]:
         user = {n: s.viewers["user"].port for n, s in self.slots.items()}
@@ -532,8 +595,8 @@ class Host:
     # ------------------------------------------------------------------ HTTP
 
     def routes(self) -> dict[tuple[str, str], Any]:
-        return {
-            ("GET", "/api/health"): lambda q, b: {"pid": os.getpid()},
+        routes = {
+            ("GET", "/api/health"): lambda q, b: self.health(),
             ("GET", "/api/state"): lambda q, b: self.state(),
             ("POST", "/api/show"): lambda q, b: self.show_version(b),
             ("POST", "/api/compare"): lambda q, b: self.compare(b),
@@ -546,86 +609,153 @@ class Host:
             ("POST", "/api/studio"): lambda q, b: self.studio(b),
             ("POST", "/api/stop"): lambda q, b: self.request_stop(),
         }
+        return {key: self._held_for_capture(route) if key[1] in CHANGES else route for key, route in routes.items()}
+
+    def _held_for_capture(self, route: Any) -> Any:
+        def guarded(query: dict[str, Any], body: dict[str, Any]) -> Any:
+            with self.guard.change():
+                return route(query, body)
+        return guarded
+
+    def health(self) -> dict[str, Any]:
+        """`presenter` is false once the headless browser is gone: such a host takes no capture."""
+        return {"pid": os.getpid(), "presenter": self.presenter is not None and self.presenter.alive(),
+                "capturing": self.guard.capturing}
 
     def request_stop(self) -> dict[str, Any]:
         threading.Timer(0.2, self.halt.set).start()
         return {"status": "stopping", "pid": os.getpid()}
 
     def capture(self, body: dict[str, Any]) -> dict[str, Any]:
+        """One capture on the presenter; the guard holds until the presenter has finished it,
+        even when this request has given up waiting."""
         if self.presenter is None:
             raise ViewerError("presenter browser is not running")
-        return self.presenter.submit(lambda page: capture.capture(self, page, body))
+        self.guard.begin_capture()
+        try:
+            job = self.presenter.submit(lambda page: capture.capture(self, page, body))
+        except BaseException:
+            self.guard.end_capture()
+            raise
+        job.add_done_callback(lambda _: self.guard.end_capture())
+        return self.presenter.result(job, CAPTURE_TIMEOUT_S, "capture")
 
     def serve(self) -> None:
-        self.start_viewers()
-        host = self
-        routes = self.routes()
+        """Start the viewers, the API, and the presenter; serve until /api/stop or SIGTERM.
 
-        class Handler(BaseHTTPRequestHandler):
-            server_version = "cad-viewer/1"
-
-            def log_message(self, fmt: str, *args: Any) -> None:
-                if self.command != "GET" or not str(args[1] if len(args) > 1 else "").startswith("2"):
-                    sys.stderr.write(f"[panel] {fmt % args}\n")
-
-            def _send(self, status: int, body: bytes, kind: str) -> None:
-                self.send_response(status)
-                self.send_header("Content-Type", kind)
-                self.send_header("Content-Length", str(len(body)))
-                self.send_header("Cache-Control", "no-store")
-                self.end_headers()
-                self.wfile.write(body)
-
-            def _json(self, status: int, data: Any) -> None:
-                self._send(status, json.dumps(data, default=str).encode(), "application/json")
-
-            def _route(self, method: str) -> None:
-                url = urlsplit(self.path)
-                if method == "GET" and url.path in STATIC:
-                    path = STATIC[url.path]
-                    kind = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
-                    self._send(HTTPStatus.OK, path.read_bytes(), f"{kind}; charset=utf-8")
-                    return
-                handler = routes.get((method, url.path))
-                if handler is None:
-                    self._json(HTTPStatus.NOT_FOUND, {"error": f"no route {method} {url.path}"})
-                    return
-                try:
-                    length = int(self.headers.get("Content-Length") or 0)
-                    body = json.loads(self.rfile.read(length) or b"{}") if length else {}
-                    if not isinstance(body, dict):
-                        raise ViewerError("request body must be a JSON object")
-                    self._json(HTTPStatus.OK, handler(parse_qs(url.query), body))
-                except LimitError as error:
-                    self._json(HTTPStatus.UNPROCESSABLE_ENTITY, {"error": str(error), "findings": error.findings})
-                except (ViewerError, ValueError) as error:
-                    self._json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
-                except Exception as error:  # noqa: BLE001 - report infrastructure failures to the caller
-                    traceback.print_exc()
-                    self._json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": f"{type(error).__name__}: {error}"})
-
-            def do_GET(self) -> None:  # noqa: N802
-                self._route("GET")
-
-            def do_POST(self) -> None:  # noqa: N802
-                self._route("POST")
-
-        self.server = ThreadingHTTPServer((HOST, self.panel_port), Handler)
-        self.server.daemon_threads = True
-        signal.signal(signal.SIGTERM, lambda *_: self.halt.set())
-        threading.Thread(target=self.server.serve_forever, name="http", daemon=True).start()
-        threading.Thread(target=self.sync_cameras, name="camera-sync", daemon=True).start()
-        self.presenter = Presenter(self, f"http://{HOST}:{self.panel_port}/?audience=presenter", *self.viewport)
-        self.presenter.start()
+        SIGTERM raises SystemExit from the first line on, so a host stopped at any point, even
+        while its viewers start, runs the cleanup below; a second SIGTERM during it is ignored.
+        """
+        signal.signal(signal.SIGTERM, _exit_on_sigterm)
+        serving = False
         try:
-            self.presenter.submit(lambda page: None, timeout=60.0)
+            self.start_viewers()
+            self.server = make_server(self)
+            threading.Thread(target=self.server.serve_forever, name="http", daemon=True).start()
+            serving = True
+            threading.Thread(target=self.sync_cameras, name="camera-sync", daemon=True).start()
+            self.presenter = Presenter(self, f"http://{HOST}:{self.panel_port}/?audience=presenter", *self.viewport)
+            self.presenter.start()
+            self.presenter.result(self.presenter.submit(lambda page: None), 60.0, "presenter start")
             self.session_file.write_text(json.dumps(self.session(), indent=2), encoding="utf-8")
-            self.halt.wait()
+            while not self.halt.wait(0.5):  # timed, so a SIGTERM handler runs promptly
+                pass
         finally:
-            self.presenter.stop()
-            self.server.shutdown()
-            self.server.server_close()
+            signal.signal(signal.SIGTERM, signal.SIG_IGN)
+            self.halt.set()
+            if self.presenter is not None:
+                self.presenter.stop()
+            if serving:
+                self.server.shutdown()
+            if self.server is not None:
+                self.server.server_close()
             self.stop_viewers()
+
+
+def _exit_on_sigterm(signum: int, _frame: Any) -> None:
+    raise SystemExit(128 + signum)
+
+
+def make_server(host: Host) -> ThreadingHTTPServer:
+    """The panel page and API on host.panel_port, bound but not yet serving.
+
+    A request is refused unless its Host names this port on 127.0.0.1 or localhost (403, DNS
+    rebinding), an Origin it carries is that same origin (403, another site's page), and a POST
+    body is application/json (415): a cross-origin JSON POST needs a preflight this server never
+    grants. The panel's same-origin fetches and the CLI's urllib calls pass all three.
+    """
+    routes = host.routes()
+    names = {f"{HOST}:{host.panel_port}", f"localhost:{host.panel_port}"}
+    origins = {f"http://{name}" for name in names}
+
+    class Handler(BaseHTTPRequestHandler):
+        server_version = "cad-viewer/1"
+
+        def log_message(self, fmt: str, *args: Any) -> None:
+            if self.command != "GET" or not str(args[1] if len(args) > 1 else "").startswith("2"):
+                sys.stderr.write(f"[panel] {fmt % args}\n")
+
+        def _send(self, status: int, body: bytes, kind: str) -> None:
+            self.send_response(status)
+            self.send_header("Content-Type", kind)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _json(self, status: int, data: Any) -> None:
+            self._send(status, json.dumps(data, default=str).encode(), "application/json")
+
+        def _refusal(self, method: str) -> tuple[HTTPStatus, str] | None:
+            if self.headers.get("Host") not in names:
+                return HTTPStatus.FORBIDDEN, f"unexpected Host {self.headers.get('Host')!r}"
+            origin = self.headers.get("Origin")
+            if origin is not None and origin not in origins:
+                return HTTPStatus.FORBIDDEN, f"cross-origin request from {origin!r} rejected"
+            if method == "POST" and self.headers.get_content_type() != "application/json":
+                return HTTPStatus.UNSUPPORTED_MEDIA_TYPE, "POST bodies must be application/json"
+            return None
+
+        def _route(self, method: str) -> None:
+            refusal = self._refusal(method)
+            if refusal is not None:
+                self._json(refusal[0], {"error": refusal[1]})
+                return
+            url = urlsplit(self.path)
+            if method == "GET" and url.path in STATIC:
+                path = STATIC[url.path]
+                kind = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+                self._send(HTTPStatus.OK, path.read_bytes(), f"{kind}; charset=utf-8")
+                return
+            handler = routes.get((method, url.path))
+            if handler is None:
+                self._json(HTTPStatus.NOT_FOUND, {"error": f"no route {method} {url.path}"})
+                return
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+                body = json.loads(self.rfile.read(length) or b"{}") if length else {}
+                if not isinstance(body, dict):
+                    raise ViewerError("request body must be a JSON object")
+                self._json(HTTPStatus.OK, handler(parse_qs(url.query), body))
+            except LimitError as error:
+                self._json(HTTPStatus.UNPROCESSABLE_ENTITY, {"error": str(error), "findings": error.findings})
+            except CaptureBusy as error:
+                self._json(HTTPStatus.CONFLICT, {"error": str(error)})
+            except (ViewerError, ValueError) as error:
+                self._json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+            except Exception as error:  # noqa: BLE001 - report infrastructure failures to the caller
+                traceback.print_exc()
+                self._json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": f"{type(error).__name__}: {error}"})
+
+        def do_GET(self) -> None:  # noqa: N802
+            self._route("GET")
+
+        def do_POST(self) -> None:  # noqa: N802
+            self._route("POST")
+
+    server = ThreadingHTTPServer((HOST, host.panel_port), Handler)
+    server.daemon_threads = True
+    return server
 
 
 def _bbox_centre(shapes: Any) -> list[float]:
@@ -668,9 +798,5 @@ def _number(body: dict[str, Any], key: str) -> float:
 
 
 def run(session_file: Path, panel_port: int, ports: dict[str, int], width: int, height: int) -> int:
-    host = Host(session_file, panel_port, ports, (width, height))
-    try:
-        host.serve()
-    finally:
-        host.stop_viewers()
+    Host(session_file, panel_port, ports, (width, height)).serve()  # serve() stops its viewers itself
     return 0

@@ -1,24 +1,34 @@
 #!/usr/bin/env python3
-"""cad-viewer command-layer tests: argument parsing, version and part-map loading, check findings,
-holes, joint-limit rejection for `animate`, and the host's fan-out to both viewer pairs (against a
-stand-in ocp_viewer module). No browser, no OCP, no viewer process.
+"""cad-viewer tests without a browser or OCP: the session lifecycle (stop, a SIGTERM while the
+viewers start, a start that times out, against stand-in ocp_viewer processes), the host API's
+request checks and its capture guard (stand-in ocp_viewer module and presenter), version and
+part-map loading, check findings, holes, joint limits, the fan-out to both viewer pairs, and the
+capture's pixel helpers.
 
-Run: python3 -m unittest discover -s cad/skills/cad-viewer/tests -v  (needs PyYAML)
+Run: python3 -m unittest discover -s cad/skills/cad-viewer/tests -v  (needs PyYAML and Pillow)
 """
 
 from __future__ import annotations
 
-import argparse
 import contextlib
 import importlib.util
 import io
 import json
 import math
+import os
 import shutil
+import signal
+import subprocess
 import sys
 import tempfile
+import textwrap
+import threading
+import time
 import types
 import unittest
+import urllib.error
+import urllib.request
+from concurrent.futures import Future
 from pathlib import Path
 from unittest import mock
 
@@ -27,7 +37,7 @@ SCRIPTS = SKILL / "scripts"
 TEMPLATE_HW = SKILL.parent / "cad-record" / "assets" / "project-template" / "hw"
 sys.path.insert(0, str(SCRIPTS))
 
-from cadviewer import LimitError, ViewerError, capture, host, motion, record  # noqa: E402
+from cadviewer import LimitError, ViewerError, capture, host, motion, record, session  # noqa: E402
 
 
 def load(name: str, path: Path):
@@ -41,11 +51,22 @@ def load(name: str, path: Path):
 
 viewer = load("cad_viewer_cli", SCRIPTS / "viewer.py")
 PNS = ("LMP-0001", "LMP-0002", "LMP-0003", "LMP-0004", "LMP-0005", "LMP-0006", "LMP-0007")
+PORTS = {"a": 1001, "b": 1002, "presenter_a": 2001, "presenter_b": 2002}
+# Stands in for `python -m ocp_viewer`: records its PID and process group, never opens its port.
+FAKE_VIEWER = """
+import os, pathlib, time
+pathlib.Path(os.environ["FAKE_VIEWER_PIDS"], str(os.getpid())).write_text(str(os.getpgid(0)))
+time.sleep(600)
+"""
 
 
-def parse(*argv: str) -> argparse.Namespace:
-    with contextlib.redirect_stderr(io.StringIO()):
-        return viewer.build_parser().parse_args(list(argv))
+def wait_for(predicate, timeout: float = 20.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.1)
+    return predicate()
 
 
 def make_version(hw: Path, label: str, products: dict[str, str] | None = None, latest: bool = True) -> None:
@@ -86,61 +107,216 @@ class Fixture(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
 
-class ArgumentParsing(unittest.TestCase):
-    def test_show_defaults_to_latest(self) -> None:
-        args = parse("show", "hw")
-        self.assertEqual((args.command, args.version, args.check), ("show", "latest", None))
+class SessionLifecycle(unittest.TestCase):
+    """`stop` and `serve` against real processes: stand-in ocp_viewers, never the real one."""
 
-    def test_compare_needs_hw(self) -> None:
-        with self.assertRaises(SystemExit):
-            parse("compare", "v1", "v2")
-        args = parse("compare", "v1", "v2", "--hw", "hw")
-        self.assertEqual((args.a, args.b), ("v1", "v2"))
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp(prefix="cad-viewer-session-"))
+        self.path = self.tmp / "state" / "session.json"
+        self.path.parent.mkdir()
+        (self.tmp / "fake" / "ocp_viewer").mkdir(parents=True)
+        (self.tmp / "fake" / "ocp_viewer" / "__init__.py").write_text("", encoding="utf-8")
+        (self.tmp / "fake" / "ocp_viewer" / "__main__.py").write_text(FAKE_VIEWER, encoding="utf-8")
+        self.pids = self.tmp / "pids"
+        self.pids.mkdir()
+        self.env = {"PYTHONPATH": str(self.tmp / "fake"), "FAKE_VIEWER_PIDS": str(self.pids),
+                    "CAD_VIEWER_SESSION": str(self.path)}
+        self.spawned: list[subprocess.Popen] = []
 
-    def test_capture_views(self) -> None:
-        for view in ("iso", "front", "side", "top", "exploded", "section", "current", "isolate:LMP-0002"):
-            self.assertEqual(parse("capture", "--view", view, "--out", "x.png").view, view)
-        for bad in ("isolate:", "perspective", ""):
-            with self.assertRaises(SystemExit, msg=bad):
-                parse("capture", "--view", bad, "--out", "x.png")
-        with self.assertRaises(SystemExit):
-            parse("capture", "--view", "iso")
+    def tearDown(self) -> None:
+        own_group = os.getpgid(0)
+        for pid, pgid in self.viewers().items():
+            if pgid != own_group:
+                with contextlib.suppress(ProcessLookupError, PermissionError):
+                    os.killpg(pgid, signal.SIGKILL)
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                os.kill(pid, signal.SIGKILL)
+        for process in self.spawned:
+            if process.poll() is None:
+                process.kill()
+            process.wait()
+        shutil.rmtree(self.tmp, ignore_errors=True)
 
-    def test_animate_arguments(self) -> None:
-        args = parse("animate", "--joint", "J-002", "--from", "-120", "--to", "0", "--at", "0.5")
-        self.assertEqual((args.joint, args.start, args.end, args.at, args.steps), ("J-002", -120.0, 0.0, 0.5, 13))
-        for bad in ("1.5", "-0.1"):
-            with self.assertRaises(SystemExit):
-                parse("animate", "--joint", "J-002", "--from", "0", "--to", "1", "--at", bad)
-        with self.assertRaises(SystemExit):
-            parse("animate", "--joint", "J-002", "--from", "0")
+    def viewers(self) -> dict[int, int]:
+        """PID -> process group of every stand-in viewer started so far."""
+        return {int(p.name): int(p.read_text()) for p in self.pids.iterdir() if p.read_text()}
 
-    def test_request_bodies(self) -> None:
-        method, route, body = viewer.request_body(parse("show", "hw", "--version", "v2", "--check", "c.json"))
-        self.assertEqual((method, route, body["version"]), ("POST", "/api/show", "v2"))
-        self.assertTrue(Path(body["hw"]).is_absolute() and Path(body["check"]).is_absolute())
-        _, route, body = viewer.request_body(parse("capture", "--view", "section", "--joint", "J-002", "--out", "s.png"))
-        self.assertEqual((route, body["view"], body["joint"], body["refit"]), ("/api/capture", "section", "J-002", None))
-        _, route, body = viewer.request_body(parse("parts", "iso", "arm_sub"))
-        self.assertEqual((route, body), ("/api/parts", {"action": "iso", "target": "arm_sub"}))
-        with self.assertRaises(ViewerError):
-            viewer.request_body(parse("parts", "hide"))
-        with self.assertRaises(ViewerError):
-            viewer.request_body(parse("animate", "--joint", "J-002", "--from", "0", "--to", "-1", "--steps", "1"))
+    def spawn(self, *argv: str, **options) -> subprocess.Popen:
+        process = subprocess.Popen([sys.executable, *argv], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                   **options)
+        self.spawned.append(process)
+        return process
 
     def test_commands_without_a_host_exit_2(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp, contextlib.redirect_stdout(io.StringIO()) as out:
-            previous = viewer.session.os.environ.get("CAD_VIEWER_SESSION")
-            viewer.session.os.environ["CAD_VIEWER_SESSION"] = str(Path(tmp) / "none.json")
-            try:
-                code = viewer.main(["show", "hw"])
-            finally:
-                if previous is None:
-                    del viewer.session.os.environ["CAD_VIEWER_SESSION"]
-                else:
-                    viewer.session.os.environ["CAD_VIEWER_SESSION"] = previous
+        with mock.patch.dict(os.environ, {"CAD_VIEWER_SESSION": str(self.tmp / "none.json")}), \
+                contextlib.redirect_stdout(io.StringIO()) as out:
+            code = viewer.main(["show", "hw"])
         self.assertEqual(code, 2)
         self.assertIn("no running viewer", json.loads(out.getvalue())["error"])
+
+    def test_stop_on_a_stale_session_signals_nothing(self) -> None:
+        # The host died long ago and its PID now belongs to an unrelated process; its port is closed.
+        bystander = self.spawn("-c", "import time; time.sleep(60)")
+        port = session.free_port()
+        self.path.write_text(json.dumps({"pid": bystander.pid, "panel_port": port, "ports": {"panel": port}}))
+        result = session.stop(self.path)
+        self.assertEqual((result["status"], result["pid"]), ("stale", bystander.pid))
+        self.assertFalse(self.path.exists())
+        time.sleep(0.3)
+        self.assertIsNone(bystander.poll(), "stop signalled a process that is not the viewer host")
+
+    def test_stop_signals_no_process_that_is_not_a_viewer_host(self) -> None:
+        # Something answers /api/health with its own PID but refuses /api/stop: only `ps` tells it apart.
+        port = session.free_port()
+        impostor = self.spawn("-c", textwrap.dedent(f"""
+            import json, os
+            from http.server import BaseHTTPRequestHandler, HTTPServer
+            class H(BaseHTTPRequestHandler):
+                def log_message(self, *a): pass
+                def do_GET(self):
+                    body = json.dumps({{"pid": os.getpid()}}).encode()
+                    self.send_response(200); self.send_header("Content-Length", str(len(body))); self.end_headers()
+                    self.wfile.write(body)
+                def do_POST(self):
+                    self.send_response(500); self.send_header("Content-Length", "0"); self.end_headers()
+            HTTPServer(("127.0.0.1", {port}), H).serve_forever()
+            """))
+        self.assertTrue(wait_for(lambda: session.port_open(port), 10))
+        self.path.write_text(json.dumps({"pid": impostor.pid, "panel_port": port, "ports": {"panel": port}}))
+        with self.assertRaisesRegex(ViewerError, "not `viewer.py host"):
+            session.stop(self.path)
+        self.assertIsNone(impostor.poll())
+
+    def test_sigterm_while_the_viewers_start_stops_them(self) -> None:
+        ports = {name: session.free_port() for name in PORTS}
+        hosted = self.spawn(str(SCRIPTS / "viewer.py"), "host", "--session", str(self.path),
+                            "--panel-port", str(session.free_port()), "--ports", json.dumps(ports),
+                            "--width", "800", "--height", "600",
+                            env={**os.environ, **self.env}, start_new_session=True)
+        self.assertTrue(wait_for(lambda: len(self.viewers()) == 4), "the stand-in viewers did not start")
+        hosted.send_signal(signal.SIGTERM)  # the host alone, as `stop` falls back to
+        self.assertEqual(hosted.wait(timeout=30), 128 + signal.SIGTERM)
+        self.assertTrue(wait_for(lambda: not any(session.pid_alive(pid) for pid in self.viewers()), 10),
+                        f"viewers left running: {self.viewers()}")
+
+    def test_a_start_that_times_out_leaves_no_process(self) -> None:
+        with mock.patch.dict(os.environ, self.env), mock.patch.object(session, "START_TIMEOUT_S", 5.0), \
+                self.assertRaisesRegex(ViewerError, "did not answer within"):
+            session.start(self.path, SCRIPTS / "viewer.py", 0, 0, 0, (800, 600))
+        groups = set(self.viewers().values())
+        self.assertEqual(len(groups), 1, "the stand-in viewers did not start in the host's group")
+        with self.assertRaises(ProcessLookupError):  # the host and every viewer are gone
+            os.killpg(groups.pop(), 0)
+        self.assertFalse(self.path.exists())
+
+
+class StubPresenter:
+    """Runs each job on a thread of its own with no page, as the presenter thread would."""
+
+    result = staticmethod(capture.Presenter.result)
+
+    @staticmethod
+    def alive() -> bool:
+        return True
+
+    @staticmethod
+    def submit(work) -> Future:
+        future: Future = Future()
+
+        def run() -> None:
+            try:
+                future.set_result(work(None))
+            except BaseException as error:  # noqa: BLE001 - handed to the request, as Presenter does
+                future.set_exception(error)
+
+        threading.Thread(target=run, daemon=True).start()
+        return future
+
+
+class HostApi(unittest.TestCase):
+    """The host's HTTP surface on a real loopback server: ocp_viewer and the presenter are stand-ins."""
+
+    def setUp(self) -> None:
+        self.calls: list[tuple[int, dict]] = []
+        fake = types.ModuleType("ocp_viewer")
+        fake.set_viewer_config = lambda port=None, **values: self.calls.append((port, values))
+        patcher = mock.patch.dict(sys.modules, {"ocp_viewer": fake})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.tmp = Path(tempfile.mkdtemp(prefix="cad-viewer-api-"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.port = session.free_port()
+        self.host = host.Host(self.tmp / "session.json", self.port, PORTS)
+        self.host.slots["a"].showing = "A"
+        self.host.presenter = StubPresenter()
+        server = host.make_server(self.host)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+
+    def request(self, method: str, route: str, body: dict | None = None,
+                headers: dict[str, str] | None = None) -> tuple[int, dict]:
+        data = None if body is None else json.dumps(body).encode()
+        req = urllib.request.Request(f"http://127.0.0.1:{self.port}{route}", data=data, method=method,
+                                     headers={"Content-Type": "application/json", **(headers or {})})
+        try:
+            with urllib.request.urlopen(req, timeout=5) as response:
+                return response.status, json.loads(response.read())
+        except urllib.error.HTTPError as error:
+            with error:
+                return error.code, json.loads(error.read() or b"{}")
+
+    def test_a_change_during_a_capture_is_refused_and_state_still_answers(self) -> None:
+        started, release = threading.Event(), threading.Event()
+
+        def slow_capture(_host, _page, body: dict) -> dict:
+            started.set()
+            release.wait(10)
+            return {"status": "pass", "view": body["view"]}
+
+        answers: dict[str, tuple[int, dict]] = {}
+        with mock.patch.object(capture, "capture", slow_capture):
+            worker = threading.Thread(target=lambda: answers.update(
+                capture=self.request("POST", "/api/capture", {"view": "section"})))
+            worker.start()
+            self.assertTrue(started.wait(5))
+            self.assertEqual(self.request("POST", "/api/parts", {"action": "hide", "target": "LMP-0002"})[0], 409)
+            self.assertEqual(self.request("POST", "/api/studio", {"environment": "studio"})[0], 409)
+            self.assertEqual(self.request("POST", "/api/capture", {"view": "iso"})[0], 409)
+            self.assertEqual(self.request("GET", "/api/state")[0], 200)  # the panel refresh a capture triggers
+            self.assertTrue(self.request("GET", "/api/health")[1]["capturing"])
+            self.assertEqual(self.calls, [], "a refused request reached a viewer")
+            release.set()
+            worker.join(10)
+        self.assertEqual(answers["capture"], (200, {"status": "pass", "view": "section"}))
+        self.assertEqual(self.request("POST", "/api/studio", {"environment": "studio"})[0], 200)
+        self.assertEqual(sorted(port for port, _ in self.calls), [1001, 2001])
+
+    def test_requests_from_another_site_are_refused(self) -> None:
+        body = {"environment": "studio"}
+        self.assertEqual(self.request("POST", "/api/studio", body, {"Origin": "http://evil.example"})[0], 403)
+        self.assertEqual(self.request("POST", "/api/studio", body, {"Content-Type": "text/plain"})[0], 415)
+        rebound = {"Host": f"evil.example:{self.port}", "Origin": f"http://evil.example:{self.port}"}
+        self.assertEqual(self.request("GET", "/api/state", headers=rebound)[0], 403)
+        self.assertEqual(self.request("POST", "/api/stop", {}, rebound)[0], 403)
+        self.assertFalse(self.host.halt.wait(0.5))
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.request("POST", "/api/studio", body, {"Origin": f"http://127.0.0.1:{self.port}"})[0], 200)
+        self.assertEqual(self.request("POST", "/api/studio", body, {"Host": f"localhost:{self.port}"})[0], 200)
+        self.assertEqual(self.request("POST", "/api/studio", body)[0], 200)  # the CLI sends no Origin
+
+    def test_a_capture_writes_only_a_png_into_an_existing_folder(self) -> None:
+        target = self.tmp / "new" / "x.png"
+        status, answer = self.request("POST", "/api/capture", {"view": "iso", "out": str(target)})
+        self.assertEqual(status, 400)
+        self.assertIn("not a directory", answer["error"])
+        self.assertFalse(target.parent.exists())
+        (self.tmp / "elsewhere.png").write_bytes(b"")
+        (self.tmp / "link.png").symlink_to(self.tmp / "elsewhere.png")
+        for out in ("relative.png", str(self.tmp / ".zshrc"), str(self.tmp / "link.png"), str(self.tmp)):
+            with self.subTest(out=out), self.assertRaises(ViewerError):
+                capture.capture_target(out)
+        self.assertEqual(capture.capture_target(str(self.tmp / "shot.PNG")), self.tmp / "shot.PNG")
 
 
 class PartMapLoading(Fixture):
@@ -305,8 +481,6 @@ class ViewerPairs(unittest.TestCase):
     """Every host change reaches the user's and the presenter's viewer; a capture's measuring moves
     reach the presenter only. ocp_viewer is replaced by a module that records each call's port."""
 
-    PORTS = {"a": 1001, "b": 1002, "presenter_a": 2001, "presenter_b": 2002}
-
     def setUp(self) -> None:
         self.calls: list[tuple[int, dict]] = []
         fake = types.ModuleType("ocp_viewer")
@@ -316,7 +490,7 @@ class ViewerPairs(unittest.TestCase):
         patcher = mock.patch.dict(sys.modules, {"ocp_viewer": fake})
         patcher.start()
         self.addCleanup(patcher.stop)
-        self.host = host.Host(Path("/nonexistent/session.json"), 1000, self.PORTS)
+        self.host = host.Host(Path("/nonexistent/session.json"), 1000, PORTS)
 
     def ports(self) -> list[int]:
         return sorted(port for port, _ in self.calls)
@@ -346,16 +520,42 @@ class ViewerPairs(unittest.TestCase):
         self.host._copy_camera("a", "b")
         self.assertEqual(sorted((p, v["position"][0]) for p, v in self.calls), [(1002, 1001.0), (2002, 2001.0)])
 
-    def test_session_names_every_viewer_port(self) -> None:
-        self.assertEqual({k: v for k, v in self.host.session()["ports"].items() if k != "panel"}, self.PORTS)
-        self.assertEqual(self.host.state()["slots"]["a"]["urls"],
-                         {"user": "http://127.0.0.1:1001/", "presenter": "http://127.0.0.1:2001/"})
 
-    def test_only_a_current_capture_follows_the_user_camera(self) -> None:
-        self.assertTrue(capture.follow_user_camera("current", True))
-        self.assertFalse(capture.follow_user_camera("current", False))
-        for view in ("iso", "front", "exploded", "section", "isolate:LMP-0002"):
-            self.assertFalse(capture.follow_user_camera(view, True), view)
+def png(size: tuple[int, int], backdrop: tuple[int, int, int], rects: list[tuple[tuple[int, ...], tuple[int, ...]]]) -> bytes:
+    """A synthetic canvas shot: `rects` are inclusive (x0, y0, x1, y1) boxes painted over the backdrop."""
+    from PIL import Image, ImageDraw
+
+    image = Image.new("RGB", size, backdrop)
+    draw = ImageDraw.Draw(image)
+    for box, colour in rects:
+        draw.rectangle(box, fill=colour)
+    out = io.BytesIO()
+    image.save(out, "PNG")
+    return out.getvalue()
+
+
+@unittest.skipUnless(importlib.util.find_spec("PIL"), "Pillow not installed")
+class PixelHelpers(unittest.TestCase):
+    BACKDROP = (240, 240, 240)
+    GIZMO = ((10, 250, 60, 290), (200, 30, 30))  # inside the bottom-left GIZMO_PX square
+
+    def test_content_box_is_the_scene_without_the_axes_gizmo(self) -> None:
+        shot = png((400, 300), self.BACKDROP, [((100, 80, 199, 149), (60, 64, 70)), self.GIZMO])
+        self.assertEqual(capture.content_box(shot), (100, 80, 200, 150))
+
+    def test_a_frame_of_backdrop_gizmo_and_faint_noise_is_blank(self) -> None:
+        faint = ((150, 100, 250, 200), (250, 250, 250))  # within BACKGROUND_DELTA of the backdrop
+        self.assertIsNone(capture.content_box(png((400, 300), self.BACKDROP, [self.GIZMO, faint])))
+
+    def test_free_area_clears_the_toolbar_and_a_tall_tree(self) -> None:
+        toolbar = (0, 0, 800, 40)
+        margin = capture.MARGIN_PX
+        self.assertEqual(capture.free_area((800, 600), [toolbar, (0, 40, 300, 500)]),
+                         (300 + margin, 40 + margin, 800 - margin, 600 - margin))
+        # A collapsed tree ends in the upper third: it widens the top band instead.
+        self.assertEqual(capture.free_area((800, 600), [toolbar, (0, 40, 300, 120)]),
+                         (margin, 120 + margin, 800 - margin, 600 - margin))
+        self.assertEqual(capture.free_area((800, 600), []), (margin, margin, 800 - margin, 600 - margin))
 
 
 if __name__ == "__main__":

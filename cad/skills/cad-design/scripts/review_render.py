@@ -171,8 +171,8 @@ def render(args: argparse.Namespace) -> dict[str, Any]:
     roots = {k: (args.parts_root / k if args.parts_root else build_parts(k, args.out)) for k in args.kernels}
     port = args.port or free_port()
     log = (args.out / "viewer.log").open("w")
-    viewer = subprocess.Popen([sys.executable, "-m", "ocp_viewer", "--port", str(port), "--theme", "light",
-                               "--perspective"], stdout=log, stderr=subprocess.STDOUT)
+    viewer = subprocess.Popen([sys.executable, "-m", "ocp_viewer", "--host", "127.0.0.1", "--port", str(port),
+                               "--theme", "light", "--perspective"], stdout=log, stderr=subprocess.STDOUT)
     pngs: dict[str, dict[str, str]] = {}
     try:
         deadline = time.monotonic() + 120
