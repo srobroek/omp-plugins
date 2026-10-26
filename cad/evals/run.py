@@ -166,12 +166,16 @@ def _judge_call(matrix, host_source: runner.HostSource):
     flags = list(cfg.get("flags", []))
 
     def call(prompt: str):
-        host = host_source.get()
+        ceiling_s = float(cfg.get("timeout_s", 300))
+        host = host_source.get(ceiling_s)
+        refusal = adapter.preflight(host, ceiling_s)
+        if refusal:
+            raise runner.TrialError("auth_error", refusal)
         paths = runner.stage_trial(None, adapter, host, require_plugin=False)
         try:
             argv = adapter.command(model=cfg["model"], prompt=prompt, paths=paths, resume=False)
             argv = argv[:-1] + flags + argv[-1:]
-            turn, _, _ = runner.run_turn(adapter, argv, paths, host, float(cfg.get("timeout_s", 300)))
+            turn, _, _ = runner.run_turn(adapter, argv, paths, host, ceiling_s)
             return turn
         finally:
             runner.end_trial(paths, adapter, host, keep=False)
@@ -234,7 +238,7 @@ def cmd_smoke(args, matrix) -> int:
     changes to the harness's user stores, both of which must be none."""
     adapter = adapters.build(args.harness, matrix.harness_cfg(args.harness))
     host_source = runner.HostSource(matrix.raw.get("auth", {}))
-    host = host_source.get()
+    host = host_source.get(args.timeout)
     refusal = adapter.preflight(host, args.timeout)
     if refusal:
         print(f"{args.harness}: smoke not started: {refusal}", file=sys.stderr)

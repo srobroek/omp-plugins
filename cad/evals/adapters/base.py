@@ -202,14 +202,10 @@ class Adapter(Protocol):
         trial reaches through a link (Kiro's executables). The smoke fingerprints them."""
 
     def preflight(self, host: Host, ceiling_s: float) -> str | None:
-        """Why no trial lasting up to `ceiling_s` may start now (a reason for the user),
-        or None. Kiro: the login a trial would copy must outlive the trial."""
+        """Why no trial lasting up to `ceiling_s` may start now, or None."""
 
-    def release_login(self, paths: TrialPaths) -> str | None:
-        """Called once the trial's processes have stopped. Deletes any copy of the
-        user's login prepare() placed in the trial, so a kept sandbox holds none, and
-        returns what the user must do when the trial refreshed that copy (their own
-        store then holds a grant the harness superseded), or None. Only Kiro copies one."""
+    def release_login(self, paths: TrialPaths) -> bool | None:
+        """Delete any trial-local login copy; report whether its token changed."""
 
     def version_command(self) -> list[str]:
         """Model-free argv whose stdout names the harness version; [] when the turn's

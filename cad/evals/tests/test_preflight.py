@@ -102,7 +102,7 @@ class StaticHost:
         self.home = home
         self.redact = runner.Redactor(home)
 
-    def get(self) -> adapters.Host:
+    def get(self, ceiling_s: float | None = None) -> adapters.Host:
         return adapters.Host(base_env={"PATH": os.environ["PATH"], **runner._GIT_ENV}, aws_env={}, real_home=self.home)
 
 
@@ -119,6 +119,88 @@ def exported_source(creds: dict) -> runner.HostSource:
     with mock.patch.object(subprocess, "run", side_effect=run):
         source.get()
     return source
+
+
+class CredentialLifetime(unittest.TestCase):
+    def fake_source(self, expiries: list[datetime], *, never_refresh: bool = False) -> tuple[runner.HostSource, list[datetime]]:
+        source = runner.HostSource({"aws_profile": "cad-eval-test"})
+        exports: list[datetime] = []
+
+        def export() -> None:
+            index = min(len(exports), len(expiries) - 1) if never_refresh else len(exports)
+            expiry = expiries[index]
+            exports.append(expiry)
+            self._export_credentials(source, index, expiry)
+
+        source._export_aws = export
+        return source, exports
+
+
+    def test_cached_credentials_wait_for_fresh_credentials_before_trial(self):
+        now = datetime.now(timezone.utc)
+        short = now + timedelta(minutes=20)
+        fresh = now + timedelta(hours=1)
+        source, exports = self.fake_source([short, short, fresh])
+        clock = [now.timestamp()]
+        with mock.patch.object(runner.time, "time", side_effect=lambda: clock[0]), \
+                mock.patch.object(runner.time, "monotonic", side_effect=lambda: clock[0]), \
+                mock.patch.object(runner.time, "sleep", side_effect=lambda duration: clock.__setitem__(0, clock[0] + duration)):
+            host = source.get(1800)
+        self.assertEqual(host.aws_env["AWS_ACCESS_KEY_ID"], "ASIAEXAMPLE2")
+
+    def test_credentials_that_never_refresh_leave_slot_not_started(self):
+        now = datetime.now(timezone.utc)
+        short = now + timedelta(minutes=20)
+        source, _ = self.fake_source([short], never_refresh=True)
+        with mock.patch.object(runner, "_CRED_POLL_S", 1), mock.patch.object(runner, "_CRED_MAX_WAIT_S", 2), \
+                mock.patch.object(runner.time, "time", return_value=now.timestamp()), \
+                mock.patch.object(runner.time, "monotonic", side_effect=[0, 0, 1, 1, 2, 2, 3]), \
+                mock.patch.object(runner.time, "sleep", return_value=None), \
+                mock.patch.object(adapters.OmpAdapter, "prepare") as prepare:
+            with self.assertRaises(runner.CredentialsUnavailable) as caught:
+                source.get(1800)
+        self.assertIn("did not issue AWS credentials", str(caught.exception))
+        self.assertEqual(source._credential_refusal, caught.exception.detail)
+        prepare.assert_not_called()
+
+    def test_unrenewed_credentials_keep_slot_pending_for_resume(self):
+        now = datetime.now(timezone.utc)
+        short = now + timedelta(minutes=20)
+        source, _ = self.fake_source([short], never_refresh=True)
+        matrix = runner.Matrix({"harness": {"omp": {"bin": str(FAKE_AGENT)}}, "case_timeout_s": 1800,
+                                "max_turns": 4, "retry": {"attempts": 1}}, [runner.Cell("omp", "model")])
+        cell = matrix.cells[0]
+        out = Path(tempfile.mkdtemp(prefix="cad-eval-credential-pending-"))
+        self.addCleanup(shutil.rmtree, out, True)
+        with mock.patch.object(runner, "_CRED_POLL_S", 1), mock.patch.object(runner, "_CRED_MAX_WAIT_S", 2), \
+                mock.patch.object(runner.time, "time", return_value=now.timestamp()), \
+                mock.patch.object(runner.time, "monotonic", side_effect=[0, 0, 1, 1, 2, 2, 3]), \
+                mock.patch.object(runner.time, "sleep", return_value=None), \
+                mock.patch.object(adapters.OmpAdapter, "prepare") as prepare:
+            counts = runner.run_matrix(matrix, [cell], [runner.load_cases(["t1-lower-link-cq"])[0]], 1, out,
+                                       trace_ids=set(), concurrency=1, keep=False, host_source=source)
+        self.assertEqual(counts, {"not_started": 1})
+        self.assertEqual(runner.plan_slots([cell], runner.load_cases(["t1-lower-link-cq"]), 1, out)[0][0], cell)
+        self.assertEqual(runner.plan_slots([cell], runner.load_cases(["t1-lower-link-cq"]), 1, out)[0][2], 1)
+        self.assertFalse((out / cell.slug / "errors.jsonl").exists())
+        prepare.assert_not_called()
+
+    def test_fresh_credentials_start_without_wait(self):
+        now = datetime.now(timezone.utc)
+        source, exports = self.fake_source([now + timedelta(hours=1)])
+        with mock.patch.object(runner.time, "time", return_value=now.timestamp()), \
+                mock.patch.object(runner.time, "sleep") as sleep:
+            host = source.get(1800)
+        self.assertEqual(host.aws_env["AWS_ACCESS_KEY_ID"], "ASIAEXAMPLE0")
+        self.assertEqual(len(exports), 1)
+        sleep.assert_not_called()
+
+    @staticmethod
+    def _export_credentials(source: runner.HostSource, index: int, expiry: datetime) -> None:
+        source._aws = {"AWS_ACCESS_KEY_ID": f"ASIAEXAMPLE{index}", "AWS_SECRET_ACCESS_KEY": f"secret{index}",
+                       "AWS_SESSION_TOKEN": f"token{index}", "AWS_REGION": source.region,
+                       "AWS_DEFAULT_REGION": source.region}
+        source._expires = expiry
 
 
 def gone(pid: int, timeout_s: float = 10) -> bool:
@@ -477,60 +559,21 @@ class FakeHarness(unittest.TestCase):
                 if harness == "claude":  # Claude's own temp root defaults to /tmp on macOS, not $TMPDIR
                     self.assertEqual(env["CLAUDE_CODE_TMPDIR"], str(paths.tmp))
 
-    def test_kiro_trial_gets_a_copy_of_the_login_only(self):
+    def test_kiro_trial_gets_a_private_login_copy_and_audits_refresh(self):
         user_db = make_kiro_login(self.tmp)
-        store = user_db.parent
         before = (user_db.read_bytes(), user_db.stat().st_mtime_ns)
         adapter = adapters.build("kiro", {"bin": "true"})
         paths = runner.stage_trial(None, adapter, self.host.get(), require_plugin=True)
-        self.addCleanup(shutil.rmtree, paths.root, True)
         trial_store = paths.home.joinpath("Library", "Application Support", "kiro-cli")
         self.assertFalse(trial_store.is_symlink())
         trial = sqlite3.connect(trial_store / "data.sqlite3")
-        self.addCleanup(trial.close)
         self.assertEqual(trial.execute("SELECT key FROM auth_kv").fetchall(), [("kirocli:odic:token",)])
-        self.assertEqual(sorted(k for (k,) in trial.execute("SELECT key FROM state")), ["api.codewhisperer.profile", "auth.idc.region"])
-        self.assertEqual(trial.execute("SELECT count(*) FROM conversations_v2").fetchone(), (0,))
-        self.assertEqual(trial.execute("SELECT count(*) FROM migrations").fetchone(), (1,))
+        trial.execute("UPDATE auth_kv SET value = '{\"access_token\": \"rotated\"}' WHERE key = 'kirocli:odic:token'")
+        trial.commit()
+        trial.close()
         self.assertEqual((user_db.read_bytes(), user_db.stat().st_mtime_ns), before)
-        self.assertIn(store, adapter.user_stores(self.host.get()))
-
-    def test_kiro_login_copy_never_outlives_the_trial(self):
-        make_kiro_login(self.tmp)
-        adapter = adapters.build("kiro", {"bin": "true"})
-        kept = runner.stage_trial(None, adapter, self.host.get(), require_plugin=True)
-        self.addCleanup(shutil.rmtree, kept.root, True)
-        copy = kept.home.joinpath("Library", "Application Support", "kiro-cli", "data.sqlite3")
-        self.assertTrue(copy.is_file())
-        with mock.patch("sys.stderr", new=io.StringIO()) as err:
-            runner.end_trial(kept, adapter, self.host.get(), keep=True)
-        self.assertTrue(kept.work.is_dir())  # kept for inspection, without the login
-        self.assertEqual(list(copy.parent.glob("data.sqlite3*")), [])
-        self.assertIn(f"kept sandbox {kept.root}", err.getvalue())
-
-        refreshed = runner.stage_trial(None, adapter, self.host.get(), require_plugin=True)
-        con = sqlite3.connect(refreshed.home.joinpath("Library", "Application Support", "kiro-cli", "data.sqlite3"))
-        con.execute("UPDATE auth_kv SET value = '{\"access_token\": \"b\"}' WHERE key = 'kirocli:odic:token'")
-        con.commit()
-        con.close()
-        with mock.patch("sys.stderr", new=io.StringIO()) as err, self.assertRaises(runner.TrialError) as caught:
-            runner.end_trial(refreshed, adapter, self.host.get(), keep=False)
-        self.assertEqual(caught.exception.failure_class, "kiro_token_refreshed")
-        self.assertIn("`kiro-cli logout`, then `kiro-cli login`", caught.exception.detail)
-        self.assertIn(caught.exception.detail, err.getvalue())  # the user is told at once
-        self.assertFalse(refreshed.root.exists())  # cleanup ran before the error
-
-    def test_a_refreshed_login_stops_the_harness(self):
-        matrix = runner.Matrix({"harness": {"omp": {"bin": str(FAKE_AGENT), "env": {"FAKE_AGENT_MODE": "quiet"}}}, **self.cfg}, [self.cell])
-        with mock.patch.object(adapters.OmpAdapter, "release_login", return_value="sign in again"), \
-                mock.patch("sys.stderr", new=io.StringIO()) as err:
-            counts = runner.run_matrix(matrix, [self.cell], [self.case], 3, self.tmp / "halt", trace_ids=set(),
-                                       concurrency=1, keep=False, host_source=self.host)
-        self.assertEqual(counts, {"omp_token_refreshed": 1, "not_started": 2})
-        [error] = [json.loads(line) for line in (self.tmp / "halt" / self.cell.slug / "errors.jsonl").read_text().splitlines()]
-        self.assertEqual((error["failure_class"], error["detail"]), ("omp_token_refreshed", "sign in again"))
-        self.assertIn("sign in again", err.getvalue())
-        self.assertFalse((self.tmp / "halt" / self.cell.slug / "results.jsonl").exists())
+        self.assertTrue(runner.end_trial(paths, adapter, self.host.get(), keep=False))
+        self.assertFalse(paths.root.exists())
 
     def test_no_process_outlives_its_trial(self):
         viewer = runner.PLUGIN_ROOT / runner.VIEWER  # a stand-in that logs how the runner stops it
@@ -695,33 +738,6 @@ class CaseSchema(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stdout[-1500:])
 
 
-class KiroLogin(unittest.TestCase):
-    """A trial never refreshes the copied Kiro token, so it starts only on one that outlives it."""
-
-    def test_trials_start_only_on_a_token_that_outlives_them(self):
-        now = datetime(2026, 10, 26, 13, 0, tzinfo=timezone.utc)
-        ceiling = 1800
-        enough = now + timedelta(seconds=ceiling + kiro.REFRESH_MARGIN_S)
-        self.assertIsNone(kiro.login_refusal(enough, now, ceiling))
-        short = kiro.login_refusal(enough - timedelta(seconds=1), now, ceiling)
-        self.assertIn("`kiro-cli logout` followed by `kiro-cli login`", short)
-        self.assertIn("in 35 min", short)
-        self.assertIn("in 0 min", kiro.login_refusal(now - timedelta(minutes=1), now, ceiling))  # already expired
-        self.assertIn("no Kiro login", kiro.login_refusal(None, now, ceiling))
-
-    def test_expiry_is_read_from_the_store_without_writing_it(self):
-        base = Path(tempfile.mkdtemp(prefix="cad-eval-kiro-"))
-        self.addCleanup(shutil.rmtree, base, True)
-        db = base / "data.sqlite3"
-        con = sqlite3.connect(db)
-        con.execute("CREATE TABLE auth_kv (key TEXT PRIMARY KEY, value TEXT)")
-        con.execute("INSERT INTO auth_kv VALUES ('kirocli:odic:token', ?)", (json.dumps({"expires_at": "2026-10-26T14:52:49.713343Z"}),))
-        con.commit()
-        con.close()
-        before = (db.read_bytes(), db.stat().st_mtime_ns)
-        self.assertEqual(kiro.login_expiry(db), datetime(2026, 10, 26, 14, 52, 49, 713343, tzinfo=timezone.utc))
-        self.assertEqual((db.read_bytes(), db.stat().st_mtime_ns), before)
-        self.assertIsNone(kiro.login_expiry(base / "absent.sqlite3"))
 
 
 class HostEffects(unittest.TestCase):

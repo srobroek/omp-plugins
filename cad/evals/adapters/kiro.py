@@ -20,14 +20,11 @@ are written inside the trial. Kiro keeps its login in the same SQLite database a
 its prompt history and runtime state (`~/Library/Application Support/kiro-cli/
 data.sqlite3`); the trial gets its own database holding a read-only copy of the
 login only (`copy_login`), so nothing a trial does is written to the user's store,
-and Kiro extracts its agent runtime into the trial's copy of that directory. A trial
-must never refresh the copied token: `preflight` refuses to start one unless the
-token outlives the trial's ceiling by REFRESH_MARGIN_S, and the user refreshes their
-own login. `release_login` checks after each trial that the copy's token row is
-unchanged, then deletes the copy, so a kept sandbox holds no login. The kiro-cli
-executables are linked in from the user's ~/.local/bin, and `user_stores` names
-their targets, so the smoke sees an updater writing through a link. The run is
-pinned to a sandbox-local agent (`.kiro/agents/cad-eval.json`) whose only resources
+and Kiro extracts its agent runtime into the trial's copy of that directory. The
+runner allows Kiro to refresh the copied token during a trial, notes whether the
+copy changed, then deletes it even when a sandbox is kept. The kiro-cli executables
+are linked in from the user's ~/.local/bin, and `user_stores` names their targets,
+so the smoke sees an updater writing through a link. The run is pinned to a sandbox-local agent (`.kiro/agents/cad-eval.json`) whose only resources
 are the cad skills. The plugin is copied to `<work>/cad/`, where the generated
 reviewer agents' relative `skill://cad/skills/...` resources resolve. The inventory
 is read from the turn's stream: active mode, available commands, context files,
@@ -41,7 +38,6 @@ import json
 import shutil
 import sqlite3
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
@@ -57,18 +53,10 @@ _DB = "data.sqlite3"
 # the CodeWhisperer profile) and the migration marker; telemetry ids and UI
 # counters stay behind.
 _LOGIN_STATE = ("auth.", "api.", "migration.")
-_TOKEN_KEY = "kirocli:odic:token"  # `auth_kv` row holding the OIDC access token and its `expires_at`
-# A trial must never refresh the copied token (its refresh would leave the user's
-# store behind), so the copy must outlive the trial's ceiling by this margin. Kiro's
-# own refresh-ahead window is unpublished; `release_login` catches a refresh anyway.
-REFRESH_MARGIN_S = 5 * 60
-_LOGIN_DOCS = "https://kiro.dev/docs/reference/cli-commands.md"
-_RELOGIN = f"Sign in again before the next Kiro run: `kiro-cli logout`, then `kiro-cli login` ({_LOGIN_DOCS}; logout is user-wide)."
+_TOKEN_KEY = "kirocli:odic:token"  # `auth_kv` row holding the OIDC access token
 
 
 def _token(db: Path) -> str | None:
-    """The `auth_kv` token row (the OIDC tokens and their expiry), read-only; None
-    without a readable login."""
     if not db.is_file():
         return None
     con = sqlite3.connect(f"{db.as_uri()}?mode=ro", uri=True, timeout=30)
@@ -87,35 +75,6 @@ def _digest(value: str | bytes | None) -> str | None:
     return hashlib.sha256(value if isinstance(value, bytes) else value.encode()).hexdigest()
 
 
-def login_expiry(db: Path) -> datetime | None:
-    """When the access token in a Kiro database expires; None without a readable login.
-    The database is opened read-only."""
-    value = _token(db)
-    try:
-        expires = datetime.fromisoformat(json.loads(value)["expires_at"]) if value else None
-    except (KeyError, TypeError, ValueError):
-        return None
-    return expires if expires is None or expires.tzinfo else expires.replace(tzinfo=timezone.utc)
-
-
-def login_refusal(expires_at: datetime | None, now: datetime, ceiling_s: float) -> str | None:
-    """Why a trial lasting up to `ceiling_s` must not start on a login whose access
-    token expires at `expires_at`, or None when the token outlives the trial by
-    REFRESH_MARGIN_S. The runner never refreshes the token: only the user does."""
-    if expires_at is None:
-        return f"no Kiro login found; sign in with `kiro-cli login` ({_LOGIN_DOCS})"
-    remaining = (expires_at - now).total_seconds()
-    if remaining >= ceiling_s + REFRESH_MARGIN_S:
-        return None
-    return (
-        f"the Kiro access token each trial copies expires at {expires_at:%H:%M:%S} UTC, in {max(remaining, 0) / 60:.0f} min,"
-        f" but a trial may run {ceiling_s / 60:.0f} min and must end {REFRESH_MARGIN_S // 60} min before the token does,"
-        " because a trial never refreshes the copied token. Refresh your own login first, then rerun:"
-        f" `kiro-cli logout` followed by `kiro-cli login` ({_LOGIN_DOCS}; logout is user-wide), or wait until"
-        " your own Kiro refreshes the token shortly before it expires. `kiro-cli whoami` only reports the login;"
-        " it does not extend a token that is still valid."
-    )
-
 
 def copy_login(src: Path, dst: Path) -> None:
     """Create `dst` as a Kiro database holding only the login in `src`: the schema and
@@ -125,6 +84,7 @@ def copy_login(src: Path, dst: Path) -> None:
     try:
         schema = [sql for (sql,) in source.execute(
             "SELECT sql FROM sqlite_master WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' ORDER BY type = 'index'")]
+
         rows = {table: source.execute(f"SELECT * FROM {table}").fetchall() for table in ("migrations", "auth_kv", "state")}
     finally:
         source.close()
@@ -216,33 +176,23 @@ class KiroAdapter:
     def env(self, paths: TrialPaths, host: Host) -> dict[str, str]:
         return {**host.base_env, **isolated_home(paths), **trial_temp(paths), **self.extra_env, "NO_COLOR": "1"}
 
+    def preflight(self, host: Host, ceiling_s: float) -> str | None:
+        return None  # Kiro refreshes its own token inside its trial-local login copy.
+
     def user_stores(self, host: Host) -> list[Path]:
         return [host.real_home.joinpath(*_APP_SUPPORT), host.real_home / ".kiro",
                 *(target for _, target in _executables(host.real_home))]
 
-    def preflight(self, host: Host, ceiling_s: float) -> str | None:
-        # The user's store is what prepare() copies right after; a refresh by the
-        # user's own Kiro in between only extends the token.
-        expires = login_expiry(host.real_home.joinpath(*_APP_SUPPORT, _DB))
-        return login_refusal(expires, datetime.now(timezone.utc), ceiling_s)
-
-    def release_login(self, paths: TrialPaths) -> str | None:
-        """Compare the copy's token row with what prepare() copied, then delete the
-        copy (the database and its -wal, -shm or -journal) whatever the result."""
+    def release_login(self, paths: TrialPaths) -> bool:
+        """Return whether the copied token changed, then delete the copy even when kept."""
         if paths.root not in self._copied:
-            return None
+            return False
         copied = self._copied.pop(paths.root)
         db = paths.home.joinpath(*_APP_SUPPORT, _DB)
-        after = _digest(_token(db))
+        refreshed = _digest(_token(db)) != copied
         for part in db.parent.glob(_DB + "*"):
             part.unlink(missing_ok=True)
-        if after == copied:
-            return None
-        if after is None:
-            return ("the trial's copy of your Kiro login could not be read back, so a refresh of the copied token"
-                    f" cannot be ruled out and your own store may hold a superseded refresh token. {_RELOGIN}")
-        return ("Kiro refreshed the copied token during the trial (its `kirocli:odic:token` row changed), so your"
-                f" own store may hold a refresh token Kiro has superseded. {_RELOGIN}")
+        return refreshed
 
     def version_command(self) -> list[str]:
         return [self.bin, "--version"]  # `kiro-cli 2.34.0`
