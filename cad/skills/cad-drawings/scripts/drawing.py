@@ -1,15 +1,18 @@
 #!/usr/bin/env -S uv run --script
 # /// script
-# dependencies = ["pyyaml>=6.0"]
+# dependencies = ["defusedxml>=0.7.1", "pyyaml>=6.0"]
 # ///
-"""Generate an overall-dimension FreeCAD TechDraw PDF and SVG."""
+"""Generate checked projected SVG and PDF drawings from STEP geometry."""
 
 from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
+import signal
 import subprocess
+import sys
 import time
 import uuid
 from pathlib import Path
@@ -17,10 +20,43 @@ from typing import Any
 
 import yaml
 
-FREECAD = Path(os.environ.get("FREECAD_LAUNCHER", "/Applications/FreeCAD.app/Contents/MacOS/FreeCAD"))
-RESOURCES = Path("/Applications/FreeCAD.app/Contents/Resources")
-TEMPLATES = RESOURCES / "share/Mod/TechDraw/Templates"
+FREECAD_SITE_PACKAGES = Path("/Applications/FreeCAD.app/Contents/Resources/lib/python3.11/site-packages")
+if FREECAD_SITE_PACKAGES.is_dir():
+    sys.path.insert(0, str(FREECAD_SITE_PACKAGES))
+from defusedxml import ElementTree as SafeET  # noqa: E402
 
+import layout_check  # noqa: E402
+import sheet  # noqa: E402
+
+FREECADCMD = Path(os.environ.get("FREECADCMD", "/Applications/FreeCAD.app/Contents/Resources/bin/freecadcmd"))
+SCRIPTS = Path(__file__).resolve().parent
+TECHDRAW_JOB = SCRIPTS / "techdraw_job.py"
+SVG_TO_PNG = SCRIPTS / "svg_to_png.swift"
+SVG_TO_PDF = SCRIPTS / "svg_to_pdf.swift"
+
+
+def _terminate_process_group(process: subprocess.Popen[str]) -> None:
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        process.wait()
+        return
+    deadline=time.monotonic()+2
+    while process.poll() is None and time.monotonic()<deadline:
+        time.sleep(0.05)
+    else:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    try:
+        process.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.wait()
 
 def fail(code: str, message: str) -> dict[str, Any]:
     return {"status": "error", "error": {"code": code, "message": message}}
@@ -36,7 +72,7 @@ def load_mapping(path: Path, label: str) -> dict[str, Any]:
     return value
 
 
-def read_inputs(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, Any], Path]:
+def read_inputs(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, Any], Path, list[dict[str, Any]]]:
     step = args.step.resolve()
     if not step.is_file():
         raise ValueError(f"STEP file does not exist: {step}")
@@ -45,175 +81,174 @@ def read_inputs(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, Any
     for field in ("PN", "rev", "title", "material"):
         if not isinstance(part.get(field), (str, int, float)) or not str(part[field]).strip():
             raise ValueError(f"part.{field} must be a non-empty string or number")
-    if product.get("regime") not in ("iso", "asme"):
+    if product.get("regime") not in sheet.SPECS:
         raise ValueError("product.regime must be 'iso' or 'asme'")
     tolerance = product.get("general_tolerance")
     if not isinstance(tolerance, (str, int, float)) or isinstance(tolerance, bool) or not str(tolerance).strip():
         raise ValueError("product.general_tolerance must be a non-empty string or number")
-    if args.scale <= 0:
-        raise ValueError("scale must be positive")
-    return part, product, step
+    if not math.isfinite(args.scale) or args.scale <= 0:
+        raise ValueError("scale must be positive and finite")
+    metrics = load_mapping(args.metrics.resolve(), "metrics")
+    pn = str(part["PN"])
+    parts = metrics.get("parts")
+    if not isinstance(parts, dict) or not isinstance(parts.get(pn), dict):
+        raise ValueError(f"metrics.parts must contain the part {pn}")
+    holes = parts[pn].get("holes")
+    if not isinstance(holes, list):
+        raise ValueError(f"metrics.parts.{pn}.holes must be a list")
+    for index, hole in enumerate(holes):
+        if not isinstance(hole, dict):
+            raise ValueError(f"metrics.parts.{pn}.holes[{index}] must be a mapping")
+        hole_id, diameter, axis, position = hole.get("id"), hole.get("diameter_mm"), hole.get("axis"), hole.get("position")
+        if not isinstance(hole_id, str) or not hole_id.strip():
+            raise ValueError(f"metrics.parts.{pn}.holes[{index}].id must be a non-empty string")
+        if (not isinstance(diameter, (int, float)) or isinstance(diameter, bool)
+                or not math.isfinite(diameter) or diameter <= 0):
+            raise ValueError(f"metrics.parts.{pn}.holes[{index}].diameter_mm must be positive and finite")
+        for field, vector in (("axis", axis), ("position", position)):
+            if (not isinstance(vector, list) or len(vector) != 3
+                    or any(not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value)
+                           for value in vector)):
+                raise ValueError(f"metrics.parts.{pn}.holes[{index}].{field} must be a 3-number vector")
+        if not any(axis):
+            raise ValueError(f"metrics.parts.{pn}.holes[{index}].axis must be non-zero")
+    return part, product, step, holes
 
 
-def choose_template(regime: str) -> tuple[Path | None, dict[str, bool]]:
-    candidates = {
-        "iso": TEMPLATES / "ISO/A4_Landscape_ISO5457_minimal.svg",
-        "asme": TEMPLATES / "ASME/ANSIA_Landscape.svg",
-    }
-    found = {name: path.is_file() for name, path in candidates.items()}
-    template = candidates[regime]
-    return (template if found[regime] else None), found
+def techdraw_job(step: Path, spec: sheet.SheetSpec, scale: float, holes: list[dict[str, Any]]) -> dict[str, Any]:
+    """Job for techdraw_job.py: projection arrangement, fit area, annotation margins and bores."""
+    area = spec.view_area()
+    return {"step": str(step), "template": str(spec.template), "projection_type": spec.projection_type,
+            "spacing": sheet.VIEW_SPACING, "area": [area.x0, area.y0, area.x1, area.y1], "margins": spec.margins(),
+            "scales": sheet.candidate_scales(scale), "holes": holes}
 
 
-def make_macro(
-    *, run_id: str, step: Path, part: dict[str, Any], product: dict[str, Any], scale: float,
-    template: Path | None, output: Path, marker: Path,
-) -> str:
-    payload = {
-        "run_id": run_id,
-        "step": str(step),
-        "part": part,
-        "product": product,
-        "scale": scale,
-        "template": str(template) if template else "",
-        "pdf": str(output / f"drawing_{run_id}.pdf"),
-        "svg": str(output / f"drawing_{run_id}.svg"),
-        "marker": str(marker),
-    }
-    data = json.dumps(payload)
-    return f'''import json, os, time
-import FreeCAD as App, FreeCADGui as Gui, Import
-import TechDrawGui
-JOB=json.loads({data!r})
-def run():
-    doc=App.newDocument("PartDrawing")
-    try:
-        Import.insert(JOB["step"], doc.Name); doc.recompute()
-        objects=[o for o in doc.Objects if hasattr(o,"Shape") and not o.Shape.isNull()]
-        if not objects: raise RuntimeError("STEP has no drawable shape")
-        sheet=doc.addObject("TechDraw::DrawPage", "Page")
-        if not JOB["template"]: raise RuntimeError("no shipped template is available for this regime")
-        template=doc.addObject("TechDraw::DrawSVGTemplate", "Template")
-        template.Template=JOB["template"]; sheet.Template=template
-        pn=str(JOB["part"]["PN"]); rev=str(JOB["part"]["rev"])
-        title=str(JOB["part"]["title"]); material=str(JOB["part"]["material"])
-        tolerance=str(JOB["product"]["general_tolerance"])
-        scale_text="1 : %.4g" % (1.0/float(JOB["scale"]))
-        fields={{"drawing_number":pn, "revision_index":rev, "title":title,
-                "part_material":material, "general_tolerances":tolerance,
-                "DrawingTitle1":title, "DrawingTitle2":"PN: "+pn+" | Rev: "+rev,
-                "DrawingTitle3":"Material: "+material+" | Tol: "+tolerance,
-                "Title":title, "Subtitle":"PN: "+pn+" | Rev: "+rev,
-                "Code":"Tolerance: "+tolerance, "Weight":"Material: "+material,
-                "scale":scale_text}}
-        editable=template.EditableTexts
-        for field,value in fields.items():
-            if field in editable: editable[field]=value
-        template.EditableTexts=editable
-        views=[]
-        for name,direction,x,y in (("Front",(0,-1,0),75,120),("Top",(0,0,1),155,120),("Right",(1,0,0),235,120)):
-            view=doc.addObject("TechDraw::DrawViewPart", "View"+name)
-            sheet.addView(view); view.Source=objects; view.Direction=App.Vector(*direction)
-            view.Scale=JOB["scale"]; view.X=x; view.Y=y; views.append(view)
-        doc.recompute()
-        for view in views:
-            try: edges=view.getVisibleEdges()
-            except Exception: edges=[]
-            if edges:
-                dimension=doc.addObject("TechDraw::DrawViewDimension", "Overall"+view.Name)
-                sheet.addView(dimension); dimension.Type="Distance"; dimension.References2D=[(view,"Edge0")]
-        doc.recompute()
-        for _ in range(10): Gui.updateGui(); time.sleep(.1)
-        TechDrawGui.exportPageAsPdf(sheet, JOB["pdf"])
-        TechDrawGui.exportPageAsSvg(sheet, JOB["svg"])
-        for path in (JOB["pdf"],JOB["svg"]):
-            if not os.path.isfile(path) or os.path.getsize(path)==0: raise RuntimeError("empty or missing drawing export: "+path)
-        result={{"status":"pass", "run_id":JOB["run_id"], "pdf":JOB["pdf"], "svg":JOB["svg"], "template":JOB["template"], "warnings":[]}}
-        with open(JOB["marker"],"w",encoding="utf-8") as f: json.dump(result,f,indent=2); f.write("\\n")
-    finally:
-        try: Gui.getMainWindow().close()
-        except Exception: pass
-        App.closeDocument(doc.Name)
-try: run()
-except Exception as exc:
-    result={{"status":"error", "run_id":JOB["run_id"], "error":{{"code":"drawing_failed", "message":str(exc)}}, "warnings":[]}}
-    with open(JOB["marker"],"w",encoding="utf-8") as f: json.dump(result,f,indent=2); f.write("\\n")
-os._exit(0)
-'''
-
-
-def run(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
-    part, product, step = read_inputs(args)
-    output = args.output_dir.resolve()
-    output.mkdir(parents=True, exist_ok=True)
-    template, templates = choose_template(product["regime"])
+def run_techdraw(job: dict[str, Any], output: Path, timeout: float) -> tuple[dict[str, Any] | None, str]:
+    """Run techdraw_job.py in freecadcmd as its own process group and return its parsed result."""
     run_id = uuid.uuid4().hex
-    macro = output / f"drawing_{run_id}.FCMacro"
-    marker = output / f"drawing_{run_id}.complete.json"
-    macro.write_text(make_macro(run_id=run_id, step=step, part=part, product=product, scale=args.scale,
-                                template=template, output=output, marker=marker), encoding="utf-8")
+    job_path = output / f"techdraw_{run_id}.job.json"
+    result_path = output / f"techdraw_{run_id}.result.json"
+    job_path.write_text(json.dumps({**job, "result": str(result_path)}), encoding="utf-8")
+    process: subprocess.Popen[str] | None = None
     try:
-        completed = subprocess.run([str(FREECAD), str(macro)], cwd=output,
-                                   env={**os.environ, "QT_QPA_PLATFORM": "offscreen"}, capture_output=True, text=True)
-    except OSError as exc:
-        return fail("freecad_unavailable", f"cannot start FreeCAD GUI launcher: {exc}"), 2
-    if not marker.is_file():
-        return {**fail("missing_completion_marker", "FreeCAD did not write the run-specific completion marker"),
-                "details": {"returncode": completed.returncode, "stderr": completed.stderr[-4000:], "templates_found": templates}}, 1
-    try:
-        result = json.loads(marker.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        return fail("invalid_marker", f"cannot parse completion marker: {exc}"), 1
-    if result.get("run_id") != run_id:
-        return fail("invalid_marker", "completion marker run id does not match this invocation"), 1
-    result["templates_found"] = templates
-    result["warnings"] = result.get("warnings", [])
-    if completed.returncode == 139:
-        result["warnings"].append("FreeCAD exited with 139 after writing the completion marker; outputs were validated.")
-    elif completed.returncode != 0:
-        result["warnings"].append(f"FreeCAD exited with status {completed.returncode}.")
-        result["status"] = "error"
-        result["error"] = {"code": "freecad_failed", "message": f"FreeCAD exited with status {completed.returncode}"}
-    if completed.stderr.strip():
-        result["warnings"].append("FreeCAD emitted diagnostics on stderr.")
+        try:
+            process = subprocess.Popen([str(FREECADCMD), str(TECHDRAW_JOB)], cwd=output, stdin=subprocess.DEVNULL,
+                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True,
+                                       env={**os.environ, "CAD_DRAWING_JOB": str(job_path)})
+            stdout,stderr=process.communicate(timeout=timeout)
+        except FileNotFoundError:
+            return None, f"FreeCAD command line application not found: {FREECADCMD}"
+        except subprocess.TimeoutExpired:
+            _terminate_process_group(process)
+            process.communicate()
+            return None, f"FreeCAD projection exceeded {timeout:g} seconds"
+        except BaseException:
+            if process is not None:
+                _terminate_process_group(process)
+                process.communicate()
+            raise
+        _terminate_process_group(process)
+        if not result_path.is_file():
+            return None, f"FreeCAD projection wrote no result marker (exit {process.returncode}): {stderr[-1500:]}"
+        try:
+            result = json.loads(result_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            return None, f"invalid FreeCAD projection result: {exc}"
+    finally:
+        job_path.unlink(missing_ok=True)
+        result_path.unlink(missing_ok=True)
     if result.get("status") != "pass":
-        return result, 1
-    artifacts: dict[str, Path] = {}
-    for key in ("pdf", "svg"):
-        artifact = Path(result.get(key, ""))
-        if not artifact.is_file() or artifact.stat().st_size <= 0:
-            return fail("invalid_export", f"missing or empty {key.upper()} output: {artifact}"), 1
-        if artifact.stat().st_mtime_ns < macro.stat().st_mtime_ns:
-            return fail("stale_export", f"{key.upper()} was not freshly written by this run"), 1
-        artifacts[key] = artifact
-    destinations = {"pdf": output / "drawing.pdf", "svg": output / "drawing.svg"}
-    for key, artifact in artifacts.items():
-        artifact.replace(destinations[key])
-        result[key] = str(destinations[key])
-    result["status"] = "pass"
-    return result, 0
+        return None, result.get("error", "projection failed")
+    return result, ""
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("step", type=Path)
-    parser.add_argument("--part", required=True, type=Path)
-    parser.add_argument("--product", required=True, type=Path)
-    parser.add_argument("--output-dir", required=True, type=Path)
-    parser.add_argument("--scale", type=float, default=1.0, help="drawing scale ratio (default: 1)")
-    args = parser.parse_args(argv)
-    if not FREECAD.is_file():
-        print(json.dumps(fail("freecad_unavailable", f"FreeCAD is not installed at {FREECAD}")))
-        return 2
+def render_pdf(svg: Path, pdf: Path, png: Path, timeout: float, required_text: list[str]) -> tuple[bool,str]:
     try:
-        result, status = run(args)
+        result=subprocess.run(["swift",str(SVG_TO_PDF),str(svg),str(pdf),str(png),*required_text],capture_output=True,text=True,timeout=timeout)
+    except FileNotFoundError: return False,"Swift/macOS PDF renderer unavailable"
+    except subprocess.TimeoutExpired: return False,"macOS SVG-to-PDF rendering timed out"
+    if result.returncode!=0 or not pdf.is_file() or pdf.stat().st_size==0 or not png.is_file() or png.stat().st_size==0:
+        return False,(result.stderr or result.stdout)[-1500:]
+    return True,""
+
+
+def render_svg(svg: Path, png: Path, timeout: float) -> tuple[bool,str]:
+    try: result=subprocess.run(["swift",str(SVG_TO_PNG),str(svg),str(png)],capture_output=True,text=True,timeout=timeout)
+    except FileNotFoundError: return False,"Swift/macOS SVG rasterizer unavailable"
+    except subprocess.TimeoutExpired: return False,"SVG rasterization timed out"
+    if result.returncode!=0 or not png.is_file() or png.stat().st_size==0: return False,(result.stderr or result.stdout)[-1500:]
+    return True,""
+
+
+def verify_svg_content(svg: Path, png: Path, part: dict[str,Any]) -> tuple[bool,str,int]:
+    try: root=SafeET.parse(str(svg),forbid_dtd=True).getroot()
+    except Exception as exc: return False,f"invalid or unsafe SVG output: {exc}",0
+    ns={"svg":"http://www.w3.org/2000/svg"}
+    path_count=len(root.findall(".//svg:path",ns))
+    texts=["".join(node.itertext()) for node in root.findall(".//svg:text",ns)]
+    required=(str(part["PN"]),str(part["rev"]),str(part["title"]),str(part["material"]))
+    missing=[value for value in required if not any(value in text for text in texts)]
+    if path_count<12 or missing: return False,f"empty_drawing: paths={path_count}, missing fields={missing}",path_count
+    return True,"",path_count
+
+
+def run(args: argparse.Namespace) -> tuple[dict[str,Any],int]:
+    part,product,step,holes=read_inputs(args)
+    output=args.output_dir.resolve(); output.mkdir(parents=True,exist_ok=True)
+    spec=sheet.SPECS[product["regime"]]
+    templates={name: candidate.template.is_file() for name,candidate in sheet.SPECS.items()}
+    if not templates[spec.regime]: return fail("template_missing",f"no shipped {spec.regime} template exists"),2
+    data,message=run_techdraw(techdraw_job(step,spec,args.scale,holes),output,args.timeout)
+    if data is None:
+        return fail("empty_drawing" if str(message).startswith("empty_drawing") else "projection_failed",message),1
+    try: drawing=sheet.compose(data,part,product,spec)
     except ValueError as exc:
-        result, status = fail("invalid_input", str(exc)), 2
-    except OSError as exc:
-        result, status = fail("io_error", str(exc)), 2
-    print(json.dumps(result, indent=2))
-    return status
+        return fail("metrics_mismatch" if str(exc).startswith("metrics_mismatch") else "empty_drawing",str(exc)),1
+    run_id=uuid.uuid4().hex
+    violations=layout_check.check_layout(drawing.svg,spec.regions,drawing.placeholders)
+    if violations:
+        rejected=output/f"drawing_{run_id}.rejected.svg"
+        rejected.write_text(drawing.svg,encoding="utf-8")
+        return fail("layout_check_failed",f"{rejected}: "+"; ".join(violations)),1
+    svg=output/"drawing.svg"; pdf=output/"drawing.pdf"
+    svg_png=output/f"drawing_{run_id}_svg.png"; pdf_png=output/f"drawing_{run_id}_pdf.png"
+    marker=output/f"drawing_{run_id}.complete.json"
+    svg.write_text(drawing.svg,encoding="utf-8")
+    ok,message=render_svg(svg,svg_png,args.timeout)
+    if not ok: return fail("empty_drawing",message),1
+    valid,message,path_count=verify_svg_content(svg,svg_png,part)
+    if not valid: return fail("empty_drawing",message),1
+    required=[str(part[k]) for k in ("PN","rev","title","material")]+[str(product["general_tolerance"])]
+    ok,message=render_pdf(svg,pdf,pdf_png,args.timeout,required)
+    if not ok:
+        code="empty_drawing" if "missing" in message or "blank" in message else "pdf_conversion_unavailable"
+        return fail(code,message),1 if code=="empty_drawing" else 2
+    report={"status":"pass","run_id":run_id,"pdf":str(pdf),"svg":str(svg),"rendered_svg_png":str(svg_png),"rendered_pdf_png":str(pdf_png),
+            "template":str(spec.template),"templates_found":templates,"projection":"FreeCAD TechDraw DrawProjGroup",
+            "projection_method":"first-angle" if spec.first_angle else "third-angle",
+            "scale":data["scale"],"layout_check":"pass","visible_paths":path_count,"face_count":data["face_count"],
+            "hole_diameters_mm":[h["diameter_mm"] for h in holes],"warnings":list(drawing.warnings)}
+    marker.write_text(json.dumps(report,indent=2)+"\n",encoding="utf-8")
+    return report,0
 
 
-if __name__ == "__main__":
-    raise SystemExit(main())
+def main(argv: list[str]|None=None) -> int:
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("step",type=Path)
+    parser.add_argument("--part",required=True,type=Path)
+    parser.add_argument("--product",required=True,type=Path)
+    parser.add_argument("--metrics",required=True,type=Path,help="metrics.json from the same model version as the STEP")
+    parser.add_argument("--output-dir",required=True,type=Path)
+    parser.add_argument("--scale",type=float,default=1.0,help="largest drawing scale; smaller standard scales are tried when the views do not fit")
+    parser.add_argument("--timeout",type=float,default=120.0)
+    args=parser.parse_args(argv)
+    if args.timeout<=0: parser.error("--timeout must be positive")
+    if not FREECADCMD.is_file():
+        print(json.dumps(fail("freecad_unavailable",f"FreeCAD is not installed at {FREECADCMD}"))); return 2
+    try: result,status=run(args)
+    except ValueError as exc: result,status=fail("invalid_input",str(exc)),2
+    except OSError as exc: result,status=fail("io_error",str(exc)),2
+    print(json.dumps(result,indent=2)); return status
+
+
+if __name__=="__main__": raise SystemExit(main())
