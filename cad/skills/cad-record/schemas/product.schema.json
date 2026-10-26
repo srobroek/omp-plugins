@@ -15,9 +15,12 @@
       "type": "object", "additionalProperties": false,
       "required": ["stage", "recheck_from"],
       "properties": {
-        "stage": {"type": "string", "enum": ["GROUND", "INTENT", "SPECIFY", "L0_CONCEPT", "VARIANT", "L1_LAYOUT", "LAYOUT", "L2_PARTS", "L3_DETAIL", "BOM", "L4_ANALYSIS", "CRITIQUE", "RECONCILE", "DESIGN", "RELEASE", "RELEASE_GATE"]},
-        "recheck_from": {"type": "string", "enum": ["layout"]}
+        "stage": {"$ref": "#/$defs/stage"},
+        "recheck_from": {"$ref": "#/$defs/stage"}
       }
     }
+  },
+  "$defs": {
+    "stage": {"type": "string", "enum": ["ground", "intent", "specify", "concept", "layout", "parts", "detail", "bom", "analysis", "critique", "reconcile", "design_freeze", "release"]}
   }
 }

@@ -1,14 +1,16 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://srobroek.com/cad/schemas/recheck.schema.json",
-  "title": "CAD recheck state",
+  "title": "CAD staged recheck stamp",
   "type": "object",
   "additionalProperties": false,
-  "required": ["from", "changed_parts", "dependents", "status"],
+  "required": ["tree_hash", "stage", "checks", "passed", "timestamp", "tool_versions"],
   "properties": {
-    "from": {"const": "layout"},
-    "changed_parts": {"type": "array", "items": {"type": "string", "pattern": "^[A-Z]{2,5}-[0-9]{4}$"}},
-    "dependents": {"type": "array", "items": {"type": "string", "pattern": "^[A-Z]{2,5}-[0-9]{4}$"}},
-    "status": {"type": "string", "enum": ["not-run", "pass", "fail"]}
+    "tree_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "stage": {"$ref": "product.schema.json#/$defs/stage"},
+    "checks": {},
+    "passed": {"type": "boolean"},
+    "timestamp": {"type": "string", "format": "date-time", "pattern": "Z$"},
+    "tool_versions": {"type": "object", "additionalProperties": {"type": "string"}}
   }
 }
