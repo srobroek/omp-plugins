@@ -3,6 +3,8 @@
 
 Source: canonical OMP agent Markdown in cad/agents/.
 Harness formats: Claude Code subagents, Kiro custom agents, and OpenCode agents.
+Also renders cad/.claude-plugin/plugin.json, which points Claude Code at the
+generated subagents instead of the OMP-format files in cad/agents/.
 """
 
 from __future__ import annotations
@@ -20,6 +22,8 @@ OUTPUTS = {
     "kiro": ROOT / "harness" / "kiro" / "agents",
     "opencode": ROOT / "harness" / "opencode" / "agents",
 }
+CLAUDE_MANIFEST = ROOT / ".claude-plugin" / "plugin.json"
+OMP_MANIFEST = ROOT / ".omp-plugin" / "plugin.json"
 AGENT_NAMES = ("cad-mech-reviewer", "cad-dfm-reviewer")
 TOOL_MAP = {"read": "Read", "grep": "Grep", "glob": "Glob"}
 
@@ -112,12 +116,25 @@ def render(agent: str, harness: str) -> str:
     raise ValueError(f"unknown harness {harness!r}")
 
 
+def output_path(agent: str, harness: str) -> Path:
+    return OUTPUTS[harness] / f"{agent}.{'json' if harness == 'kiro' else 'md'}"
+
+
+def claude_manifest() -> str:
+    # Format: https://code.claude.com/docs/en/plugins-reference#plugin-manifest-schema
+    # A declared `agents` list replaces the default agents/ directory, so Claude Code
+    # never loads the OMP-format sources there. `version` is left out: Claude Code
+    # then reads it from the marketplace entry, which build-catalog.py derives from
+    # .omp-plugin/plugin.json, the only manifest release-please bumps.
+    omp = json.loads(OMP_MANIFEST.read_text(encoding="utf-8"))
+    agents = [f"./{output_path(agent, 'claude').relative_to(ROOT).as_posix()}" for agent in AGENT_NAMES]
+    return json.dumps({"name": omp["name"], "description": omp["description"], "agents": agents}, indent=2) + "\n"
+
+
 def generated() -> dict[Path, str]:
-    return {
-        directory / f"{agent}.{'json' if harness == 'kiro' else 'md'}": render(agent, harness)
-        for harness, directory in OUTPUTS.items()
-        for agent in AGENT_NAMES
-    }
+    outputs = {output_path(agent, harness): render(agent, harness) for harness in OUTPUTS for agent in AGENT_NAMES}
+    outputs[CLAUDE_MANIFEST] = claude_manifest()
+    return outputs
 
 
 def main() -> int:
@@ -126,7 +143,7 @@ def main() -> int:
     args = parser.parse_args()
     try:
         outputs = generated()
-    except (OSError, ValueError) as error:
+    except (OSError, KeyError, ValueError) as error:
         print(f"FAIL: {error}", file=sys.stderr)
         return 1
 
@@ -143,13 +160,13 @@ def main() -> int:
             path.write_text(expected, encoding="utf-8")
             print(f"generated {path.relative_to(ROOT)}")
     if drift:
-        print("FAIL: generated CAD agents differ from canonical OMP files:", file=sys.stderr)
+        print("FAIL: generated CAD harness files differ from canonical OMP files:", file=sys.stderr)
         for path in drift:
             print(f"  {path}", file=sys.stderr)
         print("Run python3 cad/harness/generate.py", file=sys.stderr)
         return 1
     if args.check:
-        print(f"PASS: {len(outputs)} harness agents current")
+        print(f"PASS: {len(outputs)} harness files current")
     return 0
 
 

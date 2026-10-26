@@ -39,7 +39,7 @@ class HarnessGeneratorTests(unittest.TestCase):
         self.generate()
         current = self.run_generator("--check")
         self.assertEqual(current.returncode, 0, current.stdout + current.stderr)
-        self.assertIn("PASS: 6 harness agents current", current.stdout)
+        self.assertIn("PASS: 7 harness files current", current.stdout)
 
         target = self.cad / "harness" / "claude" / "agents" / "cad-mech-reviewer.md"
         target.write_text(target.read_text(encoding="utf-8") + "\nmanual drift\n", encoding="utf-8")
