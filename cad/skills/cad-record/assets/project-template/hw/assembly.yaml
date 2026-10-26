@@ -35,7 +35,7 @@ joints:
     nominal: 0
   - id: J-004
     type: fixed
-    parent: LMP-0001
+    parent: LMP-0002
     child: LMP-0005
     axis: [0, 0, 1]
     origin: [0, 0, 40]

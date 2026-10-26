@@ -3,20 +3,29 @@ interfaces:
     from: base_sub
     to: lower_link
     type: motion
-    description: "Base pivot axis; M5 shoulder pin retained with a circlip."
-    limits: {rotation_deg: [-10, 80]}
+    description: "Base pivot axis; M5 shoulder pin LMP-0005 pressed into the lower-link hub turns in the base boss, retained with a circlip on the boss pocket ceiling."
+    limits:
+      rotation_deg: [-10, 80]
+      press_fit: {fit: 5 H7/p6, pair: [LMP-0002, LMP-0005]}
+      running_fit: {fit: 5 H11/f7, pair: [LMP-0001, LMP-0005], note: "FDM bore drawn at 5.2 mm: 5 H11 plus a 0.2 mm hole allowance"}
   - id: IF-002
     from: lower_link
     to: upper_link
     type: motion
-    description: "Elbow hinge axis; M5 shoulder pin retained with a circlip."
-    limits: {rotation_deg: [-120, 0]}
+    description: "Elbow hinge axis; M5 shoulder pin LMP-0006 pressed into the lower link's +Y clevis cheek carries the upper-link tongue, retained with a circlip outside the -Y cheek."
+    limits:
+      rotation_deg: [-120, 0]
+      press_fit: {fit: 5 H7/p6, pair: [LMP-0002, LMP-0006]}
+      running_fit: {fit: 5 H8/f7, pair: [LMP-0003, LMP-0006]}
   - id: IF-003
     from: upper_link
     to: head
     type: motion
-    description: "Head tilt axis; M5 shoulder pin retained with a circlip."
-    limits: {rotation_deg: [-45, 45]}
+    description: "Head tilt axis; M5 shoulder pin LMP-0007 pressed into the upper link's +Y clevis cheek carries the head knuckle, retained with a circlip outside the -Y cheek."
+    limits:
+      rotation_deg: [-45, 45]
+      press_fit: {fit: 5 H7/p6, pair: [LMP-0003, LMP-0007]}
+      running_fit: {fit: 5 H11/f7, pair: [LMP-0004, LMP-0007], note: "FDM bore drawn at 5.2 mm: 5 H11 plus a 0.2 mm hole allowance"}
   - id: IF-004
     from: base_plate
     to: work_surface

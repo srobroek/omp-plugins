@@ -1,14 +1,15 @@
 """LMP-0002 Lower link: cad-design reference model, build123d 0.13, fidelity F2.
 
-CNC 6061-T6 link that turns on the base pin (J-001, axis Z) and carries the elbow
-clevis (J-002, axis Y). Form: the intersection of a plan outline (hub round, waisted
-taper, square fork end) and a side outline (flat hub, sagging top and bottom, round
-elbow end), with 1.5 mm fillets on every silhouette edge. Both outlines are tangent
-continuous: straight runs leave the hub and elbow rounds on tangents and every shallow
-kink between runs carries a 40 mm blend, because a fillet rolled across a kink of a
-few degrees leaves edges 0.1 mm out of tolerance. Then the elbow clevis slot with a
-tool-radius end, H8 pin bores with 0.5 mm entry chamfers, a top lightening pocket,
-and a ball-end cable channel underneath.
+CNC 6061-T6 link that turns in the base boss on the pin pressed into its hub (J-001,
+axis Z) and carries the elbow clevis (J-002, axis Y). Form: the intersection of a plan
+outline (hub round, waisted taper, square fork end) and a side outline (flat hub,
+sagging top and bottom, round elbow end), with 1.5 mm fillets on every silhouette edge.
+Both outlines are tangent continuous: straight runs leave the hub and elbow rounds on
+tangents and every shallow kink between runs carries a 40 mm blend, because a fillet
+rolled across a kink of a few degrees leaves edges 0.1 mm out of tolerance. Then the
+elbow clevis slot with a tool-radius end, H7 pin bores with 0.5 mm entry chamfers that
+grip the pins' p6 press bands, a top lightening pocket, and a ball-end cable channel
+underneath.
 
 Zero pose, assembly coordinates: hub bore on (0, 0, 40) along Z; elbow bore on
 (160, 0, 40) along Y; the arm lies along +X.
@@ -34,7 +35,7 @@ PARAMS = {
     "waist_half_h": 7.5,
     "elbow_r": 11.0,
     "edge_fillet": 1.5,
-    "pin_bore_d": 5.009,  # 5 H8 mid-limit from cad-fits (5.000..5.018); pin 5 f7
+    "pin_bore_d": 5.006,  # 5 H7 mid-limit from cad-fits (5.000..5.012); pin press band 5 p6
     "bore_chamfer": 0.5,
     "slot_w": 10.4,  # upper-link tongue 10 mm + 0.2 mm side clearance
     "slot_end_x": 132.0,
