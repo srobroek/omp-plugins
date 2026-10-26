@@ -28,6 +28,20 @@
  * ordered `git patch-id --stable` equivalence between the reviewed commits and the
  * landed ones, not by the reviewed head's ancestry.
  *
+ * The forge merges on its side, so the commits that proof reads are fetched first.
+ * Each commit the shape proof needs is checked locally with `git cat-file -e`, and a
+ * missing one is fetched by id from the landing's remote, falling back to the base
+ * branch, on a short bounded schedule for a forge whose Git service lags its API.
+ * The fetch writes objects only and moves no ref, so the proof still reads exact ids.
+ *
+ * A merge this call issued is never left unaccounted for. If anything after the
+ * forge accepted it refuses — the re-read, the fetch, the shape proof, the receipt —
+ * no receipt is written, because cleanup acts on every receipt it accepts, and the
+ * refusal carries `mergeIssued: true` and says the request is merged: re-running with
+ * the same inputs reads it as MERGED, issues no merge, and writes the receipt once
+ * the proof completes. Merging at most once and writing nothing unproved both hold
+ * across that retry.
+ *
  * Nothing is written before the proof exists. An `expectHeadSha` that is missing
  * or disagrees with the observed head, a `worktree` whose HEAD is not that head, a
  * payload for another pull request, a head or base that moved between the two
@@ -73,9 +87,12 @@ import {
 	type CliResult,
 	type CliRunner,
 	enableAutoDelete,
+	FETCH_TIMEOUT_MS,
 	FORGE_TIMEOUT_MS,
+	fetchCommitsArgv,
 	forgeEnvironment,
 	forgeTarget,
+	type GitlabHost,
 	gitObservationEnvironment,
 	MERGE_METHODS,
 	type MergeMethod,
@@ -183,11 +200,18 @@ export type LandDeps = {
 	receiptsDirectory?: string;
 	/** The tool call's abort signal: it ends the running command and stops every later step. */
 	signal?: AbortSignal;
+	/** The wait between attempts to fetch landed commits; tests replace it to observe the schedule. */
+	sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
 };
 
 export type LandOutcome =
 	| { ok: true; receipt: LandingReceipt; receiptPath: string; text: string; next: readonly string[] }
-	| { ok: false; reason: string; text: string };
+	/**
+	 * `mergeIssued` is true only when this call's merge was accepted by the forge and a
+	 * later step refused: the forge holds the landing, no receipt exists, and re-running
+	 * with the same inputs proves the MERGED request without merging it again.
+	 */
+	| { ok: false; reason: string; text: string; mergeIssued?: true };
 
 /** One observed pull request, in receipt spelling, from either forge's dialect. */
 type PrObservation = {
@@ -516,6 +540,95 @@ async function mergeProof(pr: PrObservation, method: MergeMethod | null, git: Gi
 	return { oid, parents, rebase };
 }
 
+/**
+ * Waits before each attempt to bring the landed commits into the local object store.
+ *
+ * A merge the forge just accepted can be named by its API before its Git service
+ * serves the commit, so the first fetch may miss it. Three attempts over about seven
+ * seconds cover that replication lag; a commit still missing after them is a
+ * refusal, never a guess.
+ */
+const FETCH_ATTEMPT_DELAYS_MS: readonly number[] = [0, 2_000, 5_000];
+
+/** An abortable wait: the abort resolves it early, and the caller then observes the signal. */
+function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
+	if (ms <= 0 || signal?.aborted === true) return Promise.resolve();
+	return new Promise(resolve => {
+		const done = (): void => {
+			clearTimeout(timer);
+			signal?.removeEventListener("abort", done);
+			resolve();
+		};
+		const timer = setTimeout(done, ms);
+		signal?.addEventListener("abort", done, { once: true });
+	});
+}
+
+/** What bringing the landed commits local took, recorded in the receipt's evidence. */
+type LocalCommits = { required: string[]; fetches: string[] };
+
+/**
+ * Make every commit the shape proof reads present locally, fetching it from `remote`
+ * when it is not.
+ *
+ * The forge merged on its side, so the merge commit — and, for a rebase, the
+ * reviewed head the patch ids are read from — is not in a checkout that has not
+ * fetched since. Without this step `git show` of the merge commit fails and a
+ * landing the forge holds is refused for want of a fetch. Each attempt fetches the
+ * missing ids directly and, if the forge will not serve them by id, the base branch
+ * the landing went to. The fetch writes objects only, so the proof that follows
+ * still reads exact ids and no ref is ever trusted in their place.
+ */
+async function ensureLocalCommits(
+	required: readonly string[],
+	baseBranch: string,
+	remote: string,
+	git: GitRead,
+	fetch: (argv: string[]) => Promise<CliResult>,
+	sleep: (ms: number, signal?: AbortSignal) => Promise<void>,
+	signal: AbortSignal | undefined,
+): Promise<LocalCommits | { reason: string }> {
+	const present = async (oid: string): Promise<boolean> => (await git(["cat-file", "-e", `${oid}^{commit}`])) !== null;
+	const missing = async (): Promise<string[]> => {
+		const absent: string[] = [];
+		for (const oid of required) if (!(await present(oid))) absent.push(oid);
+		return absent;
+	};
+	const fetches: string[] = [];
+	const failures: string[] = [];
+	let absent = await missing();
+	for (const delay of FETCH_ATTEMPT_DELAYS_MS) {
+		if (absent.length === 0) break;
+		const halted = (): { reason: string } | null =>
+			signal?.aborted === true ? { reason: `signal: observed an abort while fetching ${absent.join(", ")} from ${remote}` } : null;
+		const before = halted();
+		if (before !== null) return before;
+		await sleep(delay, signal);
+		const after = halted();
+		if (after !== null) return after;
+		const byId = fetchCommitsArgv(remote, { oids: absent });
+		if (byId === null) return { reason: `git fetch ${remote}: observed operands ${show(absent.join(" "))} it will not issue, expected whole object ids and a remote name` };
+		fetches.push(byId.join(" "));
+		const fetchedById = cliFailure(byId, await fetch(byId));
+		if (fetchedById !== null) failures.push(fetchedById);
+		absent = await missing();
+		if (absent.length === 0) break;
+		const byBranch = fetchCommitsArgv(remote, { branch: baseBranch });
+		if (byBranch === null) continue;
+		fetches.push(byBranch.join(" "));
+		const fetchedByBranch = cliFailure(byBranch, await fetch(byBranch));
+		if (fetchedByBranch !== null) failures.push(fetchedByBranch);
+		absent = await missing();
+	}
+	if (absent.length > 0) {
+		const last = failures.at(-1);
+		return {
+			reason: `git cat-file -e: observed ${absent.join(", ")} absent locally after ${fetches.length} fetches from ${remote} over ${FETCH_ATTEMPT_DELAYS_MS.length} attempts, expected the commits the shape proof reads${last === undefined ? "" : `; last fetch: ${last}`}`,
+		};
+	}
+	return { required: [...required], fetches };
+}
+
 /** Exact stdout of one successful local Git read, or null when Git did not complete it. */
 async function gitOutput(
 	run: CliRunner,
@@ -653,6 +766,8 @@ export type LandingTarget = {
 	/** The remote URL as a receipt or refusal may print it: credentials redacted. */
 	remoteUrl: string;
 	forge: "github" | "gitlab";
+	/** The canonical API host {@link forgeTarget} resolved for the remote's transport host. */
+	forgeHost: "github.com" | GitlabHost;
 	nameWithOwner: string;
 	repository: { key: string; canonicalRoot: string; ledger: CanonicalLedger };
 	/** `HOST/PATH`: the `--repo` every forge command is given. */
@@ -763,7 +878,7 @@ export async function resolveLandingTarget(
 			? { GH_HOST: target.canonicalHost }
 			: { GITLAB_HOST: target.canonicalHost, GITLAB_API_HOST: target.canonicalHost },
 	);
-	return { remote, remoteUrl, forge, nameWithOwner, repository, cliRepo, forgeCommandEnv };
+	return { remote, remoteUrl, forge, forgeHost: target.canonicalHost, nameWithOwner, repository, cliRepo, forgeCommandEnv };
 }
 
 /**
@@ -808,7 +923,8 @@ export async function landPullRequest(params: LandParams, deps: LandDeps = {}): 
 
 	const resolved = await resolveLandingTarget(params, git, cwd, forgeEnv);
 	if ("reason" in resolved) return refuse(resolved.reason);
-	const { remote, remoteUrl, forge, nameWithOwner, repository, cliRepo, forgeCommandEnv } = resolved;
+	const { remote, remoteUrl, forge, forgeHost, nameWithOwner, repository, cliRepo, forgeCommandEnv } = resolved;
+	const gitlabHost: GitlabHost | undefined = forgeHost === "github.com" ? undefined : forgeHost;
 	const boundForgeRun: CliRunner = (argv, options) => run(argv, { ...options, env: options.env ?? forgeCommandEnv });
 
 	const first = await readPr(run, forge, cliRepo, number, FORGE_TIMEOUT_MS, forgeCommandEnv);
@@ -864,6 +980,19 @@ export async function landPullRequest(params: LandParams, deps: LandDeps = {}): 
 	let proved = first.pr;
 	let rereadArgv: string[] | null = null;
 	let mergePolicy: boolean | "unknown" | null = null;
+	// A refusal once a landing exists on the forge. No receipt is written for a landing
+	// this call could not prove, so cleanup never acts on one; instead the refusal says
+	// the forge holds it and that re-running is safe: the next call reads the request as
+	// MERGED, takes the no-merge proof path, and writes the receipt. That keeps "merge at
+	// most once" and "nothing written before the proof" both true across the retry.
+	const refuseMerged = (reason: string): LandOutcome => {
+		if (mergeArgv === null) {
+			const retry = alreadyMerged ? "; the request is already MERGED, so re-running delivery_land issues no merge" : "";
+			return refuse(`${reason}; no receipt was written${retry}`);
+		}
+		const text = `${reason}; no receipt was written. The forge accepted ${mergeArgv.join(" ")}, so the request is merged and must not be merged again: re-run delivery_land with the same pr and expectHeadSha ${head}; it reads the request as MERGED, issues no merge, and writes the receipt once the proof completes`;
+		return { ok: false, reason: text, text: `delivery_land refused: ${text}`, mergeIssued: true };
+	};
 	if (alreadyMerged) {
 		notes.push(`The pull request was already MERGED when it was read, so no merge argv was issued: ${first.argv.join(" ")} is the proof.`);
 	} else {
@@ -904,7 +1033,7 @@ export async function landPullRequest(params: LandParams, deps: LandDeps = {}): 
 		if (mergeFailure !== null) return refuse(`${mergeFailure}; no receipt was written`);
 		const second = await readPr(run, forge, cliRepo, number, FORGE_TIMEOUT_MS, forgeCommandEnv);
 		rereadArgv = second.argv;
-		if ("reason" in second) return refuse(second.reason);
+		if ("reason" in second) return refuseMerged(second.reason);
 		// The re-read must describe the same pull request, at the same head, on the same
 		// base. A merge proves a landing only of what was read: a re-target or a push
 		// between the two reads would otherwise let this receipt name a head and a base
@@ -914,19 +1043,33 @@ export async function landPullRequest(params: LandParams, deps: LandDeps = {}): 
 		proved = second.pr;
 	}
 
-	const proof = await mergeProof(proved, alreadyMerged ? null : mergeMethod, git);
+	const proofMethod = alreadyMerged ? null : mergeMethod;
+	const provedOid = proved.mergeCommitOid?.trim().toLowerCase() ?? "";
+	let localCommits: LocalCommits | null = null;
+	if (proved.state.trim().toUpperCase() === "MERGED" && FULL_OID.test(provedOid)) {
+		const required = proofMethod === "rebase" && FULL_OID.test(head) && head !== provedOid ? [provedOid, head] : [provedOid];
+		const fetchRun = (argv: string[]): Promise<CliResult> => Promise.resolve(run(argv, { cwd, timeoutMs: FETCH_TIMEOUT_MS, env: gitEnv }));
+		const local = await ensureLocalCommits(required, proved.baseRefName, remote, git, fetchRun, deps.sleep ?? abortableSleep, signal);
+		if ("reason" in local) {
+			const source = alreadyMerged ? "the pull request read" : `the re-read after ${(mergeArgv ?? []).join(" ")}`;
+			return refuseMerged(`${source}: ${local.reason}`);
+		}
+		localCommits = local;
+	}
+
+	const proof = await mergeProof(proved, proofMethod, git);
 	if ("reason" in proof) {
 		const source = alreadyMerged ? "the pull request read" : `the re-read after ${(mergeArgv ?? []).join(" ")}`;
-		return refuse(`${source}: ${proof.reason}; no receipt was written`);
+		return refuseMerged(`${source}: ${proof.reason}`);
 	}
 
 	// Re-derived from the branch the re-read proved, which need not be the branch the
 	// first read named, and checked again: no receipt claims an active ledger with
 	// nothing for the native close-out commands to process.
 	const proven = beadIdentity(params.beadId, proved.headRefName);
-	if ("reason" in proven) return refuse(`${proven.reason}; no receipt was written`);
+	if ("reason" in proven) return refuseMerged(proven.reason);
 	const unproven = missingBeadIdentity(proven.ids, proved.headRefName, repository.ledger);
-	if (unproven !== null) return refuse(`${unproven}; no receipt was written`);
+	if (unproven !== null) return refuseMerged(unproven);
 
 	// The probe is asked from this call's own working directory: `remote` is a name,
 	// and a name only resolves in the repository that configures it.
@@ -940,7 +1083,7 @@ export async function landPullRequest(params: LandParams, deps: LandDeps = {}): 
 	// Read only now that the landing is proved, and written below only once its receipt
 	// has passed the validator: the setting governs every later merge by every
 	// contributor, so a landing that refused anywhere above leaves it as it was.
-	const observedAutoDelete: ReceiptAutoDelete = await autoDeleteSetting(forge, nameWithOwner, boundForgeRun);
+	const observedAutoDelete: ReceiptAutoDelete = await autoDeleteSetting(forge, nameWithOwner, boundForgeRun, gitlabHost);
 
 	// The proof of the landing is the read that observed it: the re-read when a merge
 	// was issued here, the first read when the forge had already merged it.
@@ -963,6 +1106,9 @@ export async function landPullRequest(params: LandParams, deps: LandDeps = {}): 
 		autoDelete: { observed: observedAutoDelete, requested: params.setupAutoDelete === true },
 		merge: mergeArgv === null ? null : { argv: mergeArgv.join(" "), method: mergeMethod, boundHead: head },
 		mergeShape: { parents: proof.parents, rebase: proof.rebase },
+		// The commits the shape proof read and the fetches that brought them local; an
+		// empty list means they were already present.
+		localCommits,
 		reread:
 			rereadArgv === null
 				? null
@@ -1013,20 +1159,20 @@ export async function landPullRequest(params: LandParams, deps: LandDeps = {}): 
 			? `setupAutoDelete: the deletion-on-merge write was not issued; the setting observed was ${observedAutoDelete}.`
 			: `setupAutoDelete was not requested, so no repository setting was written; autoDeleteSetting was observed as ${observedAutoDelete}.`,
 	);
-	if ("reason" in composed) return refuse(composed.reason);
+	if ("reason" in composed) return refuseMerged(composed.reason);
 	const landedState = alreadyMerged ? "the request was already MERGED" : "the pull request is merged";
 	if (params.setupAutoDelete === true) {
 		const unwritten = interrupted(
 			`before the deletion-on-merge write; no setting was written and no receipt was written, and ${landedState}, so delivery_land proves it again without merging`,
 		);
 		if (unwritten !== null) return unwritten;
-		const enabled = await enableAutoDelete(forge, nameWithOwner, boundForgeRun);
+		const enabled = await enableAutoDelete(forge, nameWithOwner, boundForgeRun, gitlabHost);
 		composed = compose(
 			enabled.ok
 				? `setupAutoDelete: the forge accepted a deletion-on-merge write; the setting observed before the request was ${observedAutoDelete}, which is what this receipt records because acceptance is not a re-read.`
 				: `setupAutoDelete: the deletion-on-merge write was refused: ${enabled.reason ?? "no reason reported"}. The setting observed before the request was ${observedAutoDelete}.`,
 		);
-		if ("reason" in composed) return refuse(composed.reason);
+		if ("reason" in composed) return refuseMerged(composed.reason);
 	}
 	const unrecorded = interrupted(`before the receipt was written; no receipt was written, and ${landedState}, so delivery_land proves it again without merging`);
 	if (unrecorded !== null) return unrecorded;
@@ -1036,7 +1182,7 @@ export async function landPullRequest(params: LandParams, deps: LandDeps = {}): 
 	try {
 		receiptPath = writeReceipt(receipt, deps.receiptsDirectory ?? receiptDirectory(env, receipt.repo.key));
 	} catch (error) {
-		return refuse(`the receipt could not be written: ${error instanceof Error ? error.message : String(error)}`);
+		return refuseMerged(`the receipt could not be written: ${error instanceof Error ? error.message : String(error)}`);
 	}
 
 	const next = receipt.beads.ledgerActive
@@ -1063,11 +1209,12 @@ export default function deliveryLandTool(pi: ExtensionAPI): void {
 			"Prove a pull request landed and emit one landing receipt. Reads the pull request and refuses unless expectHeadSha names its head " +
 			"(required whenever the call would merge; optional only to prove an already MERGED request) and, when worktree is given, its HEAD is that head. " +
 			"Merges at most once (an already MERGED request is proved, not re-merged) using merge_method (squash by default, with the PR title as subject, or merge/rebase), " +
-			"checks the method-specific commit shape (rebase: ordered git patch-id --stable equivalence of the reviewed and landed commits), and refuses an explicit merge " +
+			"checks the method-specific commit shape (rebase: ordered git patch-id --stable equivalence of the reviewed and landed commits) after fetching the commits it reads from the remote, and refuses an explicit merge " +
 			"when the forge policy disallows merge commits. The merge is bound to the observed repository and head, reread at the same head and base, and then the remote " +
 			"branch is observed with git ls-remote before exactly one validated receipt is written under the agent directory; setupAutoDelete writes only after that proof. " +
 			"An interrupt ends a running forge or git command. Writes no Beads ledger: when receipt beads.ledgerActive is true, close receipt beads in child-before-parent " +
-			"order, then delivery_cleanup; inactive repositories go directly to cleanup.",
+			"order, then delivery_cleanup; inactive repositories go directly to cleanup. A refusal with mergeIssued true means the request is merged: re-run with the same pr and " +
+			"expectHeadSha to write the receipt without merging again.",
 		parameters: z.object({
 			pr: z.union([z.number(), z.string()]).describe("Pull request or merge request number"),
 			merge_method: z.enum(MERGE_METHODS).optional().describe('Landing strategy: "squash" (default), "merge", or "rebase"'),
@@ -1088,7 +1235,7 @@ export default function deliveryLandTool(pi: ExtensionAPI): void {
 				content: [{ type: "text", text: result.text }],
 				details: result.ok
 					? { ok: true, receipt: result.receipt, receiptPath: result.receiptPath, next: result.next }
-					: { ok: false, reason: result.reason },
+					: { ok: false, reason: result.reason, ...(result.mergeIssued === true ? { mergeIssued: true } : {}) },
 			};
 		},
 	});

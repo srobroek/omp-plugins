@@ -41,9 +41,11 @@ import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 
 export type Forge = "github" | "gitlab" | "unknown";
+/** The GitLab instances whose API this adapter addresses, by canonical API host. */
+export type GitlabHost = "gitlab.com" | "gitlab.aws.dev";
 export type ForgeTarget =
 	| Readonly<{ forge: "github"; canonicalHost: "github.com" }>
-	| Readonly<{ forge: "gitlab"; canonicalHost: "gitlab.com" }>;
+	| Readonly<{ forge: "gitlab"; canonicalHost: GitlabHost }>;
 export const MERGE_METHODS = ["squash", "merge", "rebase"] as const;
 export type MergeMethod = (typeof MERGE_METHODS)[number];
 
@@ -113,8 +115,11 @@ const GITLAB_MAX_PATH_SEGMENTS = 21;
  * `ssh.github.com` and `altssh.gitlab.com` are each vendor's documented
  * alternate SSH endpoint for networks that block port 22. They are transport
  * hosts only: forge CLI and API calls stay pinned to the vendor's canonical
- * host. A self-hosted instance is deliberately not recognised, because its API
- * dialect is not verified here.
+ * host. `gitlab.aws.dev` is the one self-hosted GitLab instance recognised, by
+ * name: its git-over-SSH endpoint `ssh.gitlab.aws.dev` serves no API, so a remote
+ * on either host addresses the API at `gitlab.aws.dev`. Any other self-hosted
+ * instance is deliberately not recognised, because its API dialect is not
+ * verified here.
  *
  * A host is attacker-influenced input. The allowlist therefore has a null
  * prototype, is frozen, and is read through an own-property descriptor rather
@@ -122,12 +127,15 @@ const GITLAB_MAX_PATH_SEGMENTS = 21;
  */
 const GITHUB_TARGET: ForgeTarget = Object.freeze({ forge: "github", canonicalHost: "github.com" });
 const GITLAB_TARGET: ForgeTarget = Object.freeze({ forge: "gitlab", canonicalHost: "gitlab.com" });
+const GITLAB_AWS_TARGET: ForgeTarget = Object.freeze({ forge: "gitlab", canonicalHost: "gitlab.aws.dev" });
 const FORGE_HOSTS: Readonly<Record<string, ForgeTarget>> = Object.freeze(
 	Object.assign(Object.create(null) as Record<string, ForgeTarget>, {
 		"github.com": GITHUB_TARGET,
 		"ssh.github.com": GITHUB_TARGET,
 		"gitlab.com": GITLAB_TARGET,
 		"altssh.gitlab.com": GITLAB_TARGET,
+		"gitlab.aws.dev": GITLAB_AWS_TARGET,
+		"ssh.gitlab.aws.dev": GITLAB_AWS_TARGET,
 	}),
 );
 
@@ -520,6 +528,7 @@ export function forgeTarget(remoteUrl: string | null): ForgeTarget | null {
 	const target: unknown = descriptor.value;
 	if (target === GITHUB_TARGET) return GITHUB_TARGET;
 	if (target === GITLAB_TARGET) return GITLAB_TARGET;
+	if (target === GITLAB_AWS_TARGET) return GITLAB_AWS_TARGET;
 	return null;
 }
 
@@ -647,6 +656,13 @@ function supportedForge(forge: Forge): "github" | "gitlab" | null {
 	return forge === "github" || forge === "gitlab" ? forge : null;
 }
 
+const GITLAB_HOSTS: readonly GitlabHost[] = Object.freeze([GITLAB_TARGET.canonicalHost, GITLAB_AWS_TARGET.canonicalHost] as GitlabHost[]);
+
+/** The GitLab API host, tested positively for the same reason {@link supportedForge} is: it becomes an argv element. */
+function supportedGitlabHost(host: unknown): GitlabHost | null {
+	return GITLAB_HOSTS.find(known => known === host) ?? null;
+}
+
 /**
  * Read GitLab's boolean out of the project object `glab api` returns.
  *
@@ -697,16 +713,24 @@ function removeSourceBranchAfterMerge(payload: unknown): boolean | null {
  * `"unknown"`.
  *
  * `run` receives no `cwd`: both reads name the repository in the request path.
- * A caller that needs one binds it by wrapping the runner.
+ * A caller that needs one binds it by wrapping the runner. `gitlabHost` is the
+ * canonical API host {@link forgeTarget} resolved; GitHub ignores it.
  */
-export async function autoDeleteSetting(forge: Forge, repo: string, run: CliRunner = runCli): Promise<"on" | "off" | "unknown"> {
+export async function autoDeleteSetting(
+	forge: Forge,
+	repo: string,
+	run: CliRunner = runCli,
+	gitlabHost: GitlabHost = "gitlab.com",
+): Promise<"on" | "off" | "unknown"> {
 	const supported = supportedForge(forge);
 	if (supported === null) return "unknown";
 	const path = normalizeRepoPath(supported, repo);
 	if (path === null) return "unknown";
+	const host = supportedGitlabHost(gitlabHost);
+	if (supported === "gitlab" && host === null) return "unknown";
 	const argv = supported === "github"
 		? ["gh", "api", `repos/${path}`, "--jq", ".delete_branch_on_merge"]
-		: ["glab", "api", `projects/${encodeURIComponent(path)}`, "--hostname", GITLAB_TARGET.canonicalHost];
+		: ["glab", "api", `projects/${encodeURIComponent(path)}`, "--hostname", host ?? GITLAB_TARGET.canonicalHost];
 	const result = await run(argv, { timeoutMs: FORGE_TIMEOUT_MS });
 	if (!result.ok || result.exitCode !== 0 || result.error !== undefined) return "unknown";
 	const text = result.stdout.trim();
@@ -740,7 +764,12 @@ export async function autoDeleteSetting(forge: Forge, repo: string, run: CliRunn
  * the setting is on. A caller that needs proof re-reads with
  * {@link autoDeleteSetting}.
  */
-export async function enableAutoDelete(forge: Forge, repo: string, run: CliRunner = runCli): Promise<{ ok: boolean; reason?: string }> {
+export async function enableAutoDelete(
+	forge: Forge,
+	repo: string,
+	run: CliRunner = runCli,
+	gitlabHost: GitlabHost = "gitlab.com",
+): Promise<{ ok: boolean; reason?: string }> {
 	const supported = supportedForge(forge);
 	if (supported === null) {
 		return {
@@ -753,9 +782,13 @@ export async function enableAutoDelete(forge: Forge, repo: string, run: CliRunne
 		const expected = supported === "github" ? '"<owner>/<name>"' : '"<group>/<project>", optionally with nested groups';
 		return { ok: false, reason: `repo is ${JSON.stringify(repo)}, expected ${expected}` };
 	}
+	const host = supportedGitlabHost(gitlabHost);
+	if (supported === "gitlab" && host === null) {
+		return { ok: false, reason: `gitlabHost is ${JSON.stringify(gitlabHost)}, expected one of ${GITLAB_HOSTS.map(value => JSON.stringify(value)).join(", ")}` };
+	}
 	const argv = supported === "github"
 		? ["gh", "api", "-X", "PATCH", `repos/${path}`, "-F", "delete_branch_on_merge=true"]
-		: ["glab", "api", "-X", "PUT", `projects/${encodeURIComponent(path)}`, "--hostname", GITLAB_TARGET.canonicalHost, "-F", "remove_source_branch_after_merge=true"];
+		: ["glab", "api", "-X", "PUT", `projects/${encodeURIComponent(path)}`, "--hostname", host ?? GITLAB_TARGET.canonicalHost, "-F", "remove_source_branch_after_merge=true"];
 	const result = await run(argv, { timeoutMs: FORGE_TIMEOUT_MS });
 	if (!result.ok || result.exitCode !== 0 || result.error !== undefined) {
 		return { ok: false, reason: describeFailure(argv, result) };
@@ -915,6 +948,52 @@ function lsRemoteArgv(remote: string, ref: string): string[] {
 		"--upload-pack=git-upload-pack",
 		remote,
 		ref,
+	];
+}
+
+/** Wall-clock ceiling for one fetch of landed commits: it moves objects, not one ref line. */
+export const FETCH_TIMEOUT_MS = 30_000;
+
+/**
+ * The fetch that brings a landing's commits into the local object store, or null
+ * when an operand is not one this module will put on a command line.
+ *
+ * A forge merges on the server, so the merge commit it names does not exist locally
+ * until something fetches it, and every local proof of its shape reads it. Each
+ * `want` is either a whole object id — fetched by id, which both forges serve for
+ * reachable commits — or a branch, spelled in full as `refs/heads/<branch>`.
+ *
+ * Nothing is written but objects: no refspec has a destination, `FETCH_HEAD` is not
+ * written, and tags, submodules, and automatic maintenance stay off, so the fetch
+ * moves no ref a later read or cleanup observes. It carries the same transport and
+ * helper pins as the absence probe, and hooks are pointed at nothing, so a checkout's
+ * config chooses no program this fetch runs.
+ */
+export function fetchCommitsArgv(remote: string, wants: { oids?: readonly string[]; branch?: string }): string[] | null {
+	if (!REMOTE_NAME.test(remote) || !isSafeArgument(remote)) return null;
+	const refspecs: string[] = [];
+	for (const oid of wants.oids ?? []) {
+		if (!GIT_OID.test(oid)) return null;
+		refspecs.push(oid);
+	}
+	if (wants.branch !== undefined) {
+		if (!isValidBranchName(wants.branch)) return null;
+		refspecs.push(`refs/heads/${wants.branch}`);
+	}
+	if (refspecs.length === 0) return null;
+	return [
+		"git",
+		...LS_REMOTE_PROTOCOL_POLICY,
+		"-c", `core.hooksPath=${devNull}`,
+		"fetch",
+		"--quiet",
+		"--no-tags",
+		"--no-recurse-submodules",
+		"--no-write-fetch-head",
+		"--no-auto-maintenance",
+		"--upload-pack=git-upload-pack",
+		remote,
+		...refspecs,
 	];
 }
 

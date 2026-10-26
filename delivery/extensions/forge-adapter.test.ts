@@ -12,6 +12,7 @@ import {
 	enableAutoDelete,
 	FORGE_TIMEOUT_MS,
 	type Forge,
+	fetchCommitsArgv,
 	forgeEnvironment,
 	forgeTarget,
 	mergeArgs,
@@ -193,6 +194,21 @@ describe("detectForge", () => {
 		expect(forgeTarget("ssh://git@ssh.github.com:443/o/r.git")).toEqual({ forge: "github", canonicalHost: "github.com" });
 		expect(forgeTarget("ssh://git@altssh.gitlab.com:443/g/p.git")).toEqual({ forge: "gitlab", canonicalHost: "gitlab.com" });
 		expect(forgeTarget("ssh://git@evil.example:443/g/p.git")).toBeNull();
+	});
+
+	test("the gitlab.aws.dev instance is GitLab, and its SSH-only host addresses the API host", () => {
+		// ssh.gitlab.aws.dev serves git over SSH and never the API, so a remote on it
+		// must address forge commands to gitlab.aws.dev, not to itself or to gitlab.com.
+		for (const url of [
+			"git@ssh.gitlab.aws.dev:sjors/cde-builderproject.git",
+			"ssh://git@ssh.gitlab.aws.dev/sjors/cde-builderproject.git",
+			"https://gitlab.aws.dev/sjors/cde-builderproject.git",
+		]) {
+			expect(forgeTarget(url)).toEqual({ forge: "gitlab", canonicalHost: "gitlab.aws.dev" });
+			expect(repoPathFromRemote(url)).toBe("sjors/cde-builderproject");
+		}
+		expect(forgeTarget("git@ssh.gitlab.aws.dev.evil.example:sjors/p.git")).toBeNull();
+		expect(forgeTarget("git@aws.dev:sjors/p.git")).toBeNull();
 	});
 
 	test("a lookalike host is not the forge", () => {
@@ -470,6 +486,19 @@ describe("autoDeleteSetting", () => {
 		expect(calls[0]?.timeoutMs).toBe(FORGE_TIMEOUT_MS);
 	});
 
+	test("gitlab reads the setting from the API host the remote resolved to", async () => {
+		const { run, calls } = spy(completed(0, gitlabProject(true)));
+		expect(await autoDeleteSetting("gitlab", "sjors/cde-builderproject", run, "gitlab.aws.dev")).toBe("on");
+		expect(calls[0]?.argv).toEqual(["glab", "api", "projects/sjors%2Fcde-builderproject", "--hostname", "gitlab.aws.dev"]);
+	});
+
+	test("an API host outside the allowlist is never put on a command line", async () => {
+		const { run, calls } = spy(completed(0, gitlabProject(true)));
+		expect(await autoDeleteSetting("gitlab", "g/p", run, "evil.example" as "gitlab.com")).toBe("unknown");
+		expect(await enableAutoDelete("gitlab", "g/p", run, "ssh.gitlab.aws.dev" as "gitlab.com")).toMatchObject({ ok: false });
+		expect(calls).toHaveLength(0);
+	});
+
 	test("false is off, for both forges", async () => {
 		expect(await autoDeleteSetting("github", "o/r", spy(completed(0, "false\n")).run)).toBe("off");
 		expect(await autoDeleteSetting("gitlab", "g/p", spy(completed(0, gitlabProject(false))).run)).toBe("off");
@@ -635,6 +664,12 @@ describe("enableAutoDelete", () => {
 			"remove_source_branch_after_merge=true",
 		]);
 		expect(calls[0]?.timeoutMs).toBe(FORGE_TIMEOUT_MS);
+	});
+
+	test("gitlab writes the setting on the API host the remote resolved to", async () => {
+		const { run, calls } = spy(completed(0, "{}"));
+		expect(await enableAutoDelete("gitlab", "sjors/cde-builderproject", run, "gitlab.aws.dev")).toEqual({ ok: true });
+		expect(calls[0]?.argv.slice(4, 7)).toEqual(["projects/sjors%2Fcde-builderproject", "--hostname", "gitlab.aws.dev"]);
 	});
 
 	test("the endpoints take booleans, so neither write uses a raw string field", async () => {
@@ -1106,6 +1141,7 @@ describe("every issued command", () => {
 
 	test("the runtime surface is exactly the contract the delivery tools import", () => {
 		expect(Object.keys(adapter).sort()).toEqual([
+			"FETCH_TIMEOUT_MS",
 			"FORGE_TIMEOUT_MS",
 			"MERGE_METHODS",
 			"REMOTE_NAME",
@@ -1113,6 +1149,7 @@ describe("every issued command", () => {
 			"autoDeleteSetting",
 			"detectForge",
 			"enableAutoDelete",
+			"fetchCommitsArgv",
 			"forgeEnvironment",
 			"forgeTarget",
 			"gitObservationEnvironment",
@@ -1461,4 +1498,38 @@ describe("runCli against real processes", () => {
 		expect(gone.error ?? "").not.toBe("");
 		expect(await runCli([], { timeoutMs: FORGE_TIMEOUT_MS })).toEqual({ ok: false, exitCode: null, stdout: "", stderr: "", error: "no command to run" });
 	}, 60_000);
+});
+
+describe("fetchCommitsArgv", () => {
+	const OID = "feedfacecafebabe0123456789abcdef01234567";
+
+	test("fetches whole ids or one full branch ref, writing objects only, under the probe's pins", () => {
+		const argv = fetchCommitsArgv("origin", { oids: [OID] });
+		expect(argv?.slice(argv.indexOf("fetch"))).toEqual([
+			"fetch",
+			"--quiet",
+			"--no-tags",
+			"--no-recurse-submodules",
+			"--no-write-fetch-head",
+			"--no-auto-maintenance",
+			"--upload-pack=git-upload-pack",
+			"origin",
+			OID,
+		]);
+		for (const pin of ["protocol.allow=never", "protocol.ext.allow=never", "core.sshCommand=ssh", "credential.helper=", `core.hooksPath=${devNull}`]) {
+			expect(argv).toContain(pin);
+		}
+		expect(fetchCommitsArgv("origin", { branch: "main" })?.at(-1)).toBe("refs/heads/main");
+		// No refspec names a destination, so the fetch moves no ref.
+		expect(fetchCommitsArgv("origin", { oids: [OID], branch: "main" })?.some(part => part.includes(":"))).toBe(false);
+	});
+
+	test("refuses an operand it will not put on a command line", () => {
+		expect(fetchCommitsArgv("--upload-pack=evil", { oids: [OID] })).toBeNull();
+		expect(fetchCommitsArgv("origin", { oids: ["feedface"] })).toBeNull();
+		expect(fetchCommitsArgv("origin", { oids: ["HEAD"] })).toBeNull();
+		expect(fetchCommitsArgv("origin", { branch: "main:refs/heads/evil" })).toBeNull();
+		expect(fetchCommitsArgv("origin", { branch: "-main" })).toBeNull();
+		expect(fetchCommitsArgv("origin", {})).toBeNull();
+	});
 });
