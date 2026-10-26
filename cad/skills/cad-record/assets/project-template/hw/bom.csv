@@ -3,6 +3,6 @@ level,PN,rev,qty,title,material,process,make_buy,supplier,mass
 1,LMP-0002,X1,1,Lower link,Aluminum 6061-T6,cnc,make,,153
 1,LMP-0003,X1,1,Upper link,Aluminum 6061-T6,cnc,make,,138
 1,LMP-0004,X1,1,Lamp head housing,PETG,fdm,make,,58
-1,LMP-0005,X1,1,M5 x 30 shoulder pin,Stainless steel A2,purchased,buy,,5.8
-1,LMP-0006,X1,1,M5 x 25 shoulder pin,Stainless steel A2,purchased,buy,,5.0
+1,LMP-0005,X1,1,M5 x 30 shoulder pin,Stainless steel A2,purchased,buy,,5.9
+1,LMP-0006,X1,1,M5 x 25 shoulder pin,Stainless steel A2,purchased,buy,,5.1
 1,LMP-0007,X1,1,M5 x 20 shoulder pin,Stainless steel A2,purchased,buy,,4.3

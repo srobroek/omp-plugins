@@ -6,8 +6,9 @@ outline flares through 8 mm vertical blends to the 17 mm body and the head clevi
 The side outline sags between the two round ends on runs that leave each round on a
 tangent and meet mid-span in a 40 mm blend: a fillet rolled across a kink of a few
 degrees leaves edges 0.06 mm out of tolerance. Silhouette edges carry 1.5 mm
-fillets; then the head clevis slot, H8 pin bores with 0.5 mm entry chamfers, a top
-lightening pocket and a ball-end cable channel underneath.
+fillets; then the head clevis slot, an H8 elbow bore that turns on its pin's journal
+and an H7 tip bore that grips its pin's p6 press band, both with 0.5 mm entry
+chamfers, a top lightening pocket and a ball-end cable channel underneath.
 
 Zero pose, assembly coordinates: elbow bore on (160, 0, 40), tip bore on (360, 0, 40),
 both along Y.
@@ -31,7 +32,8 @@ PARAMS = {
     "flare_fillet": 8.0,
     "sag_blend": 40.0,  # radius of the blend where the sagging runs meet mid-span
     "edge_fillet": 1.5,
-    "pin_bore_d": 5.009,  # 5 H8 mid-limit from cad-fits (5.000..5.018); pin 5 f7
+    "elbow_bore_d": 5.009,  # 5 H8 mid-limit from cad-fits (5.000..5.018); turns on pin 5 f7
+    "tip_bore_d": 5.006,  # 5 H7 mid-limit from cad-fits (5.000..5.012); pin press band 5 p6
     "bore_chamfer": 0.5,
     "slot_w": 7.4,  # head tongue 7 mm + 0.2 mm side clearance
     "slot_end_x": 334.0,
@@ -161,8 +163,9 @@ def build(params: dict) -> bd.Part:
             x_end + 5.0 - slot_x, p["slot_w"], 4 * r, align=(bd.Align.MIN, bd.Align.CENTER, bd.Align.MIN)
         ),
     )
-    bore_r = p["pin_bore_d"] / 2.0
-    bores = [bd.Pos(x, 0, z) * bd.Rot(90, 0, 0) * bd.Cylinder(bore_r, 4 * bw) for x, z in ((ex, ez), (tx, tz))]
+    elbow_bore_r, tip_bore_r = p["elbow_bore_d"] / 2.0, p["tip_bore_d"] / 2.0
+    bores = [bd.Pos(x, 0, z) * bd.Rot(90, 0, 0) * bd.Cylinder(bore_r, 4 * bw)
+             for x, z, bore_r in ((ex, ez, elbow_bore_r), (tx, tz, tip_bore_r))]
     x0, x1, width, floor = p["pocket"]
     pocket = _stadium(x0, x1, width, floor, ez + 3 * r)
     cx0, cx1, cr, czc = p["cable_channel"]
@@ -173,5 +176,6 @@ def build(params: dict) -> bd.Part:
     body = safe_cut(body, pocket)
     body = safe_cut(body, channel)
 
-    entries = _circle_edges(body, bore_r, [((ex, 0.0, ez), (0, 1, 0)), ((tx, 0.0, tz), (0, 1, 0))])
+    entries = (_circle_edges(body, elbow_bore_r, [((ex, 0.0, ez), (0, 1, 0))])
+               + _circle_edges(body, tip_bore_r, [((tx, 0.0, tz), (0, 1, 0))]))
     return bd.chamfer(entries, p["bore_chamfer"])

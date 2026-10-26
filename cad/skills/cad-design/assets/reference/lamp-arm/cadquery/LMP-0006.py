@@ -1,9 +1,10 @@
 """LMP-0006 M5 x 25 shoulder pin: cad-design reference model, CadQuery 2.8, fidelity F3.
 
 Purchased stainless pin for the elbow (J-002, axis Y), modelled as bought: a low
-socket head (dk 8.5, k 3, 3 mm hex socket, 0.4 mm top chamfer), a 5 f7 shank at its
-mid-limit, a DIN 471 retaining-ring groove just outside the lower link's -Y cheek,
-and a 0.4 mm lead chamfer.
+socket head (dk 8.5, k 3, 3 mm hex socket, 0.4 mm top chamfer), a 5 p6 press band at
+its mid-limit that grips the lower link's +Y cheek (5 H7/p6), a 5 f7 journal at its
+mid-limit on which the upper-link tongue turns, a DIN 471 retaining-ring groove just
+outside the lower link's -Y cheek, and a 0.4 mm lead chamfer.
 
 Zero pose, assembly coordinates: shank axis on (160, 0, 40) pointing -Y from the head;
 the head underside sits 0.3 mm off the +Y cheek face.
@@ -20,6 +21,8 @@ PARAMS = {
     "axis": [0.0, -1.0, 0.0],  # head -> tip
     "head_offset": -11.3,  # head underside position along `axis` from the origin
     "length": 25.0,
+    "press_d": 5.016,  # 5 p6 mid-limit from cad-fits (5.012..5.020)
+    "press_len": 6.1,  # head underside to the slot face of the lower link's +Y cheek
     "shank_d": 4.984,  # 5 f7 mid-limit from cad-fits (4.978..4.990)
     "head_d": 8.5,
     "head_k": 3.0,
@@ -41,13 +44,13 @@ def _plane(p):
 
 def build(params: dict) -> cq.Shape:
     p = {**PARAMS, **params}
-    r, length, c = p["shank_d"] / 2.0, p["length"], p["chamfer"]
+    r, pr, pl, length, c = p["shank_d"] / 2.0, p["press_d"] / 2.0, p["press_len"], p["length"], p["chamfer"]
     hr, k = p["head_d"] / 2.0, p["head_k"]
     g0, gw, gr = p["groove_from_head"], p["groove_w"], p["groove_d"] / 2.0
     # Section in the plane's (radius, axial) coordinates; the head lies at negative axial values.
     section = [
-        (0.0, -k), (hr - c, -k), (hr, -k + c), (hr, 0.0), (r, 0.0), (r, g0), (gr, g0), (gr, g0 + gw),
-        (r, g0 + gw), (r, length - c), (r - c, length), (0.0, length),
+        (0.0, -k), (hr - c, -k), (hr, -k + c), (hr, 0.0), (pr, 0.0), (pr, pl), (r, pl), (r, g0), (gr, g0),
+        (gr, g0 + gw), (r, g0 + gw), (r, length - c), (r - c, length), (0.0, length),
     ]
     plane = _plane(p)
     local = cq.Plane((0, 0, 0), (1, 0, 0), (0, -1, 0))
