@@ -197,7 +197,7 @@ def run():
         max_stress=max(stress); max_displacement=max(displacement); y=float(JOB["material"]["yield"])
         warnings=[]
         versions={{"freecad":".".join(App.Version()[:3]), "gmsh":"bundled 4.15.0", "calculix":"bundled 2.23"}}
-        result={{"status":"pass", "run_id":JOB["run_id"], "max_von_mises_mpa":max_stress, "max_displacement_mm":max_displacement, "safety_factor_yield":y/max_stress if max_stress else None, "node_count":nodes, "element_count":elements, "solve_time_seconds":solve_seconds, "solver_versions":versions, "warnings":warnings, "worst_case_pose":{{"step":JOB["step"], **({{"pose":JOB["pose"]}} if JOB.get("pose") is not None else {{}})}}}}
+        result={{"status":"pass", "run_id":JOB["run_id"], "part":JOB.get("part"), "max_von_mises_mpa":max_stress, "max_displacement_mm":max_displacement, "safety_factor_yield":y/max_stress if max_stress else None, "node_count":nodes, "element_count":elements, "solve_time_seconds":solve_seconds, "solver_versions":versions, "warnings":warnings, "worst_case_pose":{{"step":JOB["step"], **({{"pose":JOB["pose"]}} if JOB.get("pose") is not None else {{}})}}}}
         with open(JOB["output"], "w", encoding="utf-8") as f: json.dump(result,f,indent=2); f.write("\\n")
     finally:
         App.closeDocument(doc.Name)
