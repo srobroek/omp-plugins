@@ -81,7 +81,7 @@ title = "Recheck L4 analysis for affected parts"
 type = "task"
 needs = ["detail-recheck"]
 labels = ["cad", "phase:analysis"]
-description = "For {{affected_parts}} only, run the kinematic sweep using `uv run --script skill://cad-motion/scripts/sweep.py ... --worst-step worst.step`; pass `worst_case.pose` and `worst.step` to the separate cad-freecad static FEA workflow, not yet merged. For an L4 commit batch, run `uv run --script skill://cad-model/scripts/cad_model.py run hw --label vN --kernel {{kernel}}`, then `uv run --script skill://cad-model/scripts/cad_model.py check vN --hw hw --out checks-vN.json`; a blocking check failure stops the batch. Then render with `uv run --script skill://cad-render/scripts/render.py hw --version vN [--views iso front side exploded closeup-<PN>]`. Apply post-LAYOUT recheck only to the affected set; preserve untouched-part evidence and record verification results plus the design entry/bead note."
+description = "For {{affected_parts}} only, run `uv run --script skill://cad-motion/scripts/sweep.py ... --worst-step worst.step` for kinematics. Run `uv run --script skill://cad-analysis/scripts/fea_static.py <case.yaml>` for static FEA at the worst-case pose. On each L4 batch, run cad-model run then check; a blocking failure stops it. Render the successful version. Apply post-LAYOUT recheck to affected parts only and preserve untouched evidence. Record verification results, design entry, and bead note."
 
 [steps.metadata]
 skill_hints = "cad-analysis, cad-recheck, cad-record, cad-flow"
