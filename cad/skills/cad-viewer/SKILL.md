@@ -21,6 +21,8 @@ TRIGGER
 ## Workflow
 
 Run every command as `uv run --script scripts/viewer.py <command>`; each prints one JSON object.
+Once per machine, install the headless browser captures use:
+`uv run --with playwright==1.64.1 playwright install chromium`.
 
 1. `serve` -> starts or reuses the host: OCP viewers A and B, once for the user's tab and once
    for a headless presenter page that captures read, plus the panel page. Prints `url` (send it
@@ -39,8 +41,12 @@ Run every command as `uv run --script scripts/viewer.py <command>`; each prints 
    current (the state as left, no refit). `current` takes the user's camera when their tab is
    open (`camera_from: user`). Every view but section and current is refitted, and the user's
    view follows the refit: `frames.a.in_frame` true and `fill` near 0.84 mean the whole
-   product is in frame. -> read every PNG before describing it.
-7. `stop` -> stops the host, its viewers, and the presenter; reports `ports_free`.
+   product is in frame. While a capture runs, every other command or panel button that would
+   change the view is refused with `capture in progress`; retry it after. -> read every PNG
+   before describing it.
+7. `stop` -> stops the host, its viewers, and the presenter; reports `ports_free`. `status:
+   stale` means the recorded host no longer answers: nothing was signalled, the session file
+   is removed. `serve` replaces a host whose presenter browser died.
 
 | command output | meaning |
 |---|---|
@@ -64,6 +70,9 @@ MUST Read the PNG before any claim about a view; a pass status only says the can
 MUST Run `stop` when the session ends and report its `ports_free`.
 DEFAULT One host per user (session file `$CAD_VIEWER_SESSION`, else `~/.local/state/cad-viewer/session.json`).
 NOT Use ocp_viewer `save_screenshot`: headless it returns a black frame. Captures are browser screenshots.
+NOT Expose the host beyond loopback: it answers only `Host` 127.0.0.1 or localhost on its port,
+  refuses another site's `Origin` (403) and a non-JSON POST (415), and writes a capture only as
+  a `.png` into a folder that already exists.
 NOT Treat the viewer, a render, or a capture as a check result; `skill://cad-model` `check` is the gate.
 
 ## Limits

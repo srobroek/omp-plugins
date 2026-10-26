@@ -16,7 +16,7 @@ import queue
 import threading
 import time
 import traceback
-from concurrent.futures import Future
+from concurrent.futures import Future, wait
 from pathlib import Path
 from typing import Any, Callable
 
@@ -31,6 +31,7 @@ FILL_TOLERANCE = 0.06
 MARGIN_PX = 16
 SETTLE_TIMEOUT_S = 20.0
 MODEL_TIMEOUT_MS = 60_000
+HEARTBEAT_S = 2.0  # an idle presenter checks its page this often
 GIZMO_PX = 140  # the orientation axes occupy this bottom-left square of the scene canvas
 CENTRE_TOLERANCE = 0.03  # scene centre offset from the free-area centre, as a share of its size
 # Adds a style sheet to a page for one scene shot, or removes it again. A canvas screenshot is a
@@ -109,6 +110,25 @@ def framing(box: Box | None, area: Box) -> dict[str, Any]:
         return {"content_px": None, "free_px": list(area), "in_frame": False, "fill": 0.0}
     return {"content_px": list(box), "free_px": list(area), "in_frame": inside(box, area),
             "fill": round(fill_ratio(box, area), 3)}
+
+
+def free_area(size: tuple[int, int], overlays: list[Box]) -> Box:
+    """Canvas area outside the viewer's overlays: below the toolbar, right of a tall tree.
+
+    A tree panel that ends in the upper third (collapsed) or covers most of a narrow canvas
+    is treated as part of the top band instead.
+    """
+    width, height = size
+    left, top = 0, 0
+    for x0, y0, x1, y1 in overlays:
+        if y0 <= 16 and x1 - x0 > width * 0.5:
+            top = max(top, y1)  # the toolbar
+        elif x0 < width * 0.1:
+            if y1 > height * 0.33 and x1 < width * 0.45:
+                left = max(left, x1)
+            else:
+                top = max(top, y1)
+    return (left + MARGIN_PX, top + MARGIN_PX, width - MARGIN_PX, height - MARGIN_PX)
 
 
 # --------------------------------------------------------------------------- page driving
@@ -197,22 +217,7 @@ class Driver:
             s.dispatchEvent(new Event('input', {bubbles: true})); s.dispatchEvent(new Event('change', {bubbles: true})); }""")
 
     def free_area(self, slot: str, png: bytes) -> Box:
-        """Canvas area outside the viewer's overlays: below the toolbar, right of a tall tree.
-
-        A tree panel that ends in the upper third (collapsed) or covers most of a narrow canvas
-        is treated as part of the top band instead.
-        """
-        width, height = _size(png)
-        left, top = 0, 0
-        for x0, y0, x1, y1 in self.overlays(slot):
-            if y0 <= 16 and x1 - x0 > width * 0.5:
-                top = max(top, y1)  # the toolbar
-            elif x0 < width * 0.1:
-                if y1 > height * 0.33 and x1 < width * 0.45:
-                    left = max(left, x1)
-                else:
-                    top = max(top, y1)
-        return (left + MARGIN_PX, top + MARGIN_PX, width - MARGIN_PX, height - MARGIN_PX)
+        return free_area(_size(png), self.overlays(slot))
 
     def refit(self, slot: str) -> dict[str, Any]:
         """Centre the scene in the free canvas and zoom it to FILL of the limiting axis."""
@@ -283,7 +288,11 @@ class Driver:
 
 
 class Presenter(threading.Thread):
-    """Owns Playwright: every page operation runs on this one thread, in submission order."""
+    """Owns Playwright: every page operation runs on this one thread, in submission order.
+
+    While idle it evaluates a no-op on the page every HEARTBEAT_S, so a crashed browser ends the
+    thread and `alive()` turns false; a job still queued then fails instead of waiting forever.
+    """
 
     def __init__(self, host: Any, url: str, width: int, height: int) -> None:
         super().__init__(name="presenter", daemon=True)
@@ -292,7 +301,8 @@ class Presenter(threading.Thread):
         self.ready = threading.Event()
         self.failure: BaseException | None = None
         self.errors: list[str] = []
-        self.chromium_pid: int | None = None
+        self._gate = threading.Lock()
+        self._closed = False
 
     def run(self) -> None:
         from playwright.sync_api import sync_playwright
@@ -307,25 +317,68 @@ class Presenter(threading.Thread):
                     page.goto(self.url, wait_until="load")
                     page.wait_for_function("document.body.dataset.ready === 'true'", timeout=MODEL_TIMEOUT_MS)
                     self.ready.set()
-                    while (job := self.jobs.get()) is not None:
-                        work, future = job
-                        try:
-                            future.set_result(work(page))
-                        except BaseException as error:  # noqa: BLE001 - handed to the waiting request
-                            future.set_exception(error)
+                    self._serve(page)
                 finally:
                     browser.close()
-        except BaseException as error:  # noqa: BLE001 - surfaced through `submit`
+        except BaseException as error:  # noqa: BLE001 - surfaced through `submit` and `alive`
             self.failure = error
             traceback.print_exc()
-            self.ready.set()
+        finally:
+            self._close()
 
-    def submit(self, work: Callable[[Any], Any], timeout: float = 600.0) -> Any:
-        if not self.ready.wait(timeout=120.0) or self.failure is not None:
-            raise ViewerError(f"presenter browser is not running: {self.failure}")
+    def _serve(self, page: Any) -> None:
+        while True:
+            try:
+                job = self.jobs.get(timeout=HEARTBEAT_S)
+            except queue.Empty:
+                page.evaluate("1")  # raises once the page or the browser is gone
+                continue
+            if job is None:
+                return
+            work, future = job
+            try:
+                future.set_result(work(page))
+            except BaseException as error:  # noqa: BLE001 - handed to the waiting request
+                future.set_exception(error)
+
+    def _close(self) -> None:
+        with self._gate:
+            self._closed = True
+        self.ready.set()
+        while True:
+            try:
+                job = self.jobs.get_nowait()
+            except queue.Empty:
+                return
+            if job is not None:
+                job[1].set_exception(ViewerError(f"presenter browser stopped: {self.failure}"))
+
+    def alive(self) -> bool:
+        with self._gate:
+            return self.ready.is_set() and not self._closed
+
+    def submit(self, work: Callable[[Any], Any]) -> Future:
+        """Queue `work(page)`; the returned future always completes, also when the browser dies."""
+        if not self.ready.wait(timeout=120.0):
+            raise ViewerError("presenter browser did not start within 120 s")
         future: Future = Future()
-        self.jobs.put((work, future))
-        return future.result(timeout=timeout)
+        with self._gate:
+            if self._closed:
+                raise ViewerError(f"presenter browser is not running: {self.failure}")
+            self.jobs.put((work, future))
+        return future
+
+    @staticmethod
+    def result(future: Future, timeout: float, what: str) -> Any:
+        """The job's result; ViewerError when it is not done within `timeout` (it keeps running)."""
+        deadline = time.monotonic() + timeout
+        while not future.done():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise ViewerError(f"{what} did not finish within {timeout:.0f} s; the presenter is still "
+                                  "running it. `viewer.py stop` then `serve` resets the host")
+            wait([future], timeout=min(1.0, remaining))  # sliced, so a SIGTERM handler runs promptly
+        return future.result()
 
     def stop(self) -> None:
         self.jobs.put(None)
@@ -341,10 +394,26 @@ def follow_user_camera(view: str, user_connected: bool) -> bool:
     return view == "current" and user_connected
 
 
+def capture_target(value: Any) -> Path:
+    """The PNG a capture writes: an absolute `.png` path straight inside an existing directory.
+
+    `viewer.py capture` resolves `--out` and creates its directory; the host creates none and
+    writes through no symlink, so a request can only add or replace a PNG where the CLI made room.
+    """
+    out = Path(value) if isinstance(value, str) and value else None
+    if out is None or not out.is_absolute() or out.suffix.lower() != ".png":
+        raise ViewerError(f"`out` must be an absolute path to a .png file, got {value!r}")
+    if not out.parent.is_dir():
+        raise ViewerError(f"{out.parent} is not a directory; `viewer.py capture` creates it")
+    if out.is_symlink() or (out.exists() and not out.is_file()):
+        raise ViewerError(f"{out} exists and is not a regular file")
+    return out
+
+
 def capture(host: Any, page: Any, request: dict[str, Any]) -> dict[str, Any]:
     """One capture on the presenter page: apply the view, refit, screenshot (runs on the presenter)."""
     view = parse_view(str(request.get("view")))
-    out = Path(str(request.get("out")))
+    out = capture_target(request.get("out"))
     crop = request.get("crop") or "page"
     if crop not in CROPS:
         raise ViewerError(f"crop must be one of {CROPS}")
@@ -398,7 +467,6 @@ def capture(host: Any, page: Any, request: dict[str, Any]) -> dict[str, Any]:
             png = driver.settle(slot, minimum_s=0.6)
             frames[slot] = framing(content_box(png), driver.free_area(slot, png))
     page.wait_for_timeout(400)
-    out.parent.mkdir(parents=True, exist_ok=True)
     if crop == "canvas":
         driver.canvas("a").screenshot(path=str(out))
     elif crop == "viewer":

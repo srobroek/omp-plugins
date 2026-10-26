@@ -43,14 +43,16 @@ The floor shows only a baked studio shadow: a dark contact shadow at the foot of
 the floor, plus a wide, faint softbox shadow whose penumbra grows and darkness falls with a
 part's height. The key light shades the parts onto each other, never the floor.
 
-The cache key is the GLB, `part-map.json`, `assembly.yaml`, the resolved material per PN, and
-the renderer files. A rerun with the same key and intact PNGs prints `"cache": "hit"`.
+The cache key is the GLB, `part-map.json`, `manifest.json` (pose, ground), `metrics.json`
+(bounding boxes), `assembly.yaml`, the resolved material per PN, and the renderer files with
+cad-concept's `tokens.css`. A rerun with the same key and intact PNGs prints `"cache": "hit"`.
 
 ## Rules
 
 MUST Map a new `part.yaml` material or finish in `assets/materials.json` before rendering; `rule: unmapped` renders neutral grey.
 MUST Treat exit 1 as a failed render for the batch; report each view's `failures` and numbers verbatim.
 MUST Run once with network access to fill the pinned three.js cache (`~/.cache/cad-concept/vendor`, SRI-checked); later runs are offline.
+MUST Install the headless browser once per machine: `uv run --with playwright==1.64.1 playwright install chromium`. The manifest's `renderer.playwright` is the installed version.
 DEFAULT Default views are iso, front, side, and exploded at 1600x1200; `--size WxH` overrides.
 NOT Render L0 concept variants here; `cad-concept` owns them.
 NOT Hand-edit `hw/renders/`; it is derived and replaced whole on every miss.

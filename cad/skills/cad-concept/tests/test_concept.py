@@ -273,19 +273,24 @@ class ServerLive(unittest.TestCase):
         self.proc.stdout.close()
         self.tmp.cleanup()
 
-    def get(self, path: str) -> tuple[int, bytes]:
+    def get(self, path: str, host: str | None = None) -> tuple[int, bytes]:
+        req = urllib.request.Request(self.url.rstrip("/") + path)
+        if host:
+            req.add_header("Host", host)
         try:
-            with urllib.request.urlopen(self.url.rstrip("/") + path, timeout=5) as resp:
+            with urllib.request.urlopen(req, timeout=5) as resp:
                 return resp.status, resp.read()
         except urllib.error.HTTPError as exc:
             with exc:
                 return exc.code, exc.read()
 
-    def post(self, body: dict, origin: str | None = None) -> tuple[int, dict]:
+    def post(self, body: dict, origin: str | None = None, host: str | None = None) -> tuple[int, dict]:
         req = urllib.request.Request(self.url + "api/screenshot", data=json.dumps(body).encode(), method="POST")
         req.add_header("Content-Type", "application/json")
         if origin:
             req.add_header("Origin", origin)
+        if host:
+            req.add_header("Host", host)
         try:
             with urllib.request.urlopen(req, timeout=5) as resp:
                 return resp.status, json.loads(resp.read())
@@ -334,6 +339,18 @@ class ServerLive(unittest.TestCase):
         self.assertEqual(self.post({**body, "png": "data:image/png;base64,aGVsbG8="})[0], 400)
         self.assertEqual(self.post({**body, "scene": "../x.scene.json"})[0], 400)
 
+    def test_a_rebound_host_name_is_refused(self) -> None:
+        # DNS rebinding: the attacker's name resolves to 127.0.0.1, so Host and Origin both name it.
+        port = self.url.rstrip("/").rsplit(":", 1)[1]
+        self.assertEqual(self.get("/api/scenes", host=f"evil.example:{port}")[0], 403)
+        self.assertEqual(self.get("/api/scenes", host="127.0.0.1:1")[0], 403)
+        self.assertEqual(self.get("/api/scenes", host=f"localhost:{port}")[0], 200)
+        png = "data:image/png;base64," + base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * 16).decode()
+        body = {"scene": "lamp-arm.scene.json", "png": png}
+        status, _ = self.post(body, origin=f"http://evil.example:{port}", host=f"evil.example:{port}")
+        self.assertEqual(status, 403)
+        self.assertFalse((self.dir / "screenshots").exists())
+
     def test_sigterm_exits_cleanly(self) -> None:
         self.proc.send_signal(signal.SIGTERM)
         self.assertEqual(self.proc.wait(timeout=5), 0)
@@ -343,6 +360,13 @@ class ServerUsage(unittest.TestCase):
     def test_missing_scene_dir_is_a_usage_error(self) -> None:
         result = subprocess.run([sys.executable, str(SERVE_PY), "--scene-dir", "/nonexistent-dir"], capture_output=True, text=True, timeout=10)
         self.assertEqual(result.returncode, 2)
+
+    def test_a_non_loopback_bind_needs_allow_remote(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            result = subprocess.run([sys.executable, str(SERVE_PY), "--scene-dir", tmp, "--host", "0.0.0.0", "--port", "0"],
+                                    capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("--allow-remote", result.stderr)
 
 
 if __name__ == "__main__":

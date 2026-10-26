@@ -11,6 +11,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -263,6 +264,74 @@ class Cache(unittest.TestCase):
             out = Path(tmp) / "v1"
             self.write(out, status="fail")
             self.assertIsNone(render.cache_hit(out, self.key, ["iso"]))
+
+
+class CacheKey(unittest.TestCase):
+    """build_scene's key against a cad-model version of the template record (no real GLB)."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.hw = Path(self.tmp.name) / "hw"
+        shutil.copytree(TEMPLATE_HW, self.hw)
+        pns = sorted(p.name for p in (self.hw / "parts").iterdir())
+        folder = self.hw / "versions" / "v1"
+        folder.mkdir(parents=True)
+        (folder / "assembly.step").write_text("", encoding="utf-8")
+        (folder / "assembly.glb").write_bytes(b"glTF v1")
+        self.write(folder / "part-map.json", {"parts": {pn: {"node_indices": [i]} for i, pn in enumerate(pns)}})
+        self.write(folder / "metrics.json", {"parts": {pn: {"bbox_mm": {"min": [0, 0, 0], "max": [10, 10, 10],
+                                                                        "size": [10, 10, 10]}} for pn in pns}})
+        self.write(folder / "manifest.json", {"ground": pns[0], "pose": {"transforms": {pn: IDENTITY for pn in pns}}})
+        self.write(self.hw / "versions" / "latest.json", {
+            "label": "v1", **{k: f"versions/v1/{name}" for k, name in render.version_layout.FILES.items()}})
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    @staticmethod
+    def write(path: Path, data: dict) -> None:
+        path.write_text(json.dumps(data), encoding="utf-8")
+
+    def key(self) -> dict:
+        version = render.resolve_version(self.hw, "latest")
+        return render.build_scene(self.hw, version, ["iso", "exploded"], (800, 600), materials.MaterialTable.load())[2]["key"]
+
+    def test_every_input_the_scene_reads_changes_the_key(self) -> None:
+        def edit_json(name: str, change) -> None:
+            path = self.hw / "versions" / "v1" / name
+            data = json.loads(path.read_text(encoding="utf-8"))
+            change(data)
+            self.write(path, data)
+
+        part_yaml = self.hw / "parts" / "LMP-0002" / "part.yaml"
+        edits = {
+            "glb": lambda: (self.hw / "versions" / "v1" / "assembly.glb").write_bytes(b"glTF v2"),
+            "part map": lambda: edit_json("part-map.json", lambda d: d["parts"]["LMP-0002"].update(node_indices=[9])),
+            "manifest pose": lambda: edit_json("manifest.json", lambda d: d["pose"]["transforms"]["LMP-0002"][0].__setitem__(3, 5.0)),
+            "metrics bbox": lambda: edit_json("metrics.json", lambda d: d["parts"]["LMP-0003"]["bbox_mm"].update(size=[10, 10, 99])),
+            "assembly.yaml": lambda: (self.hw / "assembly.yaml").write_text(
+                (self.hw / "assembly.yaml").read_text(encoding="utf-8") + "\n# edited\n", encoding="utf-8"),
+            "part material": lambda: part_yaml.write_text(
+                re.sub(r"(?m)^material:.*$", "material: PETG", part_yaml.read_text(encoding="utf-8")), encoding="utf-8"),
+        }
+        before = self.key()
+        for name, edit in edits.items():
+            with self.subTest(input=name):
+                edit()
+                after = self.key()
+                self.assertNotEqual(after, before)
+                before = after
+
+    def test_a_file_the_render_does_not_read_keeps_the_key(self) -> None:
+        before = self.key()
+        (self.hw / "bom.csv").write_text("edited\n", encoding="utf-8")
+        self.assertEqual(self.key(), before)
+
+    def test_a_malformed_latest_json_is_an_infra_error(self) -> None:
+        self.write(self.hw / "versions" / "latest.json", {"glb": "versions/v1/assembly.glb"})
+        with self.assertRaisesRegex(render.InfraError, "label"):
+            render.resolve_version(self.hw, "latest")
+        self.assertEqual(render.resolve_version(self.hw, "v1").label, "v1")  # the documented layout still resolves
 
 
 class Views(unittest.TestCase):

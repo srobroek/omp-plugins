@@ -43,6 +43,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from cadviewer import LimitError, ViewerError, session  # noqa: E402
+from cadviewer.host import SECTION_ZOOM  # noqa: E402
 
 SCRIPT = Path(__file__).resolve()
 
@@ -114,9 +115,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     capture = sub.add_parser("capture", help="drive the browser, refit the camera, and write a PNG")
     capture.add_argument("--view", type=view_arg, required=True)
-    capture.add_argument("--out", type=Path, required=True)
+    capture.add_argument("--out", type=Path, required=True, help="PNG path; its folder is created")
     capture.add_argument("--joint", help="section plane through this joint's axis (--view section)")
-    capture.add_argument("--zoom", type=float, help="section close-up zoom (default 2.5)")
+    capture.add_argument("--zoom", type=float, help=f"section close-up zoom (default {SECTION_ZOOM:g})")
     capture.add_argument("--crop", choices=("page", "viewer", "canvas"), default="page")
     capture.add_argument("--refit", action=argparse.BooleanOptionalAction, default=None,
                          help="default: refit every view except section and current")
@@ -188,6 +189,8 @@ def run(args: argparse.Namespace) -> int:
         return 0
     live = session.require_session(path)
     method, route, body = request_body(args)
+    if args.command == "capture":  # the host writes only into an existing folder
+        args.out.resolve().parent.mkdir(parents=True, exist_ok=True)
     answer = summarise(args.command, session.call(live, method, route, body))
     answer.setdefault("status", "pass")
     emit(answer)

@@ -1,10 +1,9 @@
 """Read one cad-model version of a hardware record into the viewer's scene and panel model.
 
-Kernel-free: JSON and PyYAML (`safe_load`) only. Paths follow cad-model's version layout
-(`skill://cad-model/references/outputs.md`): `latest.json` names the newest version; an older
-label resolves to the same documented layout under `versions/<label>/`. Part colours are the
-`pbr.color` of cad-render's material rule for part.yaml `material` and `finish`, so the viewer
-and the renders share one appearance table.
+Kernel-free: JSON and PyYAML (`safe_load`) only. cad-render's stdlib `versions.py` resolves the
+version through cad-model's layout (`skill://cad-model/references/outputs.md`), the same resolver
+render.py uses. Part colours are the `pbr.color` of cad-render's material rule for part.yaml
+`material` and `finish`, so the viewer and the renders share one appearance table.
 """
 
 from __future__ import annotations
@@ -21,10 +20,9 @@ from typing import Any
 
 from . import ViewerError
 
-LABEL = re.compile(r"^v[1-9][0-9]*$")
 PN_PREFIX = re.compile(r"^([A-Z]{2,5}-\d{4})(?![0-9])")
 
-CAD_RENDER_MATERIALS = Path(__file__).resolve().parents[3] / "cad-render" / "scripts" / "materials.py"
+CAD_RENDER_SCRIPTS = Path(__file__).resolve().parents[3] / "cad-render" / "scripts"
 
 
 @dataclass(frozen=True)
@@ -96,33 +94,29 @@ def read_yaml(path: Path) -> Any:
         raise ViewerError(f"cannot read {path}: {error}") from error
 
 
-def version_files(hw: Path, version: str) -> tuple[str, dict[str, Path], Path]:
-    """(label, files, parts_dir) for `latest` or a `vN` label."""
-    versions = hw / "versions"
-    latest = read_json(versions / "latest.json") if (versions / "latest.json").is_file() else None
-    if version == "latest":
-        if latest is None:
-            raise ViewerError(f"{versions / 'latest.json'} not found; build a version with cad-model run first")
-        label = str(latest.get("label", ""))
-    elif LABEL.match(version):
-        label = version
-    else:
-        raise ViewerError(f"version must be latest or vN, got {version!r}")
-    if latest is not None and latest.get("label") == label:
-        keys = ("assembly_step", "glb", "metrics", "part_map", "manifest")
-        missing = [k for k in keys if not isinstance(latest.get(k), str)]
-        if missing:
-            raise ViewerError(f"{versions / 'latest.json'}: missing {missing}")
-        files = {k: hw / latest[k] for k in keys}
-    else:
-        folder = versions / label
-        files = {"assembly_step": folder / "assembly.step", "glb": folder / "assembly.glb",
-                 "metrics": folder / "metrics.json", "part_map": folder / "part-map.json",
-                 "manifest": folder / "manifest.json"}
-    absent = [str(p) for p in files.values() if not p.is_file()]
-    if absent:
-        raise ViewerError(f"version {label}: missing {absent}")
-    return label, files, files["assembly_step"].parent / "parts"
+@functools.cache
+def _cad_render_module(name: str) -> Any:
+    """One of cad-render's stdlib modules (`materials`, `versions`), loaded once by path."""
+    path = CAD_RENDER_SCRIPTS / f"{name}.py"
+    spec = importlib.util.spec_from_file_location(f"cad_render_{name}", path)
+    if spec is None or spec.loader is None:
+        raise ViewerError(f"cannot load {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+    except OSError as error:
+        raise ViewerError(f"cannot load {path}: {error}") from error
+    return module
+
+
+def version_files(hw: Path, version: str) -> Any:
+    """cad-render's VersionFiles (label, files, parts_dir) for `latest` or a `vN` label."""
+    versions = _cad_render_module("versions")
+    try:
+        return versions.resolve(hw, version)
+    except versions.VersionError as error:
+        raise ViewerError(str(error)) from error
 
 
 def load_part_map(path: Path) -> dict[str, str]:
@@ -145,19 +139,11 @@ def load_part_map(path: Path) -> dict[str, str]:
 
 @functools.cache
 def material_table() -> Any:
-    """cad-render's MaterialTable over assets/materials.json, loaded once by path."""
-    spec = importlib.util.spec_from_file_location("cad_render_materials", CAD_RENDER_MATERIALS)
-    if spec is None or spec.loader is None:
-        raise ViewerError(f"cannot load {CAD_RENDER_MATERIALS}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
+    """cad-render's MaterialTable over assets/materials.json, loaded once."""
+    materials = _cad_render_module("materials")
     try:
-        spec.loader.exec_module(module)
-    except OSError as error:
-        raise ViewerError(f"cannot load {CAD_RENDER_MATERIALS}: {error}") from error
-    try:
-        return module.MaterialTable.load()
-    except module.MaterialsError as error:
+        return materials.MaterialTable.load()
+    except materials.MaterialsError as error:
         raise ViewerError(f"cad-render material table: {error}") from error
 
 
@@ -177,7 +163,8 @@ def load_groups(hw: Path) -> list[tuple[str, str, list[str]]]:
 
 def load_version(hw: Path, version: str = "latest") -> Version:
     hw = hw.resolve()
-    label, files, parts_dir = version_files(hw, version)
+    found = version_files(hw, version)
+    label, files, parts_dir = found.label, found.files, found.parts_dir
     products = load_part_map(files["part_map"])
     manifest = read_json(files["manifest"])
     product_id = str(manifest.get("product_id") or "assembly")

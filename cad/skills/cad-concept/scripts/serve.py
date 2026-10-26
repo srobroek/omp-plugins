@@ -6,7 +6,7 @@
 """Serve the cad-concept viewer and a scene directory, pushing reload on change.
 
 Usage:
-  uv run --script serve.py --scene-dir DIR [--host 127.0.0.1] [--port 8765]
+  uv run --script serve.py --scene-dir DIR [--host 127.0.0.1] [--port 8765] [--allow-remote]
 
 Routes:
   /                     the viewer (assets/viewer)
@@ -16,6 +16,9 @@ Routes:
   /vendor/<pkg@ver>/... pinned three.js modules, fetched once from jsDelivr,
                         verified against the import map's SRI digest, cached
   POST /api/screenshot  {scene, variant, pose, png: data URL} -> DIR/screenshots/
+
+Every request must address the server by a loopback name and its port (`Host`), which closes
+DNS rebinding; a non-loopback `--host` needs `--allow-remote` and adds that address to the names.
 
 stdout: one JSON line {"url": ...} once listening. stderr: request log.
 Exit 0 on SIGINT/SIGTERM, 2 on usage or bind errors.
@@ -27,6 +30,7 @@ import argparse
 import base64
 import binascii
 import hashlib
+import ipaddress
 import json
 import os
 import re
@@ -56,6 +60,21 @@ CONTENT_TYPES = {
 MAX_SCREENSHOT_BYTES = 32 * 1024 * 1024
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 HEARTBEAT_S = 15.0
+LOOPBACK_NAMES = ("127.0.0.1", "localhost", "[::1]")
+
+
+def is_loopback(host: str) -> bool:
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host.strip("[]")).is_loopback
+    except ValueError:
+        return False
+
+
+def allowed_hosts(port: int, bound: str) -> frozenset[str]:
+    """`Host` header values the server answers: the loopback names and the bind address."""
+    return frozenset(f"{name}:{port}" for name in {*LOOPBACK_NAMES, bound})
 
 
 def vendor_integrity(index_html: Path) -> dict[str, str]:
@@ -161,6 +180,14 @@ class Handler(BaseHTTPRequestHandler):
     scene_dir: Path
     watcher: SceneWatcher
     vendor: VendorCache
+    hosts: frozenset[str] = frozenset()  # set by run() once the port is bound
+
+    def _host_ok(self) -> bool:
+        """A request naming another host (DNS rebinding, a stray proxy) is refused."""
+        if self.headers.get("Host") in self.hosts:
+            return True
+        self._error(HTTPStatus.FORBIDDEN, f"unexpected Host {self.headers.get('Host')!r}")
+        return False
 
     def log_message(self, fmt: str, *args: object) -> None:
         print(f"{self.address_string()} {fmt % args}", file=sys.stderr)
@@ -184,6 +211,8 @@ class Handler(BaseHTTPRequestHandler):
         self.do_GET()
 
     def do_GET(self) -> None:
+        if not self._host_ok():
+            return
         path = unquote(urlsplit(self.path).path)
         if path == "/events":
             self._events()
@@ -243,6 +272,8 @@ class Handler(BaseHTTPRequestHandler):
             return
 
     def do_POST(self) -> None:
+        if not self._host_ok():
+            return
         if urlsplit(self.path).path != "/api/screenshot":
             self._error(HTTPStatus.NOT_FOUND, "unknown endpoint")
             return
@@ -283,14 +314,19 @@ def default_cache_dir() -> Path:
 def run(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="serve.py", description=__doc__.splitlines()[0])
     parser.add_argument("--scene-dir", type=Path, required=True, help="directory holding *.scene.json")
-    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--host", default="127.0.0.1", help="bind address; a non-loopback one needs --allow-remote")
     parser.add_argument("--port", type=int, default=8765, help="0 picks a free port")
+    parser.add_argument("--allow-remote", action="store_true",
+                        help="allow a non-loopback --host: every client on that network can then reach the server")
     parser.add_argument("--poll", type=float, default=0.3, help="scene poll interval, seconds")
     parser.add_argument("--cache-dir", type=Path, default=default_cache_dir(), help="pinned module cache")
     try:
         args = parser.parse_args(argv)
     except SystemExit as exc:
         return 0 if exc.code == 0 else 2
+    if not is_loopback(args.host) and not args.allow_remote:
+        print(f"serve.py: --host {args.host} is not a loopback address; add --allow-remote to serve it", file=sys.stderr)
+        return 2
 
     scene_dir = args.scene_dir.resolve()
     if not scene_dir.is_dir():
@@ -314,6 +350,7 @@ def run(argv: list[str]) -> int:
         print(f"serve.py: cannot listen on {args.host}:{args.port}: {exc}", file=sys.stderr)
         return 2
     httpd.daemon_threads = True
+    handler.hosts = allowed_hosts(httpd.server_address[1], args.host)
     watcher.start()
 
     def shutdown(_sig: int, _frame: object) -> None:

@@ -23,7 +23,8 @@ Playwright, and writes:
 Each frame is graded from its own pixels plus a subject mask and floor zones: BLANK (nothing but
 backdrop), CLIPPED (the subject touches the frame edge), NO_SHADOW (no darkened ground beside the
 product), INVERTED_SHADOW (the floor at a grounded rim is no darker than under an overhang).
-A rerun whose source, materials, and renderer hashes match a passing manifest is a cache hit.
+A rerun whose source (GLB, part map, manifest, metrics, assembly.yaml), materials, and renderer
+hashes match a passing manifest is a cache hit.
 
 stdout: one JSON summary. Exit 0 = every view passed (or cache hit), 1 = a render-quality
 failure (renders and manifest are still written, status "fail"), 2 = usage or infrastructure
@@ -35,6 +36,7 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
+import importlib.metadata
 import importlib.util
 import json
 import math
@@ -56,9 +58,11 @@ HERE = Path(__file__).resolve()
 SKILL = HERE.parent.parent
 RENDERER_DIR = SKILL / "assets" / "renderer"
 MATERIALS_PY = HERE.parent / "materials.py"
+VERSIONS_PY = HERE.parent / "versions.py"
 CONCEPT_SERVE = SKILL.parent / "cad-concept" / "scripts" / "serve.py"
+# The page chrome tokens (status line) are cad-concept's; renderer/tokens.css holds the scene's.
+CONCEPT_TOKENS = SKILL.parent / "cad-concept" / "assets" / "viewer" / "tokens.css"
 THREE_VERSION = "0.186.1"
-PLAYWRIGHT_VERSION = "1.64.1"
 CHROMIUM_ARGS = ["--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist"]
 BOOT_TIMEOUT_MS = 180_000
 VIEW_NAME = re.compile(r"^(iso|front|side|exploded|closeup-[A-Z]{2,5}-[0-9]{4})$")
@@ -66,6 +70,8 @@ SIZE = re.compile(r"^([1-9][0-9]{2,3})x([1-9][0-9]{2,3})$")
 DEFAULT_VIEWS = ["iso", "front", "side", "exploded"]
 CONTENT_TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
                  ".css": "text/css; charset=utf-8", ".json": "application/json", ".glb": "model/gltf-binary"}
+STATIC = {"/concept-tokens.css": CONCEPT_TOKENS}  # served beside assets/renderer/, outside it
+SOURCE_FILES = ("glb", "part_map", "manifest", "metrics")  # version files the scene reads: cache key, inputs
 
 # View directions from the subject towards the camera, assembly frame (mm, +Z up, front = -Y).
 # Front and side keep a low elevation so the ground plane, and the shadow on it, stays in view.
@@ -97,18 +103,19 @@ class InfraError(RuntimeError):
     """Usage or infrastructure failure; maps to exit 2."""
 
 
-def _load_material_rules() -> Any:
-    """The stdlib-only material table module beside this script (shared with cad-viewer)."""
-    spec = importlib.util.spec_from_file_location("cad_render_materials", MATERIALS_PY)
+def _load_sibling(name: str, path: Path) -> Any:
+    """A stdlib-only module beside this script, shared with cad-viewer by path."""
+    spec = importlib.util.spec_from_file_location(name, path)
     if spec is None or spec.loader is None:
-        raise InfraError(f"cannot load {MATERIALS_PY}")
+        raise InfraError(f"cannot load {path}")
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
 
 
-material_rules = _load_material_rules()
+material_rules = _load_sibling("cad_render_materials", MATERIALS_PY)
+version_layout = _load_sibling("cad_render_versions", VERSIONS_PY)
 
 
 # --------------------------------------------------------------------------- version inputs
@@ -117,9 +124,8 @@ material_rules = _load_material_rules()
 @dataclass
 class Version:
     label: str
-    glb: Path
+    files: dict[str, Path]  # cad-model's version files, versions.FILES keys
     part_map: dict[str, Any]
-    part_map_path: Path
     manifest: dict[str, Any]
     metrics: dict[str, Any]
 
@@ -132,20 +138,12 @@ def _json(path: Path) -> Any:
 
 
 def resolve_version(hw: Path, version: str) -> Version:
-    if version == "latest":
-        latest = _json(hw / "versions" / "latest.json")
-        label = latest["label"]
-        paths = {k: hw / latest[k] for k in ("glb", "part_map", "manifest", "metrics")}
-    else:
-        if not re.fullmatch(r"v[1-9][0-9]*", version):
-            raise InfraError(f"--version must be latest or vN, got {version!r}")
-        label, folder = version, hw / "versions" / version
-        paths = {"glb": folder / "assembly.glb", "part_map": folder / "part-map.json",
-                 "manifest": folder / "manifest.json", "metrics": folder / "metrics.json"}
-    if not paths["glb"].is_file():
-        raise InfraError(f"version {label}: {paths['glb']} missing")
-    return Version(label, paths["glb"], _json(paths["part_map"]), paths["part_map"],
-                   _json(paths["manifest"]), _json(paths["metrics"]))
+    try:
+        found = version_layout.resolve(hw, version)
+    except version_layout.VersionError as exc:
+        raise InfraError(str(exc)) from exc
+    files = found.files
+    return Version(found.label, files, _json(files["part_map"]), _json(files["manifest"]), _json(files["metrics"]))
 
 
 def part_records(hw: Path, pns: list[str]) -> dict[str, dict[str, Any]]:
@@ -423,7 +421,7 @@ def canonical(obj: Any) -> bytes:
 
 def renderer_sha256() -> str:
     digest = hashlib.sha256()
-    for path in sorted([*RENDERER_DIR.rglob("*"), HERE]):
+    for path in sorted([*RENDERER_DIR.rglob("*"), HERE, *STATIC.values()]):
         if path.is_file():
             digest.update(path.name.encode() + b"\0" + path.read_bytes())
     return digest.hexdigest()
@@ -448,7 +446,11 @@ def parse_views(tokens: list[str], pns: list[str]) -> list[str]:
 
 def build_scene(hw: Path, version: Version, views: list[str], size: tuple[int, int],
                 table: material_rules.MaterialTable) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
-    """Returns (scene payload for the page, materials per PN, cache key)."""
+    """Returns (scene payload for the page, materials per PN, cache key).
+
+    The key's source hash covers every version file the scene reads (GLB, part map, manifest
+    pose and ground, metrics bboxes) and assembly.yaml, whose joints shape the explode; part.yaml
+    enters through the resolved materials."""
     parts_map = version.part_map["parts"]
     pns = sorted(parts_map)
     records = part_records(hw, pns)
@@ -481,10 +483,9 @@ def build_scene(hw: Path, version: Version, views: list[str], size: tuple[int, i
         "explode": {pn: to_glb(offsets[pn], 0.001) for pn in pns if pn in offsets},
     }
     assembly_sha = sha256(assembly_raw)
+    sources = {name: sha256(version.files[name].read_bytes()) for name in SOURCE_FILES}
     key = {
-        "source_sha256": sha256(canonical({"glb": sha256(version.glb.read_bytes()),
-                                           "part_map": sha256(version.part_map_path.read_bytes()),
-                                           "assembly_yaml": assembly_sha})),
+        "source_sha256": sha256(canonical({**sources, "assembly_yaml": assembly_sha})),
         "materials_sha256": sha256(canonical({pn: [m["rule"], m["pbr"]] for pn, m in materials.items()})),
         "renderer_sha256": renderer_sha256(),
         "image": f"{size[0]}x{size[1]}",
@@ -529,7 +530,8 @@ def make_server(scene: dict[str, Any], glb: Path, cache_dir: Path) -> ThreadingH
     serve = load_concept_serve()
     vendor = serve.VendorCache(cache_dir, serve.vendor_integrity(RENDERER_DIR / "index.html"))
     payload = {"/render/scene.json": (canonical(scene), CONTENT_TYPES[".json"]),
-               "/render/model.glb": (glb.read_bytes(), CONTENT_TYPES[".glb"])}
+               "/render/model.glb": (glb.read_bytes(), CONTENT_TYPES[".glb"]),
+               **{route: (path.read_bytes(), CONTENT_TYPES[path.suffix]) for route, path in STATIC.items()}}
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "cad-render/1"
@@ -589,7 +591,13 @@ def capture_views(url: str, views: list[str], size: tuple[int, int]) -> tuple[di
                 page.on("console", lambda msg: msg.type == "error" and errors.append(f"console: {msg.text}"))
                 timings["browser_start_s"] = round(time.monotonic() - started, 3)
                 page.goto(url, wait_until="load")
-                page.wait_for_function("window.cadRender !== undefined", timeout=BOOT_TIMEOUT_MS)
+                # index.html marks the body `error` when render.js or a pinned module fails to load,
+                # and window.cadRender then never appears: stop waiting at once and say why.
+                page.wait_for_function("window.cadRender !== undefined || document.body.dataset.state === 'error'",
+                                       timeout=BOOT_TIMEOUT_MS)
+                if page.evaluate("window.cadRender === undefined"):
+                    raise InfraError(f"renderer page did not start: {page.text_content('#status')}; "
+                                     f"page errors: {errors}")
                 info = page.evaluate("window.cadRender.ready")
                 timings["load_s"] = round(time.monotonic() - started - timings["browser_start_s"], 3)
                 info["chromium"] = browser.version
@@ -690,7 +698,7 @@ def run(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
                        "wall_s": round(time.monotonic() - wall, 3),
                        "rendered_wall_s": hit.get("wall_s", {}).get("total_s")}
 
-    server = make_server(scene, version.glb, args.cache_dir or default_cache_dir())
+    server = make_server(scene, version.files["glb"], args.cache_dir or default_cache_dir())
     thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.1}, daemon=True)
     thread.start()
     port = server.server_address[1]
@@ -712,11 +720,11 @@ def run(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         "views": view_records,
         "materials": materials,
         "renderer": {"name": "cad-render three.js PBR", "three": THREE_VERSION, "three_revision": info["three"],
-                     "playwright": PLAYWRIGHT_VERSION, "chromium": info["chromium"], "webgl": "SwiftShader (ANGLE)",
-                     "studio": info["studio"]},
+                     "playwright": importlib.metadata.version("playwright"), "chromium": info["chromium"],
+                     "webgl": "SwiftShader (ANGLE)", "studio": info["studio"]},
         "image": {"width": size[0], "height": size[1]},
         "cache_key": keyed["key"],
-        "inputs": {"glb": str(version.glb.relative_to(hw)), "part_map": str(version.part_map_path.relative_to(hw)),
+        "inputs": {**{name: str(version.files[name].relative_to(hw)) for name in SOURCE_FILES},
                    "assembly_yaml_sha256": keyed["assembly_yaml_sha256"],
                    "assembly_yaml_matches_version": keyed["assembly_yaml_matches_version"]},
         "explode_offsets_mm": keyed["explode_offsets_mm"],
