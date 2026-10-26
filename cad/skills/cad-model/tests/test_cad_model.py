@@ -243,9 +243,12 @@ class KernelChecks:
         self.assertEqual(part_map["TST-0002"]["meshes"], ["TST-0002 Swing arm"])
 
 
-    def test_clean_check_lists_template_declared_press_pairs(self) -> None:
-        checks = self.runs["checks"]["v1"][1]["checks"]["interference"]
-        declared = checks["declared_pairs"]
+    def test_check_reports_template_declared_press_pairs(self) -> None:
+        hw = self.runs["hw"]
+        template = HERE.parents[1] / "cad-record" / "assets" / "project-template" / "hw" / "interfaces.yaml"
+        shutil.copy(template, hw / "interfaces.yaml")
+        _, result, _ = cli("check", "v1", "--hw", str(hw))
+        declared = result["checks"]["interference"]["declared_pairs"]
         self.assertEqual({tuple(item["pair"]) for item in declared}, {
             ("LMP-0002", "LMP-0005"), ("LMP-0002", "LMP-0006"), ("LMP-0003", "LMP-0007")})
         self.assertTrue(all(item["classification"] == "interference" for item in declared))
