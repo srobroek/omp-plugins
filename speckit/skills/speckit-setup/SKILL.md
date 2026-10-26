@@ -27,7 +27,7 @@ that worktree and skip each one already done:
    community catalog (`catalog.community.json`) as an install source. Never pass
    `--install-allowed` without it.
 3. Install + enable the required extensions not yet installed: `agent-context`, `bugfix`, `cleanup`,
-   `critique`, `fix-findings`, `iterate`, `qa`, `refine`, `retro`,
+   `critique`, `fix-findings`, `iterate`, `qa`, `refine`, `retro`, `review`,
    `security-review`, `status-report`, `tinyspec`. Stop and report failure if
    any required CLI step fails.
 4. `bd init --skip-hooks` if no workspace; copy every formula from
