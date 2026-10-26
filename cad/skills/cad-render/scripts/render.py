@@ -69,10 +69,10 @@ CONTENT_TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; c
 # View directions from the subject towards the camera, assembly frame (mm, +Z up, front = -Y).
 # Front and side keep a low elevation so the ground plane, and the shadow on it, stays in view.
 DIRECTIONS = {
-    "iso": (0.9, -1.3, 0.8),
+    "iso": (0.9, -1.3, 1.1),
     "front": (0.0, -1.0, 0.22),
     "side": (1.0, 0.0, 0.22),
-    "exploded": (0.9, -1.3, 0.9),
+    "exploded": (0.9, -1.3, 1.2),
     "closeup": (0.8, -1.0, 1.4),
 }
 MOVABLE_GAP = 0.3  # exploded gap of a moving child: fraction of its bounding-box diagonal
