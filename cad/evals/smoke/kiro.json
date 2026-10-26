@@ -11,38 +11,75 @@
     "stream-json",
     "--trust-tools=fs_read,fs_write,execute_bash,glob,grep",
     "--trust-workspace",
-    "Create a file named hello.txt whose entire content is the word ok, then reply with the single word DONE."
+    "--agent",
+    "cad-eval",
+    "First, under the heading INSTRUCTIONS, list every instruction file, rule file, steering document and system-prompt section you were given (file path or section heading, one per line), other than skill bodies. Then, under the heading SKILLS, list the names of every skill available to you, one per line. Then create a file named hello.txt whose entire content is the word ok. End your reply with the single word DONE."
   ],
-  "at": "2026-10-26T09:59:43+00:00",
+  "at": "2026-10-26T11:11:33+00:00",
   "file_written": true,
   "harness": "kiro",
-  "latency_s": 25.898,
-  "ok": true,
-  "reparsed_with_current_adapter": {
-    "error": null,
-    "served_matches": true,
-    "served_model": "claude-haiku-5.5",
-    "text": "DONE",
-    "tools": [
-      "Write File"
+  "inventory": {
+    "agents": [
+      "cad-dfm-reviewer",
+      "cad-eval",
+      "cad-mech-reviewer",
+      "context-gatherer",
+      "general-task-execution",
+      "vibe"
     ],
-    "usage": {
-      "cacheRead": 0,
-      "cacheWrite": 0,
-      "credits": 0.160723,
-      "input": 0,
-      "output": 0
-    }
+    "commands": [
+      "cad-bom",
+      "cad-concept",
+      "cad-fits",
+      "cad-flow",
+      "cad-motion",
+      "cad-recheck",
+      "cad-record",
+      "cad-review-dfm",
+      "cad-review-mech"
+    ],
+    "context": [
+      "file://<trial>/work/cad/skills/cad-bom/SKILL.md",
+      "file://<trial>/work/cad/skills/cad-concept/SKILL.md",
+      "file://<trial>/work/cad/skills/cad-fits/SKILL.md",
+      "file://<trial>/work/cad/skills/cad-flow/SKILL.md",
+      "file://<trial>/work/cad/skills/cad-motion/SKILL.md",
+      "file://<trial>/work/cad/skills/cad-recheck/SKILL.md",
+      "file://<trial>/work/cad/skills/cad-record/SKILL.md",
+      "file://<trial>/work/cad/skills/cad-review-dfm/SKILL.md",
+      "file://<trial>/work/cad/skills/cad-review-mech/SKILL.md"
+    ],
+    "mcp": [],
+    "missing": [],
+    "plugins": [],
+    "skills": []
   },
+  "isolation": "contaminated",
+  "isolation_mechanism": "HOME and XDG_* in the trial with only Kiro's auth store symlinked in; --agent cad-eval (sandbox-local, cad skills only); cad copied to <work>/cad",
+  "isolation_with_current_adapter": {
+    "isolation": "clean",
+    "leaks": []
+  },
+  "latency_s": 15.237,
+  "leaks": [
+    "agents:context-gatherer",
+    "agents:general-task-execution",
+    "agents:vibe"
+  ],
+  "ok": true,
   "requested_model": "claude-haiku-5.5",
-  "served_matches": false,
-  "served_model": null,
-  "text": "",
-  "tools": [],
-  "transcript_entries": 0,
+  "served_matches": true,
+  "served_model": "claude-haiku-5.5",
+  "text": "INSTRUCTIONS\nKiro system prompt: \"KIRO - System Prompt\" (general role statement)\nKiro system prompt: \"Security, trust and safety\"\nKiro system prompt: \"Work guidelines\"\nKiro system prompt: \"Work guidelines > Understand before acting\"\nKiro system prompt: \"Work guidelines > Make safe, scoped changes\"\nKiro system prompt: \"Communication Guide\"\nKiro system prompt: \"Communication Guide > Structure and style\"\nKiro system prompt: \"Communication Guide > Substance and words\"\nHook output channel section (describes how HOOK_INSTRUCTION blocks are treated)\nSystem information section (OS, shell, home directory)\nWorkspace folder section (workspace root and where to create files)\nSession context and environment context blocks\n\nI could not check the workspace for `.kiro` steering or rule files because the directory listing request was denied before it ran. No steering documents were activated in this session.\n\nSKILLS\ncad-bom\ncad-concept\ncad-fits\ncad-flow\ncad-motion\ncad-recheck\ncad-record\ncad-review-dfm\ncad-review-mech\n\nI created `hello.txt` in the workspace root with the content `ok`.\n\nDONE",
+  "tools": [
+    "Write File",
+    "List Directory"
+  ],
+  "transcript_entries": 6,
   "usage": {
     "cacheRead": 0,
     "cacheWrite": 0,
+    "credits": 0.0239,
     "input": 0,
     "output": 0
   }

@@ -4,11 +4,13 @@
 # ///
 """cad plugin eval runner (ratchet runner contract).
 
-  run.py plan   [--pilot] [--cell H:MODEL]... [--case ID]...      list pending slots and argv, no calls
-  run.py run    [--pilot] [--cell H:MODEL]... [--case ID]... --out DIR [--train-ids FILE]
-  run.py grade  --case ID --work DIR                                grade a sandbox directory
-  run.py judge  --a DIR --b DIR --out FILE                          pairwise blind judge, per (case, rep)
-  run.py smoke  --harness H --model MODEL --out DIR                 one trivial live call, recorded
+  run.py plan       [--pilot] [--cell H:MODEL]... [--case ID]...      pending slots and argv, no calls
+  run.py run        [--pilot] [--cell H:MODEL]... [--case ID]... --out DIR [--train-ids FILE]
+  run.py grade      --case ID --work DIR                            grade a sandbox directory
+  run.py summary    --out DIR [--allow-contaminated]                per-cell comparison table
+  run.py judge      --a DIR --b DIR --out FILE [--allow-contaminated]   pairwise blind judge
+  run.py inventory  --harness H --model MODEL                       model-free isolation check (OMP)
+  run.py smoke      --harness H --model MODEL --out DIR             one cheap live call: isolation + parse
 
 The runner and adapters need only the standard library; graders run their OCCT
 and YAML probes through `uv run --script`.
@@ -29,7 +31,12 @@ import runner
 from graders import judge
 from graders.score import grade_trial
 
-SMOKE_PROMPT = "Create a file named hello.txt whose entire content is the word ok, then reply with the single word DONE."
+SMOKE_PROMPT = (
+    "First, under the heading INSTRUCTIONS, list every instruction file, rule file, steering document and"
+    " system-prompt section you were given (file path or section heading, one per line), other than skill bodies."
+    " Then, under the heading SKILLS, list the names of every skill available to you, one per line."
+    " Then create a file named hello.txt whose entire content is the word ok. End your reply with the single word DONE."
+)
 
 
 def main(argv: list[str]) -> int:
@@ -54,21 +61,35 @@ def main(argv: list[str]) -> int:
     g.add_argument("--case", required=True)
     g.add_argument("--work", type=Path, required=True)
 
+    m = sub.add_parser("summary")
+    m.add_argument("--out", type=Path, required=True, help="directory holding one subdirectory per cell")
+    m.add_argument("--allow-contaminated", action="store_true", help="include cells whose rows loaded ambient config")
+
     j = sub.add_parser("judge")
     j.add_argument("--a", type=Path, required=True, help="cell/variant directory A")
     j.add_argument("--b", type=Path, required=True, help="cell/variant directory B")
     j.add_argument("--out", type=Path, required=True)
     j.add_argument("--seed", type=int)
+    j.add_argument("--allow-contaminated", action="store_true", help="compare cells whose rows loaded ambient config")
 
-    s = sub.add_parser("smoke")
-    s.add_argument("--harness", required=True, choices=adapters.HARNESSES)
-    s.add_argument("--model", required=True)
-    s.add_argument("--out", type=Path, required=True)
-    s.add_argument("--timeout", type=float, default=300)
+    for name in ("inventory", "smoke"):
+        s = sub.add_parser(name)
+        s.add_argument("--harness", required=True, choices=adapters.HARNESSES)
+        s.add_argument("--model", required=True)
+        if name == "smoke":
+            s.add_argument("--out", type=Path, required=True)
+            s.add_argument("--timeout", type=float, default=300)
+            s.add_argument("--keep-sandbox", action="store_true", help="leave the trial directory for inspection")
 
     args = parser.parse_args(argv[1:])
     matrix = runner.load_matrix(args.matrix)
-    return {"plan": cmd_plan, "run": cmd_run, "grade": cmd_grade, "judge": cmd_judge, "smoke": cmd_smoke}[args.cmd](args, matrix)
+    commands = {"plan": cmd_plan, "run": cmd_run, "grade": cmd_grade, "summary": cmd_summary, "judge": cmd_judge,
+                "inventory": cmd_inventory, "smoke": cmd_smoke}
+    try:
+        return commands[args.cmd](args, matrix)
+    except runner.Contaminated as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
 
 
 def _selection(args, matrix: runner.Matrix):
@@ -91,11 +112,11 @@ def cmd_plan(args, matrix) -> int:
     for cell in cells:
         adapter = adapters.build(cell.harness, matrix.harness_cfg(cell.harness))
         # The plugin path is the source checkout, so the plugin flag shows whether
-        # this harness's manifest exists; a real trial stages a copy without evals/.
-        demo = runner.TrialPaths(Path("<trial>"), Path("<trial>/work"), runner.PLUGIN_ROOT, Path("<trial>/state"))
+        # this harness's marker exists; a real trial stages a copy without evals/.
+        demo = runner.TrialPaths(Path("<trial>"), Path("<trial>/work"), runner.PLUGIN_ROOT, Path("<trial>/state"), Path("<trial>/home"))
         argv = adapter.command(model=cell.model, prompt="<prompt>", paths=demo, resume=False)
         pending = sum(1 for s in slots if s[0] == cell)
-        print(f"{cell.slug}: {pending} pending slot(s)\n  {' '.join(argv)}")
+        print(f"{cell.slug}: {pending} pending slot(s)\n  {' '.join(argv)}\n  isolation: {adapter.isolation}")
     print(f"total pending: {len(slots)} ({len(cases)} cases x {reps} reps x {len(cells)} cells, minus completed)")
     return 0
 
@@ -121,17 +142,23 @@ def cmd_grade(args, matrix) -> int:
     return 0 if graded.grade["pass"] else 1
 
 
-def _judge_call(matrix):
+def cmd_summary(args, matrix) -> int:
+    print(json.dumps(runner.summarize(args.out, args.allow_contaminated), indent=2, sort_keys=True))
+    return 0
+
+
+def _judge_call(matrix, host_source: runner.HostSource):
     cfg = matrix.raw["judge"]
     adapter = adapters.build(cfg["harness"], matrix.harness_cfg(cfg["harness"]))
     flags = list(cfg.get("flags", []))
 
     def call(prompt: str):
-        paths = runner.stage_trial(None, adapter, require_plugin=False)
+        host = host_source.get()
+        paths = runner.stage_trial(None, adapter, host, require_plugin=False)
         try:
             argv = adapter.command(model=cfg["model"], prompt=prompt, paths=paths, resume=False)
             argv = argv[:-1] + flags + argv[-1:]
-            turn, _, _ = runner.run_turn(adapter, argv, paths, float(cfg.get("timeout_s", 300)))
+            turn, _, _ = runner.run_turn(adapter, argv, paths, host, float(cfg.get("timeout_s", 300)))
             return turn
         finally:
             shutil.rmtree(paths.root, ignore_errors=True)
@@ -139,15 +166,11 @@ def _judge_call(matrix):
     return call
 
 
-def _rows(directory: Path) -> dict[tuple[str, int], dict]:
-    path = directory / "results.jsonl"
-    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()] if path.is_file() else []
-    return {(r["prompt_id"], r["rep"]): r for r in rows}
-
-
 def cmd_judge(args, matrix) -> int:
-    a_rows, b_rows = _rows(args.a), _rows(args.b)
-    call = _judge_call(matrix)
+    runner.require_comparable([args.a, args.b], args.allow_contaminated)
+    a_rows = {(r["prompt_id"], r["rep"]): r for r in runner.read_rows(args.a)}
+    b_rows = {(r["prompt_id"], r["rep"]): r for r in runner.read_rows(args.b)}
+    call = _judge_call(matrix, runner.HostSource(matrix.raw.get("auth", {})))
     rng = random.Random(args.seed)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     failures = 0
@@ -172,32 +195,58 @@ def cmd_judge(args, matrix) -> int:
     return 1 if failures else 0
 
 
-def cmd_smoke(args, matrix) -> int:
-    """One live call with a trivial prompt; records argv, served model, usage and the raw stream."""
+def cmd_inventory(args, matrix) -> int:
+    """Model-free: stage a trial, run the adapter's probe, print what loaded."""
     adapter = adapters.build(args.harness, matrix.harness_cfg(args.harness))
-    paths = runner.stage_trial(None, adapter, require_plugin=False)
+    host = runner.HostSource(matrix.raw.get("auth", {})).get()
+    paths = runner.stage_trial(None, adapter, host, require_plugin=True)
+    try:
+        if not adapter.probe(paths, args.model, []):
+            print(f"{args.harness} reports its components only from a turn; use `smoke`", file=sys.stderr)
+            return 2
+        result = runner.isolation_of(adapter, paths, runner.run_probe(adapter, paths, host, args.model, []), [])
+    finally:
+        shutil.rmtree(paths.root, ignore_errors=True)
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return 0 if result["isolation"] == "clean" else 1
+
+
+def cmd_smoke(args, matrix) -> int:
+    """One cheap live call in a clean trial: records argv, served model, usage, the
+    loaded-component inventory and its leaks, and the raw stream."""
+    adapter = adapters.build(args.harness, matrix.harness_cfg(args.harness))
+    host = runner.HostSource(matrix.raw.get("auth", {})).get()
+    paths = runner.stage_trial(None, adapter, host, require_plugin=True)
     argv = adapter.command(model=args.model, prompt=SMOKE_PROMPT, paths=paths, resume=False)
     record = {"harness": args.harness, "requested_model": args.model, "argv": argv, "at": runner._now()}
     raw: list[str] = []
+    probe: list[str] = []
     started = time.monotonic()
     try:
-        turn, raw, stderr = runner.run_turn(adapter, argv, paths, args.timeout)
+        turn, raw, stderr = runner.run_turn(adapter, argv, paths, host, args.timeout)
+        probe = runner.run_probe(adapter, paths, host, args.model, raw)
         hello = paths.work / "hello.txt"
         record |= {
             "ok": True, "served_model": turn.model, "served_matches": adapters.served_matches(args.model, turn.model),
             "usage": turn.usage, "text": turn.text, "tools": turn.tools, "transcript_entries": len(turn.transcript),
-            "file_written": hello.is_file() and hello.read_text().strip() == "ok", "stderr_tail": stderr[-500:],
+            "file_written": hello.is_file() and hello.read_text().strip() == "ok",
+            **runner.isolation_of(adapter, paths, probe, raw),
         }
     except runner.TrialError as exc:
         record |= {"ok": False, "failure_class": exc.failure_class, "detail": exc.detail}
     finally:
         record["latency_s"] = round(time.monotonic() - started, 3)
-        shutil.rmtree(paths.root, ignore_errors=True)
+        if args.keep_sandbox:
+            record["sandbox"] = str(paths.root)
+        else:
+            shutil.rmtree(paths.root, ignore_errors=True)
     args.out.mkdir(parents=True, exist_ok=True)
     (args.out / f"{args.harness}.json").write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     (args.out / f"{args.harness}.raw.jsonl").write_text("\n".join(raw) + ("\n" if raw else ""), encoding="utf-8")
-    print(json.dumps(record, sort_keys=True))
-    return 0 if record["ok"] and record.get("served_model") else 1
+    if probe:
+        (args.out / f"{args.harness}.probe.json").write_text(json.dumps(probe, indent=1) + "\n", encoding="utf-8")
+    print(json.dumps({k: record.get(k) for k in ("ok", "served_model", "isolation", "leaks", "inventory", "text", "file_written")}, indent=2))
+    return 0 if record.get("ok") and record.get("isolation") == "clean" else 1
 
 
 if __name__ == "__main__":

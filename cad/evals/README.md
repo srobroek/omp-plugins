@@ -20,7 +20,7 @@ directory can serve as a `ratchet` variant.
 | `adapters/` | One adapter per harness: plugin install, exact argv, stream parser |
 | `graders/` | `score.py` (metrics), `step_readback.py` (OCCT, uv env), `record_check.py` (YAML, uv env), `judge.py` (pairwise hook) |
 | `tests/` | Pre-flight tests, a stand-in harness binary, sanitised smoke streams |
-| `smoke/` | The recorded result of the one live smoke call per installed harness |
+| `smoke/` | The recorded result of the live smoke calls per harness (Claude Code: all three attempts) |
 
 ## Requirements
 
@@ -28,8 +28,8 @@ directory can serve as a `ratchet` variant.
 - `uv` on `PATH`. The graders run as PEP 723 scripts:
   - `step_readback.py` uses `cadquery-ocp-novtk` 8.0.x;
   - `record_check.py` uses `pyyaml`.
-  The oracles use `cadquery` 2.8 and `build123d` 0.13, each in its own environment.
-- Bedrock credentials through the AWS credential chain, for example `AWS_PROFILE`.
+  The oracles use `cadquery` 2.8 and `build123d` 0.13, each in its own environment. The tests cache built oracle STEP files by model hash in `~/.cache/cad-evals/oracle-steps`.
+- The AWS CLI and a Bedrock profile (`[auth] aws_profile`, default `$AWS_PROFILE`); the runner exports its credentials for each trial.
 - The harness CLIs for the cells you run.
 
 ## Cases and ground truth
@@ -40,7 +40,9 @@ A case names its `id` and `tier`:
 - `T2`: a subassembly;
 - `T3`: the full product flow.
 
-It also names `tags`, where `tags[0]` is the ratchet split stratum, plus `kernel`, `prompt` and `gate_answers`. Each gate answer is a `when` regex, a `reply` and `max_uses`. The case also gives `seed`, `deliverables` (part number, STEP path, record directory) and `truth`.
+It also names `tags`, where `tags[0]` is the ratchet split stratum, plus `kernel`, `prompt` and `gate_answers`. Each gate answer is a `when` regex, a `reply` and `max_uses`. The case also gives `seed`, `deliverables` (part number, a legacy STEP path, record directory) and `truth`.
+
+The seed (`cases/seeds/desk-lamp/hw/`) is a complete design record that passes the real cad-record validator: product, requirements, interfaces, assembly, one purchased pin part, `bom.csv` and `verification.csv`. A T1 task adds one part, its BOM row and its build, and the record must still validate.
 
 The runner keeps ground truth away from the model under test. The protections:
 
@@ -65,15 +67,15 @@ Programmatic checks come first. Each metric is 0 or 1; `score` is their mean, an
 
 | Metric | Check |
 |---|---|
-| `step` | The STEP file exists at the case's path, and OCCT reads it into a shape |
+| `step` | The part's STEP exists and OCCT reads it into a shape. Its path comes from `hw/versions/latest.json` (`parts[PN]`, relative to hw/, the cad-model build index). Only a record without that index falls back to the case's legacy `step` path |
 | `ap242` | The header is ISO 10303-21 and `FILE_SCHEMA` declares `AP242_MANAGED_MODEL_BASED_3D_ENGINEERING…` |
 | `solids` | The solid count equals the truth |
 | `volume` | The volume is within `volume_rel_tol` of the truth |
 | `bbox` | The sorted envelope extents are within `bbox_tol_mm`, so orientation does not matter |
 | `holes` | Concave cylinders, deduplicated per axis, give exactly the truth count per diameter within `hole_tol_mm`, with no extra holes |
-| `record` | `hw/parts/<PN>/part.yaml` and `model.py` exist and name the PN, and the record validates |
+| `record` | `hw/parts/<PN>/part.yaml` and `model.py` exist and name the PN, and the whole record validates |
 
-The `record` metric runs `cad/skills/cad-record/scripts/validate.py <hw-dir>` when that script exists. It expects the shared script exit codes: 0 valid, 1 invalid, 2 infrastructure error. Without the script, a builtin check applies the shared-contract rules: the PN and rev patterns, the `process` enum, and the `product.yaml` units, rigor and regime.
+The `record` metric runs `cad/skills/cad-record/scripts/validate.py <hw-dir>` unchanged, with its exit codes: 0 valid, 1 invalid, 2 infrastructure error. The grader never relaxes it; seeds and oracles are complete records instead. Without the script (a checkout predating cad-record), a builtin check applies the shared-contract rules: the PN and rev patterns, the `process` enum, and the `product.yaml` units, rigor and regime.
 
 A grader that cannot run (exit 2, timeout, bad JSON) raises `grader_error`. The runner writes that to `errors.jsonl`, never as a zero.
 
@@ -93,8 +95,10 @@ All commands run from the repository root. Prefix with `GIT_TERMINAL_PROMPT=0` i
 
 ```sh
 # Pre-flight: oracle ~100 %, empty ~0 %, induced adapter error -> errors.jsonl,
-# stable regrade, resume, gates, judge mapping, recorded-stream parsers. No model calls.
+# stable regrade, resume, gates, isolation verdicts, judge mapping, recorded streams. No model calls.
 python3 -m unittest discover -s cad/evals/tests -v
+# Only the fast, model-free checks (skips the oracle builds and OCCT read-back).
+CAD_EVALS_SKIP_GEOMETRY=1 python3 -m unittest discover -s cad/evals/tests -v
 
 # See what would run, with the exact argv per cell. No model calls.
 python3 cad/evals/run.py plan --pilot
@@ -112,11 +116,17 @@ python3 cad/evals/run.py run --cell omp:amazon-bedrock/global.anthropic.claude-o
 # Grade a directory by hand (for example a kept sandbox's work/).
 python3 cad/evals/run.py grade --case t1-lower-link-cq --work /path/to/work
 
-# Pairwise judge between two cells (or two ratchet variants).
+# Per-cell comparison table; contaminated cells are listed but excluded.
+python3 cad/evals/run.py summary --out cad/evals/out/matrix
+
+# Pairwise judge between two cells (or two ratchet variants). Refuses contaminated cells.
 python3 cad/evals/run.py judge --a cad/evals/out/matrix/omp--global.anthropic.claude-opus-5-5 \
   --b cad/evals/out/matrix/claude--global.anthropic.claude-opus-5-5 --out cad/evals/out/judge.jsonl
 
-# One trivial live call through an adapter, recorded (argv, served model, usage, stream).
+# Model-free isolation check (OMP): what a clean trial loads.
+python3 cad/evals/run.py inventory --harness omp --model amazon-bedrock/global.anthropic.claude-haiku-5-5
+
+# One cheap live call in a clean trial: served model, usage, inventory, leaks, raw stream.
 python3 cad/evals/run.py smoke --harness omp --model amazon-bedrock/global.anthropic.claude-haiku-5-5 --out /tmp/smoke
 ```
 
@@ -135,7 +145,8 @@ The pilot writes traces for every pilot case because no split exists yet. A ratc
   - `prompt_id`, `rep`, `prompt`, `tags`;
   - `grade` (the metric map above), `explanation`, `status` (`ok`, or `truncated` when the turns ran out or the model hit its length limit);
   - `model` (the served id, read from the stream), `usage`, `latency_s`;
-  - `harness`, `requested_model`, `turns`, `retries`.
+  - `harness`, `requested_model`, `turns`, `retries`;
+  - `isolation` (`clean` or `contaminated`), `leaks`, `inventory` (what the harness reported loading) and `isolation_mechanism`.
 - `errors.jsonl`: attempts with nothing scorable, each with a `failure_class`:
 
   | Class | Meaning |
@@ -147,6 +158,7 @@ The pilot writes traces for every pilot case because no split exists yet. A ratc
   | `model_unverified` | The stream carried no served model |
   | `truth_leak` | The stream mentions the hidden truth directory |
   | `plugin_missing` | The staged plugin lacks what the harness loads |
+  | `auth_error` | AWS credentials could not be exported from the `[auth]` profile |
   | `grader_error` | A grader could not run |
   | `runner_error` | An unexpected runner exception |
 
@@ -156,28 +168,37 @@ The pilot writes traces for every pilot case because no split exists yet. A ratc
 
 `usage` uses OMP key names: `input`, `output`, `cacheRead` and `cacheWrite`, plus `cost_usd` when the harness reports it and `credits` for Kiro.
 
+## Isolation
+
+Trials are comparable only if each harness loads the cad plugin and nothing else of the user's. Every child process gets an environment built from an allowlist (`PATH`, locale, `TMPDIR`, user, uv cache locations); nothing else of the user's shell is inherited. AWS credentials are exported once per window from the `[auth]` profile (`aws configure export-credentials`) and passed as environment variables, so no harness reads `~/.aws` or runs the profile's credential process.
+
+Each row then records what the harness itself reported loading, and the leaks: everything that is neither the cad plugin nor on that harness's bundled list (observed in a clean run), plus any capability cad needs that is missing. An inventory the harness did not report counts as contaminated. `summary` and `judge` refuse contaminated cells unless `--allow-contaminated`.
+
+| Harness | Mechanism | Inventory source | Smoke result (one cheap call each, `smoke/`) |
+|---|---|---|---|
+| OMP 18.12.3 | HOME, `PI_CODING_AGENT_DIR` and `XDG_*` in the trial; cad via `--plugin-dir` | `omp --mode rpc` after the turn: `get_state` (the assembled system prompt: skills, rules, project context, MCP; the task tool's agents) and `get_available_commands` | clean: 9 cad skills, the 2 cad reviewers, OMP's bundled agents and commands. The same probe with the user's environment reports 155 leaks |
+| Claude Code 2.1.310 | The real binary behind the Amazon toolbox launcher, which otherwise copies Amazon builder rules into the rules directory; `CLAUDE_CONFIG_DIR` in the trial; `--setting-sources project,local`; a trial `--settings` that pins the model (`modelOverrides`) and disables the two `@builtin` plugins; `--strict-mcp-config` with an empty `--mcp-config`; cad via `--plugin-dir` | `system/init` in the first turn (plugins, skills, agents, commands, MCP, tools, memory path) plus the config dir's `rules/` and `CLAUDE.md` on disk | clean, `plugins: [cad]`, served `claude-haiku-5-5`. It took three calls (`smoke/claude-attempts.json`): without `modelOverrides` the `--model` flag was ignored and Opus served; `--bare` removes the Skill, Task, Write, Glob and Grep tools, so it is off |
+| Kiro 2.34.0 (v3) | HOME and `XDG_*` in the trial, with only Kiro's login store and its sibling executables linked in; pinned to the sandbox agent `.kiro/agents/cad-eval.json` (V3 format: capability `permissions`, cad skills as `skill://` resources); cad copied to `<work>/cad` | the turn's stream: final mode, final command list, context files, memory and MCP use | clean: mode `cad-eval`, 9 cad skills, the cad reviewers, no steering, no memory |
+| OpenCode 2.1.4 | HOME and `XDG_*` in the trial; `--standalone` (a private server in the trial's environment, not the shared background service); cad skills and agents in `<work>/.opencode/` | `opencode api --standalone` after the turn (instruction entries, plugins, MCP, config sources) plus OpenCode's documented skill and agent directories on disk. Its API skill and agent lists stay empty in a standalone server, so they are not used | clean: 10 cad skills, the cad reviewers, no instructions or config outside the trial. The model also names two bundled skills (`opencode`, `report`) |
+
+Residual leaks, not closed by configuration: Claude Code bundles skills, agents and commands in the binary (listed in `adapters/claude.py`); Kiro's session store is shared with the user (auth lives in the same database), though nothing in it configures the trial; OpenCode writes to a shared temp directory outside the trial.
+
 ## Adapters
 
-| Harness | argv (first turn; later turns add the continue flag) | Served model read from | Usage read from | Status |
-|---|---|---|---|---|
-| OMP | `omp -p --model M --mode json --no-title --auto-approve --profile cad-eval --plugin-dir P --session-dir S` (`--continue`) | `message_end` assistant `model` | assistant `usage` (+ `cost.total`) | smoke passed |
-| Claude Code | `claude -p --model M --output-format stream-json --verbose --permission-mode bypassPermissions --strict-mcp-config --bare --plugin-dir P` (`--continue`) | main-thread `assistant.message.model` | `result.usage`, `total_cost_usd` | smoke passed. Claude Code reports the bare id `claude-haiku-5-5`, so the matcher now drops region and vendor prefixes |
-| Kiro | `kiro-cli chat --no-interactive --agent-engine v3 --model M --output-format stream-json --trust-tools=fs_read,fs_write,execute_bash,glob,grep --trust-workspace` (`--resume`) | the `model` entry of the last `config_option_update` | `promptTurnSummaries` credits | smoke call ran and wrote the file. The first parser missed the model and usage; it was rewritten against the recorded stream (see `smoke/kiro.json`) |
-| OpenCode | `opencode run --model M --format json --auto --dir W` (`--continue`) | any `modelID`/`providerID` in the stream | `step_finish.part.tokens`/`cost` | **untested** |
+| Harness | argv (first turn; later turns add the continue flag) | Served model read from | Usage read from |
+|---|---|---|---|
+| OMP | `omp -p --model M --mode json --no-title --auto-approve --plugin-dir P --session-dir S` (`--continue`) | `message_end` assistant `model` | assistant `usage` (+ `cost.total`) |
+| Claude Code | `<real claude> -p --model <canonical> --output-format stream-json --verbose --permission-mode bypassPermissions --strict-mcp-config --mcp-config <empty> --setting-sources project,local --settings <trial json> --plugin-dir P` (`--continue`) | main-thread `assistant.message.model` (the bare id, e.g. `claude-haiku-5-5`) | `result.usage`, `total_cost_usd` |
+| Kiro | `kiro-cli chat --no-interactive --agent-engine v3 --model M --output-format stream-json --trust-tools=fs_read,fs_write,execute_bash,glob,grep --trust-workspace --agent cad-eval` (`--resume`) | the `model` entry of the last `config_option_update` (the session's model setting; nothing closer to the wire is in the stream) | `promptTurnSummaries` credits; Kiro reports no tokens |
+| OpenCode | `opencode run --standalone --model M --format json --auto` (`--continue`) | the session's assistant messages via `opencode api --standalone session.message.list` (the stream has no model id) | the same messages' `tokens` and `cost` (the stream can end before the last `step_finish`) |
 
-The runner passes `--plugin-dir` only when the staged plugin has that harness's manifest. During a `run`, a missing manifest is a `plugin_missing` error. Kiro and OpenCode get `skills/` and the generated agents copied into the workspace (`.kiro/`, `.opencode/`).
-
-Known limits, observed in the smoke calls:
-
-- **Claude Code**: `--bare` still loads the user's own plugins. `setting_sources = "project,local"` in `matrix.toml` should drop them, but it has not been tested live. Bedrock auth then has to come from `[harness.claude.env]`.
-- **Kiro**: the default agent loads the user's `~/.kiro` steering and their default mode. Set `agent = "<name>"` to pin an agent. Kiro reports spend in credits, not tokens. The served model is the session's model setting, the closest the stream gets to the wire.
-- **OpenCode**: not installed here. Install it with `npm install -g opencode-ai` (1.19.4 on npm at the time of writing). The flags and event shapes follow OpenCode's documentation and source. The documented stream carries no model id, so expect `model_unverified` until a live check proves otherwise.
+The runner passes `--plugin-dir` only when the staged plugin has what that harness loads. During a `run`, its absence is a `plugin_missing` error. The OpenCode binary resolves from `$OPENCODE_BIN`, then `PATH` if it runs, then `~/.cache/.bun/bin/opencode`.
 
 ## Adding a case
 
 1. Write `cases/<id>.case.json` against `cases/case.schema.json`. Put the stratum first in `tags`.
 2. Write `truth/<id>/truth.json` from the specification, not from any model's output, and record its provenance.
-3. Add `truth/<id>/oracle/`, the reference answer. Its `model.py` writes the STEP file next to itself when it runs.
+3. Add `truth/<id>/oracle/`, the reference answer. Its `model.py` follows the cad-model part contract (`KERNEL`, `PARAMS`, `build`) and, run directly, writes the STEP next to itself. It also carries the record changes the task asks for (the BOM row), so seed plus oracle validates.
 4. Run the pre-flight tests. The oracle must grade 1.0 and the seed alone 0.0.
 
 Pick a case because someone can say why it is hard, never because today's model fails it. A ratchet flow needs 15–100 cases; the three seed cases are enough for the pilot and the pre-flight tests only.

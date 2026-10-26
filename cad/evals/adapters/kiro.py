@@ -12,45 +12,141 @@ events whose `data.update` is an ACP session update, then `runFinished` with
 - Usage: Kiro reports no token counts; `session_info_update` turn summaries carry
   spend in credits (`_meta.kiro.promptTurnSummaries[].usage`), recorded as
   `usage.credits`. Token fields stay 0.
+
+Isolation: HOME and the XDG roots point into the trial, so ~/.kiro (global agents,
+steering, skills, memories, settings incl. the default agent, MCP config) does not
+load. Kiro keeps its login in `~/Library/Application Support/kiro-cli`, which is
+symlinked into the isolated HOME: auth and Kiro's session store are shared with
+the user, configuration is not. The run is pinned to a sandbox-local agent
+(`.kiro/agents/cad-eval.json`) whose only resources are the cad skills. The plugin
+is copied to `<work>/cad/`, where the generated reviewer agents' relative
+`skill://cad/skills/...` resources resolve. The inventory is read from the turn's
+stream: active mode, available commands, context files, memory and MCP usage.
 """
 
 from __future__ import annotations
 
 import json
+import shutil
 from dataclasses import dataclass, field
 from typing import Iterable
 
-from .base import TrialPaths, Turn, add_usage, copy_tree, empty_usage, json_lines, tool_text
+from .base import EVAL_AGENT, Host, Inventory, TrialPaths, Turn, add_usage, copy_tree, empty_usage, isolated_home, json_lines, tool_text
+
+BUILTIN: dict[str, frozenset[str]] = {}
+_APP_SUPPORT = ("Library", "Application Support", "kiro-cli")
 
 
 @dataclass
 class KiroAdapter:
     bin: str = "kiro-cli"
     trust_tools: str = ""
-    agent: str | None = None
     extra_env: dict[str, str] = field(default_factory=dict)
     plugin_marker: str = "skills"
     name: str = "kiro"
+    isolation: str = (
+        "HOME and XDG_* in the trial with only Kiro's auth store symlinked in; --agent cad-eval"
+        " (sandbox-local, cad skills only); cad copied to <work>/cad"
+    )
+    builtin: dict = field(default_factory=lambda: BUILTIN)
 
-    def prepare(self, paths: TrialPaths) -> None:
-        # Workspace-scoped Kiro resources: skills and the generated agent JSON.
-        copy_tree(paths.plugin / "skills", paths.work / ".kiro" / "skills")
-        copy_tree(paths.plugin / "harness" / "kiro" / "agents", paths.work / ".kiro" / "agents")
+    def prepare(self, paths: TrialPaths, host: Host) -> None:
+        # Kiro's login store, and the sibling executables kiro-cli launches from
+        # $HOME/.local/bin, are linked in; nothing under ~/.kiro is.
+        auth = host.real_home.joinpath(*_APP_SUPPORT)
+        link = paths.home.joinpath(*_APP_SUPPORT)
+        link.parent.mkdir(parents=True, exist_ok=True)
+        if auth.is_dir():
+            link.symlink_to(auth, target_is_directory=True)
+        bin_dir = paths.home / ".local" / "bin"
+        bin_dir.mkdir(parents=True, exist_ok=True)
+        for exe in (host.real_home / ".local" / "bin").glob("kiro-cli*"):
+            (bin_dir / exe.name).symlink_to(exe.resolve())
+        local = paths.work / "cad"
+        shutil.copytree(paths.plugin, local, dirs_exist_ok=True)
+        agents = paths.work / ".kiro" / "agents"
+        copy_tree(paths.plugin / "harness" / "kiro" / "agents", agents)
+        agents.mkdir(parents=True, exist_ok=True)
+        skills = sorted(p.parent for p in (local / "skills").glob("*/SKILL.md"))
+        # CLI V3 format, checked with `kiro-cli agent list` ("(v3 format)"): a JSON
+        # profile with `allowedTools` and no `permissions` is skipped as unconverted
+        # 2.x config, and `toolsSettings` also demotes it, so access is granted only
+        # through capability rules.
+        (agents / f"{EVAL_AGENT}.json").write_text(json.dumps({
+            "name": EVAL_AGENT,
+            "description": "cad plugin eval agent: the cad skills and reviewer agents only.",
+            "tools": ["read", "write", "shell", "subagent"],
+            # `**/*` does not match the workspace root itself (List Directory on it
+            # asked for approval and failed in --no-interactive), so the trial's own
+            # paths are listed explicitly, under both /var and /private/var.
+            "permissions": {"rules": [
+                {"capability": "filesystem", "match": sorted({"**", f"{paths.root}/**", f"{paths.root.resolve()}/**",
+                                                              str(paths.work), str(paths.work.resolve())}), "effect": "allow"},
+                *({"capability": capability, "match": ["*"], "effect": "allow"} for capability in ("shell", "subagent", "skill")),
+            ]},
+            "resources": [f"skill://{p}/SKILL.md" for p in skills],
+            "mcpServers": {},
+            "includeMcpJson": False,
+        }, indent=2) + "\n", encoding="utf-8")
 
     def command(self, *, model: str, prompt: str, paths: TrialPaths, resume: bool) -> list[str]:
         argv = [
             self.bin, "chat", "--no-interactive", "--agent-engine", "v3", "--model", model,
             "--output-format", "stream-json", f"--trust-tools={self.trust_tools}", "--trust-workspace",
+            "--agent", EVAL_AGENT,
         ]
-        if self.agent:
-            argv += ["--agent", self.agent]
         if resume:
             argv.append("--resume")
         argv.append(prompt)
         return argv
 
-    def env(self, paths: TrialPaths) -> dict[str, str]:
-        return dict(self.extra_env)
+    def env(self, paths: TrialPaths, host: Host) -> dict[str, str]:
+        return {**host.base_env, **isolated_home(paths), **self.extra_env, "NO_COLOR": "1"}
+
+    def probe(self, paths: TrialPaths, model: str, stream_lines: list[str]) -> list[tuple[list[str], str]]:
+        return []  # the turn's own stream reports mode, commands and context files
+
+    def complete(self, turn: Turn, lines: list[str], paths: TrialPaths, env: dict[str, str]) -> Turn:
+        return turn
+
+    def inventory(self, probe_outputs: list[str], stream_lines: list[str], paths: TrialPaths) -> Inventory:
+        """The session's final state: the last mode and the last command list (earlier
+        snapshots show Kiro's default agent before `--agent` applies), plus every
+        context file, memory and MCP use seen during the turn."""
+        inv = Inventory()
+        mode: str | None = None
+        commands: list[dict] = []
+        for event in json_lines(stream_lines):
+            if event.get("type") != "sessionUpdate":
+                continue
+            inv.observed = True
+            update = (event.get("data") or {}).get("update") or {}
+            sub = update.get("sessionUpdate")
+            meta = (update.get("_meta") or {}).get("kiro") or {}
+            if sub == "config_option_update":
+                for option in update.get("configOptions") or []:
+                    if option.get("id") == "mode" and option.get("currentValue"):
+                        mode = option["currentValue"]
+            elif sub == "available_commands_update":
+                commands = update.get("availableCommands") or []
+            elif sub == "session_info_update":
+                breakdown = (meta.get("contextUsage") or {}).get("breakdown") or meta.get("breakdown") or {}
+                for item in (breakdown.get("contextFiles") or {}).get("items") or []:
+                    inv.context.append(item.get("uri") or item.get("name", ""))
+                if ((breakdown.get("memory") or {}).get("tokens") or 0) > 0:
+                    inv.context.append("memory")
+                if (((breakdown.get("tools") or {}).get("mcp") or {}).get("tokens") or 0) > 0:
+                    inv.mcp.append("mcp-tools")
+                inv.context += [d for d in meta.get("steeringDocuments") or [] if isinstance(d, str)]
+        if mode is not None:
+            inv.agents.append(mode)
+        for command in commands:
+            kind = ((command.get("_meta") or {}).get("kiro") or {}).get("type")
+            bucket = {"custom-agent": inv.agents, "skill": inv.skills}.get(kind, inv.commands)
+            bucket.append(command.get("name", ""))
+        if mode != EVAL_AGENT:
+            inv.missing.append(f"agent:{EVAL_AGENT} not active (mode {mode})")
+        return inv
 
     def parse(self, lines: Iterable[str]) -> Turn:
         turn = Turn()

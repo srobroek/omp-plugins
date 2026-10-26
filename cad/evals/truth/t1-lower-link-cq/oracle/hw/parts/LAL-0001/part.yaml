@@ -4,6 +4,6 @@ title: Lamp arm lower link
 material: PETG
 process: fdm
 finish: as printed
-mass_target: 16 g
+mass_target: 16
 make_buy: make
 supplier: null
