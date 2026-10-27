@@ -37,7 +37,7 @@ import adapters  # noqa: E402
 import run  # noqa: E402
 import runner  # noqa: E402
 from adapters import kiro  # noqa: E402
-from adapters.base import Turn  # noqa: E402
+from adapters.base import Baseline, Turn  # noqa: E402
 from adapters.claude import canonical_model  # noqa: E402
 from graders import judge  # noqa: E402
 from graders.score import METRICS, ap242_header, grade_trial, resolve_step  # noqa: E402
@@ -855,8 +855,14 @@ class RecordedStreams(unittest.TestCase):
         return turn
 
     def isolation(self, harness: str, paths, probe=(), stream=None) -> dict:
-        return runner.isolation_of(adapters.build(harness, {}), paths, list(probe), stream or self.lines(f"{harness}.raw.jsonl", paths),
-                                   RECORDED_VERSIONS.get(harness))
+        adapter = adapters.build(harness, {})
+        recorded = RECORDED_VERSIONS.get(harness)
+        if recorded:
+            # A fixture can predate the baseline's latest re-observation: audit it against
+            # the current items at the version it was recorded under. Version mismatch has
+            # its own tests.
+            adapter.baseline = Baseline(recorded, adapter.baseline.items)
+        return runner.isolation_of(adapter, paths, list(probe), stream or self.lines(f"{harness}.raw.jsonl", paths), recorded)
 
     def assert_tokens(self, turn: Turn):
         self.assertGreater(turn.usage["input"] + turn.usage["cacheRead"] + turn.usage["cacheWrite"], 0)

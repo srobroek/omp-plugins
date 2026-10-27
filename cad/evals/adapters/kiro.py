@@ -46,7 +46,10 @@ from .base import (
     tool_text, trial_temp,
 )
 
-BASELINE = Baseline("2.34.0")  # the pinned agent's command list holds only what its config names
+# The pinned agent's command list holds only what its config names. Re-observed for
+# 2.34.1 from the 2026-10-27 pilot inventories: same agents, skills and context, no MCP,
+# plugins or commands as under 2.34.0.
+BASELINE = Baseline("2.34.1")
 _APP_SUPPORT = ("Library", "Application Support", "kiro-cli")
 _DB = "data.sqlite3"
 # `state` keys that belong to the sign-in (IAM Identity Center start URL and region,
