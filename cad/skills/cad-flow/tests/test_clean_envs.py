@@ -116,9 +116,12 @@ class MeasureTests(unittest.TestCase):
         self.assertEqual(apparent, 1 << 20)
         self.assertGreaterEqual(freed, 1 << 20)
 
-    @unittest.skipUnless(sys.platform == "darwin" and shutil.which("cp"), "APFS clones are macOS-only")
-    def test_an_apfs_clone_of_the_cache_frees_nothing(self) -> None:
-        subprocess.run(["cp", "-c", str(self.base / "cache.bin"), str(self.env / "clone.bin")], check=True)
+    def test_a_clone_of_the_cache_frees_nothing(self) -> None:
+        flag = "-c" if sys.platform == "darwin" else "--reflink=always"  # APFS clone; XFS or Btrfs reflink
+        cloned = subprocess.run(["cp", flag, str(self.base / "cache.bin"), str(self.env / "clone.bin")],
+                                capture_output=True, check=False)
+        if cloned.returncode != 0:
+            self.skipTest(f"{self.base} cannot hold a copy-on-write clone")
         apparent, freed = clean_envs.measure(self.env)
         self.assertEqual(apparent, 1 << 20)
         self.assertLess(freed, 1 << 16)

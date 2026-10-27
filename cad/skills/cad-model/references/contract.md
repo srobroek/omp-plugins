@@ -54,15 +54,18 @@ primitives only (a kernel object fails the part with a `ContractError`):
 | `scripts/run_build123d.py` | build123d 0.13.0, cadquery-ocp-novtk 8.0.1.1.0, bd_warehouse 0.4.0 | 3.12 |
 | `scripts/cad_model.py` (orchestrator) | cadquery-ocp-novtk 8.0.1.1.0, pyyaml, trimesh 4, numpy | 3.11-3.14 |
 
-The two kernels' OCP builds clash, so each runner has its own uv environment, started as a
-subprocess by `cadmodel.scriptenv`: `uv run --isolated --no-project --python <requires-python>
---with-requirements <runner> python <runner>`. uv keys that environment by the header's resolved
-dependency set and interpreter, not by the runner's path, so every copy of the plugin (project
-skill copy, eval trial, worktree) loads the same installed kernel instead of installing and
-first-loading its own. With `--kernel auto` and parts in both kernels, both runners run
-concurrently: each is fed its request and drained by its own thread. When one runner fails, the
-other is killed with its uv process group before the partial version folder is removed, so a
-failed run leaves nothing.
+The OCP builds of the two kernels clash, so each runner has its own uv environment.
+`cadmodel.scriptenv` starts each runner as a subprocess:
+
+    uv run --isolated --no-project --python <requires-python> --with-requirements <runner> python <runner>
+
+uv keys that environment by the resolved dependency set of the header and by the interpreter, not
+by the path of the runner. Every copy of the plugin therefore loads the same installed kernel,
+whether it is a project's skill copy, an eval trial, or a worktree.
+
+With `--kernel auto` and parts in both kernels, both runners run concurrently: each is fed its
+request and drained by its own thread. When one runner fails, the other is killed with its uv
+process group before the partial version folder is removed, so a failed run leaves nothing.
 Every file the orchestrator writes after the runners (assembly, GLB, metrics, checks) is computed
 from the per-part STEP files through one OCP, so the JSON is identical whichever kernel built a
 part. cad-design's `build_reference.py` builds its reference models through the same runners.

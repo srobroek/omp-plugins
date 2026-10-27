@@ -16,10 +16,10 @@ script's header depends on. It is stale unless it is the environment of a script
 copy (`uv python find --script`) or was modified within --min-age-hours, which suggests a session
 still uses it. uv recreates a deleted environment on the next run of its script.
 
-Sizes: apparent is the files' length. Freed is what deletion returns to the volume: on APFS, each
-file's private size (bytes no clone shares); elsewhere, the allocated blocks of files with no other
-hard link (uv hard-links Linux installs from its cache). Reflinks outside APFS are not detected, so
-there freed is an upper bound.
+Sizes: apparent is the files' length. Freed is what deletion returns to the volume. A file with
+another hard link frees nothing. Otherwise macOS counts the file's private size (bytes no APFS clone
+shares) and Linux the bytes in extents no other file shares (FIEMAP, so XFS or Btrfs reflinks of the
+uv cache count as shared). Where neither applies, freed is the file's allocated blocks.
 
 Usage:
     uv run --script clean_envs.py [--min-age-hours 24] [--json] [--delete]
@@ -140,10 +140,8 @@ class _AttrList(ctypes.Structure):
                 ("forkattr", ctypes.c_uint32)]
 
 
-def _private_size_function():
-    """getattrlist(2)'s ATTR_CMNEXT_PRIVATESIZE on macOS: the bytes deleting a file frees, clone-aware."""
-    if sys.platform != "darwin":
-        return None
+def _darwin_private_size():
+    """getattrlist(2)'s ATTR_CMNEXT_PRIVATESIZE: the bytes deleting a file frees, APFS-clone aware."""
     libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
     libc.getattrlist.argtypes = [ctypes.c_char_p, ctypes.POINTER(_AttrList), ctypes.c_void_p, ctypes.c_size_t,
                                  ctypes.c_ulong]
@@ -159,7 +157,46 @@ def _private_size_function():
     return private_size
 
 
-PRIVATE_SIZE = _private_size_function()
+FS_IOC_FIEMAP = 0xC020660B
+FIEMAP_HEADER = struct.Struct("=QQIIII")  # fm_start, fm_length, fm_flags, fm_mapped_extents, fm_extent_count, reserved
+FIEMAP_EXTENT = struct.Struct("=QQQQQIIII")  # fe_logical, fe_physical, fe_length, reserved x2, fe_flags, reserved x3
+FIEMAP_EXTENT_LAST, FIEMAP_EXTENT_SHARED = 0x1, 0x2000
+FIEMAP_BATCH = 64
+
+
+def _linux_private_size(path: str) -> int | None:
+    """Bytes in extents no other file shares (FIEMAP), so reflinked copies on XFS or Btrfs free nothing."""
+    import fcntl
+
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError:
+        return None
+    private, start = 0, 0
+    try:
+        while True:
+            request = bytearray(FIEMAP_HEADER.pack(start, (1 << 64) - 1 - start, 0, 0, FIEMAP_BATCH, 0)
+                                + bytes(FIEMAP_EXTENT.size * FIEMAP_BATCH))
+            fcntl.ioctl(descriptor, FS_IOC_FIEMAP, request)
+            mapped = FIEMAP_HEADER.unpack_from(request)[3]
+            if mapped == 0:
+                return private
+            for index in range(mapped):
+                logical, _, length, _, _, flags, *_ = FIEMAP_EXTENT.unpack_from(
+                    request, FIEMAP_HEADER.size + index * FIEMAP_EXTENT.size)
+                if not flags & FIEMAP_EXTENT_SHARED:
+                    private += length
+                if flags & FIEMAP_EXTENT_LAST:
+                    return private
+            start = logical + length
+    except OSError:
+        return None
+    finally:
+        os.close(descriptor)
+
+
+PRIVATE_SIZE = (_darwin_private_size() if sys.platform == "darwin" else
+                _linux_private_size if sys.platform.startswith("linux") else None)
 
 
 def measure(environment: Path) -> tuple[int, int]:
@@ -175,7 +212,7 @@ def measure(environment: Path) -> tuple[int, int]:
             if not stat.S_ISREG(info.st_mode):
                 continue
             apparent += info.st_size
-            if info.st_nlink > 1:  # another link keeps the data
+            if info.st_nlink > 1:  # another hard link keeps the data
                 continue
             private = PRIVATE_SIZE(path) if PRIVATE_SIZE else None
             freed += private if private is not None else info.st_blocks * 512

@@ -60,11 +60,25 @@ uv run --script cad/skills/cad-flow/scripts/preflight.py
 ```
 
 The preflight reports each check as pass, fail, or warning, with a fix hint and elapsed time. It exits non-zero when any required runtime check fails. Use `--json` for machine-readable results or `--harness omp|claude|opencode|kiro` to check one harness. Each check is time-bounded and prints progress with its elapsed time.
-These are required: FreeCAD 1.1.4 and its TechDraw templates, CadQuery 2.8, build123d 0.13, the cad-model orchestrator environment, Playwright Chromium (launched headless), the SRI-checked three.js cache, and ocp_viewer. Beads and detected harness installation are warnings. This plugin ships no MCP server, so there is no MCP check.
 
-Each environment check imports its packages in the environment the pipeline uses, so the check is also that environment's first load. The kernel runners `run_cadquery.py` and `run_build123d.py` run in uv environments shared by dependency set: `uv run --isolated --no-project --python <requires-python> --with-requirements <runner> python <runner>`. Every plugin copy (a project's skill copy, an eval trial, a worktree) then loads the same installed kernel. Scripts started with `uv run --script` still get one environment per script path.
+The required checks are FreeCAD 1.1.4 and its TechDraw templates, CadQuery 2.8, build123d 0.13, the cad-model orchestrator environment, and ocp_viewer. Playwright Chromium (launched headless) and the SRI-checked three.js cache are also required. Beads and detected harness installation are warnings. This plugin ships no MCP server, so there is no MCP check.
 
-`--warm` also installs Playwright Chromium and fills the three.js cache. It records its progress and report for this plugin copy under `${XDG_CACHE_HOME:-~/.cache}/cad-flow/warm/`. `--warm --background` starts the warm-up in a detached process and returns once it is running. `--status [--wait SECONDS]` reports on the last warm-up: exit 0 passed, 1 a required check failed, 2 none recorded or it stopped, 3 still running. The `cad-flow` GROUND step starts the background warm-up and checks its status before the first L1 build. See `cad/skills/cad-drawings/SKILL.md` for FreeCAD installation steps.
+Each environment check imports its packages in the environment the pipeline uses, so the check is also that environment's first load. The kernel runners `run_cadquery.py` and `run_build123d.py` run in uv environments shared by dependency set:
+
+```sh
+uv run --isolated --no-project --python <requires-python> --with-requirements <runner> python <runner>
+```
+
+Every plugin copy then loads the same installed kernel, whether it is a project's skill copy, an eval trial, or a worktree. Scripts started with `uv run --script` still get one environment per script path.
+
+`--warm` also installs Playwright Chromium and fills the three.js cache. It records its progress and report for this plugin copy under `${XDG_CACHE_HOME:-~/.cache}/cad-flow/warm/`. `--warm --background` starts the warm-up in a detached process and returns once the warm-up has started. `--status [--wait SECONDS]` reports on the last warm-up and exits with one of these codes:
+
+- 0: it passed.
+- 1: a required check failed.
+- 2: no warm-up is recorded, or it stopped without a report.
+- 3: it is still running.
+
+The `cad-flow` GROUND step starts the background warm-up and checks its status before the first L1 build. See `cad/skills/cad-drawings/SKILL.md` for FreeCAD installation steps.
 
 Each path a script runs from with `uv run --script` leaves its own environment in the uv cache. To list the stale ones that belong to cad scripts:
 
@@ -72,7 +86,7 @@ Each path a script runs from with `uv run --script` leaves its own environment i
 uv run --script cad/skills/cad-flow/scripts/clean_envs.py
 ```
 
-It shows each environment's apparent size and the space deleting it frees. That figure accounts for APFS clones and for files hard-linked from the uv cache. The environments this plugin copy uses now are kept, as is any environment modified within the last 24 hours (`--min-age-hours`). Nothing is deleted without `--delete`; uv recreates a deleted environment the next time its script runs.
+It shows each environment's apparent size and the space deleting it frees. That figure accounts for APFS clones and for files hard-linked from the uv cache. The listing keeps the environments this plugin copy uses now and any environment modified within the last 24 hours (`--min-age-hours`). Without `--delete` it deletes nothing. uv recreates a deleted environment the next time its script runs.
 
 ## Flow
 
