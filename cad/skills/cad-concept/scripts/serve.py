@@ -15,7 +15,7 @@ Routes:
   /events               Server-Sent Events: `change` with {"files": [...]} on edit
   /vendor/<pkg@ver>/... pinned three.js modules, fetched once from jsDelivr,
                         verified against the import map's SRI digest, cached
-  POST /api/screenshot  {scene, variant, pose, png: data URL} -> DIR/screenshots/
+  POST /api/screenshot  {scene, variant, png: data URL} -> DIR/screenshots/
 
 Every request must address the server by a loopback name and its port (`Host`), which closes
 DNS rebinding; a non-loopback `--host` needs `--allow-remote` and adds that address to the names.
@@ -291,7 +291,7 @@ class Handler(BaseHTTPRequestHandler):
             header, _, b64 = str(body["png"]).partition(",")
             png = base64.b64decode(b64, validate=True)
         except (ValueError, KeyError, TypeError, binascii.Error) as exc:
-            self._error(HTTPStatus.BAD_REQUEST, f"expected JSON {{scene, png, pose}}: {exc}")
+            self._error(HTTPStatus.BAD_REQUEST, f"expected JSON {{scene, png}}: {exc}")
             return
         if header != "data:image/png;base64" or not png.startswith(PNG_MAGIC) or not SCENE_NAME.match(scene):
             self._error(HTTPStatus.BAD_REQUEST, "png must be a PNG data URL and scene a *.scene.json name")
@@ -301,7 +301,7 @@ class Handler(BaseHTTPRequestHandler):
         stem = f"{scene.removesuffix('.scene.json')}-{datetime.now().strftime('%Y%m%d-%H%M%S-%f')[:-3]}"
         png_path = out_dir / f"{stem}.png"
         png_path.write_bytes(png)
-        meta = {"scene": scene, "variant": body.get("variant"), "pose": body.get("pose"), "png": png_path.name}
+        meta = {"scene": scene, "variant": body.get("variant"), "png": png_path.name}
         (out_dir / f"{stem}.json").write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
         self._json(HTTPStatus.CREATED, {"ok": True, "path": str(png_path)})
 

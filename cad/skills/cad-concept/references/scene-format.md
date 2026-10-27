@@ -54,22 +54,25 @@ in the viewer; the root group is labelled by the variant `label`.
 
 - `child` is a direct child of `parent` in the tree (CHECK); a node is the child of at most one joint (CHECK).
 - `axis` (non-zero, CHECK) and `origin` are in the parent frame.
-- The authored child transform is the pose at value 0. Posed child = T(origin) * R(axis, value) * T(-origin) * authored; prismatic adds `axis * value`.
+- The authored child transform is its value-0 frame; the viewer places it at `nominal`.
+- Joint axes, origins and limits are carried to L1 LAYOUT in the handoff.
 - Revolute values are degrees within one turn, prismatic values mm. `min < max` and `min <= nominal <= max` (CHECK).
 - Single DOF only. Cylindrical, ball, and fixed joints are authored at L1 LAYOUT.
 
+
+The viewer omits joint axis arrows. They indicate mechanism direction but show no articulation and do not help compare concept variants.
 ## Viewer surface
 
 | Route or call | Use |
 |---|---|
 | `/?scene=<file>` | open one scene; a picker appears when the dir holds several |
-| `window.cadConcept.setJoint(variant, joint, value)` | pose from automation; returns the clamped value |
-| `window.cadConcept.select(variant)` / `.pose()` | highlight a variant; read every joint value |
-| `window.cadConcept.save()` | the Save screenshot button: PNG with labels plus pose JSON into `<scene-dir>/screenshots/` |
+| `window.cadConcept.select(variant)` | highlight a variant |
+| `window.cadConcept.save()` | the Save screenshot button: PNG with labels into `<scene-dir>/screenshots/` |
 | `/events` | Server-Sent Events; `change` carries `{"files": [...]}` |
 
-Sliders clamp to `[min, max]`; a pose survives reloads where the joint still exists. A scene
-that fails to parse or wire keeps the last good render and shows the error in the panel.
+The viewer shows all variants at their authored nominal configuration; joint fields remain in the
+scene for validation and the L1 LAYOUT handoff. A scene that fails to parse or wire keeps the last
+good render and shows the error in the panel.
 
 ## Handoff manifest
 
