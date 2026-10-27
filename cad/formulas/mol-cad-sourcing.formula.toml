@@ -1,0 +1,36 @@
+# mol-cad-sourcing: one purchased-part family researched by a read-only cad-sourcing-researcher worker.
+# Bond one per purchased family in the same batch as the L2 part molecules:
+#   bd mol bond mol-cad-sourcing <fanout-step> --type parallel --ref source-<family> --var family=<id> --var parts=<PNs> ...
+formula = "mol-cad-sourcing"
+description = "Source purchased family {{family}} ({{parts}}) for {{product}}: designations, datasheets, limits, and material data with citations"
+type = "workflow"
+
+[vars.product]
+required = true
+description = "hardware product id"
+
+[vars.scope]
+required = true
+description = "hardware project paths the family's records live in"
+
+[vars.family]
+required = true
+pattern = "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+description = "purchased-part family id, such as shoulder-pins; the unit id is source-<family>"
+
+[vars.parts]
+required = true
+pattern = "^[A-Z]{2,5}-[0-9]{4}(,[A-Z]{2,5}-[0-9]{4})*$"
+description = "comma-separated PNs of the family's purchased parts in hw/bom.csv"
+
+[[steps]]
+id = "research"
+title = "SOURCE purchased family {{family}}"
+type = "task"
+labels = ["cad", "phase:parts", "phase:bom"]
+description = "Unit source-{{family}}. For {{parts}}, read hw/parts/<PN>/part.yaml, hw/bom.csv, hw/interfaces.yaml, and hw/requirements.yaml, then research each part: the standard or catalogue designation, at least one supplier with its order code, the datasheet, dimensions the model and interfaces depend on, installation limits (fit, torque, load, speed, temperature), material and finish, and mass. Cite a URL or document for every value. Write no file and ask the user nothing. Return proposed part.yaml field values and interfaces.yaml limits per PN, each with its citation, plus every mismatch with the current record."
+
+[steps.metadata]
+skill_hints = "cad-bom"
+execution_mode = "subagent"
+execution_agent_type = "cad-sourcing-researcher"

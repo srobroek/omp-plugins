@@ -22,11 +22,11 @@ claude plugin install cad@srobroek-omp
 claude --plugin-dir /path/to/omp-plugins/cad
 ```
 
-The plugin's `.claude-plugin/plugin.json` loads the reviewers generated for Claude Code from `harness/claude/agents/`. Claude Code names them `cad:cad-mech-reviewer` and `cad:cad-dfm-reviewer`. The files in `agents/` are the OMP sources. Claude Code does not load them. Start the workflow with `/cad:cad-flow`, the plugin's `cad-flow` skill. If needed, verify the exact command with `claude --plugin-dir <checkout>/cad`.
+The plugin's `.claude-plugin/plugin.json` loads the agents generated for Claude Code from `harness/claude/agents/`. Claude Code names them `cad:<agent>`, such as `cad:cad-part-designer` and `cad:cad-mech-reviewer`. The files in `agents/` are the OMP sources. Claude Code does not load them. Start the workflow with `/cad:cad-flow`, the plugin's `cad-flow` skill. If needed, verify the exact command with `claude --plugin-dir <checkout>/cad`.
 
 This plugin has no Kiro or OpenCode package. Copy its generated agents and, for OpenCode, the command into your project. Run these commands from the project root. Set `CAD` to the `cad` directory of an omp-plugins checkout.
 
-For Kiro, link the plugin at `cad/` in the workspace root and copy the agents into `.kiro/agents/`. Each reviewer loads its skill as `skill://cad/skills/<skill>/SKILL.md`, which Kiro resolves from the workspace root, so the plugin must sit at exactly that path:
+For Kiro, link the plugin at `cad/` in the workspace root and copy the agents into `.kiro/agents/`. Each agent loads its skills as `skill://cad/skills/<skill>/SKILL.md`, which Kiro resolves from the workspace root, so the plugin must sit at exactly that path:
 
 ```sh
 ln -s "$CAD" cad
@@ -34,7 +34,7 @@ mkdir -p .kiro/agents
 cp cad/harness/kiro/agents/*.json .kiro/agents/
 ```
 
-`kiro-cli agent list` then shows both reviewers as workspace agents. To use the workflow skills from another Kiro agent, add `skill://cad/skills/**/SKILL.md` to that agent's `resources`.
+`kiro-cli agent list` then shows the six cad agents as workspace agents. To use the workflow skills from another Kiro agent, add `skill://cad/skills/**/SKILL.md` to that agent's `resources`.
 
 For OpenCode, copy the agents into `.opencode/agents/`. Copy the command into `.opencode/commands/` and the skills into `.opencode/skills/`.
 
@@ -49,7 +49,16 @@ OpenCode lists `/cad-flow` and the skills in its skills list. The cad plugin doe
 
 In OMP, use the `cad-flow` skill. In Kiro, use the linked `cad/` workspace skill `cad-flow`. In Claude Code, use `/cad:cad-flow` as documented above.
 
-Install a Beads workspace for the workflow formulas and approval gates. Plugin installation takes effect in a new session.
+To run the flow with Beads formulas and approval gates, initialise Beads in the project and copy the formulas into `.beads/formulas/`. Set `CAD` as above; for OMP it can also be the installed plugin, `~/.omp/plugins/node_modules/@srobroek/cad`. In Kiro, `cad` is the link made above.
+
+```sh
+bd init
+mkdir -p .beads/formulas
+cp "$CAD"/formulas/*.formula.toml .beads/formulas/
+bd formula list
+```
+
+`bd formula list` then shows `cad-product`, `cad-part`, `cad-touch`, and the eight `mol-cad-*` molecules. Copy the formulas again after you update the checkout. Without them, the lead runs the same per-stage worker batches from its own plan, but gates need Beads to close. Plugin installation takes effect in a new session.
 
 ## Preflight
 
@@ -116,21 +125,29 @@ The table lists every directory under `cad/skills/`, including the OCP viewer an
 
 | Agent | Status | Role |
 |---|---|---|
+| `cad-concept-designer` | Available | Drafts one L0 concept variant in its own work directory |
+| `cad-part-designer` | Available | Designs or details one unit's parts in a scratch copy of `hw/` and delivers only its own part directories |
+| `cad-sourcing-researcher` | Available | Read-only, cited catalogue, datasheet, and limit research for one purchased-part family |
+| `cad-analyst` | Available | Runs one L4 analysis case on an integrated version, read-only on `hw/` |
 | `cad-mech-reviewer` | Available | Read-only mechanical design critique |
 | `cad-dfm-reviewer` | Available | Read-only FDM/CNC design-for-manufacture critique |
 
-The lead spawns both reviewers in the same parallel batch during CRITIQUE. Neither reviewer changes the design record or CAD files.
+The lead dispatches each stage's workers in one parallel batch, then integrates their results and builds one version. Workers never change the shared design record, build `hw/versions/`, or ask the user; `cad-flow` lists the units and ownership per stage.
 
 ## Formulas
 
-Poured formulas start a workflow root. Bondable `mol-` formulas attach a focused sub-process or iteration to an existing root.
+Poured formulas start a workflow root. Each stage that has independent units starts with a fan-out step that bonds one worker molecule per unit, all in one parallel batch. The stage then has one lead integration step that waits for every unit, followed by one human gate. `cad/formulas/README.md` shows the bond commands.
 
 | Formula | Use |
 |---|---|
-| `cad-touch` | Poured: a scoped change to an existing design |
-| `cad-part` | Poured: design one part or subassembly within an established layout |
-| `cad-product` | Poured: a new product flow from ground through release |
-| `mol-cad-part` | Bonded: one subassembly's L2 parts loop onto the product workflow |
-| `mol-cad-concept` | Bonded: a bounded concept exploration or concept refinement loop |
-| `mol-cad-iterate` | Bonded: an approved change/iteration on an existing design node |
-| `mol-cad-release` | Bonded: the release-specific checks and handoff for a design frozen for release |
+| `cad-product` | Poured: a new multi-part product flow from ground through release |
+| `cad-part` | Poured: the same flow for a one-part product |
+| `cad-touch` | Poured: an ECO on a released part, with a revision bump |
+| `mol-cad-variant` | Bonded worker unit: one concept variant (`cad-concept-designer`) |
+| `mol-cad-part` | Bonded worker unit: one L2 subassembly, scratch-built and delivered (`cad-part-designer`) |
+| `mol-cad-sourcing` | Bonded worker unit: one purchased-part family (`cad-sourcing-researcher`) |
+| `mol-cad-detail` | Bonded worker unit: one part's L3 detail or post-freeze revision (`cad-part-designer`) |
+| `mol-cad-analysis` | Bonded worker unit: one L4 analysis case (`cad-analyst`) |
+| `mol-cad-concept` | Bonded: another concept round, fanning out its own variants |
+| `mol-cad-iterate` | Bonded: an approved change after DESIGN freeze, fanning out the affected parts and cases |
+| `mol-cad-release` | Bonded: the release package and RELEASE gate for a frozen design |
