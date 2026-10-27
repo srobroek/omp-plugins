@@ -12,6 +12,7 @@ detached process and returns at once; `--status [--wait SECONDS]` reports on the
 """
 
 from __future__ import annotations
+import re
 
 import argparse
 import hashlib
@@ -230,6 +231,23 @@ def _chromium_check(uv: str, install: bool = False) -> Check:
                   f"Playwright {expected} launches Chromium {found['chromium']} ({found['path']}).", "")
 
 
+def find_freecadcmd(environ: Mapping[str, str], home: Path | None = None) -> Path | None:
+    """Resolve FREECADCMD, PATH, the user link, then the setup-managed AppImage executable."""
+    configured = environ.get("FREECADCMD")
+    if configured:
+        return Path(configured)
+    for name in ("freecadcmd", "FreeCADCmd"):
+        found = shutil.which(name, path=environ.get("PATH"))
+        if found:
+            return Path(found)
+    home_dir = home or Path(environ.get("HOME", str(Path.home())))
+    user_link = home_dir / ".local" / "bin" / "freecadcmd"
+    if user_link.is_file() and os.access(user_link, os.X_OK):
+        return user_link
+    managed = home_dir / "opt" / "freecad-1.1.4" / "squashfs-root" / "usr" / "bin" / "freecadcmd"
+    if managed.is_file() and os.access(managed, os.X_OK):
+        return managed
+    return None
 def install_chromium_system_deps(environ: Mapping[str, str] | None = None) -> None:
     """Install Playwright's Chromium OS libraries; caller must explicitly own system consent."""
     env = os.environ if environ is None else environ
@@ -249,22 +267,17 @@ def install_chromium_system_deps(environ: Mapping[str, str] | None = None) -> No
         raise RuntimeError(f"Could not install Playwright Chromium system dependencies: {error}") from error
 
 
-def _timed_freecad_checks(environ: Mapping[str, str]) -> list[Check]:
+def _timed_freecad_checks(environ: Mapping[str, str], home: Path | None = None) -> list[Check]:
     checks: list[Check] = []
     started = time.monotonic()
     print("[preflight] freecad-command: checking...", file=sys.stderr, flush=True)
-    command = freecad_runtime.find_freecadcmd(environ)
+    command = find_freecadcmd(environ, home)
     found = command is not None and command.is_file() and os.access(command, os.X_OK)
-    detail = f"FreeCAD command: {command}" if found else (
-        f"Configured FreeCAD command is missing or not executable: {command}." if command else
-        "FreeCAD 1.1.4 freecadcmd was not found via FREECADCMD, PATH, or the macOS app.")
-    fix = ("Install FreeCAD 1.1.4; set FREECADCMD to its freecadcmd executable or add freecadcmd to PATH. "
-           "See cad-drawings/SKILL.md for macOS and Linux install steps.")
-    command_check = _check("freecad-command", "FreeCAD command", "pass" if found else "fail", detail,
-                           "" if found else fix)
-    checks.append(replace(command_check, elapsed_s=time.monotonic() - started))
-    print(f"[preflight] freecad-command: {checks[-1].status} ({checks[-1].elapsed_s:.1f}s)",
-          file=sys.stderr, flush=True)
+    detail = f"FreeCAD command: {command}" if found else "FreeCAD 1.1.4 freecadcmd was not found."
+    fix = "Install FreeCAD 1.1.4; set FREECADCMD, add freecadcmd to PATH, or use the setup-managed user install."
+    checks.append(replace(_check("freecad-command", "FreeCAD command", "pass" if found else "fail",
+                                 detail, "" if found else fix), elapsed_s=time.monotonic() - started))
+    print(f"[preflight] freecad-command: {checks[-1].status} ({checks[-1].elapsed_s:.1f}s)", file=sys.stderr, flush=True)
 
     started = time.monotonic()
     print("[preflight] freecad-version: checking...", file=sys.stderr, flush=True)
@@ -272,27 +285,19 @@ def _timed_freecad_checks(environ: Mapping[str, str]) -> list[Check]:
     detail = "FreeCAD command unavailable."
     if found and command:
         try:
-            with tempfile.TemporaryDirectory(prefix="cad-preflight-freecad-") as temporary:
-                result_file = Path(temporary) / "version.json"
-                script = Path(temporary) / "version.py"
-                script.write_text("import FreeCAD as App, json\n"
-                                  f"open({str(result_file)!r}, 'w', encoding='utf-8').write(json.dumps(App.Version()))\n",
-                                  encoding="utf-8")
-                result = subprocess.run([str(command), str(script)], capture_output=True, text=True,
-                                        timeout=90, check=False, env=dict(environ))
-                if result.returncode == 0 and result_file.is_file():
-                    version = ".".join(str(part) for part in json.loads(result_file.read_text())[:3])
-                    detail = f"FreeCAD reported {version}."
-                else:
-                    lines = (result.stderr or result.stdout).strip().splitlines()
-                    detail = lines[-1] if lines else "freecadcmd produced no version result."
-        except (OSError, subprocess.TimeoutExpired, ValueError, json.JSONDecodeError) as error:
+            result = subprocess.run([str(command), "--version"], capture_output=True, text=True, timeout=90,
+                                    check=False, env=dict(environ))
+            output = result.stdout + result.stderr
+            match = re.search(r"FreeCAD\s+(\d+\.\d+\.\d+)", output)
+            version = match.group(1) if result.returncode == 0 and match else None
+            detail = output.strip() or f"freecadcmd exited {result.returncode}."
+        except (OSError, subprocess.TimeoutExpired) as error:
             detail = f"Could not query FreeCAD version: {error}."
-    version_check = _check("freecad-version", "FreeCAD version", "pass" if version == "1.1.4" else "fail",
-                           detail if version == "1.1.4" else detail + " Required version is 1.1.4.", fix)
-    checks.append(replace(version_check, elapsed_s=time.monotonic() - started))
-    print(f"[preflight] freecad-version: {checks[-1].status} ({checks[-1].elapsed_s:.1f}s)",
-          file=sys.stderr, flush=True)
+    fix = "Install FreeCAD 1.1.4 and set FREECADCMD or PATH to its freecadcmd."
+    checks.append(replace(_check("freecad-version", "FreeCAD version", "pass" if version == "1.1.4" else "fail",
+                                 detail if version == "1.1.4" else detail + " Required version is 1.1.4.",
+                                 "" if version == "1.1.4" else fix), elapsed_s=time.monotonic() - started))
+    print(f"[preflight] freecad-version: {checks[-1].status} ({checks[-1].elapsed_s:.1f}s)", file=sys.stderr, flush=True)
 
     started = time.monotonic()
     print("[preflight] techdraw-templates: checking...", file=sys.stderr, flush=True)
@@ -301,11 +306,10 @@ def _timed_freecad_checks(environ: Mapping[str, str]) -> list[Check]:
     okay = bool(found and not missing)
     detail = (f"Missing TechDraw templates under {templates}: {', '.join(missing)}." if missing else
               f"TechDraw templates found in {templates}: {', '.join(EXPECTED_TEMPLATES)}.")
-    template_check = _check("techdraw-templates", "TechDraw templates", "pass" if okay else "fail", detail,
-                            "Install the complete FreeCAD 1.1.4 bundle; TechDraw templates must be beside freecadcmd.")
-    checks.append(replace(template_check, elapsed_s=time.monotonic() - started))
-    print(f"[preflight] techdraw-templates: {checks[-1].status} ({checks[-1].elapsed_s:.1f}s)",
-          file=sys.stderr, flush=True)
+    template_fix = "Install the complete FreeCAD 1.1.4 bundle; TechDraw templates must be beside freecadcmd."
+    checks.append(replace(_check("techdraw-templates", "TechDraw templates", "pass" if okay else "fail", detail,
+                                 "" if okay else template_fix), elapsed_s=time.monotonic() - started))
+    print(f"[preflight] techdraw-templates: {checks[-1].status} ({checks[-1].elapsed_s:.1f}s)", file=sys.stderr, flush=True)
     return checks
 
 
@@ -482,7 +486,7 @@ def run_checks(environ: Mapping[str, str] | None = None, cwd: Path | None = None
             "Install uv and ensure its bin directory is on PATH."))
                       for name in (*(runtime.id for runtime in RUNTIMES), CHROMIUM.id))
     checks.append(_run_check("three-vendor-cache", lambda: _vendor_check(env, fill=warm)))
-    checks.extend(_timed_freecad_checks(env))
+    checks.extend(_timed_freecad_checks(env, home_dir))
     checks.append(_run_check("beads", lambda: _beads_check(workdir, env)))
     harnesses = (harness,) if harness else ("omp", "claude", "opencode", "kiro")
     checks.extend(_run_check(f"harness-{name}", lambda name=name: _harness_check(name, workdir, home_dir, env))

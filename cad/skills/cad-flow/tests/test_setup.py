@@ -37,12 +37,11 @@ class PlanTests(unittest.TestCase):
         self.home = self.root / "home"
         self.home.mkdir()
         self.env = {"HOME": str(self.home)}
-
     def test_each_runtime_failure_uses_the_existing_warm_step(self) -> None:
         for identifier in setup.WARM_IDS:
             with self.subTest(check=identifier):
                 items = setup.plan(report(identifier), self.root, self.home, self.env)
-                warm = [item for item in items if item.id == "warm"]
+                warm = [item for item in items if item.id == f"warm-{identifier}"]
                 self.assertEqual(len(warm), 1)
                 self.assertIn(identifier, warm[0].command)
 
@@ -71,6 +70,62 @@ class PlanTests(unittest.TestCase):
             requested = setup.plan(report(), self.root, self.home, self.env, "opencode")
         self.assertFalse(any(item.id.startswith("harness-") for item in implicit))
         self.assertIn("harness-opencode", [item.id for item in requested])
+
+    def test_freecad_resolution_prefers_configured_path_then_path_then_user_link_then_bundle(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            executable = home / "configured"
+            executable.write_text("configured")
+            executable.chmod(0o755)
+            bin_dir = home / ".local" / "bin"
+            bin_dir.mkdir(parents=True)
+            user_executable = bin_dir / "freecadcmd"
+            user_executable.write_text("user")
+            user_executable.chmod(0o755)
+            managed = home / "opt" / "freecad-1.1.4" / "squashfs-root" / "usr" / "bin" / "freecadcmd"
+            managed.parent.mkdir(parents=True)
+            managed.write_text("managed")
+            managed.chmod(0o755)
+            resolver = setup.preflight.find_freecadcmd
+            self.assertEqual(resolver({"FREECADCMD": str(executable), "HOME": str(home)}, home), executable)
+            with patch.object(setup.preflight.shutil, "which", return_value="/path/freecadcmd"):
+                self.assertEqual(resolver({"PATH": "/path", "HOME": str(home)}, home), Path("/path/freecadcmd"))
+            self.assertEqual(resolver({"HOME": str(home)}, home), user_executable)
+            user_executable.unlink()
+            self.assertEqual(resolver({"HOME": str(home)}, home), managed)
+
+    def test_preflight_resolves_setup_install_without_path_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            command = home / "opt" / "freecad-1.1.4" / "squashfs-root" / "usr" / "bin" / "freecadcmd"
+            command.parent.mkdir(parents=True)
+            command.write_text("#!/bin/sh\necho 'FreeCAD 1.1.4'\n", encoding="utf-8")
+            command.chmod(0o755)
+            with patch.object(setup.preflight.shutil, "which", return_value=None):
+                resolved = setup.preflight.find_freecadcmd({"HOME": str(home), "PATH": ""}, home)
+            self.assertEqual(resolved, command)
+
+
+    def test_linux_browser_deps_plan_only_for_failing_chromium(self) -> None:
+        failing = report("playwright-chromium")
+        with patch.object(setup.platform, "system", return_value="Linux"), \
+                patch.object(setup, "_release_info", return_value={"ID": "ubuntu"}):
+            failed_plan = setup.plan(failing, self.root, self.home, self.env)
+            passed_plan = setup.plan(report(), self.root, self.home, self.env)
+        self.assertIn("browser-libraries-manual", [item.id for item in failed_plan])
+        self.assertNotIn("browser-libraries-manual", [item.id for item in passed_plan])
+
+    def test_unsupported_linux_lists_missing_browser_libraries_without_system_install(self) -> None:
+        check = setup.preflight.Check("playwright-chromium", "Playwright Chromium", "fail", True,
+                                      "error: libfoo.so.1: cannot open shared object file", "retry")
+        failing = setup.preflight.Report((check,))
+        with patch.object(setup.platform, "system", return_value="Linux"), \
+                patch.object(setup, "_release_info", return_value={"ID": "amzn"}):
+            items = setup.plan(failing, self.root, self.home, self.env)
+        browser = next(item for item in items if item.id == "browser-libraries-manual")
+        self.assertIn("Debian/Ubuntu only", browser.command)
+        self.assertIn("libfoo.so.1", browser.command)
+        self.assertFalse(browser.system)
 
 
 class ConsentTests(unittest.TestCase):

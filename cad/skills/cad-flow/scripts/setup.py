@@ -21,6 +21,7 @@ import platform
 import shutil
 import subprocess
 import sys
+import re
 import tempfile
 import urllib.request
 import uuid
@@ -131,6 +132,20 @@ def _harness_needed(harness: str, cwd: Path, home: Path, environ: Mapping[str, s
     return any(not (cwd / target).is_file() or (cwd / target).read_bytes() != source.read_bytes()
                for source, target in _harness_sources(harness))
 
+def _release_info(path: Path) -> dict[str, str]:
+    values = {}
+    if path.is_file():
+        for line in path.read_text(encoding="utf-8").splitlines():
+            key, separator, value = line.partition("=")
+            if separator:
+                values[key] = value.strip().strip('"')
+    return values
+
+
+def _missing_browser_libraries(detail: str) -> list[str]:
+    candidates = re.findall(r"(?:lib[A-Za-z0-9_.+-]+|[A-Za-z0-9_.+-]+\.so(?:\.[0-9]+)*)", detail)
+    return list(dict.fromkeys(candidates))
+
 
 def plan(report, cwd: Path, home: Path, environ: Mapping[str, str], harness: str | None = None) -> list[PlanItem]:
     """Plan one action per missing prerequisite, reusing preflight's existing warm operation."""
@@ -143,13 +158,17 @@ def plan(report, cwd: Path, home: Path, environ: Mapping[str, str], harness: str
     if _freecad_needed(report):
         items.append(_freecad_item())
     failed = _warm_failures(report)
-    if failed:
-        items.append(PlanItem("warm", "Warm failed CAD environments, Chromium, and the pinned three.js cache",
-                              "preflight.py --warm (covers: " + ", ".join(failed) + ")"))
     chromium = next((check for check in report.checks if check.id == "playwright-chromium"), None)
-    if platform.system() == "Linux" and chromium is not None and chromium.status != "pass":
-        items.append(PlanItem("browser-libraries", "Install Playwright Chromium system libraries",
-                              "preflight installs Chromium OS dependencies with its pinned environment", system=True))
+    for identifier in failed:
+        items.append(PlanItem(f"warm-{identifier}", f"Resolve failed prerequisite: {identifier}",
+                              f"preflight.py --warm (checks and warms {identifier})"))
+    if chromium is not None and chromium.status != "pass" and platform.system() == "Linux":
+        release = _release_info(Path("/etc/os-release"))
+        libraries = _missing_browser_libraries(chromium.detail)
+        target_os = release.get("ID", "this OS")
+        detail = (f"Playwright install-deps supports Debian/Ubuntu only; {target_os} is unsupported. "
+                  f"Install missing libraries: {', '.join(libraries) if libraries else chromium.detail}")
+        items.append(PlanItem("browser-libraries-manual", "Install Chromium system libraries manually", detail))
     workspace = preflight.beads_workspace(cwd, environ)
     if workspace is None:
         print("Warning: no Beads workspace found; skipped copying CAD formulas.")
@@ -182,7 +201,6 @@ def _run(argv: Sequence[str], *, cwd: Path | None = None, env: Mapping[str, str]
                             check=False, timeout=timeout)
     if result.returncode:
         raise RuntimeError(f"{argv[0]} exited with status {result.returncode}")
-
 
 def _download(url: str, destination: Path) -> None:
     request = urllib.request.Request(url, headers={"User-Agent": "cad-flow-setup"})
@@ -287,6 +305,7 @@ def _install_linux_freecad(archive: Path, environ: Mapping[str, str]) -> None:
     else:
         if previous_moved:
             shutil.rmtree(backup)
+        shutil.rmtree(staging, ignore_errors=True)
         print(f"FreeCAD installed under {prefix}; add {bin_dir} to PATH or set FREECADCMD={link}.")
 
 
@@ -359,10 +378,6 @@ def _copy_harness(harness: str, cwd: Path) -> None:
         return
     if harness == "kiro":
         link = cwd / "cad"
-        if link.is_symlink() and link.resolve() != CAD_ROOT.resolve():
-            raise RuntimeError(f"Refusing to replace workspace link {link}")
-        if link.exists() and not link.is_symlink():
-            raise RuntimeError(f"Refusing to replace workspace path {link}")
         if not link.exists():
             link.symlink_to(CAD_ROOT, target_is_directory=True)
     for source, relative in _harness_sources(harness):
@@ -370,8 +385,6 @@ def _copy_harness(harness: str, cwd: Path) -> None:
         target.parent.mkdir(parents=True, exist_ok=True)
         if not target.is_file() or target.read_bytes() != source.read_bytes():
             shutil.copy2(source, target)
-
-
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--yes", action="store_true", help="execute user-level setup actions")
@@ -391,6 +404,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     failures = []
+    warm_started = False
     for item in items:
         if item.id == "uv" and not args.system:
             print("Setup will not execute the downloaded uv installer without --yes --system.", file=sys.stderr)
@@ -403,11 +417,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 environ = _install_uv(home, environ)
             elif item.id == "freecad":
                 _install_freecad(environ)
-            elif item.id == "browser-libraries":
-                preflight.install_chromium_system_deps(environ)
-            elif item.id == "warm":
-                print("Warming runtime environments, Chromium, and the pinned three.js cache...")
-                print(preflight.render_text(preflight.warm(environ, cwd, home, args.harness)))
+            elif item.id.startswith("warm-"):
+                if not warm_started:
+                    print("Warming runtime environments, Chromium, and the pinned three.js cache...")
+                    print(preflight.render_text(preflight.warm(environ, cwd, home, args.harness)))
+                    warm_started = True
+            elif item.id.startswith("browser-libraries-manual"):
+                print(f"Manual browser libraries step: {item.command}", file=sys.stderr)
             elif item.id == "formulas":
                 _copy_formulas(cwd, environ)
             elif item.id.startswith("harness-"):
@@ -420,6 +436,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     final_report = preflight.run_checks(environ, cwd, home, args.harness)
     print(preflight.render_text(final_report))
     return int(bool(failures) or final_report.exit_code != 0)
+
 
 
 if __name__ == "__main__":
