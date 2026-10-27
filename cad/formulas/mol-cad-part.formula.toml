@@ -1,7 +1,9 @@
-# mol-cad-part: one L2 subassembly or part loop, built and checked independently.
-# Bond one per subassembly with --type parallel after LAYOUT freeze.
+# mol-cad-part: one L2 subassembly designed and checked by a cad-part-designer worker in a scratch copy.
+# Bond one per subassembly onto the L2 fan-out step, all in one batch:
+#   bd mol bond mol-cad-part <fanout-step> --type parallel --ref part-<subassembly> --var subassembly=<id> ...
+# The worker never builds hw/ itself; the lead builds one integrated version after the batch.
 formula = "mol-cad-part"
-description = "Build, check, and record L2 part loop {{subassembly}} for {{product}} using {{kernel}} and {{process_default}}"
+description = "Design and scratch-check L2 subassembly {{subassembly}} of {{product}} using {{kernel}} and {{process_default}}"
 type = "workflow"
 
 [vars.product]
@@ -10,11 +12,16 @@ description = "hardware product id"
 
 [vars.scope]
 required = true
-description = "hardware project paths this loop may change"
+description = "hardware project paths this unit may change"
 
 [vars.subassembly]
 required = true
-description = "one stable subassembly id from hw/assembly.yaml, or one part id"
+pattern = "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+description = "one stable subassembly id from hw/assembly.yaml, or one part id; the unit id is part-<subassembly>"
+
+[vars.change]
+required = true
+description = "what this unit changes, from the lead's plan"
 
 [vars.kernel]
 default = "cadquery"
@@ -27,56 +34,26 @@ pattern = "^(fdm|cnc)$"
 description = "default process for parts without an explicit override"
 
 [[steps]]
-id = "build-part"
-title = "BUILD L2 part loop for {{subassembly}}"
+id = "design"
+title = "DESIGN subassembly {{subassembly}} in a scratch copy"
 type = "task"
 labels = ["cad", "phase:parts"]
-description = "Run skill://cad-model for only {{subassembly}} in the {{kernel}} environment. Maintain part.yaml fields and parametric model.py under {{scope}}, using {{process_default}} unless approved part metadata specifies otherwise. Draft and preview without checks; after feedback, each L2 commit batch runs `uv run --script skill://cad-model/scripts/cad_model.py run hw --label vN --kernel {{kernel}}`. Record each immutable version."
+description = "Unit part-{{subassembly}}: {{change}}. Create the scratch copy with `uv run --script skill://cad-flow/scripts/scratch.py init --hw hw --unit part-{{subassembly}} --part <PN> [--part <PN> ...]`, naming every PN the lead assigns from {{subassembly}} in hw/assembly.yaml. Edit only `.cad-work/part-{{subassembly}}/hw/parts/<PN>/part.yaml` and `model.py`, following the skill://cad-model model.py contract in the {{kernel}} environment and {{process_default}} unless approved part metadata says otherwise. Keep the frozen interfaces, envelopes, datums, and joints. Change a shared record only in the scratch copy, as a proposal."
 
 [steps.metadata]
-skill_hints = "cad-model, cad-record, cad-flow"
-execution_mode = "interactive"
+skill_hints = "cad-model, cad-design"
+execution_mode = "subagent"
+execution_agent_type = "cad-part-designer"
 
 [[steps]]
-id = "check-part"
-title = "CHECK {{subassembly}} and its affected dependents"
+id = "scratch-check"
+title = "CHECK subassembly {{subassembly}} on its scratch build, then deliver"
 type = "task"
-needs = ["build-part"]
+needs = ["design"]
 labels = ["cad", "phase:parts"]
-description = "For the just-built version vN, run `uv run --script skill://cad-model/scripts/cad_model.py check vN --hw hw [--out FILE]`. Press fits declared in `hw/interfaces.yaml` are automatically allowed. A blocking check failure stops the batch; do not render or proceed. At/after LAYOUT freeze, run skill://cad-recheck for the changed parts and dependents, including all applicable earlier-stage checks; record the results and repair only authorized findings."
+description = "Run `uv run --script skill://cad-flow/scripts/scratch.py build --hw hw --unit part-{{subassembly}} --kernel {{kernel}} --fidelity F2`: it builds the scratch copy, runs cad-model check, and runs form_check at F2 on the unit's PNs. Fix your parts and rerun until it exits 0, or stop when the fix needs a shared-record change. Then run `uv run --script skill://cad-flow/scripts/scratch.py deliver --hw hw --unit part-{{subassembly}}`, which copies only the unit's hw/parts/<PN>/ directories into hw/ and lists every other changed file as a proposal. Never build, check, or render hw/ itself. Return the delivered files, the scratch check and form JSON paths (absolute), and each proposal with its reason."
 
 [steps.metadata]
-skill_hints = "cad-recheck, cad-record"
-
-[[steps]]
-id = "render-part"
-title = "Render the committed version and present gate images"
-type = "task"
-needs = ["check-part"]
-labels = ["cad", "phase:parts"]
-description = "For each committed L2 version, run `uv run --script skill://cad-render/scripts/render.py hw --version vN [--views iso front side exploded closeup-<PN>]`. Read every PNG, include its path and a short description in gate evidence, and use the OCP Viewer to inspect the build."
-
-[steps.metadata]
-skill_hints = "cad-render, cad-viewer"
-
-[[steps]]
-id = "fidelity-gate"
-title = "Check form fidelity for {{subassembly}}"
-type = "task"
-needs = ["render-part"]
-labels = ["cad", "phase:parts"]
-description = "Before the L2 gate, run `uv run --script skill://cad-design/scripts/form_check.py --hw hw --parts-dir hw/versions/vN/parts --fidelity F2` on affected parts. Every made part needs F2 or later. At L3 DETAIL, run the same command with `--fidelity F3` before the gate. Every made part needs F3. Record JSON evidence; findings block the gate."
-
-[steps.metadata]
-skill_hints = "cad-design, cad-record"
-
-[[steps]]
-id = "record-evidence"
-title = "COMMIT evidence for {{subassembly}}"
-type = "task"
-needs = ["fidelity-gate"]
-labels = ["cad", "phase:parts"]
-description = "Record model/revision version, changed part list, dependents, checks and results, render/form evidence in the design record and bead note. Leave failures explicit."
-
-[steps.metadata]
-skill_hints = "cad-record, cad-recheck"
+skill_hints = "cad-model, cad-design"
+execution_mode = "subagent"
+execution_agent_type = "cad-part-designer"

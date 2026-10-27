@@ -22,11 +22,11 @@ claude plugin install cad@srobroek-omp
 claude --plugin-dir /path/to/omp-plugins/cad
 ```
 
-The plugin's `.claude-plugin/plugin.json` loads the reviewers generated for Claude Code from `harness/claude/agents/`. Claude Code names them `cad:cad-mech-reviewer` and `cad:cad-dfm-reviewer`. The files in `agents/` are the OMP sources. Claude Code does not load them. Start the workflow with `/cad:cad-flow`, the plugin's `cad-flow` skill. If needed, verify the exact command with `claude --plugin-dir <checkout>/cad`.
+The plugin's `.claude-plugin/plugin.json` loads the agents generated for Claude Code from `harness/claude/agents/`. Claude Code names them `cad:<agent>`, such as `cad:cad-part-designer` and `cad:cad-mech-reviewer`. The files in `agents/` are the OMP sources. Claude Code does not load them. Start the workflow with `/cad:cad-flow`, the plugin's `cad-flow` skill. If needed, verify the exact command with `claude --plugin-dir <checkout>/cad`.
 
 This plugin has no Kiro or OpenCode package. Copy its generated agents and, for OpenCode, the command into your project. Run these commands from the project root. Set `CAD` to the `cad` directory of an omp-plugins checkout.
 
-For Kiro, link the plugin at `cad/` in the workspace root and copy the agents into `.kiro/agents/`. Each reviewer loads its skill as `skill://cad/skills/<skill>/SKILL.md`, which Kiro resolves from the workspace root, so the plugin must sit at exactly that path:
+For Kiro, link the plugin at `cad/` in the workspace root and copy the agents into `.kiro/agents/`. Each agent loads its skills as `skill://cad/skills/<skill>/SKILL.md`, which Kiro resolves from the workspace root, so the plugin must sit at exactly that path:
 
 ```sh
 ln -s "$CAD" cad
@@ -34,7 +34,7 @@ mkdir -p .kiro/agents
 cp cad/harness/kiro/agents/*.json .kiro/agents/
 ```
 
-`kiro-cli agent list` then shows both reviewers as workspace agents. To use the workflow skills from another Kiro agent, add `skill://cad/skills/**/SKILL.md` to that agent's `resources`.
+`kiro-cli agent list` then shows the six cad agents as workspace agents. To use the workflow skills from another Kiro agent, add `skill://cad/skills/**/SKILL.md` to that agent's `resources`.
 
 For OpenCode, copy the agents into `.opencode/agents/`. Copy the command into `.opencode/commands/` and the skills into `.opencode/skills/`.
 
@@ -49,7 +49,16 @@ OpenCode lists `/cad-flow` and the skills in its skills list. The cad plugin doe
 
 In OMP, use the `cad-flow` skill. In Kiro, use the linked `cad/` workspace skill `cad-flow`. In Claude Code, use `/cad:cad-flow` as documented above.
 
-Install a Beads workspace for the workflow formulas and approval gates. Plugin installation takes effect in a new session.
+To run the flow with Beads formulas and approval gates, initialise Beads in the project and copy the formulas into `.beads/formulas/`. Set `CAD` as above; for OMP it can also be the installed plugin, `~/.omp/plugins/node_modules/@srobroek/cad`. In Kiro, `cad` is the link made above.
+
+```sh
+bd init
+mkdir -p .beads/formulas
+cp "$CAD"/formulas/*.formula.toml .beads/formulas/
+bd formula list
+```
+
+`bd formula list` then shows `cad-product`, `cad-part`, `cad-touch`, and the eight `mol-cad-*` molecules. Copy the formulas again after you update the checkout. Without them, the lead runs the same per-stage worker batches from its own plan, but gates need Beads to close. Plugin installation takes effect in a new session.
 
 ## Preflight
 
@@ -59,9 +68,34 @@ Run the environment check before starting a CAD project:
 uv run --script cad/skills/cad-flow/scripts/preflight.py
 ```
 
-The preflight reports each check as pass, fail, or warning, with a fix hint and elapsed time. It exits non-zero when any required runtime check fails. Use `--json` for machine-readable results or `--harness omp|claude|opencode|kiro` to check one harness. Kernel, viewer, and browser checks sync the same uv runner environments used by the CAD pipeline, then import through each environment's Python interpreter. Each check is time-bounded and prints progress with its elapsed time.
-FreeCAD 1.1.4 and TechDraw templates, CadQuery 2.8, build123d 0.13, Playwright Chromium, the SRI-checked three.js cache, and ocp_viewer are required. Beads and detected harness installation are warnings. This plugin ships no MCP server, so there is no MCP check.
-The `cad-flow` GROUND step runs preflight and stops on required failures. See `cad/skills/cad-drawings/SKILL.md` for FreeCAD installation steps.
+The preflight reports each check as pass, fail, or warning, with a fix hint and elapsed time. It exits non-zero when any required runtime check fails. Use `--json` for machine-readable results or `--harness omp|claude|opencode|kiro` to check one harness. Each check is time-bounded and prints progress with its elapsed time.
+
+The required checks are FreeCAD 1.1.4 and its TechDraw templates, CadQuery 2.8, build123d 0.13, the cad-model orchestrator environment, and ocp_viewer. Playwright Chromium (launched headless) and the SRI-checked three.js cache are also required. Beads and detected harness installation are warnings. This plugin ships no MCP server, so there is no MCP check.
+
+Each environment check imports its packages in the environment the pipeline uses, so the check is also that environment's first load. The kernel runners `run_cadquery.py` and `run_build123d.py` run in uv environments shared by dependency set:
+
+```sh
+uv run --isolated --no-project --python <requires-python> --with-requirements <runner> python <runner>
+```
+
+Every plugin copy then loads the same installed kernel, whether it is a project's skill copy, an eval trial, or a worktree. Scripts started with `uv run --script` still get one environment per script path.
+
+`--warm` also installs Playwright Chromium and fills the three.js cache. It records its progress and report for this plugin copy under `${XDG_CACHE_HOME:-~/.cache}/cad-flow/warm/`. `--warm --background` starts the warm-up in a detached process and returns once the warm-up has started. `--status [--wait SECONDS]` reports on the last warm-up and exits with one of these codes:
+
+- 0: it passed.
+- 1: a required check failed.
+- 2: no warm-up is recorded, or it stopped without a report.
+- 3: it is still running.
+
+The `cad-flow` GROUND step starts the background warm-up and checks its status before the first L1 build. See `cad/skills/cad-drawings/SKILL.md` for FreeCAD installation steps.
+
+Each path a script runs from with `uv run --script` leaves its own environment in the uv cache. To list the stale ones that belong to cad scripts:
+
+```sh
+uv run --script cad/skills/cad-flow/scripts/clean_envs.py
+```
+
+It shows each environment's apparent size and the space deleting it frees. That figure accounts for APFS clones and for files hard-linked from the uv cache. The listing keeps the environments this plugin copy uses now and any environment modified within the last 24 hours (`--min-age-hours`). Without `--delete` it deletes nothing. uv recreates a deleted environment the next time its script runs.
 
 ## Flow
 
@@ -91,21 +125,29 @@ The table lists every directory under `cad/skills/`, including the OCP viewer an
 
 | Agent | Status | Role |
 |---|---|---|
+| `cad-concept-designer` | Available | Drafts one L0 concept variant in its own work directory |
+| `cad-part-designer` | Available | Designs or details one unit's parts in a scratch copy of `hw/` and delivers only its own part directories |
+| `cad-sourcing-researcher` | Available | Read-only, cited catalogue, datasheet, and limit research for one purchased-part family |
+| `cad-analyst` | Available | Runs one L4 analysis case on an integrated version, read-only on `hw/` |
 | `cad-mech-reviewer` | Available | Read-only mechanical design critique |
 | `cad-dfm-reviewer` | Available | Read-only FDM/CNC design-for-manufacture critique |
 
-The lead spawns both reviewers in the same parallel batch during CRITIQUE. Neither reviewer changes the design record or CAD files.
+The lead dispatches each stage's workers in one parallel batch, then integrates their results and builds one version. Workers never change the shared design record, build `hw/versions/`, or ask the user; `cad-flow` lists the units and ownership per stage.
 
 ## Formulas
 
-Poured formulas start a workflow root. Bondable `mol-` formulas attach a focused sub-process or iteration to an existing root.
+Poured formulas start a workflow root. Each stage that has independent units starts with a fan-out step that bonds one worker molecule per unit, all in one parallel batch. The stage then has one lead integration step that waits for every unit, followed by one human gate. `cad/formulas/README.md` shows the bond commands.
 
 | Formula | Use |
 |---|---|
-| `cad-touch` | Poured: a scoped change to an existing design |
-| `cad-part` | Poured: design one part or subassembly within an established layout |
-| `cad-product` | Poured: a new product flow from ground through release |
-| `mol-cad-part` | Bonded: one subassembly's L2 parts loop onto the product workflow |
-| `mol-cad-concept` | Bonded: a bounded concept exploration or concept refinement loop |
-| `mol-cad-iterate` | Bonded: an approved change/iteration on an existing design node |
-| `mol-cad-release` | Bonded: the release-specific checks and handoff for a design frozen for release |
+| `cad-product` | Poured: a new multi-part product flow from ground through release |
+| `cad-part` | Poured: the same flow for a one-part product |
+| `cad-touch` | Poured: an ECO on a released part, with a revision bump |
+| `mol-cad-variant` | Bonded worker unit: one concept variant (`cad-concept-designer`) |
+| `mol-cad-part` | Bonded worker unit: one L2 subassembly, scratch-built and delivered (`cad-part-designer`) |
+| `mol-cad-sourcing` | Bonded worker unit: one purchased-part family (`cad-sourcing-researcher`) |
+| `mol-cad-detail` | Bonded worker unit: one part's L3 detail or post-freeze revision (`cad-part-designer`) |
+| `mol-cad-analysis` | Bonded worker unit: one L4 analysis case (`cad-analyst`) |
+| `mol-cad-concept` | Bonded: another concept round, fanning out its own variants |
+| `mol-cad-iterate` | Bonded: an approved change after DESIGN freeze, fanning out the affected parts and cases |
+| `mol-cad-release` | Bonded: the release package and RELEASE gate for a frozen design |

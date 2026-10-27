@@ -9,6 +9,4 @@ level,PN,rev,qty,title,material,process,make_buy,supplier,mass
 1,LMP-0008,X1,1,Bushing SPIROL CMPL 4 X 8 EK CL8000,Brass C36000,purchased,buy,,2.0
 1,LMP-0009,X1,1,Bushing SPIROL CMPL 4 X 6 EK CL8100,Brass C36000,purchased,buy,,1.9
 1,LMP-0010,X1,1,Heat-set insert QT M10x1 x 12.7 OD 12.6,Brass,purchased,buy,,6.7
-1,LMP-0011,X1,1,Retaining ring DIN 471 - 5x0.6,Spring steel C60S,purchased,buy,,0.081
-1,LMP-0012,X1,1,Retaining ring DIN 471 - 5x0.6,Spring steel C60S,purchased,buy,,0.081
-1,LMP-0013,X1,1,Retaining ring DIN 471 - 5x0.6,Spring steel C60S,purchased,buy,,0.081
+1,LMP-0011,X1,3,Retaining ring DIN 471 - 5x0.6,Spring steel C60S,purchased,buy,,0.081

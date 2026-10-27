@@ -238,10 +238,69 @@ class ValidateProject(unittest.TestCase):
         validator_copy = self.project / "skill" / "scripts" / "validate.py"
         validator_copy.parent.mkdir(parents=True)
         shutil.copy2(VALIDATOR, validator_copy)
+        shutil.copy2(VALIDATOR.with_name("assembly_data.py"), validator_copy.with_name("assembly_data.py"))
         shutil.copytree(SKILL / "schemas", self.project / "skill" / "schemas")
         result, report = self.validate(validator_copy)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertTrue(any(item["severity"] == "info" and "skipped handoff schema validation" in item["message"] for item in report["findings"]))
+
+    def edit_assembly(self, old: str, new: str) -> None:
+        path = self.hw / "assembly.yaml"
+        text = path.read_text(encoding="utf-8")
+        self.assertIn(old, text)
+        path.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+    def messages(self) -> list[str]:
+        result, report = self.validate()
+        self.assertEqual(result.returncode, 1, result.stdout)
+        return [item["message"] for item in report["findings"]]
+
+    def test_template_places_one_ring_three_times_with_bom_qty_three(self) -> None:
+        assembly = yaml.safe_load((self.hw / "assembly.yaml").read_text(encoding="utf-8"))
+        self.assertEqual([o["id"] for o in assembly["occurrences"] if o["PN"] == "LMP-0011"],
+                         ["ring-base", "ring-elbow", "ring-head"])
+        with (self.hw / "bom.csv").open(newline="", encoding="utf-8") as stream:
+            rows = {row["PN"]: row for row in csv.DictReader(stream)}
+        self.assertEqual(rows["LMP-0011"]["qty"], "3")
+        self.assertNotIn("LMP-0012", rows)
+
+    def test_bom_quantity_must_match_the_occurrence_count(self) -> None:
+        path = self.hw / "bom.csv"
+        path.write_text(path.read_text(encoding="utf-8").replace("1,LMP-0011,X1,3,", "1,LMP-0011,X1,2,"), encoding="utf-8")
+        self.assertTrue(any("BOM quantity of LMP-0011 is 2" in m and "places it 3 times" in m for m in self.messages()))
+
+    def test_a_bare_pn_placed_three_times_is_an_ambiguous_joint_endpoint(self) -> None:
+        self.edit_assembly('child: "@ring-elbow"', "child: LMP-0011")
+        self.assertTrue(any("ambiguous" in m and "@ring-base, @ring-elbow, @ring-head" in m for m in self.messages()))
+
+    def test_an_unknown_occurrence_reference_is_rejected(self) -> None:
+        self.edit_assembly('child: "@ring-head"', 'child: "@ring-tail"')
+        self.assertTrue(any("@ring-tail names no occurrence" in m for m in self.messages()))
+
+    def test_a_repeated_part_must_be_part_local(self) -> None:
+        path = self.hw / "parts" / "LMP-0011" / "part.yaml"
+        path.write_text(path.read_text(encoding="utf-8").replace("model_frame: part_local\n", ""), encoding="utf-8")
+        self.assertTrue(any("LMP-0011 is placed 3 times but its model_frame is assembly_zero" in m for m in self.messages()))
+
+    def test_an_explicit_pn_cannot_also_be_a_legacy_member(self) -> None:
+        self.edit_assembly("LMP-0009, LMP-0010]", "LMP-0009, LMP-0010, LMP-0011]")
+        self.assertTrue(any("lists LMP-0011 in parts, but LMP-0011 has explicit occurrences" in m for m in self.messages()))
+
+    def test_an_occurrence_needs_finite_placement_and_one_group(self) -> None:
+        self.edit_assembly("translation_mm: [0, 0, 21.495]", "translation_mm: [0, 0, .nan]")
+        self.edit_assembly('occurrences: ["@ring-base", ', "occurrences: [")
+        found = self.messages()
+        self.assertTrue(any("translation_mm" in m for m in found), found)
+
+    def test_an_occurrence_belonging_to_no_group_is_rejected(self) -> None:
+        self.edit_assembly('occurrences: ["@ring-base", ', "occurrences: [")
+        self.assertTrue(any("@ring-base belongs to no subassembly" in m for m in self.messages()))
+
+    def test_a_heat_set_pair_naming_an_occurrence_of_another_part_is_rejected(self) -> None:
+        path = self.hw / "interfaces.yaml"
+        text = path.read_text(encoding="utf-8").replace("pair: [LMP-0004, LMP-0010]", 'pair: [LMP-0004, "@ring-hub"]')
+        path.write_text(text, encoding="utf-8")
+        self.assertTrue(any("@ring-hub names no occurrence" in m for m in self.messages()))
 
 
 if __name__ == "__main__":

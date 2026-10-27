@@ -54,7 +54,7 @@ def diff(hw: Path, label_a: str, label_b: str) -> tuple[int, dict[str, Any]]:
     hw = hw.resolve()
     folders = {label: build.version_dir(hw, label) for label in (label_a, label_b)}
     metrics = {label: build.read_json(folder / "metrics.json")["parts"] for label, folder in folders.items()}
-    shapes = {label: pose.load_parts(hw, parts_dir=folder / "parts") for label, folder in folders.items()}
+    shapes = {label: pose.load_definitions(hw, folder / "parts") for label, folder in folders.items()}
     ma, mb = metrics[label_a], metrics[label_b]
     rows: dict[str, Any] = {}
     for pn in sorted(set(ma) | set(mb)):
@@ -70,5 +70,5 @@ def diff(hw: Path, label_a: str, label_b: str) -> tuple[int, dict[str, Any]]:
             rows[pn] = compare_part(ma[pn], mb[pn], shapes[label_a][pn].shape, shapes[label_b][pn].shape)
     listed = {status: sorted(pn for pn, r in rows.items() if r["status"] == status)
               for status in ("added", "removed", "changed", "error")}
-    return 0, {"a": label_a, "b": label_b, "frame": "assembly coordinates at the zero pose", **listed,
+    return 0, {"a": label_a, "b": label_b, "frame": "each PN definition in its model frame", **listed,
                "parts": rows, "timings_s": {"total_s": round(time.perf_counter() - started, 3)}}

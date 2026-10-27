@@ -105,12 +105,13 @@ function vertexSample(meshes) {
 }
 
 // Camera that fits every point inside the frame with STUDIO.margin, looking along -direction.
-function fitCamera(camera, points, direction) {
+function fitCamera(camera, points, direction, frameScale = 1) {
   const back = new THREE.Vector3(...direction).normalize();
   const forward = back.clone().negate();
-  const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0)).normalize();
+  const right = new THREE.Vector3().crossVectors(forward,
+    Math.abs(forward.y) > 0.98 ? new THREE.Vector3(0, 0, 1) : new THREE.Vector3(0, 1, 0)).normalize();
   const up = new THREE.Vector3().crossVectors(right, forward).normalize();
-  const tanV = Math.tan((camera.fov * Math.PI) / 360) * (1 - STUDIO.margin);
+  const tanV = Math.tan((camera.fov * Math.PI) / 360) * (1 - STUDIO.margin) * frameScale;
   const tanH = tanV * camera.aspect;
   const target = new THREE.Box3().setFromPoints(points).getCenter(new THREE.Vector3());
   let distance = 0;
@@ -262,6 +263,8 @@ async function boot() {
   world.add(root);
   root.updateMatrixWorld(true);
 
+  // One entry per occurrence (scene.parts[].id; a legacy part's id is its PN). Materials stay per
+  // part definition: every occurrence of a PN carries its PN's material spec.
   const parts = new Map();
   const owned = new Set();
   for (const part of scene.parts) {
@@ -269,14 +272,14 @@ async function boot() {
     const nodes = await Promise.all(part.node_indices.map((i) => gltf.parser.getDependency("node", i)));
     const meshes = [];
     for (const node of nodes) node.traverse((o) => { if (o.isMesh) meshes.push(o); });
-    if (!meshes.length) throw new Error(`${part.pn}: no mesh under GLB nodes ${part.node_indices.join(", ")}`);
+    if (!meshes.length) throw new Error(`${part.ref}: no mesh under GLB nodes ${part.node_indices.join(", ")}`);
     for (const mesh of meshes) {
       mesh.material = material;
       mesh.castShadow = true;
       mesh.receiveShadow = true;
       owned.add(mesh);
     }
-    parts.set(part.pn, { nodes, meshes, material, rest: nodes.map((n) => ({
+    parts.set(part.id, { pn: part.pn, nodes, meshes, material, rest: nodes.map((n) => ({
       parent: n.parent, position: n.position.clone(), quaternion: n.quaternion.clone(), visible: n.visible,
     })) });
   }
@@ -383,6 +386,13 @@ async function boot() {
   });
   const maskSubject = maskPart(MASK_SUBJECT);
   const maskOther = maskPart(MASK_OTHER);
+  const maskGhost = new THREE.ShaderMaterial({
+    uniforms: { groundY: zones.groundY, band: zones.band, level: { value: 0.8 } },
+    vertexShader: HEIGHT_VERTEX,
+    fragmentShader: MASK_PART_FRAGMENT,
+    transparent: true,
+    depthWrite: false,
+  });
   const maskFloor = new THREE.ShaderMaterial({
     uniforms: { heights: { value: heights.texture }, overhang: zones.overhang },
     vertexShader: UV_VERTEX,
@@ -404,8 +414,8 @@ async function boot() {
     }
     root.updateMatrixWorld(true);
     if (!on) return;
-    for (const [pn, part] of parts) {
-      const offset = scene.explode[pn];
+    for (const [id, part] of parts) {
+      const offset = scene.explode[id];
       if (!offset) continue;
       part.nodes.forEach((node) => {
         const moved = node.getWorldPosition(new THREE.Vector3()).add(new THREE.Vector3(...offset));
@@ -416,8 +426,8 @@ async function boot() {
     root.updateMatrixWorld(true);
   }
 
-  function restOnFloor(pn) {
-    const part = parts.get(pn);
+  function restOnFloor(id) {
+    const part = parts.get(id);
     const box = new THREE.Box3().makeEmpty();
     part.meshes.forEach((mesh) => box.expandByObject(mesh));
     const size = box.getSize(new THREE.Vector3());
@@ -476,10 +486,10 @@ async function boot() {
   // when null), then restores the beauty materials.
   function withMaterials(partMaterial, floorMaterial, body) {
     const saved = new Map();
-    for (const [pn, part] of parts) {
+    for (const [id, part] of parts) {
       for (const mesh of part.meshes) {
         saved.set(mesh, mesh.material);
-        mesh.material = partMaterial(pn);
+        mesh.material = partMaterial(id);
       }
     }
     ground.material = floorMaterial ?? floorShadow;
@@ -572,12 +582,15 @@ async function boot() {
 
   // Class mask (0 empty, 1 other part, 2 subject) and floor zones (1 grounded rim on a part,
   // 2 overhung floor, else 0), both one byte per pixel in top-down rows.
-  function renderMask(subject) {
+  function renderMask(subject, ghostOccluders = false) {
     const rgba = new Uint8Array(width * height * 4);
     world.background = null;
     const toneMapping = renderer.toneMapping;
     renderer.toneMapping = THREE.NoToneMapping;
-    withMaterials((pn) => (subject.has(pn) ? maskSubject : maskOther), maskFloor, () => {
+    withMaterials((id) => {
+      if (subject.has(id)) return maskSubject;
+      return ghostOccluders ? maskGhost : maskOther;
+    }, maskFloor, () => {
       renderer.setRenderTarget(maskTarget);
       renderer.setClearColor(0x000000, 1);
       renderer.clear();
@@ -600,40 +613,88 @@ async function boot() {
     }
     return { mask, floor };
   }
+  function withGhostContext(subject, body) {
+    const saved = new Map();
+    for (const [id, part] of parts) {
+      if (subject.has(id)) continue;
+      for (const mesh of part.meshes) {
+        saved.set(mesh, mesh.material);
+        const ghost = mesh.material.clone();
+        ghost.transparent = true;
+        ghost.opacity = 0.22;
+        ghost.depthWrite = false;
+        mesh.material = ghost;
+      }
+    }
+    try { return body(); }
+    finally {
+      for (const [mesh, material] of saved) {
+        mesh.material.dispose();
+        mesh.material = material;
+      }
+    }
+  }
 
-  async function capture(name) {
+  function withIsolatedSubject(subject, body) {
+    const hidden = [];
+    for (const [id, part] of parts) {
+      if (subject.has(id)) continue;
+      for (const object of [...part.nodes, ...part.meshes]) {
+        hidden.push([object, object.visible]);
+        object.visible = false;
+      }
+    }
+    try { root.updateMatrixWorld(true); return body(); }
+    finally {
+      for (const [object, visible] of hidden) object.visible = visible;
+      root.updateMatrixWorld(true);
+    }
+  }
+
+  async function capture(name, options = {}) {
     const view = scene.views.find((v) => v.name === name);
     if (!view) throw new Error(`unknown view ${name}`);
     const started = performance.now();
     applyExplode(view.explode);
     const subject = new Set(view.subject ?? [...parts.keys()]);
-    for (const [pn, part] of parts) {
+    const isolated = view.isolated || options.isolated === true;
+    for (const [id, part] of parts) {
       for (let i = 0; i < part.nodes.length; i += 1) part.nodes[i].visible = part.rest[i].visible;
-      if (view.isolated && !subject.has(pn)) {
+      if (isolated && !subject.has(id)) {
         for (const node of part.nodes) node.visible = false;
       }
     }
-    if (view.isolated) restOnFloor(view.subject[0]);
-    const subjectMeshes = [...subject].flatMap((pn) => {
-      if (!parts.has(pn)) throw new Error(`view ${name}: unknown part ${pn}`);
-      return parts.get(pn).meshes;
+    if (isolated) restOnFloor(view.subject[0]);
+    const subjectMeshes = [...subject].flatMap((id) => {
+      if (!parts.has(id)) throw new Error(`view ${name}: unknown occurrence ${id}`);
+      return parts.get(id).meshes;
     });
     const sceneBox = new THREE.Box3().makeEmpty();
     subjectMeshes.forEach((mesh) => sceneBox.expandByObject(mesh));
-    const radius = stage(sceneBox, view.isolated ? name : Boolean(view.explode));
-    const points = view.isolated ? isolatedFramingPoints(subjectMeshes) : framingPoints(subjectMeshes);
-    const fit = fitCamera(camera, points, view.direction);
+    const radius = stage(sceneBox, isolated ? name : Boolean(view.explode));
+    const points = isolated ? isolatedFramingPoints(subjectMeshes) : framingPoints(subjectMeshes);
+    const fit = fitCamera(camera, points, options.direction ?? view.direction, options.frameScale ?? 1);
     const subjectRadius = new THREE.Box3().setFromPoints(vertexSample(subjectMeshes)).getSize(new THREE.Vector3()).length() / 2;
     const aoRadius = subjectRadius * STUDIO.aoRadius;
     gtao.updateGtaoMaterial({ radius: aoRadius, thickness: aoRadius, distanceExponent: 1, distanceFallOff: 1, scale: 1 });
     gtao.updatePdMaterial({ lumaPhi: 10, depthPhi: 2, normalPhi: 3, radius: 6, rings: 2, samples: 16 });
-    composer.render();
-    copyCtx.drawImage(renderer.domElement, 0, 0);
-    const pixels = copyCtx.getImageData(0, 0, width, height).data;
-    const png = copy.toDataURL("image/png");
-    const { mask, floor } = renderMask(subject);
+    const renderFrame = () => {
+      composer.render();
+      copyCtx.drawImage(renderer.domElement, 0, 0);
+      const pixels = copyCtx.getImageData(0, 0, width, height).data;
+      const png = copy.toDataURL("image/png");
+      const { mask, floor } = renderMask(subject, options.ghost === true);
+      return { pixels, png, mask, floor };
+    };
+    const finalFrame = isolated
+      ? withIsolatedSubject(subject, renderFrame)
+      : (options.ghost ? withGhostContext(subject, renderFrame) : renderFrame());
+    const visibleSubjectPixels = finalFrame.mask.reduce((count, cls) => count + (cls === 2), 0);
+    const isolatedMask = view.subject ? withIsolatedSubject(subject, () => renderMask(subject).mask) : finalFrame.mask;
+    const isolatedSubjectPixels = isolatedMask.reduce((count, cls) => count + (cls === 2), 0);
+    const { mask, floor, pixels, png } = finalFrame;
     const applied = {};
-    for (const [pn, part] of parts) applied[pn] = readBack(part.material);
+    for (const part of parts.values()) applied[part.pn] = readBack(part.material);
     return {
       view: name,
       width,
@@ -653,6 +714,7 @@ async function boot() {
         far: camera.far,
       },
       subject: [...subject],
+      visible_subject_fraction: isolatedSubjectPixels ? visibleSubjectPixels / isolatedSubjectPixels : 0,
       explode: Boolean(view.explode),
       materials: applied,
       scene_radius_m: radius,
@@ -688,5 +750,5 @@ const ready = boot().catch((error) => {
 });
 window.cadRender = {
   ready: ready.then((api) => api.info),
-  capture: async (name) => (await ready).capture(name),
+  capture: async (name, options) => (await ready).capture(name, options),
 };

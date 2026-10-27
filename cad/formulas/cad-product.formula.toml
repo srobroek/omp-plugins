@@ -1,7 +1,9 @@
-# cad-product: full product flow; each L2 subassembly bonds one parallel mol-cad-part.
+# cad-product: multi-part product flow; the lead orchestrates and every independent unit is a bonded molecule.
 # Pour with --var product=<id> --var scope=<paths>; kernel/process defaults are cadquery/fdm.
+# Each *-fanout step bonds one molecule per unit in one batch; its *-integrate step waits for all of them,
+# then one human gate closes the stage. skill://cad-flow lists the units, agents, and ownership per stage.
 formula = "cad-product"
-description = "Full multi-part CAD flow for {{product}} in {{scope}}: parallel subassembly loops from layout through validated release"
+description = "Full multi-part CAD flow for {{product}} in {{scope}}: parallel worker batches per stage, one lead integration and one gate per stage, through validated release"
 type = "workflow"
 
 [vars.product]
@@ -57,12 +59,24 @@ description = "Use skill://cad-record to write traceable REQ-### entries with ra
 skill_hints = "cad-record, cad-flow"
 
 [[steps]]
-id = "concept"
-title = "L0 CONCEPT: draft 2-4 three.js variants"
+id = "concept-fanout"
+title = "L0 CONCEPT: fan out one variant molecule per concept"
 type = "task"
 needs = ["specify"]
+labels = ["cad", "phase:concept", "fanout"]
+description = "Choose 2-4 distinct answers to the main trade-off and one shared node-id vocabulary. Bond one mol-cad-variant per variant onto this step, all before dispatch: `bd mol bond mol-cad-variant <this-step> --type parallel --ref variant-<id> --var product={{product}} --var scope={{scope}} --var variant=<id> --var tradeoff='<answer>'`. Dispatch every ready subagent step below this step in ONE parallel batch, one cad-concept-designer per variant, as skill://cad-flow Delegation describes. Close each molecule's step and root from its worker's report; dispatch a failed variant again in the next batch. Close this step when every child is closed."
+
+[steps.metadata]
+skill_hints = "cad-flow, cad-concept"
+
+[[steps]]
+id = "concept-integrate"
+title = "L0 CONCEPT: merge the variants and collect feedback"
+type = "task"
+needs = ["concept-fanout"]
+waits_for = "all-children"
 labels = ["cad", "phase:concept"]
-description = "Run skill://cad-concept to draft 2-4 labelled three.js variants in `hw/concept/<product-id>.scene.json`. Check each edit with `uv run --script skill://cad-concept/scripts/concept.py check <scene>`. Serve the live preview with `uv run --script skill://cad-concept/scripts/serve.py --scene-dir hw/concept --port 8765`. Gather feedback, then refine, merge, or drop as directed. Before LAYOUT freeze, concept commit batches save screenshots and defer the broader recheck. Record candidates and feedback."
+description = "Merge the drafted variants into `hw/concept/<product-id>.scene.json`, keeping their ids. Check it with `uv run --script skill://cad-concept/scripts/concept.py check <scene>` and serve the live preview with `uv run --script skill://cad-concept/scripts/serve.py --scene-dir hw/concept --port 8765`. Gather feedback; refine, merge, or drop as directed, or bond mol-cad-concept onto the VARIANT gate for a further worker round. Before LAYOUT freeze, concept commit batches save screenshots and defer the broader recheck. Record candidates and feedback."
 
 [steps.metadata]
 skill_hints = "cad-concept, cad-flow"
@@ -72,7 +86,7 @@ execution_mode = "interactive"
 id = "variant-gate"
 title = "VARIANT gate: select or refine a concept"
 type = "task"
-needs = ["concept"]
+needs = ["concept-integrate"]
 labels = ["cad", "phase:gate"]
 description = "Present 2-4 rendered variants and their tradeoffs. Ask the user to select a variant, request a further concept round, or specify a merge/drop. Only explicit selection or direction resolves the gate; only bd gate resolve closes it."
 
@@ -86,7 +100,7 @@ title = "L1 LAYOUT: labelled subassemblies, interfaces, joints, and BOM skeleton
 type = "task"
 needs = ["variant-gate"]
 labels = ["cad", "phase:layout"]
-description = "Run skill://cad-model and skill://cad-record. After explicit VARIANT selection, export the chosen concept with `uv run --script skill://cad-concept/scripts/concept.py handoff <scene> --out hw/concept/handoff.json`. Define labelled subassemblies, part references, envelopes, datums, interface contracts, joints and travel limits, and EBOM skeleton. Commit each L1 batch with `uv run --script skill://cad-model/scripts/cad_model.py run hw --label vN --kernel {{kernel}}`, then `uv run --script skill://cad-model/scripts/cad_model.py check vN --hw hw [--out FILE]`; press fits declared in `hw/interfaces.yaml` are automatically allowed and a blocking failure stops the batch. Then render the version. Before LAYOUT freeze, defer the broader recheck; after freeze, recheck changed parts and dependents with this stage's and all earlier stages' checks."
+description = "Run skill://cad-model and skill://cad-record. After explicit VARIANT selection, export the chosen concept with `uv run --script skill://cad-concept/scripts/concept.py handoff <scene> --out hw/concept/handoff.json`. Define labelled subassemblies, part references, envelopes, datums, interface contracts, joints and travel limits, and EBOM skeleton with make/buy per part. Commit each L1 batch with `uv run --script skill://cad-model/scripts/cad_model.py run hw --label vN --kernel {{kernel}}`, then `uv run --script skill://cad-model/scripts/cad_model.py check vN --hw hw [--out FILE]`; press fits declared in `hw/interfaces.yaml` are automatically allowed and a blocking failure stops the batch. Then render the version. Before LAYOUT freeze, defer the broader recheck; after freeze, recheck changed parts and dependents with this stage's and all earlier stages' checks."
 
 [steps.metadata]
 skill_hints = "cad-model, cad-record, cad-flow"
@@ -105,54 +119,125 @@ timeout = "72h"
 
 [[steps]]
 id = "parts-fanout"
-title = "L2 PARTS: fan out one molecule per subassembly"
+title = "L2 PARTS: fan out one part molecule per subassembly and one sourcing molecule per purchased family"
 type = "task"
 needs = ["layout-freeze-gate"]
-labels = ["cad", "phase:parts"]
-description = "Read subassemblies from hw/assembly.yaml and bond one mol-cad-part per subassembly in the SAME parallel batch (`--type parallel`). Pass product={{product}}, scope={{scope}}, subassembly, kernel={{kernel}}, process_default={{process_default}}, and distinct --ref. Each child runs model `run`, then `check`; a blocking check failure stops the batch. The child then renders that version with `cad-render`, shows it at the gate, and uses `cad-viewer` for inspection. Before the L2 gate each child runs `uv run --script skill://cad-design/scripts/form_check.py --hw hw --parts-dir hw/versions/vN/parts --fidelity F2`; record evidence. Keep this parent open until all child loops finish."
+labels = ["cad", "phase:parts", "fanout"]
+description = "Read the subassemblies from hw/assembly.yaml and the purchased families from hw/bom.csv (make_buy buy). Bond them all onto this step before dispatch: one `bd mol bond mol-cad-part <this-step> --type parallel --ref part-<subassembly> --var product={{product}} --var scope={{scope}} --var subassembly=<id> --var change='<change for this unit>' --var kernel={{kernel}} --var process_default={{process_default}}` per subassembly, and one `bd mol bond mol-cad-sourcing <this-step> --type parallel --ref source-<family> --var product={{product}} --var scope={{scope}} --var family=<id> --var parts=<PN,PN>` per family. Assign every PN to exactly one part unit. Dispatch every ready subagent step below this step in ONE parallel batch (cad-part-designer, cad-sourcing-researcher), as skill://cad-flow Delegation describes. Close each molecule's steps and root from its worker's report; dispatch a failed unit again in the next batch. Close this step when every child is closed."
 
 [steps.metadata]
-skill_hints = "cad-flow, cad-recheck, cad-record"
+skill_hints = "cad-flow"
 
 [[steps]]
-id = "detail"
-title = "L3 DETAIL: fit, fastener, tolerance, process rules, and drawings"
+id = "parts-integrate"
+title = "L2 PARTS: integrate the delivered parts and build one version"
 type = "task"
 needs = ["parts-fanout"]
-labels = ["cad", "phase:detail"]
-description = "Run skill://cad-fits and skill://cad-drawings. Specify fits, fasteners, tolerances, datums, and process rules. At the L3 gate, form_check must pass at F3: run `uv run --script skill://cad-design/scripts/form_check.py --hw hw --parts-dir hw/versions/vN/parts --fidelity F3`. For each L3 batch, run cad-model run then check. A blocking failure stops the batch. Render the successful version and show it at the gate. Generate drawings with `uv run --script skill://cad-drawings/scripts/drawing.py hw/versions/vN/parts/<PN>.step --part hw/parts/<PN>/part.yaml --product hw/product.yaml --metrics hw/versions/vN/metrics.json --output-dir <dir> [--scale <ratio>]`. Recheck changed parts/dependents after LAYOUT freeze."
+waits_for = "all-children"
+labels = ["cad", "phase:parts"]
+description = "Accept a part delivery only with its passing scratch build. Decide every proposal and sourcing finding, apply the accepted ones to the shared records yourself, and record the rest as declined. Then commit one batch for the whole product: `uv run --script skill://cad-model/scripts/cad_model.py run hw --label vN --kernel {{kernel}}`, then `uv run --script skill://cad-model/scripts/cad_model.py check vN --hw hw [--out FILE]`; a blocking failure stops the batch. Run `uv run --script skill://cad-design/scripts/form_check.py --hw hw --parts-dir hw/versions/vN/parts --fidelity F2`; every made part needs F2. Render with `uv run --script skill://cad-render/scripts/render.py hw --version vN` and inspect with cad-viewer. Run skill://cad-recheck for the changed parts and dependents. Record the design entry and bead note."
 
 [steps.metadata]
-skill_hints = "cad-fits, cad-drawings, cad-recheck, cad-record, cad-flow"
+skill_hints = "cad-model, cad-design, cad-render, cad-viewer, cad-recheck, cad-record"
+
+[[steps]]
+id = "parts-gate"
+title = "PARTS gate for {{product}}"
+type = "task"
+needs = ["parts-integrate"]
+labels = ["cad", "phase:gate"]
+description = "Present the integrated version: renders, check and form results, sourcing decisions, and declined proposals, each file as an absolute path on its own line, plus the viewer URL when it runs. Ask the user to approve the parts or name changes. Only bd gate resolve after explicit approval closes this gate."
+
+[steps.gate]
+type = "human"
+timeout = "72h"
+
+[[steps]]
+id = "detail-fanout"
+title = "L3 DETAIL: fan out one detail molecule per made part"
+type = "task"
+needs = ["parts-gate"]
+labels = ["cad", "phase:detail", "fanout"]
+description = "Bond one mol-cad-detail per made part onto this step before dispatch: `bd mol bond mol-cad-detail <this-step> --type parallel --ref detail-<PN> --var product={{product}} --var scope={{scope}} --var part=<PN> --var change='<detail for this part>' --var kernel={{kernel}} --var process_default={{process_default}}`. Dispatch every ready subagent step below this step in ONE parallel batch of cad-part-designer workers, as skill://cad-flow Delegation describes. Close each molecule's steps and root from its worker's report; dispatch a failed part again in the next batch. Close this step when every child is closed."
+
+[steps.metadata]
+skill_hints = "cad-flow"
+
+[[steps]]
+id = "detail-integrate"
+title = "L3 DETAIL: integrate the detailed parts, build one version, and draw it"
+type = "task"
+needs = ["detail-fanout"]
+waits_for = "all-children"
+labels = ["cad", "phase:detail"]
+description = "Accept a delivery only with its passing F3 scratch build. Decide every fit, interface, and limit proposal and apply the accepted ones to hw/interfaces.yaml and the other shared records yourself. Commit one batch: cad-model run then check (a blocking failure stops it), `uv run --script skill://cad-design/scripts/form_check.py --hw hw --parts-dir hw/versions/vN/parts --fidelity F3` (every made part needs F3), and the render. Generate each detailed part's drawing from this version with `uv run --script skill://cad-drawings/scripts/drawing.py hw/versions/vN/parts/<PN>.step --part hw/parts/<PN>/part.yaml --product hw/product.yaml --metrics hw/versions/vN/metrics.json --output-dir <dir> [--scale <ratio>]`. Recheck changed parts and dependents with skill://cad-recheck. Record the design entry and bead note."
+
+[steps.metadata]
+skill_hints = "cad-fits, cad-drawings, cad-design, cad-recheck, cad-record, cad-flow"
+
+[[steps]]
+id = "detail-gate"
+title = "DETAIL gate for {{product}}"
+type = "task"
+needs = ["detail-integrate"]
+labels = ["cad", "phase:gate"]
+description = "Present the integrated version's renders, F3 form results, fit decisions, and drawing previews and PDFs, each file as an absolute path on its own line, plus the viewer URL when it runs. Ask the user to approve the detail or name changes. Only bd gate resolve after explicit approval closes this gate."
+
+[steps.gate]
+type = "human"
+timeout = "72h"
 
 [[steps]]
 id = "bom"
 title = "EBOM: reconcile parts, quantities, and purchasing data"
 type = "task"
-needs = ["detail"]
+needs = ["detail-gate"]
 labels = ["cad", "phase:bom"]
-description = "Run skill://cad-bom to reconcile subassemblies, PN/revision references, quantities, make/buy, suppliers, materials, and finishes into hw/bom.csv. Include every purchased and manufactured item. Draft and preview; on commit batch recheck changed parts/dependents at this stage and all earlier stages. Record the design-record entry and bead note."
+description = "Run skill://cad-bom to reconcile subassemblies, PN/revision references, quantities, make/buy, suppliers, materials, and finishes into hw/bom.csv, using the accepted sourcing findings. Include every purchased and manufactured item. Draft and preview; on commit batch recheck changed parts/dependents at this stage and all earlier stages. Record the design-record entry and bead note."
 
 [steps.metadata]
 skill_hints = "cad-bom, cad-record, cad-recheck, cad-flow"
 
 [[steps]]
-id = "analysis"
-title = "L4 ANALYSIS: assembly and worst-case verification"
+id = "analysis-fanout"
+title = "L4 ANALYSIS: fan out one analysis molecule per case"
 type = "task"
 needs = ["bom"]
-description = "Run `uv run --script skill://cad-motion/scripts/sweep.py --hw hw --version vN --worst-step worst.step` for kinematics. Run `uv run --script skill://cad-analysis/scripts/fea_static.py <case.yaml>` for static FEA at the worst-case pose. For each L4 commit batch, run `uv run --script skill://cad-model/scripts/cad_model.py run hw --label vN --kernel {{kernel}}`, then `uv run --script skill://cad-model/scripts/cad_model.py check vN --hw hw [--out FILE]`; press fits declared in `hw/interfaces.yaml` are automatically allowed and a blocking check failure stops the batch. Then render the successful version with `uv run --script skill://cad-render/scripts/render.py hw --version vN`. Record assumptions, criteria, results, and evidence in verification.csv. Recheck affected parts and dependents from flow.recheck_from. No slicer, CAM, or machine tooling."
+labels = ["cad", "phase:analysis", "fanout"]
+description = "Build and check the version vN that L4 analyses when the record changed since the last integrated version. List the cases: the joint sweep, the FreeCAD assembly check, each tolerance stack-up, and each static FEA case. Bond every case that needs no other case's output onto this step before dispatch: `bd mol bond mol-cad-analysis <this-step> --type parallel --ref analysis-<case> --var product={{product}} --var scope={{scope}} --var case=<id> --var kind=sweep|assembly|stackup|fea --var version=vN`. Dispatch every ready subagent step below this step in ONE parallel batch of cad-analyst workers, as skill://cad-flow Delegation describes. An FEA case at the worst-case pose needs the sweep's `worst_case`: bond and dispatch those cases as the next batch once the sweep molecule closes. Close each molecule from its worker's report. Close this step when every child is closed."
+
+[steps.metadata]
+skill_hints = "cad-flow, cad-motion, cad-analysis"
+
+[[steps]]
+id = "analysis-integrate"
+title = "L4 ANALYSIS: record the verification evidence"
+type = "task"
+needs = ["analysis-fanout"]
+waits_for = "all-children"
 labels = ["cad", "phase:analysis"]
+description = "Check each case's inputs, units, selectors, and solver warnings, then write the accepted verification.csv rows yourself, tied to requirements and to version vN. A failed case blocks the gate: record it, and route a design fix through a new L2 or L3 batch. Render the analysed version with `uv run --script skill://cad-render/scripts/render.py hw --version vN`. Recheck affected parts and dependents from flow.recheck_from. No slicer, CAM, or machine tooling."
+
 [steps.metadata]
 skill_hints = "cad-analysis, cad-motion, cad-record, cad-recheck, cad-flow"
 
+[[steps]]
+id = "analysis-gate"
+title = "ANALYSIS gate for {{product}}"
+type = "task"
+needs = ["analysis-integrate"]
+labels = ["cad", "phase:gate"]
+description = "Present each case's verdict and key numbers, the worst-case pose, and the verification rows, each result file and render as an absolute path on its own line, plus the viewer URL when it runs. Ask the user to approve the analysis or name changes. Only bd gate resolve after explicit approval closes this gate."
 
+[steps.gate]
+type = "human"
+timeout = "72h"
 
 [[steps]]
 id = "mech-critique"
 title = "CRITIQUE mechanical soundness"
 type = "task"
-needs = ["analysis"]
+needs = ["analysis-gate"]
 labels = ["cad", "phase:critique"]
 description = "Run as a read-only subagent in the SAME parallel batch as dfm-critique. Challenge requirements, load paths, interfaces, joints, tolerances, failure modes, analysis assumptions, and evidence. Return PASS, MINOR, or MAJOR with named evidence; do not edit product files or question the user."
 
@@ -165,7 +250,7 @@ execution_mode = "subagent"
 id = "dfm-critique"
 title = "CRITIQUE manufacturability"
 type = "task"
-needs = ["analysis"]
+needs = ["analysis-gate"]
 labels = ["cad", "phase:critique"]
 description = "Run as a read-only subagent in the SAME parallel batch as mech-critique. Review FDM or CNC process choice, geometry, access, stock, tool access, tolerances, material, finish, and drawings. Return PASS, MINOR, or MAJOR with named evidence; do not edit product files or question the user."
 
@@ -180,7 +265,7 @@ title = "RECONCILE mechanical and DFM findings"
 type = "task"
 needs = ["mech-critique", "dfm-critique"]
 labels = ["cad", "phase:reconcile"]
-description = "Reconcile both reports against the design record and evidence. Resolve reproducible MAJOR and agreed MINOR findings, and report unreproduced findings explicitly. Recheck only changed assertions with skill://cad-recheck. Record decisions and evidence."
+description = "Reconcile both reports against the design record and evidence. Resolve reproducible MAJOR and agreed MINOR findings, routing part changes through a new L2 or L3 batch, and report unreproduced findings explicitly. Recheck only changed assertions with skill://cad-recheck. Record decisions and evidence."
 
 [steps.metadata]
 skill_hints = "cad-flow, cad-recheck, cad-record"

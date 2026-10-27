@@ -33,4 +33,4 @@ scene.add_geometry(with_pole(FACES), node_name="TST-0001 closed", geom_name="TST
 scene.add_geometry(with_pole(FACES[:3]), node_name="TST-0002 open", geom_name="TST-0002 open")
 glb = Path(sys.argv[1]) / "probe.glb"
 glb.write_bytes(scene.export(file_type="glb"))
-print(json.dumps(mesh.watertight(glb, ["TST-0001", "TST-0002"])))
+print(json.dumps(mesh.watertight(glb, {"TST-0001": "TST-0001 closed", "TST-0002": "TST-0002 open"})))

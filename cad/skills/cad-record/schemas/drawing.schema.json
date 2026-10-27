@@ -284,6 +284,7 @@
       "type": "object", "additionalProperties": false, "required": ["PN", "feature"],
       "properties": {
         "PN": {"$ref": "#/$defs/pn"},
+        "occurrence": {"$ref": "assembly.schema.json#/$defs/occurrence_ref"},
         "feature": {"$ref": "#/$defs/semantic_id"},
         "region": {"$ref": "#/$defs/semantic_id"}
       }
@@ -293,7 +294,7 @@
       "type": "object", "additionalProperties": false, "required": ["fit"],
       "properties": {
         "fit": {"type": "string", "minLength": 1},
-        "pair": {"type": "array", "minItems": 2, "maxItems": 2, "uniqueItems": true, "items": {"$ref": "#/$defs/pn"}},
+        "pair": {"type": "array", "minItems": 2, "maxItems": 2, "uniqueItems": true, "items": {"$ref": "assembly.schema.json#/$defs/part_ref"}},
         "hole": {"$ref": "#/$defs/fit_endpoint"},
         "shaft": {"$ref": "#/$defs/fit_endpoint"},
         "note": {"type": "string", "minLength": 1}
@@ -304,10 +305,10 @@
       ]
     },
     "heat_set": {
-      "description": "A heat-set insert installed in its host part's bore; the pair is [host PN, insert PN]",
+      "description": "A heat-set insert installed in its host part's bore; the pair is [host, insert], each a PN or an @occurrence reference",
       "type": "object", "additionalProperties": false, "required": ["pair", "hole_d", "insert", "source"],
       "properties": {
-        "pair": {"type": "array", "minItems": 2, "maxItems": 2, "uniqueItems": true, "items": {"$ref": "#/$defs/pn"}},
+        "pair": {"type": "array", "minItems": 2, "maxItems": 2, "uniqueItems": true, "items": {"$ref": "assembly.schema.json#/$defs/part_ref"}},
         "hole_d": {"type": "number", "exclusiveMinimum": 0},
         "hole_tol": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "number"}},
         "depth_min": {"type": "number", "exclusiveMinimum": 0},

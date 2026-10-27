@@ -1,0 +1,42 @@
+# mol-cad-analysis: one L4 analysis case run by a cad-analyst worker on an integrated version, read-only on hw/.
+# Bond one per case onto an analysis fan-out step, all independent cases in one batch:
+#   bd mol bond mol-cad-analysis <fanout-step> --type parallel --ref analysis-<case> --var case=<id> --var kind=<kind> --var version=vN ...
+# A static FEA case at the worst-case pose needs the sweep's worst_case: bond it once the sweep molecule closes.
+formula = "mol-cad-analysis"
+description = "Run L4 {{kind}} case {{case}} on {{product}} version {{version}} and propose verification rows"
+type = "workflow"
+
+[vars.product]
+required = true
+description = "hardware product id"
+
+[vars.scope]
+required = true
+description = "hardware project paths the case reads"
+
+[vars.case]
+required = true
+pattern = "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+description = "analysis case id, such as sweep or fea-head-load; the unit id is analysis-<case>"
+
+[vars.kind]
+required = true
+pattern = "^(sweep|assembly|stackup|fea)$"
+description = "sweep: cad-motion sweep.py; assembly: cad-motion freecad_assembly.py; stackup: cad-fits stackup.py; fea: cad-analysis fea_static.py"
+
+[vars.version]
+required = true
+pattern = "^v[1-9][0-9]*$"
+description = "the integrated hw/versions label the lead built for L4"
+
+[[steps]]
+id = "run-case"
+title = "ANALYSE {{kind}} case {{case}} on {{version}}"
+type = "task"
+labels = ["cad", "phase:analysis"]
+description = "Unit analysis-{{case}}. Run the {{kind}} case the lead's brief defines against hw/versions/{{version}}, writing every input and output under `.cad-work/analysis-{{case}}/`. sweep: `uv run --script skill://cad-motion/scripts/sweep.py --hw hw --version {{version}} --worst-step .cad-work/analysis-{{case}}/worst.step`. assembly: `uv run --script skill://cad-motion/scripts/freecad_assembly.py --hw hw --version {{version}}`. stackup: `uv run --script skill://cad-fits/scripts/stackup.py <stack.yaml>`. fea: write the case YAML in the unit directory, then `uv run --script skill://cad-analysis/scripts/fea_static.py <case.yaml>`. Exit 1 is a check failure to report, exit 2 is no result. Never change hw/. Return the verdict from the exit code, the key numbers verbatim, absolute paths of every result file, and proposed verification.csv rows naming their REQ ids."
+
+[steps.metadata]
+skill_hints = "cad-motion, cad-analysis, cad-fits"
+execution_mode = "subagent"
+execution_agent_type = "cad-analyst"

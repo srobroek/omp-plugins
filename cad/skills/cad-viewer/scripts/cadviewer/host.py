@@ -33,17 +33,19 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Iterator
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, quote, urlsplit
 
-from . import LimitError, ViewerError, capture, motion, record
+from . import LimitError, ViewerError, capture, gallery, motion, record
 from .capture import Presenter
 from .session import HOST, port_open
 
 SKILL = Path(__file__).resolve().parents[2]
 PANEL_DIR = SKILL / "assets" / "panel"
+GALLERY_DIR = SKILL / "assets" / "gallery"
 TOKENS_CSS = SKILL.parent / "cad-concept" / "assets" / "viewer" / "tokens.css"
 STATIC = {"/": PANEL_DIR / "index.html", "/panel.css": PANEL_DIR / "panel.css", "/panel.js": PANEL_DIR / "panel.js",
-          "/tokens.css": TOKENS_CSS}
+          "/tokens.css": TOKENS_CSS, "/gallery": GALLERY_DIR / "index.html",
+          "/gallery.css": GALLERY_DIR / "gallery.css", "/gallery.js": GALLERY_DIR / "gallery.js"}
 GHOST_ALPHA = 0.18
 TREE_WIDTH = 300  # wide enough for "LMP-0001 Base plate and pivot boss" style product names
 SECTION_ZOOM = 6.0  # close-up on the cut joint: the viewer fits the whole scene, then applies this
@@ -65,6 +67,14 @@ CHANGES = ("/api/show", "/api/compare", "/api/mode", "/api/parts", "/api/view", 
 
 class CaptureBusy(ViewerError):
     """A request that would change the viewer state arrived during a capture; maps to HTTP 409."""
+
+
+@dataclass(frozen=True)
+class Raw:
+    """A route result sent as these bytes with this Content-Type, not as JSON."""
+
+    body: bytes
+    kind: str
 
 
 class CaptureGuard:
@@ -163,14 +173,15 @@ def _load(hw: str, version: str, check_path: str | None) -> Loaded:
     check = record.read_json(Path(check_path)) if check_path else None
     panel = record.panel_model(loaded, check)
     rows = loaded.nominal_rows()
-    shown = {pn: motion.rigid_from_rows(rows[pn]) for pn in rows}
+    shown = {oid: motion.rigid_from_rows(rows[oid]) for oid in rows}
     pose = motion.pose_module()
     with pose.stdout_to_stderr():
-        parts = pose.load_parts(loaded.hw, parts_dir=loaded.parts_dir)
-    missing = [p.pn for p in loaded.parts if p.pn not in parts]
+        parts = pose.load_definitions(loaded.hw, loaded.parts_dir)
+    missing = sorted({p.pn for p in loaded.parts if p.pn not in parts})
     if missing:
         raise ViewerError(f"{loaded.parts_dir}: no STEP for {missing}")
-    shapes = {p.pn: pose.placed(parts[p.pn].shape, shown[p.pn]) for p in loaded.parts}
+    # One shape per occurrence: its PN's definition at the occurrence's built placement T = D P.
+    shapes = {p.id: pose.placed(parts[p.pn].shape, shown[p.id]) for p in loaded.parts}
     return Loaded(loaded, check_path, panel, shown, shapes)
 
 
@@ -203,6 +214,7 @@ class Host:
         # not copy a half-reported camera to b. The capture copies a -> b itself when it is done.
         self.sync_hold = threading.Event()
         self.guard = CaptureGuard()
+        self.gallery = gallery.Gallery()  # the project /gallery shows: the last hw named by show, compare, gallery
 
     def _viewers(self) -> list[tuple[str, str, Viewer]]:
         return [(slot.name, aud, viewer) for slot in self.slots.values() for aud, viewer in slot.viewers.items()]
@@ -254,9 +266,9 @@ class Host:
         version = loaded.version
 
         def leaf(part: record.Part) -> Any:
-            return OCP_Part(loaded.shapes[part.pn], name=part.product, color=Color(part.colour, self.view.alpha(part.pn)))
+            return OCP_Part(loaded.shapes[part.id], name=part.product, color=Color(part.colour, self.view.alpha(part.id)))
 
-        children: list[Any] = [OCP_PartGroup([leaf(version.part(pn)) for pn in g.parts], name=g.id)
+        children: list[Any] = [OCP_PartGroup([leaf(version.part(oid)) for oid in g.parts], name=g.id)
                                for g in version.groups]
         children += [leaf(p) for p in version.parts if p.group is None]
         return OCP_PartGroup(children, name=version.product_id)
@@ -293,7 +305,7 @@ class Host:
         if slot.showing is None:
             return
         version = self.versions[slot.showing].version
-        states = {p.path: [1, 1] if self.view.visible(p.pn) else [0, 0] for p in version.parts}
+        states = {p.path: [1, 1] if self.view.visible(p.id) else [0, 0] for p in version.parts}
         self._config(slot, audiences, states=states)
 
     def _layout(self) -> dict[str, str | None]:
@@ -339,10 +351,11 @@ class Host:
 
     def show_version(self, body: dict[str, Any]) -> dict[str, Any]:
         loaded = _load(_text(body, "hw"), str(body.get("version") or "latest"), body.get("check"))
+        self.gallery.open(loaded.version.hw)
         with self.lock:
             self.versions = {"A": loaded}
             self.mode, self.active = "single", "A"
-            self.view = ViewState(hidden={pn for pn in self.view.hidden if pn in loaded.shapes})
+            self.view = ViewState(hidden={oid for oid in self.view.hidden if oid in loaded.shapes})
             self._push_layout()
         return self.state()
 
@@ -350,6 +363,7 @@ class Host:
         hw = _text(body, "hw")
         a = _load(hw, _text(body, "a"), body.get("check_a"))
         b = _load(hw, _text(body, "b"), body.get("check_b"))
+        self.gallery.open(a.version.hw)
         with self.lock:
             self.versions = {"A": a, "B": b}
             self.mode, self.active, self.view = "split", "A", ViewState()
@@ -508,7 +522,7 @@ class Host:
         version = self.versions[self._layout()["a"]].version
         animation = Animation()
         for track in plan.tracks:
-            path = version.part(track.pn).path
+            path = version.part(track.id).path
             animation.add_track(path, "t", list(plan.times), [list(v) for v in track.translations])
             animation.add_track(path, "q", list(plan.times), [list(v) for v in track.quaternions])
         for audience in audiences:
@@ -524,7 +538,7 @@ class Host:
         self.animation_request = dict(body)
         self.animation = {"joint": plan.joint, "unit": plan.unit, "from": plan.start, "to": plan.end,
                           "keyframes": len(plan.times), "seconds": plan.times[-1],
-                          "moving_parts": [t.pn for t in plan.tracks], "at": at,
+                          "moving_parts": [version.part(t.id).ref for t in plan.tracks], "at": at,
                           "value_at": None if at is None else plan.value_at(at)}
         return self.animation
 
@@ -608,6 +622,9 @@ class Host:
             ("POST", "/api/capture"): lambda q, b: self.capture(b),
             ("POST", "/api/studio"): lambda q, b: self.studio(b),
             ("POST", "/api/stop"): lambda q, b: self.request_stop(),
+            ("GET", "/api/gallery"): lambda q, b: self.gallery_index(q),
+            ("POST", "/api/gallery"): lambda q, b: self.open_gallery(b),
+            ("GET", gallery.FILE_ROUTE): lambda q, b: self.gallery_file(q),
         }
         return {key: self._held_for_capture(route) if key[1] in CHANGES else route for key, route in routes.items()}
 
@@ -616,6 +633,32 @@ class Host:
             with self.guard.change():
                 return route(query, body)
         return guarded
+
+    # ------------------------------------------------------------------ preview gallery (read-only)
+
+    def gallery_url(self, version: str) -> str:
+        return f"http://{HOST}:{self.panel_port}/gallery?version={quote(version)}"
+
+    def open_gallery(self, body: dict[str, Any]) -> dict[str, Any]:
+        """Open `hw` in the gallery; answers the gallery URL and every file it lists, by section."""
+        self.gallery.open(_text(body, "hw"))
+        model = self.gallery.index(str(body.get("version") or "latest"), self._gallery_showing())
+        return {**gallery.summary(model), "url": self.gallery_url(model["version"])}
+
+    def gallery_index(self, query: dict[str, list[str]]) -> dict[str, Any]:
+        return self.gallery.index(_query(query, "version") or "latest", self._gallery_showing())
+
+    def gallery_file(self, query: dict[str, list[str]]) -> Raw:
+        path = self.gallery.file(_query(query, "path") or "")
+        return Raw(path.read_bytes(), gallery.media_type(path))
+
+    def _gallery_showing(self) -> str | None:
+        """The version label the live viewer's slot a shows, when it is of the gallery's project."""
+        with self.lock:
+            loaded = self.versions.get(self.slots["a"].showing or "")
+            if loaded is None or loaded.version.hw != self.gallery.hw:
+                return None
+            return loaded.version.label
 
     def health(self) -> dict[str, Any]:
         """`presenter` is false once the headless browser is gone: such a host takes no capture."""
@@ -682,7 +725,9 @@ def make_server(host: Host) -> ThreadingHTTPServer:
     A request is refused unless its Host names this port on 127.0.0.1 or localhost (403, DNS
     rebinding), an Origin it carries is that same origin (403, another site's page), and a POST
     body is application/json (415): a cross-origin JSON POST needs a preflight this server never
-    grants. The panel's same-origin fetches and the CLI's urllib calls pass all three.
+    grants. The panel's same-origin fetches and the CLI's urllib calls pass all three. The
+    preview gallery's file route (a `Raw` result) answers only files `gallery.resolve` allows
+    inside the open project's hw/ (403 otherwise, 404 when absent).
     """
     routes = host.routes()
     names = {f"{HOST}:{host.panel_port}", f"localhost:{host.panel_port}"}
@@ -700,6 +745,7 @@ def make_server(host: Host) -> ThreadingHTTPServer:
             self.send_header("Content-Type", kind)
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
             self.end_headers()
             self.wfile.write(body)
 
@@ -736,11 +782,19 @@ def make_server(host: Host) -> ThreadingHTTPServer:
                 body = json.loads(self.rfile.read(length) or b"{}") if length else {}
                 if not isinstance(body, dict):
                     raise ViewerError("request body must be a JSON object")
-                self._json(HTTPStatus.OK, handler(parse_qs(url.query), body))
+                result = handler(parse_qs(url.query), body)
+                if isinstance(result, Raw):
+                    self._send(HTTPStatus.OK, result.body, result.kind)
+                else:
+                    self._json(HTTPStatus.OK, result)
             except LimitError as error:
                 self._json(HTTPStatus.UNPROCESSABLE_ENTITY, {"error": str(error), "findings": error.findings})
             except CaptureBusy as error:
                 self._json(HTTPStatus.CONFLICT, {"error": str(error)})
+            except gallery.Forbidden as error:
+                self._json(HTTPStatus.FORBIDDEN, {"error": str(error)})
+            except gallery.NotFound as error:
+                self._json(HTTPStatus.NOT_FOUND, {"error": str(error)})
             except (ViewerError, ValueError) as error:
                 self._json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
             except Exception as error:  # noqa: BLE001 - report infrastructure failures to the caller
@@ -788,6 +842,12 @@ def _text(body: dict[str, Any], key: str) -> str:
     if not isinstance(value, str) or not value:
         raise ViewerError(f"`{key}` must be a non-empty string")
     return value
+
+
+def _query(query: dict[str, list[str]], key: str) -> str | None:
+    """The first value of one query-string parameter, None when absent."""
+    values = query.get(key)
+    return values[0] if values else None
 
 
 def _number(body: dict[str, Any], key: str) -> float:

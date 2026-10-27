@@ -1,0 +1,58 @@
+# mol-cad-detail: one part's L3 detail or post-freeze revision, by a cad-part-designer worker in a scratch copy.
+# Bond one per part onto an L3, ECO, or iterate fan-out step, all in one batch:
+#   bd mol bond mol-cad-detail <fanout-step> --type parallel --ref detail-<PN> --var part=<PN> ...
+formula = "mol-cad-detail"
+description = "Detail and scratch-check part {{part}} of {{product}}: fits, fasteners, tolerances, process rules, F3 form, and a draft drawing"
+type = "workflow"
+
+[vars.product]
+required = true
+description = "hardware product id"
+
+[vars.scope]
+required = true
+description = "hardware project paths this unit may change"
+
+[vars.part]
+required = true
+pattern = "^[A-Z]{2,5}-[0-9]{4}$"
+description = "the part number this unit owns; the unit id is detail-<part>"
+
+[vars.change]
+required = true
+description = "what this unit changes: L3 detail, or an approved ECO or intent change with its revision"
+
+[vars.kernel]
+default = "cadquery"
+pattern = "^(cadquery|build123d)$"
+description = "modeling kernel; use its dedicated environment"
+
+[vars.process_default]
+default = "fdm"
+pattern = "^(fdm|cnc)$"
+description = "default process when part.yaml names none"
+
+[[steps]]
+id = "detail"
+title = "DETAIL part {{part}} in a scratch copy"
+type = "task"
+labels = ["cad", "phase:detail"]
+description = "Unit detail-{{part}}: {{change}}. Create the scratch copy with `uv run --script skill://cad-flow/scripts/scratch.py init --hw hw --unit detail-{{part}} --part {{part}}`. In `.cad-work/detail-{{part}}/hw/parts/{{part}}/` only, apply fit classes with skill://cad-fits (`fits.py SIZE FIT`, `stackup.py STACK.yaml`), fasteners, tolerances, datums, and {{process_default}} process rules unless part.yaml names another process; change part.yaml `rev` only when the brief names the new revision. Keep the frozen interfaces; a fit or limit change on an interface goes back as a proposal."
+
+[steps.metadata]
+skill_hints = "cad-fits, cad-model, cad-design"
+execution_mode = "subagent"
+execution_agent_type = "cad-part-designer"
+
+[[steps]]
+id = "scratch-check"
+title = "CHECK part {{part}} at F3 on its scratch build, draft its drawing, then deliver"
+type = "task"
+needs = ["detail"]
+labels = ["cad", "phase:detail"]
+description = "Run `uv run --script skill://cad-flow/scripts/scratch.py build --hw hw --unit detail-{{part}} --kernel {{kernel}} --fidelity F3` and fix {{part}} until it exits 0, or stop when the fix needs a shared-record change. Draft the drawing from the scratch version the build reports: `uv run --script skill://cad-drawings/scripts/drawing.py <parts_dir>/{{part}}.step --part <scratch_hw>/parts/{{part}}/part.yaml --product <scratch_hw>/product.yaml --metrics <metrics> --output-dir .cad-work/detail-{{part}}/drawing`. Then run `uv run --script skill://cad-flow/scripts/scratch.py deliver --hw hw --unit detail-{{part}}`. Never build, check, render, or draw hw/ itself. Return the delivered files, absolute paths of the check and form JSON and the drawing PNG and PDF, and each proposal with its reason."
+
+[steps.metadata]
+skill_hints = "cad-design, cad-drawings"
+execution_mode = "subagent"
+execution_agent_type = "cad-part-designer"

@@ -20,6 +20,9 @@ import yaml
 from jsonschema import Draft202012Validator, FormatChecker
 from referencing import Registry, Resource
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import assembly_data  # noqa: E402 - the sibling module, beside this script in the skill
+
 SCHEMAS = Path(__file__).resolve().parent.parent / "schemas"
 BOM_COLUMNS = ["level", "PN", "rev", "qty", "title", "material", "process", "make_buy", "supplier", "mass"]
 # Appended procurement columns, generated from part.yaml `procurement`; a BOM carries all or none of them.
@@ -239,9 +242,47 @@ def check_procurement(part: dict[str, Any], path: str, hw: Path, findings: list[
 
 
 def check_interfaces(interfaces: dict[str, Any], path: str, part_records: dict[str, Any],
-                     findings: list[dict[str, str]]) -> None:
-    """Fit endpoints and heat-set pairs must name existing parts."""
+                     inventory: assembly_data.Inventory | None, findings: list[dict[str, str]]) -> None:
+    """Fit endpoints and heat-set pairs must name existing parts, each resolving to one physical occurrence.
+
+    An `@id` names an occurrence; a bare PN must have at most one occurrence. A `from`/`to` that
+    starts with `@` must resolve; other `from`/`to` strings stay descriptive.
+    """
+
+    def resolve(ref: str, where: str) -> str | None:
+        """The physical identity `ref` names: an occurrence id, or the PN of a part placed nowhere."""
+        if ref.startswith("@") or (inventory is not None and len(inventory.of(ref)) > 1):
+            if inventory is None:
+                return None
+            try:
+                return inventory.resolve(ref).id
+            except assembly_data.UnresolvedReference as error:
+                findings.append(finding(path, f"{where}: {error}"))
+                return None
+        if ref not in part_records:
+            findings.append(finding(path, f"{where}: part {ref} does not exist"))
+            return None
+        return inventory.of(ref)[0].id if inventory is not None and inventory.of(ref) else ref
+
+    def endpoint(entry: dict[str, Any], where: str) -> str | None:
+        pn, occurrence = entry["PN"], entry.get("occurrence")
+        if occurrence is None:
+            return resolve(pn, where)
+        if pn not in part_records:
+            findings.append(finding(path, f"{where}: part {pn} does not exist"))
+            return None
+        if inventory is None:
+            return None
+        try:
+            return inventory.endpoint(pn, occurrence).id
+        except assembly_data.UnresolvedReference as error:
+            findings.append(finding(path, f"{where}: {error}"))
+            return None
+
     for index, interface in enumerate(interfaces["interfaces"]):
+        for side in ("from", "to"):
+            if interface[side].startswith("@"):
+                resolve(interface[side], f"interfaces/{index}/{side}")
         limits = interface.get("limits", {})
         for kind in ("press_fit", "running_fit", "locating_fit"):
             fit = limits.get(kind)
@@ -249,22 +290,103 @@ def check_interfaces(interfaces: dict[str, Any], path: str, part_records: dict[s
                 continue
             where = f"interfaces/{index}/limits/{kind}"
             if "pair" in fit:
-                pns = fit["pair"]
+                for ref in fit["pair"]:
+                    resolve(ref, where)
             else:
-                pns = [fit["hole"]["PN"], fit["shaft"]["PN"]]
-                if pns[0] == pns[1]:
-                    findings.append(finding(path, f"{where}: hole and shaft are both on {pns[0]}"))
-            for pn in pns:
-                if pn not in part_records:
-                    findings.append(finding(path, f"{where}: part {pn} does not exist"))
+                hole, shaft = endpoint(fit["hole"], where), endpoint(fit["shaft"], where)
+                if hole is not None and hole == shaft:
+                    findings.append(finding(path, f"{where}: hole and shaft are both on {fit['hole']['PN']}"))
         for number, entry in enumerate(limits.get("heat_set", [])):
             where = f"interfaces/{index}/limits/heat_set/{number}"
-            for pn in entry["pair"]:
-                if pn not in part_records:
-                    findings.append(finding(path, f"{where}: part {pn} does not exist"))
+            for ref in entry["pair"]:
+                resolve(ref, where)
             lower, upper = entry.get("hole_tol", (0.0, 0.0))
             if lower > upper:
                 findings.append(finding(path, f"{where}/hole_tol: lower deviation {lower} exceeds upper {upper}"))
+
+
+def assembly_inventory(assembly: Any, path: str, part_records: dict[str, Any],
+                       findings: list[dict[str, str]]) -> assembly_data.Inventory | None:
+    """The normalized occurrence inventory, or None with findings when it cannot be normalized."""
+    if not isinstance(assembly, dict):
+        return None
+    frames = {pn: part.get("model_frame", assembly_data.DEFAULT_FRAME) for pn, (part, _) in part_records.items()}
+    try:
+        inventory = assembly_data.normalize(assembly, frames)
+    except assembly_data.InventoryError as error:
+        findings.extend(finding(path, problem) for problem in error.problems)
+        return None
+    for occurrence in inventory.occurrences:
+        if occurrence.explicit and occurrence.pn not in part_records:
+            findings.append(finding(path, f"occurrence {occurrence.ref}: part {occurrence.pn} does not exist"))
+    return inventory
+
+
+def check_joints(assembly: dict[str, Any], inventory: assembly_data.Inventory, path: str,
+                 part_records: dict[str, Any], findings: list[dict[str, str]]) -> None:
+    """Joint endpoints resolve to one occurrence each and form single-parent trees without cycles.
+
+    A member without a joint path to the ground is not a record error: `--attach` connects it at run time.
+    """
+    edges: list[tuple[str, str, str]] = []
+    resolved_all = True
+    for joint in assembly.get("joints", []):
+        if not isinstance(joint, dict):
+            continue
+        joint_id = joint.get("id", "joint")
+        ends: dict[str, str] = {}
+        for endpoint in ("parent", "child"):
+            ref = joint.get(endpoint)
+            if not isinstance(ref, str):
+                continue
+            if not ref.startswith("@"):
+                if ref not in part_records:
+                    findings.append(finding(path, f"{joint_id} {endpoint} part {ref!r} does not exist"))
+                if not inventory.of(ref):
+                    findings.append(finding(path, f"{joint_id} {endpoint} part {ref!r} is not included in any subassembly"))
+                    continue
+            try:
+                ends[endpoint] = inventory.resolve(ref).id
+            except assembly_data.UnresolvedReference as error:
+                findings.append(finding(path, f"{joint_id} {endpoint}: {error}"))
+        if len(ends) == 2:
+            edges.append((joint_id, ends["parent"], ends["child"]))
+        else:
+            resolved_all = False
+        try:
+            lower, nominal, upper = joint["min"], joint["nominal"], joint["max"]
+            if lower > upper:
+                findings.append(finding(path, f"{joint_id} minimum exceeds maximum"))
+            if not lower <= nominal <= upper:
+                findings.append(finding(path, f"{joint_id} nominal is outside its limits"))
+        except (KeyError, TypeError):
+            pass
+    if not resolved_all:
+        return
+
+    try:
+        assembly_data.joint_tree(edges, inventory.ids, lambda oid: inventory.get(oid).ref, connected=False)
+    except assembly_data.InventoryError as error:
+        findings.extend(finding(path, problem) for problem in error.problems)
+
+
+def bom_totals(bom: list[dict[str, str]], levels: list[int | None]) -> dict[str, int]:
+    """Assembled quantity per PN: each row's qty times the qty of every parent row above it."""
+    totals: dict[str, int] = {}
+    parents: list[tuple[int, int]] = []  # (level, cumulative quantity)
+    for row, level in zip(bom, levels):
+        try:
+            qty = int(row["qty"])
+        except (TypeError, ValueError, KeyError):
+            continue
+        if level is None:
+            continue
+        while parents and parents[-1][0] >= level:
+            parents.pop()
+        quantity = qty * (parents[-1][1] if parents else 1)
+        totals[row.get("PN", "")] = totals.get(row.get("PN", ""), 0) + quantity
+        parents.append((level, quantity))
+    return totals
 
 
 def validate_project(project_dir: Path) -> list[dict[str, str]]:
@@ -331,8 +453,11 @@ def validate_project(project_dir: Path) -> list[dict[str, str]]:
             part_records[pn] = (part, str(part_path))
         if not part_records:
             findings.append(finding(str(parts_dir), "no part records found"))
+    assembly_path = str(hw / "assembly.yaml")
+    inventory = (assembly_inventory(documents["assembly.yaml"], assembly_path, part_records, findings)
+                 if valid.get("assembly.yaml") else None)
     if valid.get("interfaces.yaml"):
-        check_interfaces(documents["interfaces.yaml"], str(hw / "interfaces.yaml"), part_records, findings)
+        check_interfaces(documents["interfaces.yaml"], str(hw / "interfaces.yaml"), part_records, inventory, findings)
 
     bom = read_csv(hw / "bom.csv", CSV_COLUMNS["bom.csv"], findings)
     bom_levels: list[int | None] = []
@@ -406,28 +531,14 @@ def validate_project(project_dir: Path) -> list[dict[str, str]]:
             findings.append(finding(f"{hw / 'bom.csv'}:{index}", "level must start at 0 or 1 and cannot skip a parent depth"))
         previous_level = level
 
-    assembly = documents.get("assembly.yaml")
-    if isinstance(assembly, dict):
-        subassemblies = assembly.get("subassemblies", [])
-        assembly_parts = {pn for item in subassemblies if isinstance(item, dict) for pn in item.get("parts", [])}
-        for joint in assembly.get("joints", []):
-            if not isinstance(joint, dict):
-                continue
-            joint_id = joint.get("id", "joint")
-            for endpoint in ("parent", "child"):
-                pn = joint.get(endpoint)
-                if pn not in part_records:
-                    findings.append(finding(str(hw / "assembly.yaml"), f"{joint_id} {endpoint} part {pn!r} does not exist"))
-                if pn not in assembly_parts:
-                    findings.append(finding(str(hw / "assembly.yaml"), f"{joint_id} {endpoint} part {pn!r} is not included in any subassembly"))
-            try:
-                lower, nominal, upper = joint["min"], joint["nominal"], joint["max"]
-                if lower > upper:
-                    findings.append(finding(str(hw / "assembly.yaml"), f"{joint_id} minimum exceeds maximum"))
-                if not lower <= nominal <= upper:
-                    findings.append(finding(str(hw / "assembly.yaml"), f"{joint_id} nominal is outside its limits"))
-            except (KeyError, TypeError):
-                pass
+    if inventory is not None:
+        check_joints(documents["assembly.yaml"], inventory, assembly_path, part_records, findings)
+        totals = bom_totals(bom, bom_levels)
+        for pn, count in inventory.quantities().items():
+            placed = inventory.of(pn)
+            if placed[0].explicit and pn in totals and totals[pn] != count:
+                findings.append(finding(str(hw / "bom.csv"), f"BOM quantity of {pn} is {totals[pn]}, but assembly.yaml "
+                                        f"places it {count} times ({', '.join(o.ref for o in placed)})"))
 
     requirements = documents.get("requirements.yaml")
     verification = read_csv(hw / "verification.csv", CSV_COLUMNS["verification.csv"], findings)

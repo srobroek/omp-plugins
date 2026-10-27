@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Install-path checks for the generated CAD reviewer agents.
+"""Install-path checks for the generated CAD agents and the Beads formulas.
 
 Each harness test stages the install that cad/README.md documents in a temporary
 project, then asks the harness itself, without a model call, whether it found the
-reviewers. A test skips when its harness CLI is not installed. The isolation and
+agents. The formula test asks `bd` whether it found the copied formulas. A test skips when its harness CLI is not installed. The isolation and
 login helpers come from the eval adapters, which drive the same CLIs.
 """
 
@@ -22,7 +22,8 @@ import unittest
 from pathlib import Path
 
 CAD = Path(__file__).resolve().parents[1]
-REVIEWERS = ("cad-mech-reviewer", "cad-dfm-reviewer")
+AGENTS = sorted(path.stem for path in (CAD / "agents").glob("*.md"))
+FORMULAS = sorted(path.name.removesuffix(".formula.toml") for path in (CAD / "formulas").glob("*.formula.toml"))
 
 sys.path.insert(0, str(CAD / "evals"))
 from adapters.claude import resolve_launcher  # noqa: E402
@@ -119,7 +120,7 @@ class ClaudePluginInstall(InstallTest):
         init = self.init_event(plugin)
         self.assertIn("cad", [entry.get("name") for entry in init.get("plugins", [])])
         agents = set(init.get("agents", []))
-        for name in REVIEWERS:
+        for name in AGENTS:
             self.assertIn(f"cad:{name}", agents)
         self.assertNotIn("cad:omp-source-sentinel", agents)
 
@@ -138,7 +139,7 @@ class KiroWorkspaceInstall(InstallTest):
         # Kiro resolves a relative resource URI from the workspace root, like the
         # `skill://.kiro/skills/**/SKILL.md` examples in its configuration reference.
         self.stage_workspace()
-        for name in REVIEWERS:
+        for name in AGENTS:
             agent = json.loads((self.project / ".kiro" / "agents" / f"{name}.json").read_text(encoding="utf-8"))
             skills = [uri.removeprefix("skill://") for uri in agent["resources"] if uri.startswith("skill://")]
             with self.subTest(agent=name):
@@ -146,7 +147,7 @@ class KiroWorkspaceInstall(InstallTest):
                 for skill in skills:
                     self.assertTrue((self.project / skill).is_file(), f"{name} resource skill://{skill} does not resolve")
 
-    def test_agent_list_reports_the_reviewers_as_workspace_agents(self) -> None:
+    def test_agent_list_reports_every_agent_as_a_workspace_agent(self) -> None:
         kiro = shutil.which("kiro-cli")
         if kiro is None:
             self.skipTest("kiro-cli is not installed")
@@ -166,7 +167,7 @@ class KiroWorkspaceInstall(InstallTest):
         # kiro-cli 2.34 writes the listing to stderr, coloured even under NO_COLOR.
         report = re.sub(r"\x1b\[[0-9;]*m", "", listed.stdout + listed.stderr)
         self.assertEqual(listed.returncode, 0, report)
-        for name in REVIEWERS:
+        for name in AGENTS:
             line = next((row for row in report.splitlines() if row.split()[:1] == [name]), "")
             self.assertIn("Workspace", line, report)
             self.assertIn("(v3 format)", line, report)
@@ -197,7 +198,7 @@ class OpencodeProjectInstall(InstallTest):
                 continue
         return [event["error"] for event in events if event.get("type") == "error" and isinstance(event.get("error"), dict)]
 
-    def test_run_resolves_the_reviewers_from_the_project_directory(self) -> None:
+    def test_run_resolves_every_agent_from_the_project_directory(self) -> None:
         agents = self.project / ".opencode" / "agents"
         agents.mkdir(parents=True)
         for path in sorted((CAD / "harness" / "opencode" / "agents").glob("*.md")):
@@ -207,7 +208,7 @@ class OpencodeProjectInstall(InstallTest):
         # Control: an agent OpenCode cannot find fails before model routing.
         absent = self.run_agent("cad-absent-reviewer")
         self.assertTrue(any("Agent not found" in error.get("message", "") for error in absent), absent)
-        for name in REVIEWERS:
+        for name in AGENTS:
             with self.subTest(agent=name):
                 errors = self.run_agent(name)
                 self.assertEqual([error.get("type") for error in errors], ["provider.no-route"], errors)
@@ -220,6 +221,28 @@ class OpencodeProjectInstall(InstallTest):
         self.assertIn("description: Prototype-to-CAD flow (cad plugin)", command)
         self.assertIn("Load the `cad-flow` skill and follow it", command)
         self.assertIn("$ARGUMENTS", command)
+
+
+class BeadsFormulaInstall(InstallTest):
+    """The formulas copied into `.beads/formulas/`, as every install path in cad/README.md does."""
+
+    def test_bd_lists_every_copied_formula(self) -> None:
+        if shutil.which("bd") is None:
+            self.skipTest("bd is not installed")
+        env = {**isolated_env(self.root), "BEADS_DIR": str(self.project / ".beads"),
+               "BEADS_ACTOR": "cad-install-test", "BEADS_DOLT_SHARED_SERVER": ""}
+        subprocess.run(["git", "init", "-q"], cwd=self.project, check=True)
+        subprocess.run(["bd", "init", "--quiet"], cwd=self.project, env=env, check=True, capture_output=True, timeout=120)
+        formulas = self.project / ".beads" / "formulas"
+        formulas.mkdir(parents=True, exist_ok=True)
+        for path in sorted((CAD / "formulas").glob("*.formula.toml")):
+            shutil.copy2(path, formulas / path.name)
+        listed = subprocess.run(["bd", "formula", "list", "--json"], cwd=self.project, env=env,
+                                capture_output=True, text=True, timeout=120)
+        self.assertEqual(listed.returncode, 0, listed.stderr)
+        found = {entry.get("name") for entry in json.loads(listed.stdout)}
+        self.assertLessEqual(set(FORMULAS), found, listed.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

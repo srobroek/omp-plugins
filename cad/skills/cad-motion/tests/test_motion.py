@@ -169,6 +169,68 @@ joints:
   - {{id: J-001, type: revolute, parent: TST-0001, child: TST-0002, axis: [0, 0, 1], origin: [100, 0, 0], min: -90, max: 90, nominal: 0}}
   - {{id: J-002, type: revolute, parent: TST-0002, child: TST-0003, axis: [0, 0, 1], origin: [200, 0, 0], min: 0, max: {j2_max}, nominal: 0}}
 """
+# Two occurrences of the part-local arm TST-0202 on the ground plate, each on its own revolute joint.
+TWINS_YAML = """occurrences:
+  - {id: arm-a, PN: TST-0202}
+  - {id: arm-b, PN: TST-0202, placement: {translation_mm: [0, 30, 0]}}
+subassemblies:
+  - {id: twins, title: Twin arms, parts: [TST-0201], occurrences: ["@arm-a", "@arm-b"]}
+joints:
+  - {id: J-001, type: revolute, parent: TST-0201, child: "@arm-a", axis: [0, 0, 1], origin: [0, 0, 0], min: 0, max: 90, nominal: 0}
+  - {id: J-002, type: revolute, parent: TST-0201, child: "@arm-b", axis: [0, 0, 1], origin: [0, 30, 0], min: -10, max: 10, nominal: 0}
+"""
+# One asymmetric arm placed by a rotation and a translation, fixed to the plate.
+PLACED_YAML = """occurrences:
+  - {id: arm-p, PN: TST-0202, placement: {translation_mm: [40, 10, 0], rotation: {axis: [0, 0, 2], angle_deg: 90}}}
+subassemblies:
+  - {id: placed, title: Placed arm, parts: [TST-0201], occurrences: ["@arm-p"]}
+joints:
+  - {id: J-001, type: fixed, parent: TST-0201, child: "@arm-p", axis: [0, 0, 1], origin: [0, 0, 0], min: 0, max: 0, nominal: 0}
+"""
+
+
+class OccurrenceKinematicsTests(unittest.TestCase):
+    """T_i = D_i P_i on occurrences; needs no OCP. Expected values are hand-computed."""
+
+    def chain(self, settings: dict[str, float] | None = None):
+        data = pose.assembly_data
+        inventory = data.normalize(__import__("yaml").safe_load(TWINS_YAML), {"TST-0202": "part_local"})
+        assembly = pose.Assembly(inventory, (), {})
+        joints = [pose.make_joint(raw, assembly.attachable) for raw in __import__("yaml").safe_load(TWINS_YAML)["joints"]]
+        chain = pose.build_chain(joints, inventory.occurrences)
+        return chain, chain.transforms(chain.complete(settings or {}))
+
+    def test_moving_one_sibling_does_not_move_the_other(self) -> None:
+        chain, transforms = self.chain({"J-001": 90.0})
+        assert_close(self, transforms["arm-a"].apply((50.0, 0.0, 0.0)), (0.0, 50.0, 0.0))
+        assert_close(self, transforms["arm-b"].apply((50.0, 0.0, 0.0)), (50.0, 30.0, 0.0))
+        self.assertEqual(chain.ids, ("TST-0201", "arm-a", "arm-b"))
+
+    def test_the_rest_placement_is_applied_once_after_the_motion(self) -> None:
+        """J-002 turns arm-b about its own origin (0, 30): D P, not P D and not P D P."""
+        _, transforms = self.chain({"J-002": 10.0})
+        expected = (30.0 * 0.0 + 50.0 * math.cos(math.radians(10)), 30.0 + 50.0 * math.sin(math.radians(10)), 0.0)
+        assert_close(self, transforms["arm-b"].apply((50.0, 0.0, 0.0)), expected)
+
+    def test_a_bare_pn_placed_twice_is_ambiguous_and_at_id_resolves(self) -> None:
+        chain, _ = self.chain()
+        with self.assertRaisesRegex(pose.MotionError, "ambiguous.*@arm-a, @arm-b"):
+            chain.resolve("TST-0202")
+        self.assertEqual((chain.resolve("@arm-b"), chain.resolve("TST-0201")), ("arm-b", "TST-0201"))
+
+    def test_a_repeated_assembly_zero_part_is_refused(self) -> None:
+        with self.assertRaisesRegex(pose.assembly_data.InventoryError, "placed 2 times.*assembly_zero"):
+            pose.assembly_data.normalize(__import__("yaml").safe_load(TWINS_YAML), {})
+
+    def test_freecad_connector_frames_strip_the_rest_placement(self) -> None:
+        chain, _ = self.chain()
+        frames = [{oid: [list(t.trans), list(t.quaternion())] for oid, t in chain.transforms({"J-001": v, "J-002": 0.0}).items()}
+                  for v in (0.0, 45.0, 90.0)]
+        checks = freecad_assembly.check_frames(chain, frames)
+        self.assertEqual(checks["residuals"], [])
+        self.assertAlmostEqual(checks["joints"]["J-001"]["observed_max"], 90.0, places=6)
+        self.assertAlmostEqual(checks["joints"]["J-002"]["observed_max"], 0.0, places=6)
+
 
 
 @unittest.skipUnless(shutil.which("uv"), "uv is required to build and read STEP through OCP")
@@ -249,8 +311,98 @@ class StepTests(unittest.TestCase):
         proc, result = self.run_script("pose.py", "--hw", str(TEMPLATE_HW), "--step", str(self.lamp / "lamp-arm.step"),
                                        "--set", "J-002=-90", "--out", str(out))
         self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
-        self.assertEqual(sorted(result["placements"]), [f"LMP-{n:04d}" for n in range(1, 14)])
-        self.assertIn("PRODUCT('LMP-0003 Upper link'", out.read_text(encoding="utf-8"))
+        self.assertEqual(sorted(result["placements"]),
+                         [f"LMP-{n:04d}" for n in range(1, 11)] + ["ring-base", "ring-elbow", "ring-head"])
+        self.assertEqual({oid: pn for oid, pn in result["occurrences"].items() if pn == "LMP-0011"},
+                         {"ring-base": "LMP-0011", "ring-elbow": "LMP-0011", "ring-head": "LMP-0011"})
+        text = out.read_text(encoding="utf-8")
+        self.assertIn("PRODUCT('LMP-0003 Upper link'", text)
+        self.assertEqual(text.count("PRODUCT('LMP-0011 Retaining ring DIN 471 - 5x0.6'"), 1)  # one definition
+        probe = self.probe(out)
+        rings = sorted(c["occurrence"] for c in probe["components"] if c["pn"] == "LMP-0011")
+        self.assertEqual(rings, ["ring-base", "ring-elbow", "ring-head"])
+        boxes = {c["occurrence"]: c["bbox"] for c in probe["components"] if c["occurrence"]}
+        # The elbow ring stays on the lower link's pin, outside the -Y cheek: y -11.605..-11.005.
+        assert_close(self, boxes["ring-elbow"][0], (156.8, -11.605, 36.8), places=3)
+        assert_close(self, boxes["ring-elbow"][1], (163.2, -11.005, 43.2), places=3)
+        # The head ring rides the upper link, turned -90 deg about Y through (160, 0, 40): its rest
+        # centre (360, -8.805, 40) moves to (160, -8.805, 240).
+        assert_close(self, boxes["ring-head"][0], (156.8, -9.105, 236.8), places=3)
+        assert_close(self, boxes["ring-head"][1], (163.2, -8.505, 243.2), places=3)
+
+    def probe(self, step: Path) -> dict:
+        proc = subprocess.run(["uv", "run", "--quiet", "--script", str(HERE / "fixtures" / "probe_step.py"), str(step)],
+                              capture_output=True, text=True, check=False, timeout=900)
+        self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+        return json.loads(proc.stdout)
+
+    def twins(self, assembly: str) -> Path:
+        """A record over the twins fixture: TST-0201 assembly_zero, TST-0202 part_local."""
+        hw = Path(tempfile.mkdtemp(dir=self.root))
+        (hw / "assembly.yaml").write_text(assembly, encoding="utf-8")
+        for pn, title, frame in (("TST-0201", "Ground plate", None), ("TST-0202", "Arm", "part_local")):
+            (hw / "parts" / pn).mkdir(parents=True)
+            (hw / "parts" / pn / "part.yaml").write_text(
+                f"PN: {pn}\ntitle: {title}\n" + (f"model_frame: {frame}\n" if frame else ""), encoding="utf-8")
+        return hw
+
+    def test_an_asymmetric_part_local_occurrence_is_placed_once_rotation_first(self) -> None:
+        hw = self.twins(PLACED_YAML)
+        out = self.root / "placed.step"
+        proc, result = self.run_script("pose.py", "--hw", str(hw), "--parts-dir", str(self.root / "fx" / "twins"),
+                                       "--out", str(out))
+        self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+        # 90 deg about Z, then (40, 10, 0): x' = 40 - y, y' = 10 + x.
+        self.assertEqual(result["placements"]["arm-p"], [[0.0, -1.0, 0.0, 40.0], [1.0, 0.0, 0.0, 10.0], [0.0, 0.0, 1.0, 0.0]])
+        arm = next(c for c in self.probe(out)["components"] if c["occurrence"] == "arm-p")
+        self.assertEqual(arm["name"], "TST-0202 Arm [@arm-p]")
+        # Box x 0..50, y -5..5 and tab x 0..5, y 5..10, rotated then moved: x 30..45, y 10..60.
+        assert_close(self, arm["bbox"][0], (30.0, 10.0, 0.0), places=5)
+        assert_close(self, arm["bbox"][1], (45.0, 60.0, 5.0), places=5)
+
+    def test_moving_one_sibling_leaves_the_other_at_its_rest_placement(self) -> None:
+        hw = self.twins(TWINS_YAML)
+        out = self.root / "twins.step"
+        proc, result = self.run_script("pose.py", "--hw", str(hw), "--parts-dir", str(self.root / "fx" / "twins"),
+                                       "--set", "J-001=90", "--out", str(out))
+        self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+        self.assertEqual(result["placements"]["arm-a"], [[0.0, -1.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]])
+        self.assertEqual(result["placements"]["arm-b"], [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 30.0], [0.0, 0.0, 1.0, 0.0]])
+        boxes = {c["occurrence"]: c["bbox"] for c in self.probe(out)["components"] if c["occurrence"]}
+        assert_close(self, boxes["arm-a"][0], (-10.0, 0.0, 0.0), places=5)
+        assert_close(self, boxes["arm-b"][0], (0.0, 25.0, 0.0), places=5)
+        assert_close(self, boxes["arm-b"][1], (50.0, 40.0, 5.0), places=5)
+
+    def test_two_occurrences_of_one_part_collide_in_a_sweep(self) -> None:
+        hw = self.twins(TWINS_YAML)
+        proc, result = self.run_script("sweep.py", "--hw", str(hw), "--parts-dir", str(self.root / "fx" / "twins"),
+                                       "--steps", "2", "--grid", "0", "--end-effector", "@arm-a",
+                                       "--worst-step", str(self.root / "w-twins.step"))
+        self.assertEqual(proc.returncode, 1, proc.stderr[-2000:])
+        self.assertEqual(result["pairs"]["checked"], [["@arm-a", "@arm-b"]])
+        self.assertEqual([c["pose"] for c in result["collisions"]], [{"J-001": 90.0, "J-002": 0.0}])
+        hit = result["collisions"][0]["pairs"][0]
+        self.assertEqual(hit["pair"], ["@arm-a", "@arm-b"])
+        self.assertAlmostEqual(hit["volume_mm3"], 375.0, places=2)  # x 0..5, y 25..40, z 0..5
+
+    def test_a_bare_part_number_placed_twice_is_ambiguous(self) -> None:
+        hw = self.twins(TWINS_YAML)
+        proc, result = self.run_script("sweep.py", "--hw", str(hw), "--parts-dir", str(self.root / "fx" / "twins"),
+                                       "--steps", "2", "--grid", "0", "--end-effector", "TST-0202",
+                                       "--worst-step", str(self.root / "w-ambiguous.step"))
+        self.assertEqual((proc.returncode, result), (2, {}))
+        self.assertIn("ambiguous", proc.stderr)
+        self.assertIn("@arm-a, @arm-b", proc.stderr)
+
+    def test_an_assembly_step_with_the_wrong_rest_placement_is_refused(self) -> None:
+        hw = self.twins(TWINS_YAML)
+        posed = self.root / "twins-posed.step"
+        proc, _ = self.run_script("pose.py", "--hw", str(hw), "--parts-dir", str(self.root / "fx" / "twins"),
+                                  "--set", "J-001=45", "--out", str(posed))
+        self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+        proc, result = self.run_script("pose.py", "--hw", str(hw), "--step", str(posed), "--out", str(self.root / "x.step"))
+        self.assertEqual((proc.returncode, result), (2, {}))
+        self.assertIn("not at its rest placement", proc.stderr)
 
     def cad_model_version(self) -> Path:
         """A cad-model layout: versions/v1 with zero-pose parts, an assembly.step posed at J-001=30, latest.json."""

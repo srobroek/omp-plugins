@@ -1,5 +1,5 @@
 ---
-description: Reviews per-part FDM or CNC manufacturability with measured evidence. Spawn at CRITIQUE; never edits.
+description: "Reviews per-part FDM or CNC manufacturability with measured evidence. Spawn at CRITIQUE; never edits."
 mode: subagent
 permission:
   '*': deny
@@ -31,6 +31,6 @@ NOT Assume a process for all parts. Do not infer limits from appearance or inven
 
 ## Output
 
-Begin your reply with `VERDICT: PASS|MINOR|MAJOR` and follow the output contract in `skill://cad-review-dfm`.
+Begin your reply with `VERDICT: PASS|MINOR|MAJOR` and follow the output contract in `skill://cad-review-dfm`. Give every file you cite as an absolute path.
 CAP 100w clean · 240w with findings.
 MUST Never reprint code, diffs, file contents, or the caller's claim.

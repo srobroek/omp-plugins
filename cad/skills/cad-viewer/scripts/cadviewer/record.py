@@ -27,8 +27,12 @@ CAD_RENDER_SCRIPTS = Path(__file__).resolve().parents[3] / "cad-render" / "scrip
 
 @dataclass(frozen=True)
 class Part:
+    """One displayed occurrence: a placement of the PN definition `pn` (a legacy part's id is its PN)."""
+
+    id: str
     pn: str
-    product: str  # STEP product name and viewer node name, PN first
+    ref: str  # `@id`, or the PN of a singleton
+    product: str  # viewer node name: the instance name, `<PN> <title>` or `<PN> <title> [@id]`
     title: str
     material: str
     process: str
@@ -41,7 +45,7 @@ class Part:
 class Group:
     id: str
     title: str
-    parts: tuple[str, ...]
+    parts: tuple[str, ...]  # occurrence ids
     path: str
 
 
@@ -57,24 +61,32 @@ class Version:
     metrics: dict[str, Any]
     manifest: dict[str, Any]
 
-    def part(self, pn: str) -> Part:
+    def part(self, target: str) -> Part:
+        """The occurrence `target` names: its id, `@id`, or a PN placed once."""
+        key = target[1:] if target.startswith("@") else target
         for part in self.parts:
-            if part.pn == pn:
+            if part.id == key:
                 return part
-        raise ViewerError(f"{self.label}: no part {pn}; parts: {[p.pn for p in self.parts]}")
+        placed = [p for p in self.parts if p.pn == target]
+        if len(placed) == 1:
+            return placed[0]
+        if placed:
+            raise ViewerError(f"{self.label}: {target} is ambiguous, placed {len(placed)} times; "
+                              f"name one of {', '.join(p.ref for p in placed)}")
+        raise ViewerError(f"{self.label}: no part {target}; parts: {[p.ref for p in self.parts]}")
 
     def targets(self, target: str) -> tuple[str, ...]:
-        """PNs named by a PN or a subassembly id."""
+        """Occurrence ids named by a subassembly id (all its members) or one occurrence (`part`)."""
         for group in self.groups:
             if group.id == target:
                 return group.parts
-        return (self.part(target).pn,)
+        return (self.part(target).id,)
 
     def nominal_rows(self) -> dict[str, list[list[float]]]:
-        """Per-part 3x4 placement rows at the pose this version was built in (manifest `pose`)."""
+        """Per-occurrence 3x4 placement rows at the pose this version was built in (manifest `pose`)."""
         rows = (self.manifest.get("pose") or {}).get("transforms")
-        if not isinstance(rows, dict) or any(p.pn not in rows for p in self.parts):
-            raise ViewerError(f"{self.files['manifest']}: pose.transforms must name every part")
+        if not isinstance(rows, dict) or any(p.id not in rows for p in self.parts):
+            raise ViewerError(f"{self.files['manifest']}: pose.transforms must name every occurrence")
         return rows
 
 
@@ -151,14 +163,23 @@ def colour_for(material: str, finish: str) -> str:
     return material_table().resolve(material, finish).pbr["color"]
 
 
-def load_groups(hw: Path) -> list[tuple[str, str, list[str]]]:
+def load_groups(hw: Path) -> list[tuple[str, str]]:
+    """(id, title) of every assembly.yaml subassembly, in record order."""
     data = read_yaml(hw / "assembly.yaml") if (hw / "assembly.yaml").is_file() else {}
-    groups = []
+    return [(sub["id"], str(sub.get("title") or sub["id"])) for sub in (data or {}).get("subassemblies") or []
+            if isinstance(sub, dict) and isinstance(sub.get("id"), str)]
+
+
+def legacy_groups(hw: Path) -> dict[str, str]:
+    """PN -> first subassembly listing it in `parts`: the grouping a version 1 manifest did not record."""
+    data = read_yaml(hw / "assembly.yaml") if (hw / "assembly.yaml").is_file() else {}
+    grouped: dict[str, str] = {}
     for sub in (data or {}).get("subassemblies") or []:
         if isinstance(sub, dict) and isinstance(sub.get("id"), str):
-            groups.append((sub["id"], str(sub.get("title") or sub["id"]),
-                           [pn for pn in sub.get("parts") or [] if isinstance(pn, str)]))
-    return groups
+            for pn in sub.get("parts") or []:
+                if isinstance(pn, str):
+                    grouped.setdefault(pn, sub["id"])
+    return grouped
 
 
 def load_version(hw: Path, version: str = "latest") -> Version:
@@ -167,25 +188,31 @@ def load_version(hw: Path, version: str = "latest") -> Version:
     label, files, parts_dir = found.label, found.files, found.parts_dir
     products = load_part_map(files["part_map"])
     manifest = read_json(files["manifest"])
+    versions = _cad_render_module("versions")
+    try:
+        occurrences = versions.built_occurrences(read_json(files["part_map"]), manifest, legacy_groups(hw))
+    except versions.VersionError as error:
+        raise ViewerError(f"{label}: {error}") from error
     product_id = str(manifest.get("product_id") or "assembly")
-    grouped: dict[str, str] = {}
     groups = []
-    for gid, title, members in load_groups(hw):
-        present = tuple(pn for pn in members if pn in products and pn not in grouped)
-        grouped.update({pn: gid for pn in present})
-        if present:
-            groups.append(Group(gid, title, present, f"/{product_id}/{gid}"))
+    for gid, title in load_groups(hw):
+        members = tuple(oid for oid in sorted(occurrences) if occurrences[oid].group == gid)
+        if members:
+            groups.append(Group(gid, title, members, f"/{product_id}/{gid}"))
     parts = []
-    for pn in sorted(products):
+    for oid in sorted(occurrences):
+        built = occurrences[oid]
+        pn = built.pn
         record_path = hw / "parts" / pn / "part.yaml"
         record = read_yaml(record_path) if record_path.is_file() else {}
         record = record if isinstance(record, dict) else {}
         material, process = str(record.get("material") or ""), str(record.get("process") or "")
         finish = str(record.get("finish") or "")
-        group = grouped.get(pn)
-        path = f"/{product_id}/{group}/{products[pn]}" if group else f"/{product_id}/{products[pn]}"
+        group = built.group if any(g.id == built.group for g in groups) else None
+        node = products[pn] if built.ref == pn else f"{products[pn]} [{built.ref}]"
+        path = f"/{product_id}/{group}/{node}" if group else f"/{product_id}/{node}"
         title = str(record.get("title") or products[pn][len(pn):].strip())
-        parts.append(Part(pn, products[pn], title, material, process, colour_for(material, finish), group, path))
+        parts.append(Part(oid, pn, built.ref, node, title, material, process, colour_for(material, finish), group, path))
     return Version(hw, label, product_id, parts_dir, files, tuple(parts), tuple(groups),
                    read_json(files["metrics"]), manifest)
 
@@ -298,15 +325,19 @@ def panel_model(version: Version, check: dict[str, Any] | None) -> dict[str, Any
     connections = ((check or {}).get("checks") or {}).get("connection", {}).get("parts", {})
     metric_parts = version.metrics.get("parts") or {}
     parts = []
+    placed = version.metrics.get("occurrences") or {}  # schema_version 2: nominal-pose geometry per occurrence
     for part in version.parts:
         m = metric_parts.get(part.pn) or {}
+        spatial = placed.get(part.id) or m  # a version 1 part is modeled in place: its PN box is its spatial box
         parts.append({
+            "id": part.id, "ref": part.ref,
             "pn": part.pn, "product": part.product, "title": part.title, "material": part.material,
             "process": part.process, "colour": part.colour, "group": part.group, "path": part.path,
-            "connection": connections.get(part.pn),
-            "findings": findings.get(part.pn, []),
+            "connection": connections.get(part.id),
+            # Occurrence checks key by occurrence id, definition checks by PN; a legacy id is its PN.
+            "findings": findings.get(part.id, []) + (findings.get(part.pn, []) if part.id != part.pn else []),
             "metrics": {"volume_mm3": _finite(m.get("volume_mm3")), "mass_g": _finite(m.get("mass_g")),
-                        "mass_target_g": _finite(m.get("mass_target_g")), "bbox_mm": m.get("bbox_mm"),
+                        "mass_target_g": _finite(m.get("mass_target_g")), "bbox_mm": spatial.get("bbox_mm"),
                         "holes": holes(part.pn, m.get("holes"))},
         })
     totals = version.metrics.get("totals") or {}
@@ -316,7 +347,7 @@ def panel_model(version: Version, check: dict[str, Any] | None) -> dict[str, Any
         "parts": parts,
         "totals": {"volume_mm3": _finite(totals.get("volume_mm3")), "mass_g": _finite(totals.get("mass_g")),
                    "parts_without_density": totals.get("parts_without_density") or [],
-                   "bbox_mm": _union_bbox(list(metric_parts.values()))},
+                   "bbox_mm": _union_bbox(list(placed.values()) if placed else list(metric_parts.values()))},
         "check": None if check is None else {
             "status": check.get("status"), "blocking_failures": check.get("blocking_failures") or [],
             "warnings": check.get("warnings") or [], "pose": check.get("pose")},

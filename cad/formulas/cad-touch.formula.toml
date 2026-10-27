@@ -1,5 +1,6 @@
 # cad-touch: ECO-style change to a released part, with an explicit revision bump.
 # Pour with product, scope, part, from_rev, to_rev, decision, and change vars.
+# Revised parts and recheck cases fan out as bonded molecules; each batch ends in one lead integration and one gate.
 formula = "cad-touch"
 description = "ECO-style released-part change for {{product}} / {{part}}: record impact, bump revision, recheck affected design, and release"
 type = "workflow"
@@ -70,33 +71,80 @@ type = "human"
 timeout = "72h"
 
 [[steps]]
-id = "revise-part"
-title = "Revise {{part}} from {{from_rev}} to {{to_rev}}"
+id = "revise-fanout"
+title = "Fan out one revision molecule per part in the ECO {{decision}} impact set"
 type = "task"
 needs = ["intent-gate"]
-labels = ["cad", "phase:eco", "phase:parts"]
-description = "Change only {{part}} and explicitly impacted dependent parts. Update part.yaml to {{to_rev}} and make the corresponding model.py change in the selected {{kernel}} environment; {{to_rev}} must be the immediate successor of {{from_rev}} under the design-record rev sequence. Keep unaffected part files and revisions unchanged. Draft live previews without checks. For each approved commit batch, run `uv run --script skill://cad-model/scripts/cad_model.py run hw --label vN --kernel {{kernel}}`, then `uv run --script skill://cad-model/scripts/cad_model.py check vN --hw hw [--out FILE]`; press fits declared in `hw/interfaces.yaml` are automatically allowed and a blocking check failure stops the batch. Render the successful version with `uv run --script skill://cad-render/scripts/render.py hw --version vN`, then run `uv run --script skill://cad-design/scripts/form_check.py --hw hw --parts-dir hw/versions/vN/parts --fidelity F3`. Commit the decision/design-record entry and bead note for the approved batch."
+labels = ["cad", "phase:eco", "fanout"]
+description = "Bond one mol-cad-detail per part in the approved impact set onto this step before dispatch: `bd mol bond mol-cad-detail <this-step> --type parallel --ref detail-<PN> --var product={{product}} --var scope={{scope}} --var part=<PN> --var kernel={{kernel}} --var process_default={{process_default}} --var change='ECO {{decision}}: <change for this part>; set rev <next rev>'`. {{part}} goes from {{from_rev}} to {{to_rev}}, the immediate successor under the design-record rev sequence; an impacted dependent bumps to its own immediate successor only when its geometry changes. Keep unaffected part files and revisions unchanged. Dispatch every ready subagent step below this step in ONE parallel batch of cad-part-designer workers, as skill://cad-flow Delegation describes. Close each molecule's steps and root from its worker's report; dispatch a failed part again in the next batch. Close this step when every child is closed."
 
 [steps.metadata]
-skill_hints = "cad-model, cad-record, cad-flow"
-execution_mode = "interactive"
+skill_hints = "cad-flow, cad-record"
 
 [[steps]]
-id = "recheck-detail-analysis"
-title = "Recheck L3-L4 and dependencies for the ECO impact set"
+id = "revise-integrate"
+title = "Integrate the revised parts for ECO {{decision}} and build one version"
 type = "task"
-needs = ["revise-part"]
-labels = ["cad", "phase:detail", "phase:analysis"]
-description = "Run skill://cad-fits and skill://cad-drawings for impacted parts. Run `uv run --script skill://cad-motion/scripts/sweep.py --hw hw --version vN --worst-step worst.step` for kinematics. For static FEA, run `uv run --script skill://cad-analysis/scripts/fea_static.py <case.yaml>`. Recheck detail, fits, fasteners, process rules, drawings, BOM, interference, clearance, stack-up, kinematics, and static FEA for {{part}} and affected dependents only. Use skill://cad-recheck for post-LAYOUT checks. Preserve evidence for untouched parts. Update verification.csv and the ECO record."
+needs = ["revise-fanout"]
+waits_for = "all-children"
+labels = ["cad", "phase:eco", "phase:parts"]
+description = "Accept a delivery only with its passing F3 scratch build and the revision the brief named. Decide every proposal and apply the accepted ones to the shared records yourself. Commit one batch: `uv run --script skill://cad-model/scripts/cad_model.py run hw --label vN --kernel {{kernel}}`, then `uv run --script skill://cad-model/scripts/cad_model.py check vN --hw hw [--out FILE]`; press fits declared in `hw/interfaces.yaml` are automatically allowed and a blocking check failure stops the batch. Render with `uv run --script skill://cad-render/scripts/render.py hw --version vN`, run `uv run --script skill://cad-design/scripts/form_check.py --hw hw --parts-dir hw/versions/vN/parts --fidelity F3`, and generate each revised part's drawing from vN with `uv run --script skill://cad-drawings/scripts/drawing.py hw/versions/vN/parts/<PN>.step --part hw/parts/<PN>/part.yaml --product hw/product.yaml --metrics hw/versions/vN/metrics.json --output-dir <dir> [--scale <ratio>]`. Commit the decision/design-record entry and bead note."
 
 [steps.metadata]
-skill_hints = "cad-fits, cad-drawings, cad-bom, cad-analysis, cad-recheck, cad-record"
+skill_hints = "cad-model, cad-design, cad-drawings, cad-render, cad-record"
+
+[[steps]]
+id = "revision-gate"
+title = "REVISION gate: approve the revised parts for ECO {{decision}}"
+type = "task"
+needs = ["revise-integrate"]
+labels = ["cad", "phase:gate"]
+description = "Present the revised parts, their revisions, renders, check and F3 form results, and drawings, each file as an absolute path on its own line, plus the viewer URL when it runs. Ask the user to approve the revision or name changes. Only bd gate resolve after explicit approval closes this human gate."
+
+[steps.gate]
+type = "human"
+timeout = "72h"
+
+[[steps]]
+id = "analysis-fanout"
+title = "Fan out the L3-L4 recheck cases for the ECO impact set"
+type = "task"
+needs = ["revision-gate"]
+labels = ["cad", "phase:analysis", "fanout"]
+description = "List the analysis cases that cover {{part}} or an impacted dependent: the joint sweep, the FreeCAD assembly check, tolerance stack-ups, and static FEA. Bond each case that needs no other case's output onto this step before dispatch: `bd mol bond mol-cad-analysis <this-step> --type parallel --ref analysis-<case> --var product={{product}} --var scope={{scope}} --var case=<id> --var kind=sweep|assembly|stackup|fea --var version=vN`. Dispatch every ready subagent step below this step in ONE parallel batch of cad-analyst workers, as skill://cad-flow Delegation describes. An FEA case at the worst-case pose waits for the sweep molecule, then runs as the next batch. Close each molecule from its worker's report. Close this step when every child is closed."
+
+[steps.metadata]
+skill_hints = "cad-flow, cad-motion, cad-analysis"
+
+[[steps]]
+id = "analysis-integrate"
+title = "Record the ECO recheck evidence for the impact set"
+type = "task"
+needs = ["analysis-fanout"]
+waits_for = "all-children"
+labels = ["cad", "phase:detail", "phase:analysis"]
+description = "Check each case's inputs and warnings, then update verification.csv and the ECO record yourself for {{part}} and affected dependents only, tied to version vN. Recheck detail, fits, fasteners, process rules, drawings, BOM, interference, clearance, stack-up, kinematics, and static FEA for the impact set with skill://cad-recheck; preserve evidence for untouched parts. A failed case blocks the gate."
+
+[steps.metadata]
+skill_hints = "cad-analysis, cad-recheck, cad-bom, cad-record"
+
+[[steps]]
+id = "analysis-gate"
+title = "ANALYSIS gate for ECO {{decision}}"
+type = "task"
+needs = ["analysis-integrate"]
+labels = ["cad", "phase:gate"]
+description = "Present each case's verdict and key numbers and the updated verification rows for the impact set, each result file as an absolute path on its own line. Ask the user to approve the recheck or name changes. Only bd gate resolve after explicit approval closes this human gate."
+
+[steps.gate]
+type = "human"
+timeout = "72h"
 
 [[steps]]
 id = "mech-critique"
 title = "CRITIQUE ECO mechanical change"
 type = "task"
-needs = ["recheck-detail-analysis"]
+needs = ["analysis-gate"]
 labels = ["cad", "phase:critique"]
 description = "Spawn cad-mech-reviewer read-only in the SAME parallel batch as dfm-critique. Review the delta, load paths, interfaces, tolerances, failure modes, and changed verification evidence only. Return PASS, MINOR, or MAJOR with named evidence; do not edit files or ask the user."
 
@@ -109,7 +157,7 @@ execution_mode = "subagent"
 id = "dfm-critique"
 title = "CRITIQUE ECO manufacturability"
 type = "task"
-needs = ["recheck-detail-analysis"]
+needs = ["analysis-gate"]
 labels = ["cad", "phase:critique"]
 description = "Spawn cad-dfm-reviewer read-only in the SAME parallel batch as mech-critique. Review only affected parts: process, access, stock/tool access, tolerances, material, finish, and drawing. Return PASS, MINOR, or MAJOR with named evidence; do not edit files or ask the user."
 

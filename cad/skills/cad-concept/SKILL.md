@@ -5,8 +5,9 @@ description: Iterates 2-4 rough three.js concept variants in a live viewer, then
 
 # CAD Concept (L0)
 
-Stage L0 CONCEPT of `skill://cad-flow`: rough primitive variants the user compares, poses,
-refines, merges, or drops until the VARIANT gate, then a handoff manifest for L1 LAYOUT.
+Stage L0 CONCEPT of `skill://cad-flow`: rough primitive variants the user compares, refines,
+merges, or drops until the VARIANT gate, then a handoff manifest for L1 LAYOUT. Joints describe
+the mechanism at its nominal configuration and are passed to L1 LAYOUT in the handoff.
 Paths below are relative to this skill's directory, `skill://cad-concept/`.
 
 TRIGGER
@@ -27,9 +28,9 @@ ASK which live variant passes the VARIANT gate; record nothing as chosen until t
 4. Start the preview once as a long-running process:
    `uv run --script scripts/serve.py --scene-dir hw/concept --port 8765`. -> first stdout
    line is `{"url": ...}`; send the user that URL. Each saved edit reloads the open viewer.
-5. Collect feedback. Drive the viewer yourself when the harness has a browser; otherwise
-   ask the user to pose it and press Save screenshot. -> the PNG plus pose JSON land in
-   `hw/concept/screenshots/`; read both.
+5. Collect feedback. Drive the viewer yourself when the harness has a browser; otherwise ask
+   the user which nominal variant best addresses the trade-off. Save a screenshot for each
+   live variant when useful; screenshots land in `hw/concept/screenshots/`.
 6. Apply each request as one operation from the table, then re-run step 3.
 7. On "commit batch": run step 3 and save one screenshot per live variant. No other checks
    run before LAYOUT freeze. Hand the batch to `skill://cad-flow` for COMMIT.

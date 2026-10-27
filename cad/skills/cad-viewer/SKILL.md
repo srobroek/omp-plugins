@@ -11,6 +11,7 @@ review surface at each gate, and the screenshots a gate or the user reads. L0 CO
 
 TRIGGER
 + "show the model", "show v3", "open the viewer", "keep the viewer on the latest build"
++ "show me the previews", "open the gallery", "where are the renders"
 + "compare v2 and v3", "side by side", "isolate the lower link", "ghost the rest"
 + "explode it", "section through the elbow pin", "animate J-002", "screenshot the iso view"
 + "look-dev", "studio lighting" for interactive renders
@@ -36,15 +37,19 @@ Once per machine, install the headless browser captures use:
 5. `animate --joint J-00x --from V --to V [--at 0..1]` -> keyframes from cad-motion's chain.
    A value outside the joint's assembly.yaml [min, max] exits 1 with `joint_limit` findings
    and pushes nothing. `--at` holds one pose for a capture.
-6. `capture --view V --out PNG [--crop page|viewer|canvas]` -> V is iso, front, side, top,
-   exploded, `isolate:<PN|group>`, `section --joint J-00x` (plane along the joint axis), or
-   current (the state as left, no refit). `current` takes the user's camera when their tab is
-   open (`camera_from: user`). Every view but section and current is refitted, and the user's
-   view follows the refit: `frames.a.in_frame` true and `fill` near 0.84 mean the whole
-   product is in frame. While a capture runs, every other command or panel button that would
-   change the view is refused with `capture in progress`; retry it after. -> read every PNG
-   before describing it.
-7. `stop` -> stops the host, its viewers, and the presenter; reports `ports_free`. `status:
+6. `capture --view V --out hw/captures/<vN>/<view>.png [--crop page|viewer|canvas]` -> V is iso,
+   front, side, top, exploded, `isolate:<PN|group>`, `section --joint J-00x` (plane along the
+   joint axis), or current (the state as left, no refit). A PNG under `hw/captures/` shows in the
+   gallery. `current` takes the user's camera when their tab is open (`camera_from: user`).
+   Every view but section and current is refitted, and the user's view follows the refit:
+   `frames.a.in_frame` true and `fill` near 0.84 mean the whole product is in frame. While a
+   capture runs, every other command or panel button that would change the view is refused with
+   `capture in progress`; retry it after. -> read every PNG before describing it.
+7. `gallery hw [--version vN]` -> opens the record in the preview gallery. Prints `url`
+   (`http://127.0.0.1:<panel port>/gallery?version=vN`) and, under `files`, the absolute path of
+   each listed file. `show` and `compare` also open their record and print a `gallery` URL per
+   version. Give the user the URL and the absolute paths.
+8. `stop` -> stops the host, its viewers, and the presenter; reports `ports_free`. `status:
    stale` means the recorded host no longer answers: nothing was signalled, the session file
    is removed. `serve` replaces a host whose presenter browser died.
 
@@ -63,6 +68,25 @@ Studio mode is the interactive route. `studio --environment studio --tone-mappin
 Studio tab, and `capture --view current` records it. Settings the user changes by hand in their
 tab stay in their tab: only `studio` flags reach captures. The next push returns the viewer to
 the Tree tab.
+
+## Preview gallery
+
+The host serves a read-only gallery at `/gallery` beside the panel, on the same origin and
+behind the same Host and Origin checks. Pick a version from the bar. Each tile shows its image,
+its absolute path with a Copy path button, and opens full size in a new tab. The bar also links
+to the live 3D viewer.
+
+| section | source | caption |
+|---|---|---|
+| Renders | `hw/renders/<vN>/manifest.json` (`skill://cad-render`) | view, quality status, failures, warnings, retry strategy and attempts, material per PN shown |
+| Viewer captures | PNGs under `hw/captures/` | file name, modified time |
+| Drawings | `package.json` packages and `drawing_<run>.complete.json` drawings anywhere under `hw/`, plus other PNGs under `hw/drawings/` | status, scale, projection, warnings, Open PDF with its absolute path |
+| Concept screenshots | `hw/concept/screenshots/` (`skill://cad-concept`) | scene and variant |
+
+A capture or drawing belongs to vN when a `vN` folder is on its path or a package's provenance
+names vN. Files that name no version show under every version, marked "version not recorded".
+The file route serves only PNG, JPEG, and PDF files inside the open `hw/`. It answers 403 to an
+absolute path, a `..` step, a dot folder, or a symlink out of `hw/`, and 404 to a missing file.
 
 ## Rules
 
@@ -88,8 +112,9 @@ NOT Treat the viewer, a render, or a capture as a check result; `skill://cad-mod
   holes; a missing or empty field shows "no cylindrical bores".
 
 ```text
-L1 VIEWER {SERVE|SHOW|COMPARE|ANIMATE|CAPTURE|STOP}: {PASS|FAIL}, {version(s)}, {url or PNG}
+L1 VIEWER {SERVE|SHOW|COMPARE|ANIMATE|CAPTURE|GALLERY|STOP}: {PASS|FAIL}, {version(s)}, {url or PNG}
    Findings -- {per-part check findings shown, only if any}
    Captures -- {absolute PNG path, view, in_frame, and one line on what the PNG shows}
+   Gallery -- {gallery URL, then each listed file's absolute path, only for GALLERY}
 ```
 CAP 80w clean · 160w with findings
