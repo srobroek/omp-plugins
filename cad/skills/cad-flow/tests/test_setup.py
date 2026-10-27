@@ -163,6 +163,19 @@ class ConsentTests(unittest.TestCase):
             status = setup.main(["--yes"])
         self.assertEqual(status, 1)
         install_uv.assert_not_called()
+
+    def test_manual_browser_libraries_are_not_installed(self) -> None:
+        failing = setup.preflight.Report((
+            setup.preflight.Check("playwright-chromium", "Playwright Chromium", "fail", True,
+                                  "error: libfoo.so.1 cannot open shared object file", "retry"),
+        ))
+        with patch.object(setup.platform, "system", return_value="Linux"), \
+                patch.object(setup, "_release_info", return_value={"ID": "amzn"}), \
+                patch.object(setup.preflight, "run_checks", side_effect=(failing, failing)), \
+                patch.object(setup.preflight, "warm", return_value=failing), \
+                redirect_stdout(io.StringIO()):
+            status = setup.main(["--yes", "--system"])
+        self.assertEqual(status, 1)
     def test_system_flag_requires_yes(self) -> None:
         with self.assertRaises(SystemExit) as raised:
             setup.main(["--system"])
