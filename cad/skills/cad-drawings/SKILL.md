@@ -26,6 +26,13 @@ TRIGGER
 5. Review the JSON report and the PNG preview. Confirm the orthographic views, dimensions, title block, and projection symbol.
 6. After a human reviews the PNG preview, record the accepted drawing checks in the hardware project's `verification.csv`.
 
+## Assembly drawings
+
+LOAD references/assembly-drawings.md before writing the `drawing` block of `assembly.yaml`.
+
+1. Run `uv run --script skill://cad-flow/scripts/run.py cad-drawings/scripts/assembly_drawing.py hw --version vN --output-dir <dir>`. It produces checked sheets for the top assembly and each `assembly.drawing.subassembly_sheets` group, with assembled and exploded views, item balloons, a parts list from `bom.csv`, and assembly notes.
+2. Re-check a published package with `uv run --script skill://cad-drawings/scripts/assembly_check.py <dir>`.
+
 ## Install FreeCAD
 
 `drawing.py` takes the first `freecadcmd` it finds:
