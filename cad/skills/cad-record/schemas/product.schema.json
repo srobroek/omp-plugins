@@ -19,6 +19,20 @@
         "recheck_from": {"$ref": "#/$defs/stage"}
       }
     },
+    "build_volume": {
+      "type": "object", "additionalProperties": false,
+      "required": ["x_mm", "y_mm", "z_mm"],
+      "properties": {
+        "x_mm": {"type": "number", "exclusiveMinimum": 0},
+        "y_mm": {"type": "number", "exclusiveMinimum": 0},
+        "z_mm": {"type": "number", "exclusiveMinimum": 0},
+        "orientations": {
+          "type": "array", "minItems": 1, "uniqueItems": true,
+          "items": {"type": "string", "enum": ["xyz", "xzy", "yxz", "yzx", "zxy", "zyx"]}
+        },
+        "margin_mm": {"type": "number", "minimum": 0}
+      }
+    },
     "drawing": {"$ref": "drawing.schema.json#/$defs/product_drawing"}
   },
   "$defs": {

@@ -53,6 +53,20 @@ class ValidateProject(unittest.TestCase):
         lines[target] = f"    {field}: {value}"
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
+    def test_template_declares_build_volume(self) -> None:
+        product = yaml.safe_load((self.hw / "product.yaml").read_text(encoding="utf-8"))
+        self.assertEqual(product["build_volume"], {"x_mm": 256, "y_mm": 256, "z_mm": 256, "margin_mm": 5})
+        result, report = self.validate()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(report["findings"], [])
+
+    def test_product_rejects_nonpositive_build_volume_axis(self) -> None:
+        path = self.hw / "product.yaml"
+        path.write_text(path.read_text(encoding="utf-8").replace("x_mm: 256", "x_mm: 0"), encoding="utf-8")
+        result, report = self.validate()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("x_mm", json.dumps(report["findings"]))
+
     def test_template_validates(self) -> None:
         result, report = self.validate()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

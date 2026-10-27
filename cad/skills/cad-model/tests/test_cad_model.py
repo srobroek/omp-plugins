@@ -556,6 +556,82 @@ class OccurrenceBuildTests(unittest.TestCase):
 
 class CheckRuleTests(unittest.TestCase):
     """check's verdicts on given measurements; needs no OCP."""
+    def test_build_volume_accepts_axis_permutation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            hw = Path(tmp)
+            (hw / "parts" / "TST-0001").mkdir(parents=True)
+            (hw / "product.yaml").write_text(
+                "build_volume: {x_mm: 35, y_mm: 10, z_mm: 5, margin_mm: 0}\n", encoding="utf-8")
+            (hw / "parts" / "TST-0001" / "part.yaml").write_text("process: fdm\n", encoding="utf-8")
+            shape = mock.Mock()
+            with mock.patch.object(occ, "bbox", return_value=((-17.5, -5.0, -2.5), (17.5, 5.0, 2.5))):
+                with mock.patch.object(occ, "oriented_bbox", side_effect=AssertionError("fallback should not run")):
+                    result = check.build_volume(hw, {"TST-0001": mock.Mock(shape=shape)})
+        self.assertEqual(result["status"], "pass")
+        row = result["parts"]["TST-0001"]
+        self.assertEqual((row["orientation"], row["method"], row["size_mm"]),
+                         ("xyz", "axis_aligned", [35.0, 10.0, 5.0]))
+
+    def test_build_volume_chooses_lowest_print_height(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            hw = Path(tmp)
+            (hw / "parts" / "TST-0001").mkdir(parents=True)
+            (hw / "product.yaml").write_text(
+                "build_volume: {x_mm: 35, y_mm: 20, z_mm: 10, margin_mm: 0}\n", encoding="utf-8")
+            (hw / "parts" / "TST-0001" / "part.yaml").write_text("process: fdm\n", encoding="utf-8")
+            with mock.patch.object(occ, "bbox", return_value=((-17.5, -5.0, -10.0), (17.5, 5.0, 10.0))):
+                with mock.patch.object(occ, "oriented_bbox", side_effect=AssertionError("AABB rotation should fit")):
+                    result = check.build_volume(hw, {"TST-0001": mock.Mock(shape=mock.Mock())})
+        row = result["parts"]["TST-0001"]
+        self.assertEqual((row["orientation"], row["size_mm"]), ("xzy", [35.0, 20.0, 10.0]))
+
+    def test_build_volume_falls_back_for_rotated_plate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            hw = Path(tmp)
+            (hw / "parts" / "TST-0001").mkdir(parents=True)
+            (hw / "product.yaml").write_text(
+                "build_volume: {x_mm: 256, y_mm: 256, z_mm: 256, margin_mm: 5}\n", encoding="utf-8")
+            (hw / "parts" / "TST-0001" / "part.yaml").write_text("process: fdm\n", encoding="utf-8")
+            shape = mock.Mock()
+            with mock.patch.object(occ, "bbox", return_value=((-171.0, -171.0, -2.5), (171.0, 171.0, 2.5))):
+                with mock.patch.object(occ, "oriented_bbox", return_value=((240.0, 240.0, 5.0),
+                                                                            ((0.707, 0.707, 0.0),
+                                                                             (-0.707, 0.707, 0.0),
+                                                                             (0.0, 0.0, 1.0)))):
+                    result = check.build_volume(hw, {"TST-0001": mock.Mock(shape=shape)})
+        row = result["parts"]["TST-0001"]
+        self.assertEqual((result["status"], row["orientation"], row["method"]), ("pass", "oriented", "oriented"))
+        self.assertEqual(row["size_mm"], [240.0, 240.0, 5.0])
+        self.assertEqual(row["axes"][2], [0.0, 0.0, 1.0])
+
+    def test_build_volume_fails_if_aabb_and_oriented_box_do_not_fit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            hw = Path(tmp)
+            (hw / "parts" / "TST-0001").mkdir(parents=True)
+            (hw / "product.yaml").write_text(
+                "build_volume: {x_mm: 256, y_mm: 256, z_mm: 256, margin_mm: 5}\n", encoding="utf-8")
+            (hw / "parts" / "TST-0001" / "part.yaml").write_text("process: fdm\n", encoding="utf-8")
+            with mock.patch.object(occ, "bbox", return_value=((-150.0, -10.0, -10.0), (150.0, 10.0, 10.0))):
+                with mock.patch.object(occ, "oriented_bbox", return_value=((300.0, 20.0, 20.0),
+                                                                            ((1.0, 0.0, 0.0),
+                                                                             (0.0, 1.0, 0.0),
+                                                                             (0.0, 0.0, 1.0)))):
+                    result = check.build_volume(hw, {"TST-0001": mock.Mock(shape=mock.Mock())})
+        self.assertEqual((result["status"], result["blocking_failures"]), ("fail", ["TST-0001"]))
+        message = result["parts"]["TST-0001"]["message"]
+        self.assertIn("TST-0001", message)
+        self.assertIn("(300.0, 20.0, 20.0)", message)
+        self.assertIn("oriented box", message)
+
+    def test_build_volume_warns_when_not_declared(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            hw = Path(tmp)
+            (hw / "parts" / "TST-0001").mkdir(parents=True)
+            (hw / "product.yaml").write_text("id: test\n", encoding="utf-8")
+            (hw / "parts" / "TST-0001" / "part.yaml").write_text("process: fdm\n", encoding="utf-8")
+            result = check.build_volume(hw, {"TST-0001": mock.Mock(shape=mock.Mock())})
+        self.assertEqual((result["status"], result["blocking"]), ("warn", False))
+        self.assertIn("TST-0001", result["parts"])
 
     def test_missing_interfaces_file_means_no_declared_fits(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
