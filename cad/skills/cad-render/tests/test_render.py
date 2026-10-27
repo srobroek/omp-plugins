@@ -225,7 +225,7 @@ class Explode(unittest.TestCase):
     }
 
     def offsets(self, toward=(0.0, -1.0, 0.5)):
-        return render.explode_offsets(self.joints, "A", {}, self.bboxes, toward)
+        return render.explode_offsets(self.joints, "A", {}, {}, self.bboxes, toward)
 
     def test_root_stays_and_moving_children_slide_out_of_their_joint(self) -> None:
         out = self.offsets()
@@ -243,8 +243,15 @@ class Explode(unittest.TestCase):
 
     def test_the_parent_pose_rotates_a_child_axis(self) -> None:
         quarter = [[0.0, -1.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]]  # 90 deg about Z
-        out = render.explode_offsets(self.joints, "A", {"B": quarter}, self.bboxes, (1.0, 0.0, 0.0))
+        out = render.explode_offsets(self.joints, "A", {"B": quarter}, {"B": quarter}, self.bboxes, (1.0, 0.0, 0.0))
         self.assertAlmostEqual(out["P"][0] - out["B"][0], render.FIXED_GAP * 20)
+
+    def test_a_rest_placement_moves_the_centre_but_not_the_joint_frame(self) -> None:
+        """A part-local child placed 100 mm along +X: its centre follows T = D P, its joint axis D alone."""
+        shifted = [[1.0, 0.0, 0.0, 100.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]]
+        local = {**self.bboxes, "C": {"min": [0, -5, 5], "max": [100, 5, 15], "size": [100, 10, 10]}}
+        out = render.explode_offsets(self.joints, "A", {}, {"C": shifted}, local, (0.0, -1.0, 0.5))
+        self.assertEqual(out, self.offsets())  # same posed geometry as the in-place C
 
     def test_glb_frame_conversion(self) -> None:
         self.assertEqual(render.to_glb((1.0, 2.0, 3.0), 0.001), [0.001, 0.003, -0.002])
@@ -349,13 +356,71 @@ class CacheKey(unittest.TestCase):
 
 class Views(unittest.TestCase):
     def test_closeup_and_part_views_require_existing_parts(self) -> None:
-        self.assertEqual(render.parse_views(["iso", "closeup-LMP-0004", "part-LMP-0005", "iso"],
-                                           ["LMP-0004", "LMP-0005"]),
+        singletons = {"LMP-0004": "LMP-0004", "LMP-0005": "LMP-0005"}
+        self.assertEqual(render.parse_views(["iso", "closeup-LMP-0004", "part-LMP-0005", "iso"], singletons),
                          ["iso", "closeup-LMP-0004", "part-LMP-0005"])
         self.assertEqual(render.view_kind("part-LMP-0005"), "part")
-        for token in ("closeup-LMP-0009", "part-LMP-0009", "top"):
+        for token in ("closeup-LMP-0009", "part-LMP-0009", "top", "closeup-@ring-1"):
             with self.subTest(token=token), self.assertRaises(render.InfraError):
-                render.parse_views([token], ["LMP-0004"])
+                render.parse_views([token], {"LMP-0004": "LMP-0004"})
+
+    def test_a_repeated_part_needs_an_occurrence_reference(self) -> None:
+        rings = {"LMP-0004": "LMP-0004", "ring-1": "LMP-0011", "ring-2": "LMP-0011"}
+        with self.assertRaisesRegex(render.InfraError, "closeup-@ring-1, closeup-@ring-2"):
+            render.parse_views(["closeup-LMP-0011"], rings)
+        self.assertEqual(render.view_subject("closeup-@ring-2", rings), "ring-2")
+        self.assertEqual(render.view_subject("part-LMP-0004", rings), "LMP-0004")
+
+
+class OccurrenceScene(unittest.TestCase):
+    """build_scene on a schema_version 2 version with one PN placed twice (no real GLB)."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.hw = Path(self.tmp.name) / "hw"
+        shutil.copytree(TEMPLATE_HW, self.hw)
+        folder = self.hw / "versions" / "v1"
+        folder.mkdir(parents=True)
+        (folder / "assembly.step").write_text("", encoding="utf-8")
+        (folder / "assembly.glb").write_bytes(b"glTF")
+        moved = [[1.0, 0.0, 0.0, 50.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]]
+        occurrences = {"LMP-0001": ("LMP-0001", "LMP-0001", IDENTITY), "ring-a": ("LMP-0011", "@ring-a", IDENTITY),
+                       "ring-b": ("LMP-0011", "@ring-b", moved)}
+        box = {"bbox_mm": {"min": [0, 0, 0], "max": [10, 10, 1], "size": [10, 10, 1]}}
+        write = CacheKey.write
+        write(folder / "part-map.json", {"schema_version": 2, "parts": {
+            "LMP-0001": {"occurrences": ["LMP-0001"], "node_indices": [1]},
+            "LMP-0011": {"occurrences": ["ring-a", "ring-b"], "node_indices": [2, 3]}},
+            "occurrences": {oid: {"PN": pn, "node_indices": [i + 1]} for i, (oid, (pn, _, _)) in enumerate(occurrences.items())}})
+        write(folder / "metrics.json", {"schema_version": 2, "parts": {"LMP-0001": box, "LMP-0011": box}})
+        write(folder / "manifest.json", {
+            "schema_version": 2, "ground": "LMP-0001",
+            "occurrences": {oid: {"PN": pn, "ref": ref, "group": "g", "rest": rows} for oid, (pn, ref, rows) in occurrences.items()},
+            "pose": {"transforms": {oid: rows for oid, (_, _, rows) in occurrences.items()},
+                     "motions": {oid: IDENTITY for oid in occurrences}},
+            "joints": [{"id": f"J-00{n}", "type": "fixed", "parent": "LMP-0001", "child": oid, "axis": [0, 0, 1],
+                        "origin": [0, 0, 0]} for n, oid in enumerate(("ring-a", "ring-b"), start=1)]})
+        write(self.hw / "versions" / "latest.json", {
+            "label": "v1", **{k: f"versions/v1/{name}" for k, name in render.version_layout.FILES.items()}})
+
+    def test_each_occurrence_is_its_own_scene_part_with_its_pn_material(self) -> None:
+        version = render.resolve_version(self.hw, "latest")
+        scene, by_pn, _ = render.build_scene(self.hw, version, ["exploded", "closeup-@ring-b"], (800, 600),
+                                             materials.MaterialTable.load())
+        parts = {p["id"]: p for p in scene["parts"]}
+        self.assertEqual(sorted(parts), ["LMP-0001", "ring-a", "ring-b"])
+        self.assertEqual((parts["ring-a"]["node_indices"], parts["ring-b"]["node_indices"]), ([2], [3]))
+        self.assertEqual(parts["ring-a"]["material"], parts["ring-b"]["material"])
+        self.assertEqual(sorted(by_pn), ["LMP-0001", "LMP-0011"])
+        self.assertEqual(sorted(scene["explode"]), ["LMP-0001", "ring-a", "ring-b"])
+        self.assertEqual(next(v for v in scene["views"] if v["name"] == "closeup-@ring-b")["subject"], ["ring-b"])
+
+    def test_a_newer_schema_is_refused(self) -> None:
+        path = self.hw / "versions" / "v1" / "manifest.json"
+        CacheKey.write(path, {**json.loads(path.read_text(encoding="utf-8")), "schema_version": 3})
+        with self.assertRaisesRegex(render.InfraError, "schema_version 3"):
+            render.resolve_version(self.hw, "latest")
 
 
 class RendererPage(unittest.TestCase):
