@@ -38,9 +38,26 @@ class HarnessGeneratorTests(unittest.TestCase):
     def test_check_accepts_generated_files_and_rejects_modified_output(self) -> None:
         self.generate()
         current = self.run_generator("--check")
-        self.assertEqual(current.returncode, 0, current.stdout + current.stderr)
-        self.assertIn("PASS: 7 harness files current", current.stdout)
+        self.assertIn("PASS: 8 harness files current", current.stdout)
+        self.assertEqual(
+            (self.cad / "harness" / "opencode" / "commands" / "cad-flow.md").read_text(encoding="utf-8"),
+            """---
+description: Prototype-to-CAD flow (cad plugin)
+---
 
+Load the `cad-flow` skill and follow it. With arguments, apply it to $ARGUMENTS. Without arguments, resume the existing `hw/` design record, or ask what to design when there is none.
+""",
+        )
+        command_path = self.cad / "harness" / "opencode" / "commands" / "cad-flow.md"
+        command_path.write_text(command_path.read_text(encoding="utf-8") + "\nmanual drift\n", encoding="utf-8")
+        stale_command = self.run_generator("--check")
+        self.assertNotEqual(stale_command.returncode, 0, stale_command.stdout)
+        self.assertIn("stale harness/opencode/commands/cad-flow.md", stale_command.stderr)
+        command_path.unlink()
+        missing_command = self.run_generator("--check")
+        self.assertNotEqual(missing_command.returncode, 0, missing_command.stdout)
+        self.assertIn("missing harness/opencode/commands/cad-flow.md", missing_command.stderr)
+        self.generate()
         target = self.cad / "harness" / "claude" / "agents" / "cad-mech-reviewer.md"
         target.write_text(target.read_text(encoding="utf-8") + "\nmanual drift\n", encoding="utf-8")
         stale = self.run_generator("--check")

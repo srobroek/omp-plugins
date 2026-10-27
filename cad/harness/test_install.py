@@ -173,7 +173,7 @@ class KiroWorkspaceInstall(InstallTest):
 
 
 class OpencodeProjectInstall(InstallTest):
-    """The generated agents in `.opencode/agents/`, the skills in `.opencode/skills/`."""
+    """The generated agents and command in `.opencode/`, plus `.opencode/skills/`."""
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -211,7 +211,15 @@ class OpencodeProjectInstall(InstallTest):
             with self.subTest(agent=name):
                 errors = self.run_agent(name)
                 self.assertEqual([error.get("type") for error in errors], ["provider.no-route"], errors)
-
+    def test_copy_steps_include_command_template(self) -> None:
+        commands = self.project / ".opencode" / "commands"
+        commands.mkdir(parents=True)
+        for path in sorted((CAD / "harness" / "opencode" / "commands").glob("*.md")):
+            shutil.copy2(path, commands / path.name)
+        command = (commands / "cad-flow.md").read_text(encoding="utf-8")
+        self.assertIn("description: Prototype-to-CAD flow (cad plugin)", command)
+        self.assertIn("Load the `cad-flow` skill and follow it", command)
+        self.assertIn("$ARGUMENTS", command)
 
 if __name__ == "__main__":
     unittest.main()
