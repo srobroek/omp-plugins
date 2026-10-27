@@ -5,20 +5,28 @@
 """Kinematic sweep: interference, clearance, reach envelope, and worst-case pose.
 
 Usage:
-    uv run --script sweep.py --hw HW (--version vN|latest | --step ASSEMBLY.step | --parts-dir DIR)
+    uv run --script skill://cad-flow/scripts/run.py cad-motion/scripts/sweep.py --hw HW
+        (--version vN|latest | --step ASSEMBLY.step | --parts-dir DIR)
         [--attach REF=PARENT_REF ...] --worst-step WORST.step
         [--steps 19] [--grid 3] [--end-effector REF] [--include-pair REF:REF ...]
         [--min-clearance 0] [--volume-tol 0.001] [--max-poses 5000] [--time-limit 600]
+        [--worst-criterion max_horizontal_reach|minimum_clearance|maximum_interference]
 
 Inputs and kinematics are pose.py's (same options, same occurrence chain): the
 geometry is at the zero pose, so pass a cad-model version with `--version`, not
 its nominal-pose assembly.step. A REF is a PN placed once or `@id` for one
 occurrence; a PN placed several times is ambiguous and refused.
 
-Poses: for every movable joint, `--steps` values evenly spaced through
-[min, max] with the other joints at nominal; plus a combined grid of
-`--grid` evenly spaced values per movable joint (`--grid 0` turns it off).
-Identical poses are evaluated once.
+Poses: only independent joints are sampled; a coupled (dependent) joint is
+derived from them at every sample (pose.py `Chain.complete`) before any
+placement. For every independent joint, `--steps` values evenly spaced through
+its [min, max], unwrapped (a four-stroke crank declared 0..720 is sampled over
+720 degrees), with the other independent joints at nominal; plus a combined
+grid of `--grid` evenly spaced values per independent joint (`--grid 0` turns
+it off). Samples with identical independent values are evaluated once. A sample
+whose derived value leaves its joint's [min, max] is a joint_limit finding and
+is not measured. A pass proves the sampled poses, not continuous freedom from
+collision.
 
 Pairs: every pair of chain occurrences, including two occurrences of one PN,
 except joint-connected parent/child pairs (fixed joints and --attach included);
@@ -42,24 +50,40 @@ Reach envelope: the union of the end-effector's posed bounding boxes.
 End effector: `--end-effector`, else the occurrence with the most movable
 joints between it and the ground (first in joint order on a tie).
 
-Worst case (criterion `max_horizontal_reach`): among collision-free poses, the
-one with the largest horizontal (XY, gravity along -Z) distance from the first
-joint origin on the end effector's path to the end effector's centre of mass:
-the largest cantilever moment arm, the static FEA load case. It is written
-with pose.py's posed-STEP writer to `--worst-step`.
+Worst case, by `--worst-criterion`; ties go to the earliest sample:
+    max_horizontal_reach (default): among collision-free poses, the largest
+        horizontal (XY, gravity along -Z) distance from the first joint origin
+        on the end effector's path to the end effector's centre of mass: the
+        largest cantilever moment arm, the static FEA load case.
+    minimum_clearance: the smallest clearance margin (minimum distance minus
+        `--min-clearance`) over the checked pairs whose overlap is not
+        declared; a larger undeclared overlap breaks a tie.
+    maximum_interference: the largest undeclared overlap volume above
+        `--volume-tol`; none when nothing collides.
+These are geometric criteria; none of them is a stress load case by itself.
+The worst pose is written with pose.py's posed-STEP writer to `--worst-step`
+(one product per PN, one `<PN> <title> [@id]` component per occurrence) and
+its evidence to `<WORST.step>.json`: criterion and metric, sample, pair,
+independent and complete pose, units, input provenance, the STEP's SHA-256,
+the occurrence -> PN and component-name map, and a replay command that sets
+the independent joints only. Both files are removed when the run starts, so
+an incomplete run, an error, or a sweep with no eligible pose (`worst_case`
+null) leaves none behind.
 
 Runtime is bounded: more than `--max-poses` poses is refused up front, and a
 sweep that passes `--time-limit` seconds stops and reports `incomplete`.
 
 stdout: JSON summary with timings; pairs and parts are reported as references
 (`@id`, or the PN of a singleton). stderr: diagnostics.
-Exit 0 = no collision and no clearance finding, 1 = a collision or clearance
-finding, 2 = usage or infrastructure error, or an incomplete sweep.
+Exit 0 = no collision, clearance or joint-limit finding, 1 = a collision,
+clearance or joint-limit finding, 2 = usage or infrastructure error, or an
+incomplete sweep.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import itertools
 import json
@@ -85,8 +109,15 @@ pose = sys.modules.get("cad_motion_pose") or _load("cad_motion_pose", Path(__fil
 pair_policy = sys.modules.get("cad_motion_pair_policy") or _load("cad_motion_pair_policy",
                                                                   Path(__file__).with_name("pair_policy.py"))
 
-CRITERION = "max_horizontal_reach"
+CRITERIA = {
+    "max_horizontal_reach": "horizontal (XY) distance from the {joint} origin to the {effector} centre of mass; "
+                            "gravity along -Z; collision-free poses only",
+    "minimum_clearance": "smallest minimum distance minus the required {required} mm over the checked pairs "
+                         "whose overlap is not declared; a larger undeclared overlap breaks a tie",
+    "maximum_interference": "largest undeclared overlap volume above {volume_tol} mm^3",
+}
 MAX_LISTED = 50
+EVIDENCE_SCHEMA = 1
 
 
 def linspace(low: float, high: float, count: int) -> list[float]:
@@ -95,31 +126,40 @@ def linspace(low: float, high: float, count: int) -> list[float]:
     return [low + (high - low) * k / (count - 1) for k in range(count)]
 
 
-def generate_poses(chain: Any, steps: int, grid: int) -> list[tuple[str, dict[str, float]]]:
-    """(source, values) for the per-joint sweeps then the grid; duplicates dropped."""
-    movable = chain.movable
-    nominal = {j.id: j.nominal for j in movable}
-    poses: list[tuple[str, dict[str, float]]] = []
+@dataclass(frozen=True)
+class Sample:
+    index: int
+    source: str  # sweep:<joint id> or grid
+    settings: dict[str, float]  # the independent joints' values
+    values: dict[str, float]  # the complete coordinate map, dependents derived
+
+
+def generate_poses(chain: Any, steps: int, grid: int) -> list[Sample]:
+    """The per-joint sweeps then the grid over the independent joints, each completed with its derived
+    coordinates; samples with the same independent values are dropped."""
+    independent = chain.independent
+    nominal = {j.id: j.nominal for j in independent}
+    samples: list[Sample] = []
     seen: set[tuple[float, ...]] = set()
 
-    def add(source: str, values: dict[str, float]) -> None:
-        key = tuple(round(values[j.id], 9) for j in movable)
+    def add(source: str, settings: dict[str, float]) -> None:
+        key = tuple(round(settings[j.id], 9) for j in independent)
         if key not in seen:
             seen.add(key)
-            poses.append((source, values))
+            samples.append(Sample(len(samples), source, settings, chain.complete(settings)))
 
-    for joint in movable:
+    for joint in independent:
         for value in linspace(joint.min, joint.max, steps):
             add(f"sweep:{joint.id}", {**nominal, joint.id: value})
     if grid:
-        for combo in itertools.product(*(linspace(j.min, j.max, grid) for j in movable)):
-            add("grid", dict(zip((j.id for j in movable), combo)))
-    return poses
+        for combo in itertools.product(*(linspace(j.min, j.max, grid) for j in independent)):
+            add("grid", dict(zip((j.id for j in independent), combo)))
+    return samples
 
 
 def pose_count_bound(chain: Any, steps: int, grid: int) -> int:
-    count = steps * len(chain.movable)
-    return count + (grid ** len(chain.movable) if grid else 0)
+    count = steps * len(chain.independent)
+    return count + (grid ** len(chain.independent) if grid else 0)
 
 
 def pairs_to_check(chain: Any, include: list[str]) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
@@ -192,10 +232,11 @@ class Geometry:
 @dataclass
 class SweepState:
     collisions: list[dict[str, Any]] = field(default_factory=list)
+    limits: list[dict[str, Any]] = field(default_factory=list)  # samples a derived value puts outside a limit
     clearance: dict[tuple[str, str], dict[str, Any]] = field(default_factory=dict)
     envelope_min: list[float] = field(default_factory=lambda: [math.inf] * 3)
     envelope_max: list[float] = field(default_factory=lambda: [-math.inf] * 3)
-    worst: dict[str, Any] | None = None
+    worst: dict[str, Any] | None = None  # sample, rank (lower is worse), metric, pair
     evaluated: int = 0
 
 
@@ -210,36 +251,69 @@ def rounded(values: dict[str, float]) -> dict[str, float]:
     return {k: round(v, 6) + 0.0 for k, v in values.items()}
 
 
-def sweep(chain: Any, geometry: Geometry, poses: list[tuple[str, dict[str, float]]], pairs: list[tuple[str, str]],
+def sweep(chain: Any, geometry: Geometry, samples: list[Sample], pairs: list[tuple[str, str]],
           allowed: set[tuple[str, str]], effector: str, reference: tuple[float, float, float], volume_tol: float,
-          deadline: float) -> SweepState:
-    """Evaluate every pose; `allowed` holds the sorted occurrence pairs whose overlap is declared."""
+          criterion: str, required: float, deadline: float) -> SweepState:
+    """Evaluate every sample; `allowed` holds the sorted occurrence pairs whose overlap is declared.
+
+    The worst sample under `criterion` has the smallest rank; a strict comparison keeps the earliest on a tie.
+    """
     state = SweepState()
-    for source, values in poses:
+    for sample in samples:
         if time.monotonic() > deadline:
             break
-        transforms = chain.transforms(values)
+        state.evaluated += 1
+        limits = chain.limit_findings(sample.values)
+        if limits:
+            state.limits.append({"sample": sample.index, "source": sample.source,
+                                 "independent_pose": rounded(sample.settings), "findings": limits})
+            continue
+        transforms = chain.transforms(sample.values)
         hits = []
+        closest: tuple[float, float, list[str] | None] = (math.inf, math.inf, None)  # margin, distance, pair
+        overlap: tuple[float, list[str] | None] = (0.0, None)  # largest undeclared volume above volume_tol
         for a, b in pairs:
             distance, volume = geometry.pair(a, b, transforms[a].inverse() @ transforms[b])
+            refs = [chain.ref(a), chain.ref(b)]
             best = state.clearance.get((a, b))
             if best is None or distance < best["clearance_mm"]:
-                state.clearance[(a, b)] = {"pair": [chain.ref(a), chain.ref(b)], "clearance_mm": distance,
-                                           "pose": rounded(values)}
-            if volume > volume_tol and tuple(sorted((a, b))) not in allowed:
-                hits.append({"pair": [chain.ref(a), chain.ref(b)], "volume_mm3": round(volume, 4)})
+                state.clearance[(a, b)] = {"pair": refs, "clearance_mm": distance, "pose": rounded(sample.values),
+                                           "independent_pose": rounded(sample.settings)}
+            if tuple(sorted((a, b))) in allowed:
+                continue
+            if distance - required < closest[0]:
+                closest = (distance - required, distance, refs)
+            if volume > volume_tol:
+                hits.append({"pair": refs, "volume_mm3": round(volume, 4)})
+                if volume > overlap[0]:
+                    overlap = (volume, refs)
         low, high = geometry.bounds(effector, transforms[effector])
         state.envelope_min = [min(m, v) for m, v in zip(state.envelope_min, low)]
         state.envelope_max = [max(m, v) for m, v in zip(state.envelope_max, high)]
         if hits:
-            state.collisions.append({"source": source, "pose": rounded(values), "pairs": hits})
-        else:
+            state.collisions.append({"sample": sample.index, "source": sample.source,
+                                     "independent_pose": rounded(sample.settings), "pose": rounded(sample.values),
+                                     "pairs": hits})
+        if criterion == "max_horizontal_reach":
+            if hits:
+                continue
             centre = geometry.centre(effector, transforms[effector])
             reach = math.hypot(centre[0] - reference[0], centre[1] - reference[1])
-            if state.worst is None or reach > state.worst["reach_mm"]:
-                state.worst = {"source": source, "values": dict(values), "reach_mm": reach,
-                               "centre_of_mass": [round(v, 4) for v in centre]}
-        state.evaluated += 1
+            rank, metric, pair = (-reach,), {"reach_mm": round(reach, 3),
+                                             "centre_of_mass": [round(v, 4) for v in centre]}, None
+        elif criterion == "minimum_clearance":
+            if closest[2] is None:
+                continue
+            rank = (closest[0], -overlap[0])
+            metric = {"clearance_mm": round(closest[1], 4), "required_mm": required,
+                      "margin_mm": round(closest[0], 4), "overlap_mm3": round(overlap[0], 4)}
+            pair = overlap[1] or closest[2]  # an overlapping pair is at distance 0, the smallest margin
+        else:  # maximum_interference
+            if not hits:
+                continue
+            rank, metric, pair = (-overlap[0],), {"volume_mm3": round(overlap[0], 4)}, overlap[1]
+        if state.worst is None or rank < state.worst["rank"]:
+            state.worst = {"sample": sample, "rank": rank, "metric": metric, "pair": pair}
     return state
 
 
@@ -257,16 +331,58 @@ def clearance_report(clearance: dict[tuple[str, str], dict[str, Any]],
     return rows, findings
 
 
-def pose_command(args: argparse.Namespace, values: dict[str, float]) -> str:
-    parts = ["uv run --script pose.py", f"--hw {args.hw}"]
-    if args.version:
-        parts.append(f"--version {args.version}")
-    else:
-        parts.append(f"--step {args.step}" if args.step else f"--parts-dir {args.parts_dir}")
+def pose_command(args: argparse.Namespace, settings: dict[str, float]) -> str:
+    """The pose.py command that replays a sample: it sets the independent joints only."""
+    parts = ["uv run --script skill://cad-flow/scripts/run.py cad-motion/scripts/pose.py", f"--hw {args.hw}",
+             geometry_option(args)]
     parts += [f"--attach {spec}" for spec in args.attach]
-    parts += [f"--set {jid}={value!r}" for jid, value in values.items()]
+    parts += [f"--set {jid}={value!r}" for jid, value in settings.items()]
     parts.append(f"--out {args.worst_step}")
     return " ".join(parts)
+
+
+def geometry_option(args: argparse.Namespace) -> str:
+    if args.version:
+        return f"--version {args.version}"
+    return f"--step {args.step}" if args.step else f"--parts-dir {args.parts_dir}"
+
+
+def evidence_path(step: Path) -> Path:
+    """`worst.step` -> `worst.step.json`: the evidence beside the worst-case STEP."""
+    return step.with_name(step.name + ".json")
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def write_evidence(args: argparse.Namespace, chain: Any, definitions: dict[str, Any], worst: dict[str, Any],
+                   description: dict[str, Any], digest: str) -> Path:
+    """Write `<worst-step>.json`: what selected the worst pose and how to check and replay its STEP."""
+    sample = worst["sample"]
+    occurrences = {}
+    for oid in chain.ids:
+        part = definitions[chain.pn(oid)]
+        occurrences[oid] = {"PN": chain.pn(oid), "ref": chain.ref(oid),
+                            "component": pose.component_name(part, chain.inventory.get(oid)) or part.name}
+    path = evidence_path(args.worst_step)
+    path.write_text(json.dumps({
+        "schema_version": EVIDENCE_SCHEMA,
+        "producer": "cad-motion sweep.py",
+        **description,
+        "metric": worst["metric"],
+        "pair": worst["pair"],
+        "sample": {"index": sample.index, "source": sample.source},
+        "independent_pose": sample.settings,
+        "pose": sample.values,
+        "units": {j.id: j.unit for j in chain.movable},
+        "inputs": {"hw": str(args.hw), "assembly_yaml_sha256": sha256(args.hw / "assembly.yaml"),
+                   "geometry": geometry_option(args), "attach": list(args.attach)},
+        "step": {"path": str(args.worst_step), "sha256": digest},
+        "occurrences": occurrences,
+        "command": pose_command(args, sample.settings),
+    }, indent=2) + "\n", encoding="utf-8")
+    return path
 
 
 def declared_overlaps(hw: Path, assembly: Any) -> set[tuple[str, str]]:
@@ -283,8 +399,12 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Kinematic sweep with interference and clearance checks")
     pose.add_geometry_arguments(parser)
     parser.add_argument("--worst-step", type=Path, required=True, help="posed STEP AP242 of the worst-case pose")
-    parser.add_argument("--steps", type=int, default=19, help="values per joint in the per-joint sweeps (>= 2)")
-    parser.add_argument("--grid", type=int, default=3, help="values per joint in the combined grid (0 = off, else >= 2)")
+    parser.add_argument("--worst-criterion", choices=sorted(CRITERIA), default="max_horizontal_reach",
+                        help="how the worst-case pose is selected")
+    parser.add_argument("--steps", type=int, default=19,
+                        help="values per independent joint in the per-joint sweeps (>= 2)")
+    parser.add_argument("--grid", type=int, default=3,
+                        help="values per independent joint in the combined grid (0 = off, else >= 2)")
     parser.add_argument("--end-effector", metavar="REF", help="occurrence for the reach envelope and worst case")
     parser.add_argument("--include-pair", action="append", default=[], metavar="REF:REF",
                         help="check a joint-connected pair as well (repeatable)")
@@ -299,9 +419,11 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     started = time.monotonic()
     try:
+        for stale in (args.worst_step, evidence_path(args.worst_step)):  # never left looking like this run's result
+            stale.unlink(missing_ok=True)
         assembly, chain, definitions = pose.load_inputs(args)
-        if not chain.movable:
-            raise pose.MotionError("the chain has no movable joint to sweep")
+        if not chain.independent:
+            raise pose.MotionError("the chain has no independent movable joint to sweep")
         bound = pose_count_bound(chain, args.steps, args.grid)
         if bound > args.max_poses:
             raise pose.MotionError(f"{bound} poses exceed --max-poses {args.max_poses}; lower --steps or --grid")
@@ -313,43 +435,55 @@ def main(argv: list[str] | None = None) -> int:
             raise pose.MotionError(f"no movable joint moves the end effector {chain.ref(effector)}")
         geometry = Geometry(chain, {pn: definitions[pn] for pn in {chain.pn(oid) for oid in chain.ids}})
         loaded = time.monotonic()
-        poses = generate_poses(chain, args.steps, args.grid)
-        state = sweep(chain, geometry, poses, pairs, allowed, effector, path[0].origin, args.volume_tol,
-                      loaded + args.time_limit)
+        samples = generate_poses(chain, args.steps, args.grid)
+        state = sweep(chain, geometry, samples, pairs, allowed, effector, path[0].origin, args.volume_tol,
+                      args.worst_criterion, args.min_clearance, loaded + args.time_limit)
         swept = time.monotonic()
-        complete = state.evaluated == len(poses)
+        complete = state.evaluated == len(samples)
         worst = None
         if complete and state.worst is not None:
-            pose.write_posed(args.worst_step, args.hw, chain, definitions, state.worst["values"])
+            sample = state.worst["sample"]
+            description = {"criterion": args.worst_criterion, "definition": CRITERIA[args.worst_criterion].format(
+                joint=path[0].id, effector=chain.ref(effector), required=args.min_clearance, volume_tol=args.volume_tol)}
+            pose.write_posed(args.worst_step, args.hw, chain, definitions, sample.values)
+            digest = sha256(args.worst_step)
+            evidence = write_evidence(args, chain, definitions, state.worst, description, digest)
             worst = {
-                "criterion": CRITERION,
-                "definition": (f"horizontal (XY) distance from the {path[0].id} origin to the {chain.ref(effector)} "
-                               "centre of mass; gravity along -Z; collision-free poses only"),
-                "source": state.worst["source"],
-                "pose": rounded(state.worst["values"]),
-                "reach_mm": round(state.worst["reach_mm"], 3),
-                "centre_of_mass": state.worst["centre_of_mass"],
+                **description,
+                **state.worst["metric"],
+                "pair": state.worst["pair"],
+                "sample": sample.index,
+                "source": sample.source,
+                "independent_pose": rounded(sample.settings),
+                "pose": rounded(sample.values),
                 "step": str(args.worst_step),
-                "command": pose_command(args, state.worst["values"]),
+                "step_sha256": digest,
+                "evidence": str(evidence),
+                "command": pose_command(args, sample.settings),
             }
         exported = time.monotonic()
     except (pose.MotionError, OSError) as error:
         print(f"sweep: {error}", file=sys.stderr)
         return 2
     clearance, findings = clearance_report(state.clearance, args.min_clearance)
-    failed = bool(state.collisions or findings)
+    failed = bool(state.collisions or findings or state.limits)
     status = "incomplete" if not complete else ("fail" if failed else "pass")
     per_pose = (swept - loaded) / state.evaluated if state.evaluated else 0.0
     refs = [[chain.ref(a), chain.ref(b)] for a, b in pairs]
     print(json.dumps({
         "status": status,
-        "poses": {"evaluated": state.evaluated, "planned": len(poses), "steps_per_joint": args.steps,
-                  "grid_per_joint": args.grid, "movable_joints": [j.id for j in chain.movable]},
+        "poses": {"evaluated": state.evaluated, "planned": len(samples), "steps_per_joint": args.steps,
+                  "grid_per_joint": args.grid, "movable_joints": [j.id for j in chain.movable],
+                  "independent_joints": [j.id for j in chain.independent],
+                  "dependent_joints": [j.id for j in chain.dependent],
+                  "spacing": {j.id: (j.max - j.min) / (args.steps - 1) for j in chain.independent}},
         "pairs": {"checked": refs, "excluded_adjacent": [[chain.ref(a), chain.ref(b)] for a, b in excluded],
                   "declared_overlap": [[chain.ref(a), chain.ref(b)] for a, b in pairs if tuple(sorted((a, b))) in allowed]},
         "occurrences": {oid: chain.pn(oid) for oid in chain.ids},
         "collision_pose_count": len(state.collisions),
         "collisions": state.collisions[:MAX_LISTED],
+        "limit_pose_count": len(state.limits),
+        "limit_findings": state.limits[:MAX_LISTED],
         "min_clearance": clearance,
         "clearance_findings": findings,
         "reach_envelope": {"part": chain.ref(effector), "min": [round(v, 3) for v in state.envelope_min],
@@ -361,7 +495,7 @@ def main(argv: list[str] | None = None) -> int:
                       "pair_evaluations": geometry.evaluations, "cache_hits": geometry.cache_hits},
     }, indent=2))
     if not complete:
-        print(f"sweep: stopped after {state.evaluated} of {len(poses)} poses at --time-limit {args.time_limit} s",
+        print(f"sweep: stopped after {state.evaluated} of {len(samples)} poses at --time-limit {args.time_limit} s",
               file=sys.stderr)
         return 2
     return 1 if failed else 0

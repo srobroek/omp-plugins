@@ -168,6 +168,21 @@ class Handoff(unittest.TestCase):
         fates = {a["id"]: a["disposition"] for a in self.manifest["alternatives"]}
         self.assertEqual(fates, {"short-reach": "not-chosen", "square-base": "not-chosen", "wall-mount": "dropped"})
 
+    def test_lamp_handoff_is_stable_without_viewer_pose(self) -> None:
+        scene = example()
+        scene["chosen"] = "long-reach"
+        variant = concept.pick_variant(scene, None)
+        manifest = concept.build_handoff(
+            scene, variant, file_name=EXAMPLE.name, digest=hashlib.sha256(EXAMPLE.read_bytes()).hexdigest()
+        )
+        self.assertEqual(manifest["variant"]["id"], "long-reach")
+        self.assertEqual(len(manifest["joints"]), 3)
+        self.assertEqual(manifest["joints"][0]["nominal"], 30)
+        self.assertEqual(
+            hashlib.sha256(json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
+            "48e8bf582be54a38981a655f1e347a128d3a9af6add139f76e939be41db09379",
+        )
+
     def test_part_envelope_is_its_primitive(self) -> None:
         plate = next(n for n in self.manifest["nodes"] if n["id"] == "base-plate")
         self.assertEqual(plate["envelope"]["size"], [220.0, 220.0, 24.0])
@@ -327,14 +342,15 @@ class ServerLive(unittest.TestCase):
 
     def test_screenshot_upload(self) -> None:
         png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
-        body = {"scene": "lamp-arm.scene.json", "variant": "long-reach", "pose": {"long-reach": {"base": 80}},
+        body = {"scene": "lamp-arm.scene.json", "variant": "long-reach",
                 "png": "data:image/png;base64," + base64.b64encode(png).decode()}
         status, result = self.post(body, origin=self.url.rstrip("/"))
         self.assertEqual(status, 201, result)
         saved = Path(result["path"])
         self.assertEqual(saved.read_bytes(), png)
         meta = json.loads(saved.with_suffix(".json").read_text(encoding="utf-8"))
-        self.assertEqual(meta["pose"], {"long-reach": {"base": 80}})
+        self.assertEqual(meta, {"scene": "lamp-arm.scene.json", "variant": "long-reach", "png": saved.name})
+        self.assertNotIn("pose", meta)
         self.assertEqual(self.post(body, origin="http://evil.example")[0], 403)
         self.assertEqual(self.post({**body, "png": "data:image/png;base64,aGVsbG8="})[0], 400)
         self.assertEqual(self.post({**body, "scene": "../x.scene.json"})[0], 400)

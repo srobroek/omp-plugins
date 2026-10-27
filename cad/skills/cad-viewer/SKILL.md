@@ -35,8 +35,10 @@ Once per machine, install the headless browser captures use:
    B side by side, cameras synced both ways. `mode single --active A|B` flips one viewer.
 4. `parts hide|iso|ghost|reset [PN|subassembly]` does what the panel buttons do.
 5. `animate --joint J-00x --from V --to V [--at 0..1]` -> keyframes from cad-motion's chain.
-   A value outside the joint's assembly.yaml [min, max] exits 1 with `joint_limit` findings
-   and pushes nothing. `--at` holds one pose for a capture.
+   A value outside the joint's assembly.yaml [min, max], or one that puts a coupled joint outside
+   its limits, exits 1 with `joint_limit` findings and pushes nothing. `--at` holds one pose for a
+   capture. Animate independent joints only: coupled joints follow their driver at every keyframe,
+   and naming a coupled joint exits 2 with its driver.
 6. `capture --view V --out hw/captures/<vN>/<view>.png [--crop page|viewer|canvas]` -> V is iso,
    front, side, top, exploded, `isolate:<PN|group>`, `section --joint J-00x` (plane along the
    joint axis), or current (the state as left, no refit). A PNG under `hw/captures/` shows in the

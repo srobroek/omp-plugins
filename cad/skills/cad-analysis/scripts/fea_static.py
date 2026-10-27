@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -19,6 +20,8 @@ import yaml
 
 from fea_part_selection import OCCURRENCE_REF
 from freecad_lookup import find_freecad
+
+POSE_TOL = 1e-6  # cad-motion's sweep reports pose values rounded to 6 decimals
 
 
 class CaseError(ValueError):
@@ -135,14 +138,10 @@ def load_case(path: Path) -> dict[str, Any]:
         or required_safety_factor <= 0
     ):
         raise CaseError("required_safety_factor must be a positive finite number")
-    if "pose" in raw:
-        pose = raw["pose"]
-        if not isinstance(pose, dict) or not pose or any(
-            not isinstance(joint, str) or not joint
-            or not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value)
-            for joint, value in pose.items()
-        ):
-            raise CaseError("pose must map joint IDs to finite numeric values")
+    if "pose" in raw and not valid_pose(raw["pose"]):
+        raise CaseError("pose must map joint IDs to finite numeric values")
+    if raw.get("evidence") is not None:
+        raw["_evidence"] = sweep_evidence(path, raw["evidence"], step, raw)
     raw["fixed_faces"] = selector(raw.get("fixed_faces"), "fixed_faces")
     loads = raw.get("loads")
     if not isinstance(loads, list) or not loads:
@@ -160,6 +159,48 @@ def load_case(path: Path) -> dict[str, Any]:
             raise CaseError(f"loads[{index}].force must not be zero")
     raw["_step"] = str(step)
     return raw
+
+
+def valid_pose(pose: Any) -> bool:
+    return isinstance(pose, dict) and bool(pose) and all(
+        isinstance(joint, str) and joint
+        and isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+        for joint, value in pose.items())
+
+
+def sweep_evidence(case_path: Path, value: Any, step: Path, raw: dict[str, Any]) -> dict[str, Any]:
+    """Check a cad-motion sweep's `worst.step.json` against the case, never re-posing anything.
+
+    `step` must be the STEP the evidence hashes; the case `pose`, copied from the evidence when absent,
+    must be the evidence's complete pose; an `occurrence` must be one the evidence lists.
+    """
+    if not isinstance(value, str) or not value:
+        raise CaseError("evidence must be the path of a cad-motion sweep worst.step.json")
+    path = Path(value)
+    if not path.is_absolute():
+        path = (case_path.parent / path).resolve()
+    try:
+        evidence = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise CaseError(f"cannot read evidence {path}: {exc}") from exc
+    recorded = evidence.get("step") if isinstance(evidence, dict) else None
+    if (not isinstance(recorded, dict) or not isinstance(recorded.get("sha256"), str)
+            or not valid_pose(evidence.get("pose"))):
+        raise CaseError(f"{path} is not cad-motion sweep evidence: it needs step.sha256 and pose")
+    digest = hashlib.sha256(step.read_bytes()).hexdigest()
+    if digest != recorded["sha256"]:
+        raise CaseError(f"step {step} is not the STEP {path} records (sha256 {digest}, recorded {recorded['sha256']}); "
+                        "point step at that sweep's worst STEP or rerun the sweep")
+    pose = raw.get("pose")
+    if pose is None:
+        raw["pose"] = evidence["pose"]
+    elif set(pose) != set(evidence["pose"]) or any(abs(pose[j] - evidence["pose"][j]) > POSE_TOL for j in pose):
+        raise CaseError(f"pose is not the pose {path} records; copy its pose or omit pose to take it")
+    occurrence = raw.get("occurrence")
+    if occurrence is not None and occurrence[1:] not in (evidence.get("occurrences") or {}):
+        raise CaseError(f"occurrence {occurrence} is not in {path}; available: "
+                        f"{', '.join(sorted('@' + oid for oid in evidence.get('occurrences') or {}))}")
+    return {"path": str(path), "sha256": digest, "criterion": evidence.get("criterion")}
 
 
 def run_directory(case_path: Path, run_id: str) -> Path:
@@ -182,6 +223,7 @@ def run_job(case_path: Path, case: dict[str, Any], timeout: float = 600.0) -> tu
         "solid_index": case.get("solid_index"),
         "required_safety_factor": case.get("required_safety_factor"),
         "pose": case.get("pose"),
+        "evidence": case.get("_evidence"),
         "selection_module": str(Path(__file__).with_name("fea_part_selection.py").resolve()),
         "material": case["material"],
         "fixed_faces": case["fixed_faces"],
@@ -314,7 +356,7 @@ def run():
         result={{"run_id":JOB["run_id"], "part":JOB.get("part"), "occurrence":JOB.get("occurrence"), "solid_index":JOB.get("solid_index"), "max_von_mises_mpa":max_stress, "max_displacement_mm":max_displacement, "safety_factor_yield":safety_factor, "node_count":nodes, "element_count":elements, "solve_time_seconds":solve_seconds}}
         result["solver_versions"]={{"freecad":".".join(App.Version()[:3])}}
         result["warnings"]=[]
-        result["worst_case_pose"]={{"step":JOB["step"], **({{"pose":JOB["pose"]}} if JOB.get("pose") is not None else {{}})}}
+        result["worst_case_pose"]={{"step":JOB["step"], **({{"pose":JOB["pose"]}} if JOB.get("pose") is not None else {{}}), **({{"evidence":JOB["evidence"]}} if JOB.get("evidence") is not None else {{}})}}
         result["required_safety_factor"]=JOB.get("required_safety_factor")
         result["mesh_input_hashes"]=mesh_inputs
         result["mesh_input_files"]=["GmshGeometry.brep", "GmshInput.geo"]

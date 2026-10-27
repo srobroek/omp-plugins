@@ -23,6 +23,12 @@ OUT_DIR/twins/      TST-0201, a ground plate z -5..0 over x -20..80, y -20..60,
                     and TST-0202, a part-local arm box x 0..50, y -5..5, z 0..5
                     with a 5 x 5 x 5 tab at x 0..5, y 5..10 (asymmetric: a
                     mirrored or misrotated placement moves the tab).
+OUT_DIR/v6/         VSX-0001..VSX-0401, the coupled V6-like mechanism of
+                    v6_record.py: a block plate below the crank; the crankshaft
+                    (three main-journal boxes clear of the rods and one 3 mm
+                    crankpin box per cylinder at its crank-angle-0 position);
+                    and the part-local piston, rod, camshaft and valve boxes
+                    v6_record.py describes.
 """
 
 from __future__ import annotations
@@ -38,6 +44,8 @@ assert _spec and _spec.loader
 pose = importlib.util.module_from_spec(_spec)
 sys.modules["cad_motion_pose"] = pose
 _spec.loader.exec_module(pose)
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import v6_record  # noqa: E402 - the kernel-free record beside this script
 
 LAMP_TITLES = {
     "LMP-0001": "Base plate and pivot boss",
@@ -145,6 +153,20 @@ def twin_shapes() -> dict[str, object]:
     }
 
 
+def v6_shapes() -> dict[str, object]:
+    pins = [box(x - 1.5, y - 1.5, z - 1.5, x + 1.5, y + 1.5, z + 1.5)
+            for x, y, z in (v6_record.crankpin_rest(x, side, phase) for _, x, side, phase in v6_record.CYLINDERS)]
+    journals = [box(-55, -3, -3, -48, 3, 3), box(-2, -3, -3, 2, 3, 3), box(48, -3, -3, 55, 3, 3)]
+    return {
+        "VSX-0001": box(-55, -20, -45, 55, 20, -40),
+        "VSX-0101": fuse(*journals, *pins),
+        "VSX-0201": box(-4, -4, -4, 4, 4, 2),
+        "VSX-0211": box(-1, -1, -v6_record.L + 3, 1, 1, -5),
+        "VSX-0301": box(-48, -2, -2, 48, 2, 2),
+        "VSX-0401": box(-1.5, -1.5, 2 + v6_record.VALVE_GAP, 1.5, 1.5, 5 + v6_record.VALVE_GAP),
+    }
+
+
 def write_set(folder: Path, shapes: dict[str, object], titles: dict[str, str]) -> dict[str, object]:
     folder.mkdir(parents=True, exist_ok=True)
     parts = {pn: pose.Part(pn, f"{pn} {titles[pn]}", shape) for pn, shape in shapes.items()}
@@ -160,6 +182,7 @@ def main(out: Path) -> int:
     pose.write_assembly_step(out / "lamp" / "lamp-arm.step", "lamp-arm", lamp, assembly.occurrences, rests)
     write_set(out / "planar", planar_shapes(), {"TST-0001": "Ground link", "TST-0002": "Middle link", "TST-0003": "Tip link"})
     write_set(out / "twins", twin_shapes(), {"TST-0201": "Ground plate", "TST-0202": "Arm"})
+    write_set(out / "v6", v6_shapes(), {pn: title for pn, (title, _) in v6_record.PARTS.items()})
     return 0
 
 
