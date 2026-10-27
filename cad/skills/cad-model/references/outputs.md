@@ -8,15 +8,18 @@ newest built version.
 
 | File | Content |
 |---|---|
-| `parts/<PN>.step` | AP242 (`AP242_MANAGED_MODEL_BASED_3D_ENGINEERING_MIM_LF`), one free product `"<PN> <title>"`, zero pose |
-| `assembly.step` | AP242, top product `"<product id> vN"`, each part a component at the nominal pose (cad-motion `pose.write_step`) |
-| `assembly.glb` | binary glTF 2.0 of `assembly.step`: metres, +Y up, node and mesh names = product names, one mesh per part |
-| `part-map.json` | `parts.<PN>`: `product`, `nodes`, `node_indices`, `meshes` in the GLB |
-| `metrics.json` | `parts.<PN>`: `volume_mm3`, `area_mm2`, `bbox_mm` {min, max, size}, `centre_of_volume_mm`, `solids`, `shells`, `faces`, `holes`, `material`, `density_g_cm3`, `mass_g`, `mass_target_g`; `totals` |
-| `drawing-features.json` | only when a model defines `drawing_features`: `label`, `frame: assembly_zero`, `units`, and `parts.<PN>` = that model's locators (semantic ID → locator, `references/contract.md`); parts without the hook are absent |
-| `manifest.json` | `parts.<PN>`: `kernel`, `model`, `source_sha256`, `params`, `kernel_volume_mm3`, `kernel_solids`, `kernel_valid`, `kernel_errors`; `tools` per environment with `import_s`; `pose` (values, transforms); `joint_pairs` (`pair`, `joint` id, `type`: revolute, prismatic, or fixed; `--attach` joints are fixed, id `attach:<PN>`); `ground`; `glb` tessellation; `drawing_features` (the sidecar's file name, present with the sidecar); `files` sha256, the sidecar included |
+| `parts/<PN>.step` | AP242 (`AP242_MANAGED_MODEL_BASED_3D_ENGINEERING_MIM_LF`), one free product `"<PN> <title>"`: the definition in the part's `model_frame` |
+| `assembly.step` | AP242, top product `"<product id> vN"`, one product per PN and one component per occurrence at T = D P (nominal pose); an explicit occurrence's component is named `"<PN> <title> [@id]"` (cad-motion `pose.write_assembly_step`) |
+| `assembly.glb` | binary glTF 2.0 of `assembly.step`: metres, +Y up, one node per occurrence named by its instance name (`"<PN> <title>"`, or `"<PN> <title> [@id]"`), mesh names = product names |
+| `part-map.json` | `schema_version: 2`; `occurrences.<id>`: `PN`, `ref`, `nodes`, `node_indices`, `meshes`, matched on the exact instance name (authoritative for selection and motion); `parts.<PN>`: `product`, `occurrences`, and the aggregated `nodes`, `node_indices`, `meshes` |
+| `metrics.json` | `schema_version: 2`; `parts.<PN>` (definition level, in its `model_frame`): `model_frame`, `volume_mm3`, `area_mm2`, `bbox_mm` {min, max, size}, `centre_of_volume_mm`, `solids`, `shells`, `faces`, `holes`, `material`, `density_g_cm3`, `mass_g` (unit mass), `mass_target_g`; `occurrences.<id>`: `PN`, `transform`, `bbox_mm` of the placed geometry, `centre_of_volume_mm` and `holes` carried by the placement; `totals` over occurrences (quantity-weighted), with `quantity` per PN, `parts_without_density` and `occurrences_without_density` |
+| `drawing-features.json` | only when a model defines `drawing_features`: `label`, `units`, `frames.<PN>` (its `model_frame`), and `parts.<PN>` = that model's locators in that frame (semantic ID → locator, `references/contract.md`); parts without the hook are absent |
+| `manifest.json` | `schema_version: 2`; `parts.<PN>`: `kernel`, `model_frame`, `occurrences`, `model`, `source_sha256`, `record_sha256` (part.yaml), `params`, `kernel_volume_mm3`, `kernel_solids`, `kernel_valid`, `kernel_errors`; `occurrences.<id>`: `PN`, `ref`, `explicit`, `group`, `rest` (P); `tools` per environment with `import_s`; `pose` (`values`, `transforms` T and `motions` D per occurrence); `joints` (id, type, parent, child occurrence ids, axis, origin, limits); `joint_pairs` (`pair` of occurrence ids, `joint` id, `type`; `--attach` joints are fixed, id `attach:<REF>`); `ground`; `glb` tessellation; `drawing_features`; `files` sha256 |
 
-Metrics and bboxes are in assembly coordinates at the zero pose, read back from the per-part STEP.
+A file without `schema_version` is a version 1 version, written before occurrences: it reads as one
+occurrence per PN whose id is the PN (cad-render `scripts/versions.py`, `built_occurrences`, the
+one reader for render, viewer and check). A newer schema is refused. Versions are never rewritten.
+Definition metrics and bboxes are in each part's model frame, read back from the per-part STEP.
 Every volume is BRepGProp's adaptive integration to 1e-9 relative (cad-motion `pose.VOLUME_EPS`,
 through `pose.volume_properties`, which cad-motion's sweep uses too); the default fixed-order rule
 is off by up to ~6e-6 on revolved and filleted B-spline faces.

@@ -12,8 +12,14 @@
 - `build` receives a private copy of `PARAMS`; the manifest records the values it received.
 - Accepted return values: CadQuery `Shape` or `Workplane` (every stack object; several become one
   compound), build123d `Shape`/`Part`/`Compound` or a `BuildPart` builder (`.part`).
-- Geometry is in assembly coordinates at the zero joint pose (every joint value 0), the
-  `cad-motion` convention. `run` places parts at the joints' nominal values for `assembly.step`.
+- Geometry is in the part's `model_frame` (part.yaml). `assembly_zero`, the default, is assembly
+  coordinates at the zero joint pose (every joint value 0), the `cad-motion` convention, and admits
+  one identity-placed occurrence. `part_local` is the definition's own origin and axes; each
+  `assembly.yaml` occurrence places it (`placement`: rotation about the local origin, then
+  translation). A part placed more than once, or anywhere but identity, is `part_local`; nothing
+  guesses a frame from the geometry. `run` places each occurrence at T = D P (joint motion at the
+  nominal values times the rest placement) for `assembly.step`; `parts/<PN>.step` keeps the frame.
+- Drawing feature locators carry the same `frame` as the part's `model_frame`.
 - The STEP product name is `"<PN> <title>"`, title from `part.yaml`; the script never names it.
 - Import only the declared kernel, OCP, the standard library, `cadmodel.safe`, and the kernel's
   warehouse: `bd_warehouse` 0.4.0 is in the build123d environment. `cq_warehouse` is not on PyPI
