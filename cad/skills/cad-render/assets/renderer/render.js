@@ -682,9 +682,11 @@ async function boot() {
       composer.render();
       copyCtx.drawImage(renderer.domElement, 0, 0);
       const pixels = copyCtx.getImageData(0, 0, width, height).data;
+      const encodeStarted = performance.now();
       const png = copy.toDataURL("image/png");
+      const encodeMs = performance.now() - encodeStarted;
       const { mask, floor } = renderMask(subject, options.ghost === true);
-      return { pixels, png, mask, floor };
+      return { pixels, png, mask, floor, encodeMs };
     };
     const finalFrame = isolated
       ? withIsolatedSubject(subject, renderFrame)
@@ -692,7 +694,7 @@ async function boot() {
     const visibleSubjectPixels = finalFrame.mask.reduce((count, cls) => count + (cls === 2), 0);
     const isolatedMask = view.subject ? withIsolatedSubject(subject, () => renderMask(subject).mask) : finalFrame.mask;
     const isolatedSubjectPixels = isolatedMask.reduce((count, cls) => count + (cls === 2), 0);
-    const { mask, floor, pixels, png } = finalFrame;
+    const { mask, floor, pixels, png, encodeMs } = finalFrame;
     const applied = {};
     for (const part of parts.values()) applied[part.pn] = readBack(part.material);
     return {
@@ -719,6 +721,7 @@ async function boot() {
       materials: applied,
       scene_radius_m: radius,
       render_ms: Math.round(performance.now() - started),
+      encode_ms: Math.round(encodeMs),
     };
   }
 

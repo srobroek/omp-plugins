@@ -21,9 +21,13 @@ TRIGGER
 ## Workflow
 
 1. Build first: `skill://cad-model` `run` writes `hw/versions/vN/` and `latest.json`.
-2. Render: `uv run --script skill://cad-flow/scripts/run.py cad-render/scripts/render.py hw [--version latest|vN] [--views iso front side exploded closeup-<PN> part-<PN>]`
+2. Render: `uv run --script skill://cad-flow/scripts/run.py cad-render/scripts/render.py hw [--version latest|vN] [--views iso front side exploded closeup-<PN> part-<PN>] [--jobs N]`
    -> `hw/renders/<vN>/<view>.png` and `manifest.json` (version, camera per attempt, quality metrics,
-   retry strategy, material applied per PN, three and Chromium versions, wall times); JSON summary on stdout.
+   retry strategy, material applied per PN, three and Chromium versions, phase timings); JSON summary on stdout.
+   `--jobs` uses 1-8 dedicated pages in one Chromium process (default 4); each page loads the scene once and
+   renders its assigned views serially, while pages capture concurrently. Use `--jobs 1` for the serial baseline.
+   The manifest records page-load time, each view's elapsed capture time, renderer time, and PNG encoding time;
+   per-view PNG SHA-256 values remain the cache integrity check.
 3. Close-ups: add `closeup-<PN>` for each part/interface to show, or `part-<PN>` for a studio view of
    one part in stable resting orientation with the other assembly parts hidden.
 4. Read every PNG before describing it. Name the material each PN shows from

@@ -10,12 +10,13 @@
 
 Usage:
     uv run --script skill://cad-flow/scripts/run.py cad-render/scripts/render.py HW [--version latest|vN] [--views iso front side exploded closeup-REF part-REF ...]
-        [--size 1600x1200] [--force] [--cache-dir DIR]
+        [--size 1600x1200] [--jobs N] [--force] [--cache-dir DIR]
 
 Resolves the version through HW/versions/latest.json (or HW/versions/vN/), maps each part's
 part.yaml material and finish to a MeshPhysicalMaterial through assets/materials.json, serves
-assets/renderer/ with the version GLB, drives headless Chromium (SwiftShader WebGL) with
-Playwright, and writes:
+assets/renderer/ with the version GLB, and drives headless Chromium (SwiftShader WebGL) with
+Playwright. Each worker uses a dedicated page in one shared Chromium process; page loads and view
+captures are measured separately from renderer and PNG encoding time. Writes:
 
     HW/renders/<version>/<view>.png   one per view
     HW/renders/<version>/manifest.json
@@ -33,10 +34,12 @@ stdout: one JSON summary. Exit 0 = every view is usable (pass or warn, including
 from __future__ import annotations
 
 import argparse
+import asyncio
 import base64
 import hashlib
 import importlib.metadata
 import importlib.util
+import inspect
 import json
 import math
 import re
@@ -67,6 +70,8 @@ BOOT_TIMEOUT_MS = 180_000
 VIEW_NAME = re.compile(r"^(iso|front|side|exploded|(closeup|part)-([A-Z]{2,5}-[0-9]{4}|@[a-z][a-z0-9_-]*))$")
 SIZE = re.compile(r"^([1-9][0-9]{2,3})x([1-9][0-9]{2,3})$")
 DEFAULT_VIEWS = ["iso", "front", "side", "exploded"]
+DEFAULT_JOBS = 4
+MAX_JOBS = 8
 CONTENT_TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
                  ".css": "text/css; charset=utf-8", ".json": "application/json", ".glb": "model/gltf-binary"}
 STATIC = {"/concept-tokens.css": CONCEPT_TOKENS}  # served beside assets/renderer/, outside it
@@ -672,47 +677,6 @@ def make_server(scene: dict[str, Any], glb: Path, cache_dir: Path) -> ThreadingH
 # --------------------------------------------------------------------------- render
 
 
-def capture_views(url: str, views: list[str], size: tuple[int, int]) -> tuple[dict[str, Any], dict[str, Any], dict[str, float]]:
-    from playwright.sync_api import Error as PlaywrightError
-    from playwright.sync_api import sync_playwright
-
-    results: dict[str, Any] = {}
-    timings: dict[str, float] = {}
-    errors: list[str] = []
-    started = time.monotonic()
-    try:
-        with sync_playwright() as pw:
-            browser = pw.chromium.launch(headless=True, args=CHROMIUM_ARGS)
-            try:
-                page = browser.new_page(viewport={"width": size[0], "height": size[1]}, device_scale_factor=1)
-                page.on("pageerror", lambda exc: errors.append(f"pageerror: {exc}"))
-                page.on("console", lambda msg: msg.type == "error" and errors.append(f"console: {msg.text}"))
-                timings["browser_start_s"] = round(time.monotonic() - started, 3)
-                page.goto(url, wait_until="load")
-                # index.html marks the body `error` when render.js or a pinned module fails to load,
-                # and window.cadRender then never appears: stop waiting at once and say why.
-                page.wait_for_function("window.cadRender !== undefined || document.body.dataset.state === 'error'",
-                                       timeout=BOOT_TIMEOUT_MS)
-                if page.evaluate("window.cadRender === undefined"):
-                    raise InfraError(f"renderer page did not start: {page.text_content('#status')}; "
-                                     f"page errors: {errors}")
-                info = page.evaluate("window.cadRender.ready")
-                timings["load_s"] = round(time.monotonic() - started - timings["browser_start_s"], 3)
-                info["chromium"] = browser.version
-                for view in views:
-                    t0 = time.monotonic()
-                    results[view] = page.evaluate("name => window.cadRender.capture(name)", view)
-                    timings[view] = round(time.monotonic() - t0, 3)
-            finally:
-                browser.close()
-    except PlaywrightError as exc:
-        raise InfraError(f"browser: {exc.message}; page errors: {errors}") from exc
-    if errors:
-        raise InfraError(f"renderer page reported errors: {errors}")
-    if info.get("unmapped_meshes"):
-        raise InfraError(f"GLB meshes owned by no part-map occurrence: {info['unmapped_meshes']}")
-    return info, results, timings
-
 
 def camera_record(camera: dict[str, Any]) -> dict[str, Any]:
     def asm(v: list[float]) -> list[float]:
@@ -733,18 +697,25 @@ def _frame_from_capture(result: dict[str, Any]) -> Frame:
     return Frame(result["width"], result["height"], *(pixels(key) for key in ("rgba", "mask", "floor")))
 
 
-def _capture_attempt(page: Any, name: str, options: dict[str, Any]) -> dict[str, Any]:
-    return page.evaluate("({name, options}) => window.cadRender.capture(name, options)",
-                         {"name": name, "options": options})
+async def _capture_attempt(page: Any, name: str, options: dict[str, Any]) -> dict[str, Any]:
+    return await page.evaluate("({name, options}) => window.cadRender.capture(name, options)",
+                               {"name": name, "options": options})
 
 
-def _retry_view(name: str, capture: Callable[[dict[str, Any]], dict[str, Any]]) -> tuple[dict[str, Any], Quality, list[dict[str, Any]]]:
+async def _retry_view(name: str, capture: Callable[[dict[str, Any]], Any]) -> tuple[dict[str, Any], Quality, list[dict[str, Any]]]:
     attempts: list[dict[str, Any]] = []
+    capture_wall_ms = render_ms = encode_ms = 0.0
     closeup = view_kind(name) == "closeup"
     isolated = view_kind(name) == "part"
 
-    def attempt(strategy: str, options: dict[str, Any] | None = None) -> tuple[dict[str, Any], Quality]:
-        result = capture(options or {})
+    async def attempt(strategy: str, options: dict[str, Any] | None = None) -> tuple[dict[str, Any], Quality]:
+        nonlocal capture_wall_ms, render_ms, encode_ms
+        started = time.monotonic()
+        captured = capture(options or {})
+        result = await captured if inspect.isawaitable(captured) else captured
+        capture_wall_ms += (time.monotonic() - started) * 1000
+        render_ms += float(result.get("render_ms", 0))
+        encode_ms += float(result.get("encode_ms", 0))
         quality = assess(_frame_from_capture(result), closeup=closeup and not bool(options and options.get("isolated")),
                          isolated=isolated or bool(options and options.get("isolated")),
                          visible_fraction=result.get("visible_subject_fraction"))
@@ -753,66 +724,108 @@ def _retry_view(name: str, capture: Callable[[dict[str, Any]], dict[str, Any]]) 
                          "failures": quality.failures, "warnings": quality.warnings})
         return result, quality
 
-    result, quality = attempt("original")
+    result, quality = await attempt("original")
     strategy = "original"
     if quality.failures and closeup:
         candidates = [(result, quality, {}, "original")]
         for direction in ALTERNATE_CLOSEUP_DIRECTIONS:
             options = {"direction": to_glb(direction), "frameScale": 1.15}
-            candidate, candidate_quality = attempt("alternate-camera", options)
+            candidate, candidate_quality = await attempt("alternate-camera", options)
             candidates.append((candidate, candidate_quality, options, "alternate-camera"))
         result, quality, best_options, strategy = max(
             candidates, key=lambda item: item[0].get("visible_subject_fraction", 0))
         if quality.failures:
-            result, quality = attempt("ghosted-context", {**best_options, "ghost": True})
+            result, quality = await attempt("ghosted-context", {**best_options, "ghost": True})
             strategy = "ghosted-context"
         if quality.failures:
-            result, quality = attempt("isolated-part", {"isolated": True})
+            result, quality = await attempt("isolated-part", {"isolated": True})
             strategy = "isolated-part"
             result["retry_note"] = "Context close-up unusable after alternate cameras and ghosted context; isolated component shown instead."
     elif quality.failures:
         if "CLIPPED" in quality.failures:
-            result, quality = attempt("reframe", {"frameScale": 0.8})
+            result, quality = await attempt("reframe", {"frameScale": 0.8})
             strategy = "reframe"
         if quality.failures and "BLANK" in quality.failures:
-            result, quality = attempt("blank-retry", {"direction": to_glb(DIRECTIONS[view_kind(name)])})
+            result, quality = await attempt("blank-retry", {"direction": to_glb(DIRECTIONS[view_kind(name)])})
             strategy = "blank-retry"
     result["retry"] = {"strategy": strategy, "attempts": attempts}
+    result["_capture_timing_ms"] = {"playwright_call": round(capture_wall_ms, 1),
+                                     "renderer": round(render_ms, 1), "png_encode": round(encode_ms, 1)}
     return result, quality, attempts
 
 
-def capture_views(url: str, views: list[str], size: tuple[int, int]) -> tuple[dict[str, Any], dict[str, Any], dict[str, float]]:
-    from playwright.sync_api import Error as PlaywrightError
-    from playwright.sync_api import sync_playwright
+async def _open_capture_page(browser: Any, url: str, size: tuple[int, int], errors: list[str]) -> tuple[Any, dict[str, Any]]:
+    page = await browser.new_page(viewport={"width": size[0], "height": size[1]}, device_scale_factor=1)
+    page.on("pageerror", lambda exc: errors.append(f"pageerror: {exc}"))
+    page.on("console", lambda msg: errors.append(f"console: {msg.text}") if msg.type == "error" else None)
+    await page.goto(url, wait_until="load")
+    await page.wait_for_function("window.cadRender !== undefined || document.body.dataset.state === 'error'",
+                                 timeout=BOOT_TIMEOUT_MS)
+    if await page.evaluate("window.cadRender === undefined"):
+        raise InfraError(f"renderer page did not start: {await page.text_content('#status')}; page errors: {errors}")
+    return page, await page.evaluate("window.cadRender.ready")
 
+
+async def _capture_page_views(page: Any, names: list[str]) -> tuple[dict[str, Any], dict[str, float]]:
+    results: dict[str, Any] = {}
+    timings: dict[str, float] = {}
+    for name in names:
+        t0 = time.monotonic()
+        result, quality, _ = await _retry_view(name, lambda options: _capture_attempt(page, name, options))
+        result["_quality"] = quality
+        results[name] = result
+        timings[name] = round(time.monotonic() - t0, 3)
+    return results, timings
+
+
+def capture_views(url: str, views: list[str], size: tuple[int, int], jobs: int = DEFAULT_JOBS) -> tuple[dict[str, Any], dict[str, Any], dict[str, float]]:
+    import asyncio
+    from playwright.async_api import Error as PlaywrightError
+    from playwright.async_api import async_playwright
+
+    if not 1 <= jobs <= MAX_JOBS:
+        raise InfraError(f"--jobs must be between 1 and {MAX_JOBS}")
     results: dict[str, Any] = {}
     timings: dict[str, float] = {}
     errors: list[str] = []
+    info: dict[str, Any] = {}
     started = time.monotonic()
-    try:
-        with sync_playwright() as pw:
-            browser = pw.chromium.launch(headless=True, args=CHROMIUM_ARGS)
+
+    async def capture() -> None:
+        nonlocal info
+        async def collect(awaitables: list[Any]) -> list[Any]:
+            tasks = [asyncio.create_task(awaitable) for awaitable in awaitables]
             try:
-                page = browser.new_page(viewport={"width": size[0], "height": size[1]}, device_scale_factor=1)
-                page.on("pageerror", lambda exc: errors.append(f"pageerror: {exc}"))
-                page.on("console", lambda msg: msg.type == "error" and errors.append(f"console: {msg.text}"))
+                return await asyncio.gather(*tasks)
+            except BaseException:
+                for task in tasks:
+                    task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+                raise
+
+        async with async_playwright() as pw:
+            browser = await pw.chromium.launch(headless=True, args=CHROMIUM_ARGS)
+            try:
                 timings["browser_start_s"] = round(time.monotonic() - started, 3)
-                page.goto(url, wait_until="load")
-                page.wait_for_function("window.cadRender !== undefined || document.body.dataset.state === 'error'",
-                                       timeout=BOOT_TIMEOUT_MS)
-                if page.evaluate("window.cadRender === undefined"):
-                    raise InfraError(f"renderer page did not start: {page.text_content('#status')}; page errors: {errors}")
-                info = page.evaluate("window.cadRender.ready")
-                timings["load_s"] = round(time.monotonic() - started - timings["browser_start_s"], 3)
+                worker_count = min(jobs, len(views))
+                chunks = [views[index::worker_count] for index in range(worker_count)]
+                load_started = time.monotonic()
+                pages = await collect([_open_capture_page(browser, url, size, errors) for _ in chunks])
+                timings["load_s"] = round(time.monotonic() - load_started, 3)
+                worker_results = await collect([_capture_page_views(page, chunk)
+                                                for (page, _), chunk in zip(pages, chunks)])
+                info = pages[0][1]
                 info["chromium"] = browser.version
                 for name in views:
-                    t0 = time.monotonic()
-                    result, quality, _ = _retry_view(name, lambda options: _capture_attempt(page, name, options))
-                    result["_quality"] = quality
-                    results[name] = result
-                    timings[name] = round(time.monotonic() - t0, 3)
+                    for group_results, group_timings in worker_results:
+                        if name in group_results:
+                            results[name] = group_results[name]
+                            timings[name] = group_timings[name]
+                            break
             finally:
-                browser.close()
+                await browser.close()
+    try:
+        asyncio.run(capture())
     except PlaywrightError as exc:
         raise InfraError(f"browser: {exc.message}; page errors: {errors}") from exc
     if errors:
@@ -838,6 +851,7 @@ def grade(results: dict[str, Any]) -> tuple[dict[str, Any], dict[str, bytes], bo
             "retry": result["retry"],
             "quality": {"status": "fail" if quality.failures else ("warn" if quality.warnings else "pass"),
                         "failures": quality.failures, "warnings": quality.warnings, **quality.metrics},
+            "capture_ms": result["_capture_timing_ms"],
             "page_render_ms": result["render_ms"],
         }
         if result.get("retry_note"):
@@ -877,6 +891,8 @@ def default_cache_dir() -> Path:
 
 def run(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     wall = time.monotonic()
+    if not 1 <= args.jobs <= MAX_JOBS:
+        raise InfraError(f"--jobs must be between 1 and {MAX_JOBS}")
     hw = args.hw.resolve()
     size = parse_size(args.size)
     version = resolve_version(hw, args.version)
@@ -901,7 +917,7 @@ def run(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     thread.start()
     port = server.server_address[1]
     try:
-        info, results, timings = capture_views(f"http://127.0.0.1:{port}/", views, size)
+        info, results, timings = capture_views(f"http://127.0.0.1:{port}/", views, size, args.jobs)
     finally:
         server.shutdown()
         server.server_close()
@@ -947,6 +963,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--views", nargs="+", default=DEFAULT_VIEWS,
                         help="iso front side exploded closeup-<PN> part-<PN> (default: iso front side exploded)")
     parser.add_argument("--size", default="1600x1200", help="frame size WIDTHxHEIGHT")
+    parser.add_argument("--jobs", type=int, default=DEFAULT_JOBS,
+                        help=f"parallel Chromium pages (1-{MAX_JOBS}; default: {DEFAULT_JOBS})")
     parser.add_argument("--force", action="store_true", help="render even when the cache matches")
     parser.add_argument("--cache-dir", type=Path, help="pinned three.js module cache (default: cad-concept's)")
     try:
