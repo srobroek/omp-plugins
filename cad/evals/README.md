@@ -138,7 +138,7 @@ python3 cad/evals/run.py inventory --harness omp --model amazon-bedrock/global.a
 
 # One cheap live call in a clean trial: served model, usage, inventory, leaks, raw stream, and what the trial
 # left on the host (shared temp entries, user-store changes). Exits 0 only when isolation is clean and the
-# host shows no change, and 2 without a call when the harness's preflight refuses (Kiro login too close to expiry).
+# host shows no change, and 2 without a call when the harness's preflight refuses (a Claude Code launcher whose binary cannot be found).
 python3 cad/evals/run.py smoke --harness omp --model amazon-bedrock/global.anthropic.claude-haiku-5-5 --out /tmp/smoke
 ```
 
@@ -204,7 +204,7 @@ Each row then records what the harness itself reported loading, and the leaks: e
 
 The smoke records in `smoke/` predate the CLI version lookup, so their `inventory.version` is null for OMP, Kiro and OpenCode. The CLIs reported the declared versions (18.12.3, 2.34.0, 2.1.4) when those smokes ran. When the record scrub landed, the committed records' `added_by_other_processes` lists were reduced to counts and Kiro's `isolation_mechanism` was corrected, without new calls. The records predate the Kiro executable fingerprint.
 
-Kiro updated itself to 2.34.1 before the 2026-10-27 pilot, so those pilot rows carry `baseline: declared for 2.34.0`. Their inventories match the 2.34.0 smoke apart from cad's own newer skills. They hold the cad agents, skills and skill context, and nothing else. The Kiro baseline is therefore declared for 2.34.1 with no items. The smoke ran under 2.34.0, so it vouches for the isolation mechanism only.
+Kiro updated itself to 2.34.1 before the 2026-10-27 pilot, so those pilot rows carry `baseline: declared for 2.34.0`. The 2.34.1 smoke (`smoke/kiro-2.34.1.json`) is clean. It ran in mode `cad-eval` on the served `claude-haiku-5.5` and loaded only cad's agents, skills and skill context. The Kiro baseline is therefore declared for 2.34.1 with no items. That smoke's `host.unchanged` is false. Kiro processes outside any trial share the real stores, and two were active around the smoke: a recurring headless run and a long-lived interactive session. No store row or entry names the trial, and the trial's own stores hold 12 entries each, as in the 2.34.0 smoke.
 
 ## Adapters
 
