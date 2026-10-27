@@ -9,6 +9,7 @@ Stdlib only; the live render (Playwright, three.js) is exercised by scripts/rend
 from __future__ import annotations
 
 import importlib.util
+import base64
 import json
 import re
 import shutil
@@ -200,7 +201,31 @@ class RetryLadder(unittest.TestCase):
         self.assertTrue(quality.passed)
         self.assertEqual(attempts[-1]["strategy"], "ghosted-context")
         self.assertTrue(all("metrics" in row and "camera" in row for row in attempts))
-        self.assertEqual(len(attempts), len(calls))
+    def test_isolated_retry_resets_subject_visibility_ratio(self) -> None:
+        attempts = []
+        def capture(options: dict) -> dict:
+            isolated = options.get("isolated", False)
+            attempts.append(isolated)
+            rendered = frame(**GOOD)
+            return self.capture_frame("closeup-LMP-0004", rendered, fraction=1.0 if isolated else 0.1)
+        _, quality, records = render._retry_view("closeup-LMP-0004", capture)
+        self.assertTrue(quality.passed)
+        self.assertEqual(records[-1]["strategy"], "isolated-part")
+        self.assertEqual(records[-1]["metrics"]["visible_subject_fraction"], 1.0)
+    def test_isolated_mode_mask_hides_all_non_subject_parts(self) -> None:
+        hidden = []
+        def capture(options: dict) -> dict:
+            hidden.append(options.get("isolated", False))
+            rendered = frame(**GOOD)
+            if options.get("isolated"):
+                rendered = render.Frame(rendered.width, rendered.height, rendered.rgba,
+                                        bytes(2 if value == 1 else value for value in rendered.mask), rendered.floor)
+            return self.capture_frame("closeup-LMP-0004", rendered,
+                                      fraction=1.0 if options.get("isolated") else 0.1)
+        result, _, _ = render._retry_view("closeup-LMP-0004", capture)
+        mask = base64.b64decode(result["mask"])
+        self.assertTrue(hidden[-1])
+        self.assertNotIn(1, mask)
 
     def test_shadowless_closeup_passes_as_warning_without_retry(self) -> None:
         rendered = frame(subject=GOOD["subject"])

@@ -637,14 +637,14 @@ async function boot() {
     const hidden = [];
     for (const [pn, part] of parts) {
       if (subject.has(pn)) continue;
-      for (const node of part.nodes) {
-        hidden.push([node, node.visible]);
-        node.visible = false;
+      for (const object of [...part.nodes, ...part.meshes]) {
+        hidden.push([object, object.visible]);
+        object.visible = false;
       }
     }
     try { root.updateMatrixWorld(true); return body(); }
     finally {
-      for (const [node, visible] of hidden) node.visible = visible;
+      for (const [object, visible] of hidden) object.visible = visible;
       root.updateMatrixWorld(true);
     }
   }
@@ -655,13 +655,11 @@ async function boot() {
     const started = performance.now();
     applyExplode(view.explode);
     const subject = new Set(view.subject ?? [...parts.keys()]);
+    const isolated = view.isolated || options.isolated === true;
     for (const [pn, part] of parts) {
       for (let i = 0; i < part.nodes.length; i += 1) part.nodes[i].visible = part.rest[i].visible;
-      if ((view.isolated || options.isolated === true) && !subject.has(pn)) {
-        for (const node of part.nodes) node.visible = false;
-      }
+      if (isolated && !subject.has(pn)) for (const node of part.nodes) node.visible = false;
     }
-    const isolated = view.isolated || options.isolated === true;
     if (isolated) restOnFloor(view.subject[0]);
     const subjectMeshes = [...subject].flatMap((pn) => {
       if (!parts.has(pn)) throw new Error(`view ${name}: unknown part ${pn}`);
@@ -669,8 +667,8 @@ async function boot() {
     });
     const sceneBox = new THREE.Box3().makeEmpty();
     subjectMeshes.forEach((mesh) => sceneBox.expandByObject(mesh));
-    const radius = stage(sceneBox, view.isolated ? name : Boolean(view.explode));
-    const points = view.isolated ? isolatedFramingPoints(subjectMeshes) : framingPoints(subjectMeshes);
+    const radius = stage(sceneBox, isolated ? name : Boolean(view.explode));
+    const points = isolated ? isolatedFramingPoints(subjectMeshes) : framingPoints(subjectMeshes);
     const fit = fitCamera(camera, points, options.direction ?? view.direction, options.frameScale ?? 1);
     const subjectRadius = new THREE.Box3().setFromPoints(vertexSample(subjectMeshes)).getSize(new THREE.Vector3()).length() / 2;
     const aoRadius = subjectRadius * STUDIO.aoRadius;
@@ -684,11 +682,13 @@ async function boot() {
       const { mask, floor } = renderMask(subject, options.ghost === true);
       return { pixels, png, mask, floor };
     };
-    const visible = options.ghost ? withGhostContext(subject, renderFrame) : renderFrame();
-    const visibleSubjectPixels = visible.mask.reduce((count, cls) => count + (cls === 2), 0);
-    const isolatedMask = view.subject ? withIsolatedSubject(subject, () => renderMask(subject).mask) : visible.mask;
+    const finalFrame = isolated
+      ? withIsolatedSubject(subject, renderFrame)
+      : (options.ghost ? withGhostContext(subject, renderFrame) : renderFrame());
+    const visibleSubjectPixels = finalFrame.mask.reduce((count, cls) => count + (cls === 2), 0);
+    const isolatedMask = view.subject ? withIsolatedSubject(subject, () => renderMask(subject).mask) : finalFrame.mask;
     const isolatedSubjectPixels = isolatedMask.reduce((count, cls) => count + (cls === 2), 0);
-    const { mask, floor, pixels, png } = visible;
+    const { mask, floor, pixels, png } = finalFrame;
     const applied = {};
     for (const [pn, part] of parts) applied[pn] = readBack(part.material);
     return {
@@ -746,5 +746,5 @@ const ready = boot().catch((error) => {
 });
 window.cadRender = {
   ready: ready.then((api) => api.info),
-  capture: async (name) => (await ready).capture(name),
+  capture: async (name, options) => (await ready).capture(name, options),
 };
