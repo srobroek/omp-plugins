@@ -6,7 +6,7 @@
 """Serve the cad-concept viewer and a scene directory, pushing reload on change.
 
 Usage:
-  uv run --script serve.py --scene-dir DIR [--host 127.0.0.1] [--port 8765] [--allow-remote]
+  uv run --script serve.py --scene-dir DIR [--host 127.0.0.1] [--port N] [--idle-timeout MIN] [--allow-remote]
 
 Routes:
   /                     the viewer (assets/viewer)
@@ -20,8 +20,8 @@ Routes:
 Every request must address the server by a loopback name and its port (`Host`), which closes
 DNS rebinding; a non-loopback `--host` needs `--allow-remote` and adds that address to the names.
 
-stdout: one JSON line {"url": ...} once listening. stderr: request log.
-Exit 0 on SIGINT/SIGTERM, 2 on usage or bind errors.
+stdout: one JSON line {"url": ..., "scene_dir": ..., "idle_timeout_min": ...} once listening. stderr: request log.
+Exit 0 on SIGINT/SIGTERM or idle timeout, 2 on usage or bind errors.
 """
 
 from __future__ import annotations
@@ -37,6 +37,8 @@ import re
 import signal
 import sys
 import threading
+import time
+from collections.abc import Callable
 import urllib.error
 import urllib.request
 from datetime import datetime
@@ -118,8 +120,28 @@ class SceneWatcher(threading.Thread):
         self.cond = threading.Condition()
         self.generation = 0
         self.last_change: list[str] = []
+        self.last_activity = time.monotonic()
+        self.live_clients = 0
         self._halt = threading.Event()
 
+    def record_request(self) -> None:
+        with self.cond:
+            self.last_activity = time.monotonic()
+
+    def client_connected(self) -> None:
+        with self.cond:
+            self.live_clients += 1
+            self.cond.notify_all()
+
+    def client_disconnected(self) -> None:
+        with self.cond:
+            self.live_clients -= 1
+            self.last_activity = time.monotonic()
+            self.cond.notify_all()
+
+    def idle_for(self, seconds: float) -> bool:
+        with self.cond:
+            return self.live_clients == 0 and time.monotonic() - self.last_activity >= seconds
     def run(self) -> None:
         before = scene_snapshot(self.scene_dir)
         while not self._halt.wait(self.interval):
@@ -181,7 +203,7 @@ class Handler(BaseHTTPRequestHandler):
     watcher: SceneWatcher
     vendor: VendorCache
     hosts: frozenset[str] = frozenset()  # set by run() once the port is bound
-
+    heartbeat_s = HEARTBEAT_S
     def _host_ok(self) -> bool:
         """A request naming another host (DNS rebinding, a stray proxy) is refused."""
         if self.headers.get("Host") in self.hosts:
@@ -207,10 +229,17 @@ class Handler(BaseHTTPRequestHandler):
     def _error(self, status: HTTPStatus, message: str) -> None:
         self._json(status, {"ok": False, "error": message})
 
+    def parse_request(self) -> bool:
+        parsed = super().parse_request()
+        if parsed:
+            self.watcher.record_request()
+        return parsed
+
     def do_HEAD(self) -> None:
         self.do_GET()
 
     def do_GET(self) -> None:
+        self.watcher.record_request()
         if not self._host_ok():
             return
         path = unquote(urlsplit(self.path).path)
@@ -247,20 +276,21 @@ class Handler(BaseHTTPRequestHandler):
         self._send(HTTPStatus.OK, file.read_bytes(), ctype)
 
     def _events(self) -> None:
-        self.send_response(HTTPStatus.OK)
-        self.send_header("Content-Type", "text/event-stream")
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("Connection", "keep-alive")
-        self.end_headers()
         watcher = self.watcher
-        with watcher.cond:
-            seen = watcher.generation
+        watcher.client_connected()
         try:
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Connection", "keep-alive")
+            self.end_headers()
+            with watcher.cond:
+                seen = watcher.generation
             self.wfile.write(b"event: hello\ndata: {}\n\n")
             self.wfile.flush()
             while not watcher.stopped:
                 with watcher.cond:
-                    watcher.cond.wait_for(lambda: watcher.generation != seen or watcher.stopped, HEARTBEAT_S)
+                    watcher.cond.wait_for(lambda: watcher.generation != seen or watcher.stopped, self.heartbeat_s)
                     fresh = watcher.generation != seen
                     seen, files = watcher.generation, list(watcher.last_change)
                 if fresh:
@@ -270,12 +300,11 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError):
             return
+        finally:
+            watcher.client_disconnected()
 
     def do_POST(self) -> None:
         if not self._host_ok():
-            return
-        if urlsplit(self.path).path != "/api/screenshot":
-            self._error(HTTPStatus.NOT_FOUND, "unknown endpoint")
             return
         origin = self.headers.get("Origin")
         if origin is not None and origin != f"http://{self.headers.get('Host')}":
@@ -311,11 +340,16 @@ def default_cache_dir() -> Path:
     return Path(base) / "cad-concept" / "vendor"
 
 
-def run(argv: list[str]) -> int:
+def run(argv: list[str], *, idle_timeout_s: float | None = None,
+        ready_callback: Callable[[dict[str, object]], None] | None = None,
+        install_signals: bool = True,
+        shutdown_callback: Callable[[Callable[[int, object], None]], None] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="serve.py", description=__doc__.splitlines()[0])
     parser.add_argument("--scene-dir", type=Path, required=True, help="directory holding *.scene.json")
     parser.add_argument("--host", default="127.0.0.1", help="bind address; a non-loopback one needs --allow-remote")
-    parser.add_argument("--port", type=int, default=8765, help="0 picks a free port")
+    parser.add_argument("--port", type=int, default=0, help="port to listen on; 0 picks a free port")
+    parser.add_argument("--idle-timeout", type=int, default=30, metavar="MIN",
+                        help="exit after this many idle minutes (default: 30; 0 disables)")
     parser.add_argument("--allow-remote", action="store_true",
                         help="allow a non-loopback --host: every client on that network can then reach the server")
     parser.add_argument("--poll", type=float, default=0.3, help="scene poll interval, seconds")
@@ -324,6 +358,13 @@ def run(argv: list[str]) -> int:
         args = parser.parse_args(argv)
     except SystemExit as exc:
         return 0 if exc.code == 0 else 2
+    if args.idle_timeout < 0:
+        print("serve.py: --idle-timeout must be 0 or greater", file=sys.stderr)
+        return 2
+    timeout_s = args.idle_timeout * 60 if idle_timeout_s is None else idle_timeout_s
+    if timeout_s < 0:
+        print("serve.py: idle timeout must be 0 or greater", file=sys.stderr)
+        return 2
     if not is_loopback(args.host) and not args.allow_remote:
         print(f"serve.py: --host {args.host} is not a loopback address; add --allow-remote to serve it", file=sys.stderr)
         return 2
@@ -342,13 +383,19 @@ def run(argv: list[str]) -> int:
     handler = type(
         "BoundHandler",
         (Handler,),
-        {"scene_dir": scene_dir, "watcher": watcher, "vendor": VendorCache(args.cache_dir, integrity)},
+        {
+            "scene_dir": scene_dir,
+            "watcher": watcher,
+            "vendor": VendorCache(args.cache_dir, integrity),
+            "heartbeat_s": HEARTBEAT_S if timeout_s <= 0 else min(HEARTBEAT_S, timeout_s / 4),
+        },
     )
     try:
         httpd = ThreadingHTTPServer((args.host, args.port), handler)
     except OSError as exc:
         print(f"serve.py: cannot listen on {args.host}:{args.port}: {exc}", file=sys.stderr)
         return 2
+    host, port = httpd.server_address[:2]
     httpd.daemon_threads = True
     handler.hosts = allowed_hosts(httpd.server_address[1], args.host)
     watcher.start()
@@ -357,10 +404,31 @@ def run(argv: list[str]) -> int:
         watcher.stop()
         threading.Thread(target=httpd.shutdown, daemon=True).start()
 
-    signal.signal(signal.SIGINT, shutdown)
-    signal.signal(signal.SIGTERM, shutdown)
-    host, port = httpd.server_address[:2]
-    print(json.dumps({"url": f"http://{host}:{port}/", "scene_dir": str(scene_dir)}), flush=True)
+    if install_signals:
+        signal.signal(signal.SIGINT, shutdown)
+        signal.signal(signal.SIGTERM, shutdown)
+    if shutdown_callback:
+        shutdown_callback(shutdown)
+    ready = {"url": f"http://{host}:{port}/", "scene_dir": str(scene_dir),
+             "idle_timeout_min": args.idle_timeout}
+    print(json.dumps(ready), flush=True)
+    if ready_callback:
+        ready_callback(ready)
+    if timeout_s > 0:
+        def stop_when_idle() -> None:
+            while True:
+                with watcher.cond:
+                    while not watcher.stopped:
+                        remaining = timeout_s - (time.monotonic() - watcher.last_activity)
+                        if watcher.live_clients == 0 and remaining <= 0:
+                            break
+                        watcher.cond.wait(max(0.01, min(0.2, remaining if watcher.live_clients == 0 else 0.2)))
+                    if watcher.stopped:
+                        return
+                shutdown(signal.SIGTERM, None)
+                return
+
+        threading.Thread(target=stop_when_idle, daemon=True, name="idle-timeout").start()
     try:
         httpd.serve_forever(poll_interval=0.2)
     finally:

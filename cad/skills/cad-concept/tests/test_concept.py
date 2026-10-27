@@ -17,6 +17,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import threading
 import unittest
 import urllib.error
 import urllib.request
@@ -70,10 +71,10 @@ class SemanticChecks(unittest.TestCase):
     def test_wiring_and_limit_errors_are_reported(self) -> None:
         scene = example()
         variant = scene["variants"][0]
-        variant["joints"][1]["parent"] = "base"  # elbow child is not a direct child of base
-        variant["joints"][2]["nominal"] = 90  # outside [-45, 45]
+        variant["joints"][1]["parent"] = "base"
+        variant["joints"][2]["nominal"] = 90
         variant["joints"][0]["axis"] = [0, 0, 0]
-        variant["root"]["children"][0]["children"][1]["id"] = "base-plate"  # duplicate id
+        variant["root"]["children"][0]["children"][1]["id"] = "base-plate"
         errors = concept.semantic_errors(scene)
         joined = "\n".join(errors)
         self.assertIn("not a direct child of 'base'", joined)
@@ -86,9 +87,7 @@ class SemanticChecks(unittest.TestCase):
         scene["chosen"] = "missing"
         scene["retired"] = [{"id": "tall", "label": "Tall", "disposition": "merged", "into": "nowhere", "reason": "r"}]
         scene["variants"][0]["root"]["children"][0]["children"][2]["children"][0]["shape"] = {
-            "type": "capsule",
-            "radius": 20,
-            "height": 30,
+            "type": "capsule", "radius": 20, "height": 30,
         }
         joined = "\n".join(concept.semantic_errors(scene))
         self.assertIn("chosen: 'missing' is not a live variant", joined)
@@ -99,25 +98,19 @@ class SemanticChecks(unittest.TestCase):
 class Geometry(unittest.TestCase):
     def test_rotated_box_envelope_swaps_axes(self) -> None:
         variant = {
-            "id": "v",
-            "label": "v",
-            "root": {"kind": "group", "id": "root", "label": "r", "children": [box_part("p", (100, 20, 10), (50, 0, 0), (0, 0, 90))]},
+            "id": "v", "label": "v", "root": {"kind": "group", "id": "root", "label": "r",
+            "children": [box_part("p", (100, 20, 10), (50, 0, 0), (0, 0, 90))]},
         }
         box = concept.envelopes(variant)["root"]
         self.assertEqual([round(v, 6) for v in box.lo], [40, -50, -5])
         self.assertEqual([round(v, 6) for v in box.hi], [60, 50, 5])
 
     def test_revolute_joint_poses_child_at_nominal(self) -> None:
-        # A 100 mm arm standing on +Z, hinged at the origin about +Y, nominal 90 deg -> lies along +X.
-        arm = {"kind": "group", "id": "arm", "label": "arm", "children": [box_part("link", (10, 10, 100), (0, 0, 50))]}
+        arm = {"kind": "group", "id": "arm", "label": "a", "children": [box_part("link", (10, 10, 100), (0, 0, 50))]}
         variant = {
-            "id": "v",
-            "label": "v",
-            "root": {"kind": "group", "id": "root", "label": "r", "children": [arm]},
-            "joints": [
-                {"id": "j", "type": "revolute", "parent": "root", "child": "arm", "axis": [0, 1, 0],
-                 "origin": [0, 0, 0], "min": 0, "max": 90, "nominal": 90}
-            ],
+            "id": "v", "label": "v", "root": {"kind": "group", "id": "root", "label": "r", "children": [arm]},
+            "joints": [{"id": "j", "type": "revolute", "parent": "root", "child": "arm", "axis": [0, 1, 0],
+                        "origin": [0, 0, 0], "min": 0, "max": 90, "nominal": 90}],
         }
         box = concept.envelopes(variant)["root"]
         self.assertEqual([round(v, 6) for v in box.lo], [0, -5, -5])
@@ -126,13 +119,9 @@ class Geometry(unittest.TestCase):
     def test_prismatic_joint_translates_along_axis(self) -> None:
         slider = {"kind": "group", "id": "slide", "label": "s", "children": [box_part("block", (10, 10, 10))]}
         variant = {
-            "id": "v",
-            "label": "v",
-            "root": {"kind": "group", "id": "root", "label": "r", "children": [slider]},
-            "joints": [
-                {"id": "j", "type": "prismatic", "parent": "root", "child": "slide", "axis": [0, 0, 2],
-                 "origin": [0, 0, 0], "min": 0, "max": 40, "nominal": 25}
-            ],
+            "id": "v", "label": "v", "root": {"kind": "group", "id": "root", "label": "r", "children": [slider]},
+            "joints": [{"id": "j", "type": "prismatic", "parent": "root", "child": "slide", "axis": [0, 0, 2],
+                        "origin": [0, 0, 0], "min": 0, "max": 40, "nominal": 25}],
         }
         box = concept.envelopes(variant)["root"]
         self.assertEqual([round(v, 6) for v in box.lo], [-5, -5, 20])
@@ -156,7 +145,7 @@ class Handoff(unittest.TestCase):
             seen.add(node["id"])
         paths = {n["id"]: n["path"] for n in nodes}
         self.assertEqual(paths["bulb"], "lamp/base/lower-arm/upper-arm/head/bulb")
-        self.assertEqual(nodes[0]["parent"], None)
+        self.assertIsNone(nodes[0]["parent"])
         self.assertEqual(len(nodes), 11)
 
     def test_joints_variant_and_alternatives(self) -> None:
@@ -172,16 +161,13 @@ class Handoff(unittest.TestCase):
         scene = example()
         scene["chosen"] = "long-reach"
         variant = concept.pick_variant(scene, None)
-        manifest = concept.build_handoff(
-            scene, variant, file_name=EXAMPLE.name, digest=hashlib.sha256(EXAMPLE.read_bytes()).hexdigest()
-        )
+        manifest = concept.build_handoff(scene, variant, file_name=EXAMPLE.name,
+                                         digest=hashlib.sha256(EXAMPLE.read_bytes()).hexdigest())
         self.assertEqual(manifest["variant"]["id"], "long-reach")
         self.assertEqual(len(manifest["joints"]), 3)
         self.assertEqual(manifest["joints"][0]["nominal"], 30)
-        self.assertEqual(
-            hashlib.sha256(json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
-            "48e8bf582be54a38981a655f1e347a128d3a9af6add139f76e939be41db09379",
-        )
+        self.assertEqual(hashlib.sha256(json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
+                         "48e8bf582be54a38981a655f1e347a128d3a9af6add139f76e939be41db09379")
 
     def test_part_envelope_is_its_primitive(self) -> None:
         plate = next(n for n in self.manifest["nodes"] if n["id"] == "base-plate")
@@ -196,7 +182,8 @@ class Handoff(unittest.TestCase):
 @unittest.skipUnless(shutil.which("uv"), "uv not on PATH; schema checks need the PEP 723 environment")
 class SchemaCli(unittest.TestCase):
     def run_cli(self, *args: str) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(["uv", "run", "--quiet", "--script", str(CONCEPT_PY), *args], capture_output=True, text=True, timeout=180)
+        return subprocess.run(["uv", "run", "--quiet", "--script", str(CONCEPT_PY), *args], capture_output=True,
+                              text=True, timeout=180)
 
     def test_example_scene_passes_check(self) -> None:
         result = self.run_cli("check", str(EXAMPLE))
@@ -229,14 +216,11 @@ class SchemaCli(unittest.TestCase):
 class ServerUnits(unittest.TestCase):
     def test_import_map_is_the_vendor_allow_list(self) -> None:
         integrity = serve.vendor_integrity(serve.VIEWER_DIR / "index.html")
-        self.assertEqual(
-            sorted(integrity),
-            [
-                "/vendor/three@0.186.1/build/three.core.js",
-                "/vendor/three@0.186.1/build/three.module.js",
-                "/vendor/three@0.186.1/examples/jsm/controls/OrbitControls.js",
-            ],
-        )
+        self.assertEqual(sorted(integrity), [
+            "/vendor/three@0.186.1/build/three.core.js",
+            "/vendor/three@0.186.1/build/three.module.js",
+            "/vendor/three@0.186.1/examples/jsm/controls/OrbitControls.js",
+        ])
         self.assertTrue(all(v.startswith("sha384-") for v in integrity.values()))
 
     def test_sri_and_cache_hit(self) -> None:
@@ -270,15 +254,20 @@ class ServerLive(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.dir = Path(self.tmp.name)
         shutil.copy(EXAMPLE, self.dir / EXAMPLE.name)
-        self.proc = subprocess.Popen(
+        self.proc, self.ready = self.start_server()
+        self.url = self.ready["url"]
+
+    def start_server(self, *extra: str) -> tuple[subprocess.Popen[str], dict]:
+        proc = subprocess.Popen(
             [sys.executable, str(SERVE_PY), "--scene-dir", str(self.dir), "--port", "0", "--poll", "0.1",
-             "--cache-dir", str(self.dir / "cache")],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
+             *extra, "--cache-dir", str(self.dir / "cache")],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
         )
-        assert self.proc.stdout
-        self.url = json.loads(self.proc.stdout.readline())["url"]
+        assert proc.stdout
+        ready = json.loads(proc.stdout.readline())
+        self.assertEqual(ready["scene_dir"], str(self.dir.resolve()))
+        self.assertIn("idle_timeout_min", ready)
+        return proc, ready
 
     def tearDown(self) -> None:
         if self.proc.poll() is None:
@@ -316,8 +305,7 @@ class ServerLive(unittest.TestCase):
     def test_routes(self) -> None:
         status, body = self.get("/api/scenes")
         self.assertEqual((status, json.loads(body)), (200, {"scenes": ["lamp-arm.scene.json"]}))
-        status, body = self.get("/scenes/lamp-arm.scene.json")
-        self.assertEqual((status, body), (200, EXAMPLE.read_bytes()))
+        self.assertEqual(self.get("/scenes/lamp-arm.scene.json"), (200, EXAMPLE.read_bytes()))
         self.assertEqual(self.get("/scenes/..%2Fsecret.scene.json")[0], 404)
         self.assertEqual(self.get("/../../etc/passwd")[0], 404)
         self.assertEqual(self.get("/vendor/three@0.186.1/build/not-pinned.js")[0], 404)
@@ -356,7 +344,6 @@ class ServerLive(unittest.TestCase):
         self.assertEqual(self.post({**body, "scene": "../x.scene.json"})[0], 400)
 
     def test_a_rebound_host_name_is_refused(self) -> None:
-        # DNS rebinding: the attacker's name resolves to 127.0.0.1, so Host and Origin both name it.
         port = self.url.rstrip("/").rsplit(":", 1)[1]
         self.assertEqual(self.get("/api/scenes", host=f"evil.example:{port}")[0], 403)
         self.assertEqual(self.get("/api/scenes", host="127.0.0.1:1")[0], 403)
@@ -371,10 +358,84 @@ class ServerLive(unittest.TestCase):
         self.proc.send_signal(signal.SIGTERM)
         self.assertEqual(self.proc.wait(timeout=5), 0)
 
+class ServerTimeout(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+        shutil.copy(EXAMPLE, self.dir / EXAMPLE.name)
+        self.ready: dict | None = None
+        self.url = ""
+        self._server_done = None
+        self._server_thread = None
+
+    def tearDown(self) -> None:
+        self.stop_server()
+        self.tmp.cleanup()
+
+    def stop_server(self) -> None:
+        if self._server_done and not self._server_done.is_set():
+            self._shutdown(signal.SIGTERM, None)
+            self.assertTrue(self._server_done.wait(2))
+        self._server_thread.join(timeout=2)
+
+    def start_server(self, idle_timeout_s: float | None) -> None:
+        done = threading.Event()
+
+        def ready(info: dict[str, object]) -> None:
+            self.ready = info
+            self.url = str(info["url"])
+        def request_shutdown(stop) -> None:
+            self._shutdown = stop
+
+        def serve_forever() -> None:
+            try:
+                serve.run([
+                    "--scene-dir", str(self.dir), "--port", "0", "--idle-timeout",
+                    "1" if idle_timeout_s is not None else "0", "--poll", "0.1",
+                    "--cache-dir", str(self.dir / "cache"),
+                ], idle_timeout_s=idle_timeout_s, ready_callback=ready, install_signals=False,
+                   shutdown_callback=request_shutdown)
+            finally:
+                done.set()
+        self._server_done = done
+        self._server_thread = threading.Thread(target=serve_forever, daemon=True)
+        self._server_thread.start()
+        self.assertTrue(wait_until(lambda: self.ready is not None, 2), "server did not announce ready")
+
+    def test_idle_expiry_uses_seconds_level_timeout(self) -> None:
+        started = time.monotonic()
+        self.start_server(0.4)
+        self.assertTrue(self._server_done.wait(2))
+        self.assertLess(time.monotonic() - started, 2)
+
+    def test_live_sse_connection_holds_server_then_disconnect_expires(self) -> None:
+        self.start_server(0.4)
+        resp = urllib.request.urlopen(self.url + "events", timeout=5)
+        self.assertEqual(resp.readline().strip(), b"event: hello")
+        resp.readline(), resp.readline()
+        time.sleep(0.6)
+        self.assertFalse(self._server_done.is_set(), "connected SSE client must keep the server alive")
+        resp.close()
+        self.assertTrue(self._server_done.wait(2), "server did not expire after SSE disconnect")
+
+    def test_zero_disables_idle_expiry(self) -> None:
+        self.start_server(None)
+        time.sleep(0.6)
+        self.assertFalse(self._server_done.is_set(), "0 disables idle expiry")
+        self.stop_server()
+
+def wait_until(predicate, timeout: float) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.01)
+    return predicate()
 
 class ServerUsage(unittest.TestCase):
     def test_missing_scene_dir_is_a_usage_error(self) -> None:
-        result = subprocess.run([sys.executable, str(SERVE_PY), "--scene-dir", "/nonexistent-dir"], capture_output=True, text=True, timeout=10)
+        result = subprocess.run([sys.executable, str(SERVE_PY), "--scene-dir", "/nonexistent-dir"],
+                                capture_output=True, text=True, timeout=10)
         self.assertEqual(result.returncode, 2)
 
     def test_a_non_loopback_bind_needs_allow_remote(self) -> None:
