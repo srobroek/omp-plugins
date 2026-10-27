@@ -32,6 +32,8 @@ from xml.etree import ElementTree as ET
 
 from defusedxml import ElementTree as SafeET
 
+import freecad_runtime
+
 import sheet_export
 from drawing_contract import DrawingContext, sha256
 from freecad_views import ViewGeometry
@@ -645,7 +647,7 @@ def _replace_package(staging: Path, output_dir: Path, run_id: str) -> None:
 
 def publish_package(context: DrawingContext, sheets: Sequence[ComposedSheet], report: CoverageReport,
                     output_dir: Path, freecadcmd: Path, timeout: float,
-                    release: Sequence[Mapping[str, Any]] = ()) -> PackageReport:
+                    release: Sequence[Mapping[str, Any]] = (), jobs: int = 1, executor: Any = None) -> PackageReport:
     """Check, export and publish the sheets of one drawing as ``output_dir``; return what happened.
 
     Order: the coverage verdict, ``check_layout`` on every sheet, then the PDF and PNG export of
@@ -678,17 +680,24 @@ def publish_package(context: DrawingContext, sheets: Sequence[ComposedSheet], re
                 findings.append({"code": "layout_check_failed", "sheet": number, "message": "; ".join(violations)})
         records: list[dict[str, Any]] = []
         if layout_ok:
-            for sheet in sheets:
+            def export(sheet: ComposedSheet) -> tuple[dict[str, Any] | None, sheet_export.ExportError | None]:
                 number = sheet.metadata.sheet_number
                 paths = {kind: staging / f"sheet-{number}.{kind}" for kind in ("svg", "pdf", "png")}
                 try:
-                    exported = sheet_export.export_sheet(freecadcmd, paths["svg"], paths["pdf"], paths["png"],
-                                                         sheet.required_text, timeout)
+                    result = sheet_export.export_sheet(freecadcmd, paths["svg"], paths["pdf"], paths["png"],
+                                                       sheet.required_text, timeout)
                 except sheet_export.ExportError as exc:
-                    findings.append({"code": exc.code, "sheet": number, "message": str(exc)})
-                    break
-                records.append({"sheet": number, "size": sheet.spec.size, "files": {k: p.name for k, p in paths.items()},
-                                "sha256": {k: sha256(p) for k, p in paths.items()}, "export": exported})
+                    return None, exc
+                return {"sheet": number, "size": sheet.spec.size,
+                        "files": {k: p.name for k, p in paths.items()},
+                        "sha256": {k: sha256(p) for k, p in paths.items()}, "export": result}, None
+
+            exported = freecad_runtime.map_jobs(sheets, jobs, export, executor)
+            for sheet, (record, error) in zip(sheets, exported):
+                if error is not None:
+                    findings.append({"code": error.code, "sheet": sheet.metadata.sheet_number, "message": str(error)})
+                elif record is not None:
+                    records.append(record)
         status = "pass" if not findings else ("error" if any(f["code"] == "export_failed" for f in findings) else "fail")
         result = PackageReport(status=status, run_id=run_id, output_dir=output_dir, provenance=provenance,
                                sheets=tuple(records), coverage=report.to_dict(), findings=tuple(findings),

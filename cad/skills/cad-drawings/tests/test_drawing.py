@@ -3,11 +3,17 @@
 
 from __future__ import annotations
 
+import json
+import os
+import signal
 import sys
 import tempfile
+import time
 import unittest
 import zlib
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from unittest.mock import patch
 
 from defusedxml import ElementTree as SafeET
 
@@ -141,6 +147,64 @@ class FreeCADDiscovery(unittest.TestCase):
         self.assertEqual(freecad_runtime.templates_dir(link),
                          command.resolve().parents[1] / "share" / "Mod" / "TechDraw" / "Templates")
 
+class FreeCADConcurrency(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory(prefix="cad-freecad-parallel-")
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+
+    def test_jobs_default_is_bounded_by_cpu_available_memory_and_items(self) -> None:
+        with patch.object(freecad_runtime.os, "cpu_count", return_value=8), \
+                patch.object(freecad_runtime, "available_memory_bytes", return_value=4_000):
+            self.assertEqual(freecad_runtime.jobs_for(None, 10, 1_000), 4)
+            self.assertEqual(freecad_runtime.jobs_for(None, 2, 1_000), 2)
+            self.assertEqual(freecad_runtime.jobs_for(5, 2, 1_000), 2)
+
+    def test_shared_pool_results_stay_in_input_order(self) -> None:
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            result = freecad_runtime.map_jobs((0.06, 0.0, 0.03), 3,
+                                              lambda delay: (time.sleep(delay), delay)[1], executor)
+        self.assertEqual(result, [0.06, 0.0, 0.03])
+
+    def test_freecad_job_environment_is_isolated_and_stdout_is_not_the_summary(self) -> None:
+        command = self.root / "fake-freecad"
+        command.write_text("#!/bin/sh\nexec python3 \"$1\"\n", encoding="utf-8")
+        command.chmod(0o755)
+        script = self.root / "job.py"
+        script.write_text("import json, os\n"
+                          "job = json.load(open(os.environ['CAD_DRAWING_JOB']))\n"
+                          "keys = ('HOME', 'FREECAD_USER_HOME', 'FREECAD_USER_DATA', 'FREECAD_USER_TEMP', "
+                          "'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'XDG_RUNTIME_DIR', 'TMPDIR')\n"
+                          "json.dump({'status': 'pass', 'environment': {k: os.environ[k] for k in keys}, "
+                          "'directories_exist': all(os.path.isdir(os.environ[k]) for k in keys)}, "
+                          "open(job['result'], 'w'))\n"
+                          "print('diagnostic output')\n", encoding="utf-8")
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            values = freecad_runtime.map_jobs((1, 2), 2,
+                                              lambda _: freecad_runtime.run_job(command, script, {}, self.root, 10)[0],
+                                              executor)
+        self.assertTrue(all(value and value["directories_exist"] for value in values))
+        first, second = (value["environment"] for value in values if value)
+        self.assertTrue(all(first[key] != second[key] for key in first))
+    def test_sigterm_terminates_and_reaps_every_process_group(self) -> None:
+        command = self.root / "fake-freecad"
+        command.write_text("#!/bin/sh\nexec python3 \"$1\"\n", encoding="utf-8")
+        command.chmod(0o755)
+        script = self.root / "job.py"
+        script.write_text("import json, os, signal, time\n"
+                          "job = json.load(open(os.environ['CAD_DRAWING_JOB']))\n"
+                          "open(job['result'] + '.pid', 'w').write(str(os.getpid()))\n"
+                          "signal.signal(signal.SIGTERM, lambda *_: time.sleep(60))\n"
+                          "time.sleep(60)\n", encoding="utf-8")
+        with self.assertRaises(freecad_runtime.JobInterrupted):
+            with freecad_runtime.terminate_jobs_on_signal():
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    [executor.submit(freecad_runtime.run_job, command, script, {}, self.root, 120) for _ in range(2)]
+                    deadline = time.monotonic() + 10
+                    while len(list(self.root.glob("*.result.json.pid"))) < 2 and time.monotonic() < deadline:
+                        time.sleep(0.05)
+                    self.assertEqual(len(list(self.root.glob("*.result.json.pid"))), 2)
+                    os.kill(os.getpid(), signal.SIGTERM)
 
 class SheetExportParts(unittest.TestCase):
     """Text splitting and PDF reading without FreeCAD; the lamp drawings exercise the Qt export itself."""

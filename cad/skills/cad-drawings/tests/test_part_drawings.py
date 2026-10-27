@@ -138,6 +138,24 @@ class PinDrawingGate(unittest.TestCase):
         package_json = json.loads((package / "package.json").read_text(encoding="utf-8"))
         self.assertFalse(package_json["release"]["ready"])  # X1 is a prototype revision
 
+    def test_one_part_failure_does_not_prevent_other_requested_parts(self) -> None:
+        part = self.hw / "parts" / "LMP-0005" / "part.yaml"
+        original = part.read_text(encoding="utf-8")
+        try:
+            part.write_text(original.replace("  sheet: {sizes: [A3, A2], scale: auto}\n",
+                                             "  sheet: {sizes: [A3], scale: 100:1}\n"), encoding="utf-8")
+            proc = run(UV, "run", "--script", str(DRAWING), str(self.hw), "--version", "v1",
+                       "--part", "LMP-0005", "--part", "LMP-0002", "--output-dir",
+                       str(Path(self.tmp.name) / "isolate-failure"), "--timeout", "900", "--jobs", "2")
+        finally:
+            part.write_text(original, encoding="utf-8")
+        self.assertEqual(proc.returncode, 1)
+        results = json.loads(proc.stdout)["parts"]
+        self.assertEqual([result["pn"] for result in results], ["LMP-0005", "LMP-0002"])
+        self.assertEqual(results[0]["status"], "fail")
+        self.assertEqual(results[1]["status"], "pass")
+        self.assertTrue((Path(results[1]["output_dir"]) / "package.json").is_file())
+
     def test_removed_dimension_intent_fails_the_gate(self) -> None:
         part = self.hw / "parts" / "LMP-0005" / "part.yaml"
         original = part.read_text(encoding="utf-8")
