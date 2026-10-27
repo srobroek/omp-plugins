@@ -71,30 +71,35 @@ class PlanTests(unittest.TestCase):
             requested = setup.plan(report(), self.root, self.home, self.env, "opencode")
         self.assertFalse(any(item.id.startswith("harness-") for item in implicit))
         self.assertIn("harness-opencode", [item.id for item in requested])
-
     def test_freecad_resolution_prefers_configured_path_then_path_then_user_link_then_bundle(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             home = Path(temporary)
-            executable = home / "configured"
-            executable.write_text("configured")
-            executable.chmod(0o755)
-            bin_dir = home / ".local" / "bin"
-            bin_dir.mkdir(parents=True)
-            user_executable = bin_dir / "freecadcmd"
-            user_executable.write_text("user")
+            empty_path = home / "empty-path"
+            empty_path.mkdir()
+            path_dir = home / "path-bin"
+            path_dir.mkdir()
+            path_executable = path_dir / "freecadcmd"
+            path_executable.write_text("path command", encoding="utf-8")
+            path_executable.chmod(0o755)
+            configured = home / "configured"
+            configured.write_text("configured command", encoding="utf-8")
+            configured.chmod(0o755)
+            user_executable = home / ".local" / "bin" / "freecadcmd"
+            user_executable.parent.mkdir(parents=True)
+            user_executable.write_text("user command", encoding="utf-8")
             user_executable.chmod(0o755)
             managed = home / "opt" / "freecad-1.1.4" / "squashfs-root" / "usr" / "bin" / "freecadcmd"
             managed.parent.mkdir(parents=True)
-            managed.write_text("managed")
+            managed.write_text("managed command", encoding="utf-8")
             managed.chmod(0o755)
             resolver = setup.preflight.find_freecadcmd
             with patch.object(setup.preflight.sys, "platform", "linux"):
-                self.assertEqual(resolver({"FREECADCMD": str(executable), "HOME": str(home)}, home), executable)
-                with patch.object(setup.preflight.shutil, "which", return_value="/path/freecadcmd"):
-                    self.assertEqual(resolver({"PATH": "/path", "HOME": str(home)}, home), Path("/path/freecadcmd"))
-                self.assertEqual(resolver({"HOME": str(home)}, home), user_executable)
+                self.assertEqual(resolver({"FREECADCMD": str(configured), "PATH": str(empty_path),
+                                           "HOME": str(home)}, home), configured)
+                self.assertEqual(resolver({"PATH": str(path_dir), "HOME": str(home)}, home), path_executable)
+                self.assertEqual(resolver({"PATH": str(empty_path), "HOME": str(home)}, home), user_executable)
                 user_executable.unlink()
-                self.assertEqual(resolver({"HOME": str(home)}, home), managed)
+                self.assertEqual(resolver({"PATH": str(empty_path), "HOME": str(home)}, home), managed)
 
     def test_preflight_resolves_setup_install_without_path_changes(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
