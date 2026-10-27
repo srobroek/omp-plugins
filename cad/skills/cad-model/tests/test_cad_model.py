@@ -556,6 +556,44 @@ class OccurrenceBuildTests(unittest.TestCase):
 
 class CheckRuleTests(unittest.TestCase):
     """check's verdicts on given measurements; needs no OCP."""
+    def test_build_volume_accepts_the_best_rotated_orientation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            hw = Path(tmp)
+            (hw / "parts" / "TST-0001").mkdir(parents=True)
+            (hw / "product.yaml").write_text(
+                "build_volume: {x_mm: 10, y_mm: 35, z_mm: 5, margin_mm: 0}\n", encoding="utf-8")
+            (hw / "parts" / "TST-0001" / "part.yaml").write_text("process: fdm\n", encoding="utf-8")
+            shape = mock.Mock()
+            with mock.patch.object(occ, "oriented_bbox_size", return_value=(35.0, 10.0, 5.0)):
+                result = check.build_volume(hw, {"TST-0001": mock.Mock(shape=shape)})
+        self.assertEqual(result["status"], "pass")
+        self.assertEqual(result["parts"]["TST-0001"]["orientation"], "yxz")
+        self.assertEqual(result["parts"]["TST-0001"]["size_mm"], [10.0, 35.0, 5.0])
+
+    def test_build_volume_fails_with_pn_size_and_printer_envelope(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            hw = Path(tmp)
+            (hw / "parts" / "TST-0001").mkdir(parents=True)
+            (hw / "product.yaml").write_text(
+                "build_volume: {x_mm: 10, y_mm: 20, z_mm: 5}\n", encoding="utf-8")
+            (hw / "parts" / "TST-0001" / "part.yaml").write_text("process: fdm\n", encoding="utf-8")
+            with mock.patch.object(occ, "oriented_bbox_size", return_value=(21.0, 11.0, 6.0)):
+                result = check.build_volume(hw, {"TST-0001": mock.Mock(shape=mock.Mock())})
+        self.assertEqual((result["status"], result["blocking_failures"]), ("fail", ["TST-0001"]))
+        message = result["parts"]["TST-0001"]["message"]
+        self.assertIn("TST-0001", message)
+        self.assertIn("(21.0, 11.0, 6.0)", message)
+        self.assertIn("(10.0, 20.0, 5.0)", message)
+
+    def test_build_volume_warns_when_not_declared(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            hw = Path(tmp)
+            (hw / "parts" / "TST-0001").mkdir(parents=True)
+            (hw / "product.yaml").write_text("id: test\n", encoding="utf-8")
+            (hw / "parts" / "TST-0001" / "part.yaml").write_text("process: fdm\n", encoding="utf-8")
+            result = check.build_volume(hw, {"TST-0001": mock.Mock(shape=mock.Mock())})
+        self.assertEqual((result["status"], result["blocking"]), ("warn", False))
+        self.assertIn("TST-0001", result["parts"])
 
     def test_missing_interfaces_file_means_no_declared_fits(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -82,6 +82,25 @@ unsupported `KERNEL`; `type` `ContractError`, `where` null), `kernel` (the part'
 from `--kernel`; `ContractError`, `where` null), or `build` (the runner's exception `type`, `where`
 = `model.py:<line> in <function>`, null when the failure is not in model.py).
 
+`product.yaml` can declare a printer volume for FDM parts:
+
+```yaml
+build_volume:
+  x_mm: 220
+  y_mm: 220
+  z_mm: 250
+  orientations: [xyz, xzy, yxz, yzx, zxy, zyx] # optional; defaults to all six axis permutations
+  margin_mm: 5 # optional; removed from both ends of each usable axis
+```
+
+`check.build_volume` computes a minimum-volume oriented box for each FDM shape.
+It tests every allowed axis-aligned permutation against the printer dimensions.
+The check subtracts twice the margin from each axis.
+Each part row reports the chosen orientation and dimensions.
+If no orientation fits, the row names the PN and reports its size and printer volume.
+An undeclared volume produces a non-blocking warning.
+The check ignores non-FDM parts.
+
 ## Check result (`check`)
 
 Top level: `status` pass|fail, `label`, `pose: nominal`, `baseline` (previous label or null),
@@ -91,6 +110,7 @@ Top level: `status` pass|fail, `label`, `pose: nominal`, `baseline` (previous la
 | Check | Blocking | Fails when |
 |---|---|---|
 | `step_readback` | yes | a STEP schema is not AP242; a product name differs from `"<PN> <title>"` in the part or assembly STEP; the top product is missing; a read-back volume differs from the kernel volume by more than 1e-6 relative; the read-back solid count differs from the kernel's |
+| `build_volume` | yes | an FDM part's minimum-volume oriented bounding box does not fit any allowed axis permutation inside the printer volume, after subtracting the configured margin. A missing declaration warns without blocking. |
 | `brep_validity` | yes | BRepCheck rejects the kernel's in-memory shape or the STEP read-back |
 | `solid_structure` | yes | a part has no solid, or its solid count differs from `--expect-solids` or else from the previous version; `--expect-solids` naming a PN outside the version fails (`unknown_parts`) |
 | `interference` | yes | two parts share more than 1e-3 mm^3 at the nominal pose, unless the pair is a declared interference fit or heat-set insert (below) or `--allow-interference` names an undeclared intentional overlap; a declared interference fit that measures no interference is reported in `declared_fit_findings` and fails; a pair whose measurement failed (`error`, `interference_mm3` null) fails even when allowed; `--pair` or `--allow-interference` naming a PN outside the version fails (`unknown_pairs`, `unknown_allowed`); joint-connected pairs are listed under `joint_pairs`, others under `pairs`; `min_clearance` names the closest pair |

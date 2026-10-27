@@ -3,6 +3,11 @@ rigor: pro
 units: mm
 regime: iso
 general_tolerance: "ISO 2768-m"
+build_volume:
+  x_mm: 500
+  y_mm: 500
+  z_mm: 500
+  margin_mm: 5
 flow:
   stage: layout
   recheck_from: layout

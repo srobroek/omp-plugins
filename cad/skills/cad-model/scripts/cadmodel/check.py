@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import importlib.util
 import itertools
+import math
 import re
 import sys
 import time
@@ -31,6 +32,7 @@ FLOAT_GAP_MM = 2.0           # beyond this a part is disconnected rather than fl
 SLIVER_FACE_MM2 = 1e-3       # faces smaller than this are slivers (advisory)
 LOOSE_TOLERANCE_MM = 0.01    # vertex/edge/face tolerance above this is loose (advisory)
 SCHEMA_LINE = re.compile(r"FILE_SCHEMA\s*\(\s*\(\s*'([^']+)'")
+BUILD_ORIENTATIONS = ("xyz", "xzy", "yxz", "yzx", "zxy", "zyx")
 
 
 def _rel(a: float, b: float) -> float:
@@ -333,6 +335,64 @@ def slivers_and_tolerances(parts: dict[str, Any]) -> dict[str, Any]:
             "sliver_face_mm2": SLIVER_FACE_MM2, "loose_tolerance_mm": LOOSE_TOLERANCE_MM, "parts": rows}
 
 
+def build_volume(hw: Path, parts: Mapping[str, Any]) -> dict[str, Any]:
+    """Fit each FDM definition's minimum-volume box in the printer envelope."""
+    import yaml
+
+    product_path = hw / "product.yaml"
+    try:
+        product = yaml.safe_load(product_path.read_text(encoding="utf-8")) if product_path.is_file() else {}
+    except (OSError, yaml.YAMLError) as error:
+        raise build.UsageError(f"{product_path}: cannot read product record: {error}") from error
+    declared = product.get("build_volume") if isinstance(product, dict) else None
+    rows: dict[str, Any] = {}
+    for pn, part in sorted(parts.items()):
+        record_path = hw / "parts" / pn / "part.yaml"
+        try:
+            record = yaml.safe_load(record_path.read_text(encoding="utf-8"))
+        except (OSError, yaml.YAMLError) as error:
+            raise build.UsageError(f"{record_path}: cannot read part record: {error}") from error
+        if not isinstance(record, dict) or record.get("process") != "fdm":
+            continue
+        if not isinstance(declared, dict):
+            rows[pn] = {"status": "warn", "message": "no printer build volume is declared"}
+            continue
+        size = occ.oriented_bbox_size(part.shape)
+        dimensions = tuple(float(declared[axis]) for axis in ("x_mm", "y_mm", "z_mm"))
+        margin = float(declared.get("margin_mm", 0.0))
+        limit = tuple(dimension - 2.0 * margin for dimension in dimensions)
+        orientations = declared.get("orientations", BUILD_ORIENTATIONS)
+        fits = []
+        for orientation in orientations:
+            if (not isinstance(orientation, str) or len(orientation) != 3
+                    or set(orientation) != {"x", "y", "z"}):
+                continue
+            oriented_size = tuple(size["xyz".index(axis)] for axis in orientation)
+            if all(value <= limit[i] + 1e-9 for i, value in enumerate(oriented_size)):
+                clearance = min(limit[i] / max(value, 1e-12) for i, value in enumerate(oriented_size))
+                fits.append((orientation, oriented_size, clearance))
+        if fits:
+            orientation, oriented_size, _ = max(fits, key=lambda item: (item[2], item[0]))
+            rows[pn] = {"status": "pass", "orientation": orientation,
+                        "size_mm": [round(value, 6) for value in oriented_size],
+                        "volume_mm": [round(value, 6) for value in dimensions],
+                        "usable_volume_mm": [round(value, 6) for value in limit]}
+        else:
+            rows[pn] = {"status": "fail", "size_mm": [round(value, 6) for value in size],
+                        "volume_mm": [round(value, 6) for value in dimensions],
+                        "usable_volume_mm": [round(value, 6) for value in limit],
+                        "message": f"{pn} bounding box {tuple(round(value, 3) for value in size)} mm "
+                                   f"does not fit printer volume {tuple(round(value, 3) for value in dimensions)} mm "
+                                   f"(usable {tuple(round(value, 3) for value in limit)} mm) in any allowed orientation"}
+    if not isinstance(declared, dict):
+        return {"status": "warn", "blocking": False, "blocking_failures": [], "parts": rows,
+                "message": "product.yaml does not declare build_volume"}
+    failures = [pn for pn, row in rows.items() if row["status"] == "fail"]
+    return {"status": "fail" if failures else "pass", "blocking": True,
+            "blocking_failures": failures, "volume_mm": [declared[axis] for axis in ("x_mm", "y_mm", "z_mm")],
+            "margin_mm": declared.get("margin_mm", 0.0), "parts": rows}
+
+
 def mesh_watertight(folder: Path, part_map: Mapping[str, Any], ids: Iterable[str]) -> dict[str, Any]:
     """Per occurrence: its GLB node's mesh is a closed 2-manifold, never welded to another instance."""
     names = mesh.node_names(part_map)
@@ -379,6 +439,7 @@ def check(hw: Path, label: str, named: list[tuple[str, str]] | None, allowed: It
         "solid_structure": solid_structure(parts, expected_solids, baseline, previous),
         "interference": interference(geometry, named_pairs, joint_pairs, allowed_pairs, declared, heat_sets, refs),
         "connection": connection(geometry, placed, joints),
+        "build_volume": build_volume(hw, parts),
         "slivers_tolerances": slivers_and_tolerances(parts),
         "mesh_watertight": mesh_watertight(folder, part_map, occurrences),
     }

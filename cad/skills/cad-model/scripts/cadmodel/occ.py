@@ -115,6 +115,18 @@ def bbox(shape: Any) -> tuple[tuple[float, float, float], tuple[float, float, fl
     return (low.X(), low.Y(), low.Z()), (high.X(), high.Y(), high.Z())
 
 
+def oriented_bbox_size(shape: Any) -> tuple[float, float, float]:
+    """The tight oriented bounding-box dimensions, ignoring shape tolerances."""
+    from OCP.Bnd import Bnd_OBB
+    from OCP.BRepBndLib import BRepBndLib
+
+    box = Bnd_OBB()
+    BRepBndLib.AddOBB_s(shape, box, True, True, False)
+    if box.IsVoid():
+        raise GeometryError("shape has no extent")
+    return 2.0 * box.XHSize(), 2.0 * box.YHSize(), 2.0 * box.ZHSize()
+
+
 def is_valid(shape: Any) -> bool:
     from OCP.BRepCheck import BRepCheck_Analyzer
 
