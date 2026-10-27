@@ -27,6 +27,7 @@ MATERIALS = SCRIPTS.parent / "assets" / "materials.yaml"
 KERNELS = ("cadquery", "build123d")
 RUNNERS = {kernel: SCRIPTS / f"run_{kernel}.py" for kernel in KERNELS}
 ORCHESTRATOR_DISTS = ("cadquery-ocp-novtk", "trimesh", "numpy", "pyyaml")
+FEATURES_FILE = "drawing-features.json"  # the drawing_features hook results of one version
 
 
 class UsageError(RuntimeError):
@@ -300,6 +301,11 @@ def run(hw: Path, label: str, kernel: str, attach: Iterable[str]) -> tuple[int, 
             "totals": {"volume_mm3": sum(m["volume_mm3"] for m in metrics.values()), "mass_g": sum(known),
                        "parts_without_density": sorted(pn for pn, m in metrics.items() if m["mass_g"] is None)},
         })
+        features = {pn: built[pn][1]["drawing_features"] for pn in sorted(parts)
+                    if built[pn][1]["drawing_features"] is not None}
+        if features:
+            write_json(work / FEATURES_FILE, {"label": label, "frame": "assembly_zero", "units": {"length": "mm"},
+                                              "parts": features})
 
         manifest = {
             "label": label,
@@ -331,6 +337,8 @@ def run(hw: Path, label: str, kernel: str, attach: Iterable[str]) -> tuple[int, 
                 "step": f"parts/{pn}.step",
             } for pn in sorted(parts)},
         }
+        if features:
+            manifest["drawing_features"] = FEATURES_FILE
         manifest["files"] = {str(p.relative_to(work)): sha256(p) for p in sorted(work.rglob("*")) if p.is_file()}
         write_json(work / "manifest.json", manifest)
         os.replace(work, final)
@@ -342,6 +350,8 @@ def run(hw: Path, label: str, kernel: str, attach: Iterable[str]) -> tuple[int, 
               "parts": {pn: f"{rel}/parts/{pn}.step" for pn in sorted(parts)},
               "glb": f"{rel}/assembly.glb", "metrics": f"{rel}/metrics.json",
               "part_map": f"{rel}/part-map.json", "manifest": f"{rel}/manifest.json"}
+    if features:
+        latest["drawing_features"] = f"{rel}/{FEATURES_FILE}"
     write_json(versions / "latest.json", latest)
     timings["total_s"] = round(time.perf_counter() - started, 3)
     return 0, {

@@ -12,9 +12,13 @@ and reads one JSON result from that file once the runner exits, identical in sha
     {"kernel": "cadquery", "tools": {"python": "3.12.13", "cadquery": "2.8.0", ...},
      "import_s": 3.7,
      "parts": {"LMP-0003": {"ok": true, "params": {...}, "kernel_volume_mm3": 1234.5,
-                            "kernel_solids": 1, "kernel_valid": true, "kernel_errors": [], "build_s": 0.4},
+                            "kernel_solids": 1, "kernel_valid": true, "kernel_errors": [], "build_s": 0.4,
+                            "drawing_features": {"elbow_bore": {...}} or null},
                "LMP-0004": {"ok": false, "error": {"type": "SafeEditError", "message": "...",
                                                    "where": "model.py:42 in build"}}}}
+
+`drawing_features` is the optional `drawing_features(params, shape)` hook's result, checked by
+`feature_locators`: JSON primitives only, never a kernel object; null when the model has no hook.
 
 A part that fails never stops the others. stdout and stderr are console output only: model output
 and OCCT's console messages land there and never reach the result, whenever they are flushed.
@@ -27,6 +31,7 @@ import importlib
 import importlib.metadata
 import importlib.util
 import json
+import math
 import platform
 import re
 import sys
@@ -39,6 +44,13 @@ from cadmodel import occ
 from cadmodel.motion import load_pose
 
 CONTRACT = "model.py must define KERNEL (str), PARAMS (JSON-serialisable dict), and build(params) -> shape"
+FEATURE_ID = re.compile(r"[a-z][a-z0-9_]*")
+FEATURE_FRAME = "assembly_zero"  # build's coordinates: assembly frame at the zero joint pose
+SUPPORT_TYPES = frozenset({"plane", "cylinder", "cone", "sphere", "torus", "bezier", "bspline",
+                           "revolution", "extrusion", "offset", "other"})
+LOCATOR_KEYS = frozenset({"kind", "frame", "patches", "anchors", "relations"})
+PATCH_KEYS = frozenset({"support_type", "point_mm", "normal", "region"})
+ANCHOR_KEYS = frozenset({"point_mm", "direction"})
 
 
 class ContractError(ValueError):
@@ -76,6 +88,88 @@ def _params(module: Any) -> dict[str, Any]:
         raise ContractError(f"PARAMS is not JSON-serialisable: {error}") from error
 
 
+def _vector(value: Any, where: str, *, unit: bool = False) -> list[float]:
+    if (not isinstance(value, (list, tuple)) or len(value) != 3
+            or any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) for v in value)):
+        raise ContractError(f"{where} must be three finite numbers")
+    vector = [float(v) for v in value]
+    if unit and abs(math.hypot(*vector) - 1.0) > 1e-6:
+        raise ContractError(f"{where} must be a unit vector")
+    return vector
+
+
+def _keys(value: Any, allowed: frozenset[str], required: frozenset[str], where: str) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ContractError(f"{where} must be a mapping")
+    unknown, missing = sorted(set(value) - allowed), sorted(required - set(value))
+    if unknown or missing:
+        raise ContractError(f"{where}: unknown keys {unknown}, missing keys {missing}")
+    return value
+
+
+def feature_locators(value: Any) -> dict[str, Any]:
+    """Check a drawing_features result and return its JSON copy: semantic ID -> FeatureLocator.
+
+    FeatureLocator: `kind` (str), `frame` "assembly_zero", `patches` (non-empty list of
+    `support_type`, `point_mm`, unit `normal`, optional `region` id), optional `anchors`
+    (id -> `point_mm`, optional unit `direction`), optional `relations` (name -> feature ids of
+    this result). Points are final-surface witnesses, not dimensions.
+    """
+    if not isinstance(value, dict) or not value:
+        raise ContractError("drawing_features must return a non-empty dict of semantic ID -> locator")
+    features: dict[str, Any] = {}
+    for feature_id, locator in value.items():
+        where = f"drawing_features[{feature_id!r}]"
+        if not isinstance(feature_id, str) or not FEATURE_ID.fullmatch(feature_id):
+            raise ContractError(f"{where}: a semantic ID is lower_snake_case")
+        _keys(locator, LOCATOR_KEYS, frozenset({"kind", "frame", "patches"}), where)
+        if not isinstance(locator["kind"], str) or not FEATURE_ID.fullmatch(locator["kind"]):
+            raise ContractError(f"{where}.kind must be a lower_snake_case string")
+        if locator["frame"] != FEATURE_FRAME:
+            raise ContractError(f"{where}.frame must be {FEATURE_FRAME!r}, the coordinates build returns")
+        patches = locator["patches"]
+        if not isinstance(patches, list) or not patches:
+            raise ContractError(f"{where}.patches must be a non-empty list")
+        checked: dict[str, Any] = {"kind": locator["kind"], "frame": FEATURE_FRAME, "patches": []}
+        for index, patch in enumerate(patches):
+            at = f"{where}.patches[{index}]"
+            _keys(patch, PATCH_KEYS, frozenset({"support_type", "point_mm", "normal"}), at)
+            if patch["support_type"] not in SUPPORT_TYPES:
+                raise ContractError(f"{at}.support_type must be one of {sorted(SUPPORT_TYPES)}")
+            entry = {"support_type": patch["support_type"], "point_mm": _vector(patch["point_mm"], f"{at}.point_mm"),
+                     "normal": _vector(patch["normal"], f"{at}.normal", unit=True)}
+            if "region" in patch:
+                if not isinstance(patch["region"], str) or not FEATURE_ID.fullmatch(patch["region"]):
+                    raise ContractError(f"{at}.region must be a lower_snake_case string")
+                entry["region"] = patch["region"]
+            checked["patches"].append(entry)
+        if "anchors" in locator:
+            if not isinstance(locator["anchors"], dict):
+                raise ContractError(f"{where}.anchors must be a mapping")
+            checked["anchors"] = {}
+            for name, anchor in locator["anchors"].items():
+                at = f"{where}.anchors[{name!r}]"
+                if not isinstance(name, str) or not FEATURE_ID.fullmatch(name):
+                    raise ContractError(f"{at}: an anchor name is lower_snake_case")
+                _keys(anchor, ANCHOR_KEYS, frozenset({"point_mm"}), at)
+                checked["anchors"][name] = {"point_mm": _vector(anchor["point_mm"], f"{at}.point_mm")}
+                if "direction" in anchor:
+                    checked["anchors"][name]["direction"] = _vector(anchor["direction"], f"{at}.direction", unit=True)
+        if "relations" in locator:
+            if not isinstance(locator["relations"], dict):
+                raise ContractError(f"{where}.relations must be a mapping")
+            checked["relations"] = {}
+            for name, targets in locator["relations"].items():
+                at = f"{where}.relations[{name!r}]"
+                if (not isinstance(name, str) or not FEATURE_ID.fullmatch(name) or not isinstance(targets, list)
+                        or not targets or any(not isinstance(t, str) or t not in value or t == feature_id
+                                              for t in targets)):
+                    raise ContractError(f"{at} must name a non-empty list of the other semantic IDs in this result")
+                checked["relations"][name] = list(targets)
+        features[feature_id] = checked
+    return features
+
+
 def build_part(kernel: str, request: Mapping[str, str]) -> dict[str, Any]:
     pose = load_pose()
     started = time.perf_counter()
@@ -86,6 +180,9 @@ def build_part(kernel: str, request: Mapping[str, str]) -> dict[str, Any]:
     build = getattr(module, "build", None)
     if not callable(build):
         raise ContractError(f"build is not callable; {CONTRACT}")
+    hook = getattr(module, "drawing_features", None)
+    if hook is not None and not callable(hook):
+        raise ContractError("drawing_features is defined but not callable; expected drawing_features(params, shape)")
     value = build(json.loads(json.dumps(params)))  # a private copy: build may not alter the record
     shape = occ.to_topods(value)
     if shape is None or shape.IsNull():
@@ -93,10 +190,13 @@ def build_part(kernel: str, request: Mapping[str, str]) -> dict[str, Any]:
     solids = occ.count(shape, "SOLID")
     if solids == 0:
         raise ContractError("build returned a shape with no solid")
+    # The hook sees build's own result, after every cut and fillet, and its own copy of the parameters.
+    features = feature_locators(hook(json.loads(json.dumps(params)), value)) if hook is not None else None
     pose.write_step(Path(request["step"]), None, [(pose.Part(request["pn"], request["name"], shape), pose.Rigid.identity())])
     errors = occ.check_statuses(shape)  # STEP export can hide an invalid solid (an open shell becomes a surface model)
     return {"ok": True, "params": params, "kernel_volume_mm3": occ.volume(shape), "kernel_solids": solids,
-            "kernel_valid": not errors, "kernel_errors": errors, "build_s": round(time.perf_counter() - started, 3)}
+            "kernel_valid": not errors, "kernel_errors": errors, "build_s": round(time.perf_counter() - started, 3),
+            "drawing_features": features}
 
 
 def _failure(error: BaseException, model: str) -> dict[str, Any]:
