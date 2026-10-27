@@ -579,7 +579,7 @@ class FakeHarness(unittest.TestCase):
         viewer = runner.PLUGIN_ROOT / runner.VIEWER  # a stand-in that logs how the runner stops it
         viewer.parent.mkdir(parents=True)
         viewer.write_text("import os, sys\nwith open(os.environ['FAKE_VIEWER_LOG'], 'a') as fh:\n"
-                          "    fh.write(' '.join([*sys.argv[1:], os.environ['XDG_STATE_HOME']]) + '\\n')\n")
+                          "    fh.write(' '.join([*sys.argv[1:], os.environ['CAD_VIEWER_SESSION']]) + '\\n')\n")
         pids, log = self.tmp / "pids", self.tmp / "viewer.log"
         outcome, _ = self.slot("linger", FAKE_AGENT_PIDS=str(pids), FAKE_VIEWER_LOG=str(log))
         self.assertEqual(outcome, "ok")
@@ -588,9 +588,10 @@ class FakeHarness(unittest.TestCase):
             self.addCleanup(kill_if_running, pid)
         self.assertTrue(gone(in_group), "a child left in the turn's process group still runs")
         self.assertTrue(gone(detached), "a detached child naming the trial still runs")
-        command, state = log.read_text().split()
+        command, session = log.read_text().split()
         self.assertEqual(command, "stop")
-        self.assertTrue(state.endswith("/home/.local/state") and runner.TRIAL_PREFIX in state, state)
+        self.assertTrue(session.endswith("/home/.local/state/cad-viewer/harness-keyed/session.json")
+                        and runner.TRIAL_PREFIX in session, session)
 
     def test_every_record_is_scrubbed(self):
         secret, token = "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY", "IQoJb3JpZ2luX2VjEXAMPLETOKEN"

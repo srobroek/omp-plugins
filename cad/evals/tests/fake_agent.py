@@ -23,6 +23,7 @@ import shutil
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 MODEL = "global.anthropic.claude-haiku-5-5"
 
@@ -35,12 +36,16 @@ def leaked() -> str:
 
 def linger() -> None:
     """One child stays in the harness's process group; the other detaches into its own
-    session, as the cad-viewer host does, and only its command line names the trial."""
+    session, as the cad-viewer host does, and only its command line names the trial. A
+    session file under a harness-keyed directory stands in for that host's record."""
     sleep = [sys.executable, "-c", "import time; time.sleep(120)"]
     quiet = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
     children = [subprocess.Popen(sleep, **quiet), subprocess.Popen([*sleep, os.getcwd()], start_new_session=True, **quiet)]
     with open(os.environ["FAKE_AGENT_PIDS"], "a", encoding="utf-8") as fh:
         fh.write("".join(f"{child.pid}\n" for child in children))
+    session = Path(os.environ["XDG_STATE_HOME"], "cad-viewer", "harness-keyed", "session.json")
+    session.parent.mkdir(parents=True, exist_ok=True)
+    session.write_text(json.dumps({"pid": children[1].pid}), encoding="utf-8")
 
 
 def emit(text: str, model: str = MODEL) -> None:
