@@ -6,7 +6,7 @@ description: Renders cad-model versions into PBR product PNGs (iso, front, side,
 # CAD Product Render
 
 Stages L1 LAYOUT to L4 ANALYSIS: every commit batch renders its version after `cad-model run`,
-and every stage gate shows the renders. L0 CONCEPT is excluded; it stays on `cad-concept`.
+and every stage gate shows the renders. Use `cad-concept` for L0 CONCEPT variants.
 Paths below are relative to this skill's directory, `skill://cad-render/`.
 Interactive look-dev (environment, exposure, shadow and AO tuning by eye) runs in OCP CAD
 Viewer Studio mode through `cad-viewer`; this skill is the unattended renderer.
@@ -37,7 +37,7 @@ Exit codes: 0 every view passed, or a cache hit; 1 a quality failure, with rende
 |---|---|---|
 | `BLANK` | subject under 0.5 % of the frame, or nothing but backdrop | GLB empty or a WebGL failure; rerun with `--force`, then report |
 | `CLIPPED` | a subject pixel touches the frame edge | report the view; framing is automatic |
-| `NO_SHADOW` | under 4 % floor shadow at 22 levels, or under 2.5 % support shadow at 10 levels for a close-up; isolated parts require 10 floor-shadow levels | report the view; check contact shading |
+| `NO_SHADOW` | under 4 % floor shadow at 22 levels, or under 2.5 % floor/support shadow at 10 levels for close-ups and isolated parts | report the view; check contact shading |
 | `INVERTED_SHADOW` | the floor 3 to 10 px below a part standing on the floor is no darker (median) than the shadow core under a part high above it | report the view; the floor shadow must darken towards contact |
 | `part-<PN>` | renders only one part in a stable resting orientation on the studio floor | use for individual component inspection |
 

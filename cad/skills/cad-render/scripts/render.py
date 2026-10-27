@@ -448,8 +448,8 @@ def assess(frame: Frame, *, closeup: bool = False, isolated: bool = False) -> Qu
         "support_shadow_ratio": round(support_ratio, 4),
         "support_shadow_depth": round(support_depth, 1),
         "thresholds": {"min_subject_coverage": MIN_SUBJECT_COVERAGE, "min_content_coverage": MIN_CONTENT_COVERAGE,
-                       "min_shadow_ratio": MIN_SHADOW_RATIO,
-                       "min_shadow_depth": SHADOW_DELTA if closeup else MIN_SHADOW_DEPTH,
+                       "min_shadow_ratio": 0.025 if closeup else MIN_SHADOW_RATIO,
+                       "min_shadow_depth": SHADOW_DELTA if closeup or isolated else MIN_SHADOW_DEPTH,
                        "shadow_delta": SHADOW_DELTA, "contact_band_px": list(CONTACT_BAND_PX)},
     })
 
