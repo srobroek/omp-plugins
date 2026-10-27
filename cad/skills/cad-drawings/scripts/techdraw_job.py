@@ -9,7 +9,7 @@ The CAD_DRAWING_JOB environment variable names a JSON job file. Every mode reads
   together with the affine map from model millimetres to sheet millimetres (``project_anchor`` of
   the origin and the unit axes), so the compositor can place annotations on projected geometry.
   A section view also reports, per face, the points where the cutting plane meets that face, and
-  the closed outlines of the cut faces for hatching.
+  each face of the cut itself (``section_hatch.CutRegion``): its area and its own loops, outer first.
 
 The result is plain JSON; no FreeCAD object leaves this process. Coordinates on the sheet are
 millimetres with Y down.
@@ -50,8 +50,12 @@ def _points(shape):
     return found
 
 
+def _loop(wire):
+    return [[p.x, p.y, p.z] for p in wire.discretize(Deflection=CUT_DEFLECTION_MM)]
+
+
 def _cut(shape, section):
-    """Per-face cutting-plane intersections and the cut outlines of one section plane."""
+    """Per-face cutting-plane intersections, and the faces of the cut with their own loops."""
     origin, normal = _vec(section["origin"]), _vec(section["normal"]).normalize()
     size = shape.BoundBox.DiagonalLength * 2 + 10.0
     plane = Part.makePlane(size, size, origin, normal)
@@ -61,13 +65,14 @@ def _cut(shape, section):
         common = face.section(plane)
         if common.Edges:
             per_face[str(index)] = _points(common)
-    # the cut faces themselves, outer and inner wires: a slice can double the seam lines of cylinders the
-    # plane contains, which flips the even-odd fill and leaves cut material unhatched
-    outlines = []
+    # the cut faces themselves, each with its own wires: a slice can double the seam lines of cylinders
+    # the plane contains, and one even-odd fill over every face's loops lets overlapping faces cancel
+    regions = []
     for cut_face in shape.common(plane).Faces:
-        for wire in cut_face.Wires:
-            outlines.append([[p.x, p.y, p.z] for p in wire.discretize(Deflection=CUT_DEFLECTION_MM)])
-    return per_face, outlines
+        outer = cut_face.OuterWire
+        loops = [_loop(outer)] + [_loop(wire) for wire in cut_face.Wires if not wire.isSame(outer)]
+        regions.append({"area_mm2": cut_face.Area, "loops": loops})
+    return per_face, regions
 
 
 def bind(job):
@@ -125,7 +130,7 @@ def views(job):
         entry = {"geometry": freecad_views.serialize_view(view, view_id=spec["id"], role=spec["role"]).to_dict(),
                  "affine": _affine(view)}
         if spec["kind"] == "section":
-            entry["cut_faces"], entry["cut_outlines"] = _cut(shape, spec["section"])
+            entry["cut_faces"], entry["cut_regions"] = _cut(shape, spec["section"])
         result["views"][spec["id"]] = entry
     return result
 

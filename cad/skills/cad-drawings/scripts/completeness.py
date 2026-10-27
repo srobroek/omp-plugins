@@ -10,7 +10,9 @@
 6. consistency: no characteristic is controlled twice with different values;
 7. visibility: every characteristic sits on a visible point of its own feature in some view;
 8. cross-part fit: each fit endpoint naming this part names one of its bound features;
-9. product notes: a detail drawing states its edge condition and finish.
+9. product notes: a detail drawing states its edge condition and finish;
+10. section fill: every cut face of every section view is lined or filled solid over its projected
+    area (``section_hatch``; thin faces solid).
 
 Layout and export (stage 9 of the architecture) run in ``drawing_document.publish_package`` on the
 composed sheets. A passing report proves this implemented contract, not ISO or ASME conformance.
@@ -21,6 +23,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+import section_hatch
 from drawing_document import CoverageReport
 from drawing_intent import FIT_KEYS, Characteristic, Measured, finding
 from feature_geometry import Binding
@@ -82,7 +85,8 @@ def _repeated_dimensions(chars: Sequence[Characteristic], presentation: Presenta
 
 
 def evaluate(pn: str, part: Mapping[str, Any], interfaces: Sequence[Mapping[str, Any]], binding: Binding,
-             measured: Measured, presentation: Presentation | None, step_sha256: str) -> CoverageReport:
+             measured: Measured, presentation: Presentation | None, step_sha256: str,
+             sections: Sequence[section_hatch.SectionFill] = ()) -> CoverageReport:
     findings: list[dict[str, Any]] = [dict(f) for f in binding.findings] + [dict(f) for f in measured.findings]
     findings += _endpoint_findings(pn, interfaces, binding)
     findings += _conflicts(measured.characteristics)
@@ -121,6 +125,8 @@ def evaluate(pn: str, part: Mapping[str, Any], interfaces: Sequence[Mapping[str,
             findings.append(finding("feature_not_presentable", f"{item['characteristic']} has no visible point of "
                                     f"{item['feature']} in any {item['presentation']} view", feature=item["feature"]))
         findings += _repeated_dimensions(measured.characteristics, presentation)
+    for section in sections:
+        findings += section_hatch.findings(section)
     if measured.frame is None and not any(f["code"] == "datum_invalid" for f in findings):
         findings.append(finding("datum_invalid", "no datum frame"))
     return CoverageReport(status="fail" if findings else "pass", rows=tuple(rows), findings=tuple(findings))

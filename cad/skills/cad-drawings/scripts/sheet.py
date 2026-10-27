@@ -9,8 +9,8 @@ and lays them out around each view:
 - every other characteristic joins its feature's callout: a leader from a text block in a column
   left or right of the view to a point of the feature's projected outline, with feature control
   frames under the text and a datum feature symbol for a datum feature;
-- centre lines for cylinder axes, cutting-plane lines with view letters, detail circles and section
-  hatching complete the views.
+- centre lines for cylinder axes, cutting-plane lines with view letters, detail circles and the
+  section fill of every cut face (``section_hatch``) complete the views.
 
 Each annotation's leader or extension line ends on a point of the feature's own faces that projects
 onto the view's visible geometry; ``Presentation.unplaced`` lists characteristics with no such
@@ -34,6 +34,7 @@ from feature_geometry import Face, ResolvedFeature
 from freecad_views import ViewGeometry
 from layout_check import TEXT_ASCENT, TEXT_DESCENT, Box, path_points
 from part_views import ViewPlan
+from section_hatch import CutRegion, SectionFill, fill_section, markup as fill_markup, spacing_for
 
 THIN = 0.25
 ARROW_LENGTH, ARROW_HALF_WIDTH = 2.5, 0.45
@@ -119,7 +120,7 @@ class ViewData:
     geometry: ViewGeometry
     affine: Sequence[Sequence[float]]
     cut_faces: Mapping[int, Sequence[Sequence[float]]] = field(default_factory=dict)
-    cut_outlines: Sequence[Sequence[Sequence[float]]] = ()
+    cut_regions: Sequence[CutRegion] = ()     # section views: the faces of the cut
     clip_radius: float | None = None         # detail views: sheet radius of the boundary circle
     source: tuple[Any, float, tuple[float, float], tuple[float, float]] | None = None  # (view, zoom, pivot, centre)
     _cells: dict[tuple[int, int], list[tuple[float, float, float, float]]] | None = None
@@ -147,7 +148,7 @@ class ViewData:
                            bounds=bounds)
         affine = [[zoom * row[0], zoom * row[1], zoom * row[2], zoom * (row[3] - pivot[k]) + centre[k]]
                   for k, row in enumerate(self.affine)]
-        return ViewData(plan or self.plan, geometry, affine, self.cut_faces, self.cut_outlines, clip_radius,
+        return ViewData(plan or self.plan, geometry, affine, self.cut_faces, self.cut_regions, clip_radius,
                         (self, zoom, pivot, centre))
 
     def _segments(self) -> dict[tuple[int, int], list[tuple[float, float, float, float]]]:
@@ -560,6 +561,7 @@ class ViewLayout:
     footprint: Box                  # view plus everything placed around it
     annotations: list[SvgAnnotation]
     notes: list[str] = field(default_factory=list)
+    section: SectionFill | None = None      # section views: each cut face's fill, for the section_hatch gate
 
 
 def _text(content: str, x: float, y: float, size: float, anchor: str = "start", rotate: float | None = None) -> str:
@@ -670,12 +672,14 @@ def layout_view(view: ViewData, presentation: Presentation, size: float, regime:
             x0, x1 = (edge - w - LANDING, edge) if side < 0 else (edge, edge + w + LANDING)
             footprint = footprint.union(Box(min(x0, edge - 2 * LANDING), top - 0.5, max(x1, edge + 2 * LANDING),
                                             bottom + 0.5))
-    annotations.extend(_view_furniture(view, size, regime))
+    section = (fill_section(view.plan.id, view.cut_regions, view.project, view.geometry.scale, spacing_for(size))
+               if view.plan.kind == "section" else None)
+    annotations.extend(_view_furniture(view, section))
     label = _view_label(view, size, regime)
     if label is not None:
         annotations.append(label[0])
         footprint = footprint.union(label[1])
-    return ViewLayout(footprint, annotations)
+    return ViewLayout(footprint, annotations, section=section)
 
 
 def _side_anchor(callout: Callout, side: int, box: Box) -> tuple[float, float]:
@@ -875,54 +879,17 @@ def _view_label(view: ViewData, size: float, regime: str) -> tuple[SvgAnnotation
             Box(x - width / 2, y - (size + 1.5) * TEXT_ASCENT, x + width / 2, y + 1.0))
 
 
-def _view_furniture(view: ViewData, size: float, regime: str) -> list[SvgAnnotation]:
-    """Section hatching and the detail boundary circle of the view itself."""
-    items = []
+def _view_furniture(view: ViewData, section: SectionFill | None) -> list[SvgAnnotation]:
+    """The section fill of each cut face and the detail boundary circle of the view itself."""
     plan = view.plan
-    if plan.kind == "section" and view.cut_outlines:
-        polygons = [[view.project(p) for p in outline] for outline in view.cut_outlines]
-        lines = _hatch(polygons, spacing=2.5 if size < 3 else 3.0)
-        if lines:
-            markup = "".join(_line(x1, y1, x2, y2, 0.18) for x1, y1, x2, y2 in lines)
-            items.append(SvgAnnotation(id=f"hatch-{plan.id}".replace("_", "-"), kind="hatch", markup=markup))
+    items = [SvgAnnotation(id=f"hatch-{plan.id}-{fill.face}".replace("_", "-"), kind="hatch", markup=fill_markup(fill))
+             for fill in (section.fills if section is not None else ()) if fill.mode == "solid" or fill.lines]
     if plan.kind == "detail" and view.clip_radius:
         cx, cy = view.geometry.centre_mm
         items.append(SvgAnnotation(id=f"detail-boundary-{plan.id}".replace("_", "-"), kind="detail-boundary",
                                    markup=f'<circle cx="{cx:.3f}" cy="{cy:.3f}" r="{view.clip_radius:.3f}" fill="none" '
                                           f'stroke="#000" stroke-width="{THIN}"/>'))
     return items
-
-
-def _hatch(polygons: Sequence[Sequence[tuple[float, float]]], spacing: float) -> list[tuple[float, float, float, float]]:
-    """45° hatch lines clipped to the even-odd interior of the cut outlines (ISO 128-50 general hatching)."""
-    lines: list[tuple[float, float, float, float]] = []
-    # rotate by -45° so the hatch lines are horizontal scanlines
-    c = math.sqrt(0.5)
-
-    def rot(p: tuple[float, float]) -> tuple[float, float]:
-        return (c * p[0] + c * p[1], -c * p[0] + c * p[1])
-
-    def back(u: float, v: float) -> tuple[float, float]:
-        return (c * u - c * v, c * u + c * v)
-
-    rotated = [[rot(p) for p in polygon] for polygon in polygons if len(polygon) > 2]
-    if not rotated:
-        return lines
-    v_min = min(p[1] for poly in rotated for p in poly)
-    v_max = max(p[1] for poly in rotated for p in poly)
-    v = math.floor(v_min / spacing) * spacing + spacing / 2
-    while v < v_max:
-        crossings = []
-        for poly in rotated:
-            for (u1, v1), (u2, v2) in zip(poly, poly[1:] + poly[:1]):
-                if (v1 <= v < v2) or (v2 <= v < v1):
-                    crossings.append(u1 + (v - v1) * (u2 - u1) / (v2 - v1))
-        crossings.sort()
-        for a, b in zip(crossings[0::2], crossings[1::2]):
-            (x1, y1), (x2, y2) = back(a, v), back(b, v)
-            lines.append((x1, y1, x2, y2))
-        v += spacing
-    return lines
 
 
 def centre_lines(view: ViewData, binding: Mapping[str, ResolvedFeature], faces: Mapping[int, Face]) -> SvgAnnotation | None:

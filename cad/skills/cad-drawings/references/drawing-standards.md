@@ -12,6 +12,7 @@ what `drawing.py` checks; everything else needs human review of the PNG preview.
 | Authoritative definition stated: model plus drawing | MUST | [ISO 16792](https://www.iso.org/standard/73871.html), [ISO 1101](https://www.iso.org/standard/66777.html) | [Y14.41](https://www.asme.org/codes-standards/find-codes-standards/y14-41-digital-product-definition-data-practices) | model note with the STEP name and sha256 when a controlled-model profile is used |
 | Material, process and finish | MUST | [ISO 7573](https://www.iso.org/standard/43883.html) | [Y14.100](https://www.asme.org/codes-standards/find-codes-standards/y14-100-engineering-drawing-practices) | material in the title block; `finish` note required |
 | Sufficient views, sections, details; declared projection | MUST | [ISO 128-3](https://www.iso.org/standard/83356.html), [ISO 5456-2](https://www.iso.org/standard/11502.html) | [Y14.3](https://www.asme.org/codes-standards/find-codes-standards/y14-3-orthographic-pictorial-views) | projection symbol; each annotation ends on visible geometry of its feature (`feature_not_presentable`) |
+| Every cut face of a section shown as cut: lined, or solid when thin | MUST | [ISO 128-3](https://www.iso.org/standard/83356.html), which replaced [ISO 128-50](https://www.iso.org/standard/24240.html) | [Y14.3](https://www.asme.org/codes-standards/find-codes-standards/y14-3-orthographic-pictorial-views) | `section_hatch`: each face's fill shows its projected area within 1 %; see Section fills |
 | Every functional and inspection dimension defined | MUST | [ISO 129-1](https://www.iso.org/standard/64007.html) | [Y14.5](https://www.asme.org/codes-standards/find-codes-standards/dimensioning-and-tolerancing) | feature-kind requirements, face inventory, axial-end closure (`dimension_coverage_incomplete`, `geometry_unaccounted`) |
 | Stated scale, standard sheet, legible lettering | SHOULD; MUST where scaled print matters | [ISO 5455](https://www.iso.org/standard/11500.html), [ISO 5457](https://www.iso.org/standard/29017.html), [ISO 3098-1](https://www.iso.org/standard/65679.html) | [Y14.1](https://www.asme.org/codes-standards/find-codes-standards/drawing-sheet-size-and-format), [Y14.2](https://www.asme.org/codes-standards/find-codes-standards/y14-2-line-conventions-lettering) | standard scales only; 2.5 mm lettering on A4/ANSI A, 3.5 mm above; `layout_check` |
 | Explicit general or individual tolerances | MUST | [ISO 2768-1](https://www.iso.org/standard/7748.html); ISO 2768 does not cover FDM | [Y14.5](https://www.asme.org/codes-standards/find-codes-standards/dimensioning-and-tolerancing) | named policy per process (`tolerance_policy_inapplicable`); no general value below 0.5 mm (`tolerance_missing`) |
@@ -25,3 +26,23 @@ what `drawing.py` checks; everything else needs human review of the PNG preview.
 
 Release readiness is separate from the gate: an `X` revision (`revision_unreleased`) or a bought part
 with no supplier blocks release, not the drawing.
+
+## Section fills
+
+`section_hatch.py` fills every face the cutting plane leaves on the part on its own: the face's
+outer loop less its own holes, never one even-odd fill over all faces, where overlapping faces
+would cancel.
+
+- General lining: thin 0.18 mm lines at 45°, 3 mm apart (2.5 mm with the 2.5 mm lettering of A4
+  and ANSI A), on one sheet-wide grid, so every face of the part carries the same pattern.
+- Thin sections: a face whose projected minimum wall is under twice the lining pitch is filled
+  solid black. Lines that far apart leave one or two short ticks across such a wall, and none
+  where the wall runs along the lining, so the face reads as uncut. ISO 128-50 (now in ISO 128-3)
+  and ASME Y14.3 both allow thin sections shown solid, so both regimes use the same rule. The
+  minimum wall is the narrowest distance between facing walls (within 30° of parallel); a compact
+  face with no facing walls, such as a triangle, uses its inscribed width, 4 · area / perimeter. A
+  face with any thin wall is filled solid as a whole, its holes left open.
+- Gate: `section_hatch` fails the sheet when a face's fill does not show the face's projected
+  area (its model area at the view scale) within 1 %. It catches a face with no fill, lining that
+  leaves part of a face bare or crosses one of its holes, and lining across a thin face, which
+  counts as no fill. A section that cuts no material fails too.

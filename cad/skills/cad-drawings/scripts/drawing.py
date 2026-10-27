@@ -47,6 +47,7 @@ import sheet  # noqa: E402
 from drawing_document import CompositionError, CoverageReport, SheetMetadata, SvgNote, SvgTable  # noqa: E402
 from freecad_views import ViewGeometry  # noqa: E402
 from layout_check import Box  # noqa: E402
+from section_hatch import CutRegion  # noqa: E402
 
 TECHDRAW_JOB = Path(__file__).resolve().parent / "techdraw_job.py"
 SCRIPTS = Path(__file__).resolve().parent
@@ -106,7 +107,8 @@ def view_data(result: Mapping[str, Any], plans: Sequence[part_views.ViewPlan],
         found[plan.id] = sheet.ViewData(
             plan=plan, geometry=ViewGeometry.from_dict(entry["geometry"]), affine=entry["affine"],
             cut_faces={int(k): v for k, v in entry.get("cut_faces", {}).items()},
-            cut_outlines=entry.get("cut_outlines", []), clip_radius=(clip or {}).get(plan.id))
+            cut_regions=tuple(CutRegion.from_dict(r) for r in entry.get("cut_regions", [])),
+            clip_radius=(clip or {}).get(plan.id))
     return found
 
 
@@ -472,13 +474,18 @@ def compose_and_publish(context: drawing_contract.DrawingContext, part: drawing_
     text = text_size(spec)
     presentation = presentation_for(views)
     annotations = []
+    sections = []
     for view in views.values():
         children = [p for p in plans if p.base == view.plan.id and p.id in views]
-        annotations.extend(sheet.layout_view(view, presentation, text, regime, children).annotations)
+        layout = sheet.layout_view(view, presentation, text, regime, children)
+        annotations.extend(layout.annotations)
+        if layout.section is not None:
+            sections.append(layout.section)
         lines = sheet.centre_lines(view, binding.features, faces)
         if lines is not None:
             annotations.append(lines)
-    report = completeness.evaluate(part.pn, record, context.interfaces, binding, measured, presentation, part.step_sha256)
+    report = completeness.evaluate(part.pn, record, context.interfaces, binding, measured, presentation, part.step_sha256,
+                                   sections)
     if procurement:
         report = CoverageReport("fail", report.rows, (*report.findings, *procurement))
     try:
