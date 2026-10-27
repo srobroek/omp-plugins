@@ -400,7 +400,8 @@ class CheckFindings(Fixture):
         with self.assertRaisesRegex(ViewerError, "is for v1, not v2"):
             record.panel_model(version, self.CHECK)
         panel = record.panel_model(version, {**self.CHECK, "label": "v2"})
-        self.assertEqual(panel["totals"]["bbox_mm"]["size"], [70, 5, 5])
+        # make_version gives the i-th part a 10*i mm box from the origin, so the union spans the largest.
+        self.assertEqual(panel["totals"]["bbox_mm"]["size"], [10 * len(PNS), 5, 5])
         self.assertEqual(panel["check"]["blocking_failures"], ["interference"])
 
 

@@ -54,6 +54,6 @@ NOT Treat a render as a check result; it is review material for the user.
 ```text
 L1 DESIGN {stage}: {PN count} parts at {lowest level}, form_check PASS|FAIL
    Findings -- {check, part, and value per form_check finding, only if any}
-   Renders -- {PNG paths and one line each on what they show}
+   Renders -- {absolute PNG paths and one line each on what they show}
 ```
 CAP 80w clean · 160w with findings

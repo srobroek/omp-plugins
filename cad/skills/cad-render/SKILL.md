@@ -28,7 +28,7 @@ TRIGGER
    one part in stable resting orientation with the other assembly parts hidden.
 4. Read every PNG before describing it. Name the material each PN shows from
    `manifest.json` `materials.<PN>` (`rule`, `label`, `applied`).
-5. Gate: put the PNG paths in the gate report, one line each on what the image shows.
+5. Gate: put each PNG's absolute path in the gate report, one per line, with one line on what the image shows. Absolute paths are clickable in the terminal; a path relative to `hw/` is not.
 
 Exit codes: 0 every view passed, or a cache hit; 1 a quality failure, with renders and a
 `status: fail` manifest still written; 2 usage or infrastructure error, nothing written.
@@ -67,6 +67,6 @@ NOT Install Blender for this skill; a Cycles hero-shot route is a future option,
 ```text
 L1 RENDER vN: PASS|FAIL|CACHE HIT, {views} views, {wall s}
    Failures -- {view, failure, and metric, only if any}
-   Renders -- {PNG path and one line each on what it shows}
+   Renders -- {absolute PNG path and one line each on what it shows}
 ```
 CAP 80w clean · 160w with failures
