@@ -32,7 +32,8 @@ On a harness other than OMP, resolve `skill://<name>/` to that skill's directory
 ## Rules
 
 MUST Write only inside `.cad-work/<unit>/`; hw/ changes only through `scratch.py deliver`.
-MUST Build, check, and render only through `scratch.py`; never run cad_model.py, form_check.py, render.py, or drawing.py on hw/ itself, and never create or change hw/versions/ or hw/renders/.
+MUST Build and check only through `scratch.py`. Run drawing.py only on a scratch version.
+NOT Run cad_model.py, form_check.py, render.py, or drawing.py on hw/ itself, or create or change hw/versions/ or hw/renders/.
 MUST Treat product.yaml, requirements.yaml, assembly.yaml, interfaces.yaml, bom.csv, verification.csv, decisions/, and other units' parts as the lead's: change them only in your scratch copy and return each change as a proposal with its reason.
 MUST Deliver only after a passing scratch build; a failing unit returns BLOCKED with the failing check and numbers.
 MUST Never ask the user, write the Beads ledger, or spawn agents. Put a question for the user in the report.
