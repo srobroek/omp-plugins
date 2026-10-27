@@ -1,0 +1,258 @@
+#!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
+"""Scratch workspace of one cad-flow worker unit: copy hw/, build and check the copy, deliver the unit's parts.
+
+Usage:
+    uv run --script scratch.py init    --hw HW --unit UNIT --part PN [--part PN ...] [--reset]
+    uv run --script scratch.py build   --hw HW --unit UNIT --fidelity F0|F1|F2|F3 [--kernel auto|cadquery|build123d]
+    uv run --script scratch.py deliver --hw HW --unit UNIT
+
+The workspace is <project>/.cad-work/<UNIT>/, <project> being the directory that holds HW.
+
+init    copies HW into <workspace>/hw/ without versions/, renders/, releases/, .git/ and
+        __pycache__/, then records the unit's PNs and the sha256 of every copied file in
+        <workspace>/baseline.json. An existing workspace is kept unless --reset replaces it.
+build   runs cad-model `run` on the scratch hw/ under the next scratch label, cad-model `check`
+        on that version, and cad-design form_check at --fidelity. HW itself is never passed to
+        any of them, so HW/versions/ is neither created nor changed. Form findings are split
+        into the unit's own PNs and the rest; only the unit's own block it.
+deliver copies each unit PN's scratch hw/parts/<PN>/ over HW/parts/<PN>/ and lists every other
+        scratch file that differs from the baseline as a proposal for the lead. When any
+        HW/parts/<PN>/ changed since init it writes nothing and exits 1.
+
+stdout: one JSON document; every path in it is absolute. stderr: the tools' diagnostics.
+Exit codes: 0 pass; 1 build: a part failed to build, a blocking check failed, or the unit's
+parts have form findings; deliver: HW/parts/<PN>/ changed since init; 2 usage or
+infrastructure error.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+
+SKILLS = Path(__file__).resolve().parents[2]
+CAD_MODEL = SKILLS / "cad-model" / "scripts" / "cad_model.py"
+FORM_CHECK = SKILLS / "cad-design" / "scripts" / "form_check.py"
+WORK_DIR = ".cad-work"
+NOT_COPIED = frozenset({"versions", "renders", "releases", ".git"})
+UNIT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+PN = re.compile(r"^[A-Z]{2,5}-[0-9]{4}$")
+LABEL = re.compile(r"^v([1-9][0-9]*)$")
+
+
+class UsageError(Exception):
+    """Bad arguments or a missing workspace: exit 2, nothing written."""
+
+
+def workspace(hw: Path, unit: str) -> Path:
+    if not UNIT.match(unit) or ".." in unit:
+        raise UsageError(f"unit {unit!r} must match {UNIT.pattern} without '..'")
+    if not (hw / "parts").is_dir():
+        raise UsageError(f"{hw} is not a design record: no parts/ directory")
+    return hw.parent / WORK_DIR / unit
+
+
+def skips(root: Path, top: frozenset[str] = NOT_COPIED):
+    """A copytree `ignore` that leaves out `top` directly below `root` and __pycache__ anywhere."""
+    def ignore(directory: str, names: list[str]) -> set[str]:
+        at_top = Path(directory) == root
+        return {name for name in names if name == "__pycache__" or (at_top and name in top)}
+    return ignore
+
+
+def tree_hashes(root: Path, top: frozenset[str] = NOT_COPIED) -> dict[str, str]:
+    """sha256 per file below `root`, keyed by POSIX path relative to it, skipping what `skips` leaves out."""
+    hashes = {}
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(root)
+        if relative.parts[0] in top or "__pycache__" in relative.parts or not path.is_file():
+            continue
+        hashes[relative.as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return hashes
+
+
+def load_baseline(work: Path) -> dict[str, Any]:
+    path = work / "baseline.json"
+    if not path.is_file():
+        raise UsageError(f"{work} has no baseline.json; run `scratch.py init` first")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def init(hw: Path, unit: str, parts: list[str], reset: bool) -> tuple[int, dict[str, Any]]:
+    bad = [pn for pn in parts if not PN.match(pn)]
+    if not parts or bad:
+        raise UsageError(f"--part needs one or more PNs matching {PN.pattern}; got {bad or 'none'}")
+    work = workspace(hw, unit)
+    if work.exists() and not reset:
+        baseline = load_baseline(work)
+        return 0, {"status": "exists", "unit": unit, "workspace": str(work), "scratch_hw": str(work / "hw"),
+                   "parts": baseline["parts"], "note": "kept the existing workspace; --reset replaces it"}
+    shutil.rmtree(work, ignore_errors=True)
+    work.parent.mkdir(parents=True, exist_ok=True)
+    gitignore = work.parent / ".gitignore"
+    if not gitignore.exists():
+        gitignore.write_text("*\n", encoding="utf-8")
+    shutil.copytree(hw, work / "hw", ignore=skips(hw))
+    baseline = {"unit": unit, "hw": str(hw), "parts": sorted(set(parts)), "files": tree_hashes(work / "hw")}
+    (work / "baseline.json").write_text(json.dumps(baseline, indent=2) + "\n", encoding="utf-8")
+    return 0, {"status": "created", "unit": unit, "workspace": str(work), "scratch_hw": str(work / "hw"),
+               "parts": baseline["parts"], "files": len(baseline["files"])}
+
+
+def run_tool(argv: list[str]) -> tuple[int, dict[str, Any] | None]:
+    """Run one `uv run --script` tool; its exit code and its stdout JSON (None when unparseable)."""
+    try:
+        done = subprocess.run(["uv", "run", "--quiet", "--script", *argv], stdout=subprocess.PIPE, text=True)
+    except FileNotFoundError as error:
+        raise UsageError("uv is not on PATH") from error
+    try:
+        return done.returncode, json.loads(done.stdout)
+    except ValueError:
+        sys.stderr.write(done.stdout)
+        return done.returncode, None
+
+
+def next_label(scratch_hw: Path) -> str:
+    built = [int(m.group(1)) for d in (scratch_hw / "versions").glob("v*")
+             if (m := LABEL.match(d.name)) and (d / "manifest.json").is_file()]
+    return f"v{max(built, default=0) + 1}"
+
+
+def build(hw: Path, unit: str, kernel: str, fidelity: str) -> tuple[int, dict[str, Any]]:
+    work = workspace(hw, unit)
+    baseline = load_baseline(work)
+    scratch_hw = work / "hw"
+    own = set(baseline["parts"])
+    label = next_label(scratch_hw)
+    report: dict[str, Any] = {"unit": unit, "scratch_hw": str(scratch_hw), "label": label, "parts": sorted(own)}
+
+    code, ran = run_tool([str(CAD_MODEL), "run", str(scratch_hw), "--label", label, "--kernel", kernel])
+    report["run"] = {"exit": code, "findings": (ran or {}).get("findings", [])}
+    if code != 0:
+        report["status"] = "fail" if code == 1 else "error"
+        return (1 if code == 1 else 2), report
+    version = scratch_hw / "versions" / label
+    report.update({"version_dir": str(version), "parts_dir": str(version / "parts"),
+                   "metrics": str(version / "metrics.json"), "assembly_step": str(version / "assembly.step")})
+
+    check_out = work / f"check-{label}.json"
+    code, checked = run_tool([str(CAD_MODEL), "check", label, "--hw", str(scratch_hw), "--out", str(check_out)])
+    report["check"] = {"exit": code, "json": str(check_out),
+                       "blocking_failures": (checked or {}).get("blocking_failures"),
+                       "warnings": (checked or {}).get("warnings")}
+
+    form_out = work / f"form-{label}.json"
+    form_code, form = run_tool([str(FORM_CHECK), "--hw", str(scratch_hw), "--parts-dir", str(version / "parts"),
+                                "--fidelity", fidelity])
+    findings = (form or {}).get("findings", [])
+    if form is not None:
+        form_out.write_text(json.dumps(form, indent=2) + "\n", encoding="utf-8")
+    report["form"] = {"exit": form_code, "fidelity": fidelity, "json": str(form_out),
+                      "own_findings": [f for f in findings if f.get("part") in own],
+                      "other_findings": [f for f in findings if f.get("part") not in own]}
+
+    if code == 2 or form is None or form_code == 2:
+        report["status"] = "error"
+        return 2, report
+    passed = code == 0 and not report["form"]["own_findings"]
+    report["status"] = "pass" if passed else "fail"
+    return (0 if passed else 1), report
+
+
+def deliver(hw: Path, unit: str) -> tuple[int, dict[str, Any]]:
+    work = workspace(hw, unit)
+    baseline = load_baseline(work)
+    if Path(baseline["hw"]) != hw:
+        raise UsageError(f"{work} was initialised from {baseline['hw']}, not {hw}")
+    scratch_hw = work / "hw"
+    files: dict[str, str] = baseline["files"]
+    owned = [f"parts/{pn}/" for pn in baseline["parts"]]
+
+    conflicts = []
+    for pn in baseline["parts"]:
+        if not (scratch_hw / "parts" / pn).is_dir():
+            raise UsageError(f"scratch hw/parts/{pn}/ is missing; deliver never deletes a part")
+        then = {path: digest for path, digest in files.items() if path.startswith(f"parts/{pn}/")}
+        part_dir = hw / "parts" / pn
+        now = {f"parts/{pn}/{path}": digest for path, digest in tree_hashes(part_dir, frozenset()).items()} \
+            if part_dir.is_dir() else {}
+        if now != then:
+            conflicts.append(str(hw / "parts" / pn))
+    if conflicts:
+        return 1, {"status": "conflict", "unit": unit, "changed_since_init": conflicts,
+                   "note": "another actor changed these part directories; nothing was delivered"}
+
+    delivered = []
+    for pn in baseline["parts"]:
+        target = hw / "parts" / pn
+        staged = hw / "parts" / f".{pn}.deliver-{os.getpid()}"
+        shutil.rmtree(staged, ignore_errors=True)
+        source = scratch_hw / "parts" / pn
+        shutil.copytree(source, staged, ignore=skips(source, frozenset()))
+        if target.exists():
+            retired = hw / "parts" / f".{pn}.replaced-{os.getpid()}"
+            target.rename(retired)
+            staged.rename(target)
+            shutil.rmtree(retired)
+        else:
+            staged.rename(target)
+        current = tree_hashes(target, frozenset())
+        delivered += [str(target / path) for path in current]
+        files = {path: digest for path, digest in files.items() if not path.startswith(f"parts/{pn}/")}
+        files.update({f"parts/{pn}/{path}": digest for path, digest in current.items()})
+    baseline["files"] = files
+    (work / "baseline.json").write_text(json.dumps(baseline, indent=2) + "\n", encoding="utf-8")
+
+    scratch = tree_hashes(scratch_hw)
+    proposals = []
+    for path in sorted(set(scratch) | set(files)):
+        if any(path.startswith(prefix) for prefix in owned) or scratch.get(path) == files.get(path):
+            continue
+        change = "added" if path not in files else "removed" if path not in scratch else "modified"
+        proposals.append({"path": str(hw / path), "scratch": str(scratch_hw / path), "change": change})
+    return 0, {"status": "delivered", "unit": unit, "delivered": delivered, "proposals": proposals}
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="cad-flow worker scratch workspace")
+    sub = parser.add_subparsers(dest="command", required=True)
+    for name in ("init", "build", "deliver"):
+        command = sub.add_parser(name)
+        command.add_argument("--hw", type=Path, required=True, help="the project's hw/ design record")
+        command.add_argument("--unit", required=True, help="the unit id from the lead's brief")
+        if name == "init":
+            command.add_argument("--part", action="append", default=[], metavar="PN", help="a PN this unit owns (repeatable)")
+            command.add_argument("--reset", action="store_true", help="replace an existing workspace")
+        if name == "build":
+            command.add_argument("--fidelity", choices=("F0", "F1", "F2", "F3"), required=True)
+            command.add_argument("--kernel", choices=("auto", "cadquery", "build123d"), default="auto")
+    args = parser.parse_args(argv)
+    hw = args.hw.resolve()
+    try:
+        if args.command == "init":
+            code, report = init(hw, args.unit, args.part, args.reset)
+        elif args.command == "build":
+            code, report = build(hw, args.unit, args.kernel, args.fidelity)
+        else:
+            code, report = deliver(hw, args.unit)
+    except (UsageError, OSError, ValueError) as error:
+        print(json.dumps({"status": "error", "error": str(error)}))
+        return 2
+    print(json.dumps(report, indent=2))
+    return code
+
+
+if __name__ == "__main__":
+    sys.exit(main())

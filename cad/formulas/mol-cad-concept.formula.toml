@@ -1,5 +1,5 @@
 # mol-cad-concept: one additional L0 round before LAYOUT freeze.
-# Bond onto the concept/VARIANT step that needs another user-directed round.
+# Bond onto the concept/VARIANT step that needs another user-directed round; its variants fan out as mol-cad-variant.
 formula = "mol-cad-concept"
 description = "Another L0 concept round {{round}} for {{product}}: render, refine, merge, or drop three.js variants and obtain selection"
 type = "workflow"
@@ -28,11 +28,23 @@ pattern = "^(fdm|cnc)$"
 description = "default manufacturing process"
 
 [[steps]]
-id = "draft-concept-round"
-title = "DRAFT L0 concept round {{round}}"
+id = "round-fanout"
+title = "L0 concept round {{round}}: fan out one variant molecule per new or reworked variant"
 type = "task"
+labels = ["cad", "phase:concept", "fanout"]
+description = "Read the current scene, requirements, and feedback. For each variant the user asked to add or rework in round {{round}}, bond one mol-cad-variant onto this step before dispatch: `bd mol bond mol-cad-variant <this-step> --type parallel --ref variant-<id> --var product={{product}} --var scope={{scope}} --var variant=<id> --var tradeoff='<answer>'`. Keep at most 4 live variants. Dispatch every ready subagent step below this step in ONE parallel batch of cad-concept-designer workers, as skill://cad-flow Delegation describes. Close each molecule's step and root from its worker's report. Close this step when every child is closed."
+
+[steps.metadata]
+skill_hints = "cad-flow, cad-concept"
+
+[[steps]]
+id = "round-integrate"
+title = "L0 concept round {{round}}: merge the variants and collect feedback"
+type = "task"
+needs = ["round-fanout"]
+waits_for = "all-children"
 labels = ["cad", "phase:concept"]
-description = "Read the current requirements, concept, and feedback. Draft variants at `hw/concept/<product-id>.scene.json`. Check each edit with `uv run --script skill://cad-concept/scripts/concept.py check <scene>`. Serve the preview with `uv run --script skill://cad-concept/scripts/serve.py --scene-dir hw/concept --port 8765`. After feedback, refine, merge, or drop as directed. On commit, check and save one screenshot per live variant. Before LAYOUT freeze, concept commit batches defer the broader recheck. Record the design entry and bead note."
+description = "Merge the drafted variants into `hw/concept/<product-id>.scene.json`, retiring replaced variants with a reason. Check each edit with `uv run --script skill://cad-concept/scripts/concept.py check <scene>`. Serve the preview with `uv run --script skill://cad-concept/scripts/serve.py --scene-dir hw/concept --port 8765`. After feedback, refine, merge, or drop as directed. On commit, check and save one screenshot per live variant. Before LAYOUT freeze, concept commit batches defer the broader recheck. Record the design entry and bead note."
 
 [steps.metadata]
 skill_hints = "cad-concept, cad-flow, cad-record"
@@ -42,7 +54,7 @@ execution_mode = "interactive"
 id = "variant-gate"
 title = "VARIANT gate for concept round {{round}}"
 type = "task"
-needs = ["draft-concept-round"]
+needs = ["round-integrate"]
 labels = ["cad", "phase:gate"]
 description = "Present the round {{round}} variants and the cumulative refine/merge/drop history. Obtain explicit user selection or another direction. Recommendations do not resolve the gate; only bd gate resolve closes it."
 

@@ -1,6 +1,6 @@
 ---
 name: cad-mech-reviewer
-description: Reviews CAD requirements, load paths, fits, joints, and FEA with measured evidence. Spawn at CRITIQUE; never edits.
+description: "Reviews CAD requirements, load paths, fits, joints, and FEA with measured evidence. Spawn at CRITIQUE; never edits."
 tools: Read, Grep, Glob
 skills: [cad-review-mech]
 model: inherit
@@ -24,6 +24,6 @@ NOT Edit files, run models, or invent project-specific limits.
 
 ## Output
 
-Begin your reply with `VERDICT: PASS|MINOR|MAJOR` and follow the output contract in `skill://cad-review-mech`.
+Begin your reply with `VERDICT: PASS|MINOR|MAJOR` and follow the output contract in `skill://cad-review-mech`. Give every file you cite as an absolute path.
 CAP 120w clean · 280w with findings.
 MUST Never reprint code, diffs, file contents, or the caller's claim.
