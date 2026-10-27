@@ -1,7 +1,7 @@
-"""Declared physical overlaps between occurrences: classified press fits and heat-set inserts.
+"""Declared pair relations between occurrences: press fits, heat-set inserts and clearance requirements.
 
-The one reader of hw/interfaces.yaml allowances for cad-model `check` and cad-motion `sweep`. Each
-declaration is resolved once to the exact pair of occurrences it joins, through the caller's
+The one reader of hw/interfaces.yaml pair declarations for cad-model `check` and cad-motion `sweep`.
+Each declaration is resolved once to the exact pair of occurrences it joins, through the caller's
 assembly (cad-motion pose's `Assembly`: `attachable(ref, where)` and `pn(id)`): `@id` names one
 occurrence, and a bare PN must have exactly one. So a fit declared on one occurrence never
 excuses the overlap of another occurrence of the same PN. Every entry keeps its provenance:
@@ -10,12 +10,18 @@ interface id and record path.
 Press fits are classified with cad-fits' ISO 286 tables; only an `interference` classification
 allows shared volume. An installed heat-set insert overlaps its bore by design, so its pair may
 interfere; unlike a press fit, no measured overlap is required, because a model may draw the
-insert at its bore size. Stdlib plus PyYAML; no CAD kernel.
+insert at its bore size.
+
+A clearance requirement, an interface `{type: clearance, pair: [REF, REF], min_clearance_mm}`,
+binds its pair whatever else joins it: a joint, a fit or an insert never exempts the pair, because
+the requirement is explicit rather than a global running clearance. Stdlib plus PyYAML; no CAD
+kernel.
 """
 
 from __future__ import annotations
 
 import importlib.util
+import math
 import sys
 from collections.abc import Iterable
 from decimal import Decimal, InvalidOperation
@@ -175,3 +181,34 @@ def allowed_pairs(press_fits: Iterable[dict[str, Any]], heat_sets: Iterable[dict
     """The occurrence pairs whose shared volume is declared: interference press fits and heat-set inserts."""
     allowed = {tuple(item["pair"]) for item in press_fits if item["classification"] == "interference"}
     return allowed | {tuple(item["pair"]) for item in heat_sets}  # type: ignore[return-value]
+
+
+def declared_clearances(hw: Path, interfaces: list[Any], assembly: Any) -> list[dict[str, Any]]:
+    """Clearance requirements as {pair, min_clearance_mm, interface, source}, `pair` the sorted
+    occurrence ids; at most one requirement per occurrence pair.
+
+    An interface with a `pair` or a `min_clearance_mm` is a requirement and needs both and `type:
+    clearance`; a clearance interface with neither stays descriptive.
+    """
+    path = hw / "interfaces.yaml"
+    declared: list[dict[str, Any]] = []
+    by_pair: dict[tuple[str, str], str] = {}
+    for index, interface in enumerate(interfaces):
+        if not isinstance(interface, dict) or ("pair" not in interface and "min_clearance_mm" not in interface):
+            continue
+        source = f"interfaces.yaml#/interfaces/{index}"
+        where = f"{path}:{source}"
+        refs, required = interface.get("pair"), interface.get("min_clearance_mm")
+        if (interface.get("type") != "clearance" or not isinstance(refs, list) or len(refs) != 2
+                or not all(_text(ref) for ref in refs) or refs[0] == refs[1]
+                or isinstance(required, bool) or not isinstance(required, (int, float))
+                or not math.isfinite(required) or required <= 0):
+            raise PolicyError(f"{where}: a clearance requirement needs type clearance, a pair of two distinct "
+                              "part references and a positive min_clearance_mm")
+        pair = _pair(refs, assembly, where)
+        if pair in by_pair:
+            raise PolicyError(f"{where}: {refs[0]} / {refs[1]} already has a clearance requirement at {by_pair[pair]}")
+        by_pair[pair] = source
+        declared.append({"pair": list(pair), "min_clearance_mm": float(required), "interface": interface.get("id"),
+                         "source": source})
+    return declared

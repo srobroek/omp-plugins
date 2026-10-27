@@ -52,15 +52,22 @@ record with couplings (exit 2). Verify coupled motion with `pose.py` and `sweep.
    → posed STEP AP242 with product names kept. A value outside [min, max] exits 1 with a
    `joint_limit` finding and writes no STEP.
 2. Sweep: `uv run --script skill://cad-flow/scripts/run.py cad-motion/scripts/sweep.py --hw hw --version vN --worst-step worst.step
-   [--steps 19] [--grid 3] [--min-clearance MM] [--include-pair REF:REF] [--end-effector REF]`
+   [--steps 19] [--grid 3] [--min-clearance MM] [--pair-clearance REF:REF=MM] [--include-pair REF:REF] [--end-effector REF]`
    → JSON: `collisions` (sample, independent and complete pose, pair, volume), `min_clearance` per
-   pair with its pose, `limit_findings`, `reach_envelope`, `worst_case` (written to `--worst-step`,
-   evidence in `<worst-step>.json`), and `timings_s`. Only independent joints are sampled; every
-   coupled joint is derived at each sample. `--worst-criterion` picks the worst case:
+   pair with its pose, `pair_clearance` per clearance requirement, `limit_findings`,
+   `reach_envelope`, `worst_case` (written to `--worst-step`, evidence in `<worst-step>.json`), and
+   `timings_s`. Only independent joints are sampled; every coupled joint is derived at each sample.
+   `--worst-criterion` picks the worst case:
    `max_horizontal_reach` (default; collision-free poses, the end effector's cantilever arm),
    `minimum_clearance` (smallest clearance margin), or `maximum_interference` (largest undeclared
    overlap). One-driver engine over 720 degrees at 5 degree steps:
    `uv run --script skill://cad-flow/scripts/run.py cad-motion/scripts/sweep.py --hw hw --version vN --steps 145 --grid 0 --worst-criterion minimum_clearance --worst-step worst.step`
+   Pair requirements: the sweep measures every clearance requirement in `hw/interfaces.yaml`
+   (`type: clearance`, `pair: [REF, REF]`, `min_clearance_mm`, such as valve-to-piston >= 1 mm) at
+   every sample. `--pair-clearance REF:REF=MM` adds a requirement for one run or overrides the
+   record's on that pair (`overrides` names it). Each `pair_clearance` row reports the pair,
+   `required_mm`, the smallest `clearance_mm` with its sample and pose (the larger overlap breaks a
+   tie at 0 mm), `samples_below`, `status`, and its `source`. A row below its requirement exits 1.
 3. FreeCAD: `uv run --script skill://cad-flow/scripts/run.py cad-motion/scripts/freecad_assembly.py --hw hw --version vN [--report-part REF]`
    → JSON: `frames`, start/mid/end `placements`, per-joint `limit_check`, `violations`, `residuals`.
 4. Record each result as a `verification.csv` row: `requirement_id` from requirements.yaml,
@@ -69,8 +76,12 @@ record with couplings (exit 2). Verify coupled motion with `pose.py` and `sweep.
    STEP hash and pose, never re-poses); cite its pose in the FEA row. The clearance and
    interference criteria select geometric poses; a stress case needs its own load criterion.
 
-Exit codes for all scripts: 0 pass, 1 check failure (limit, collision, clearance, FreeCAD
-violation or residual), 2 usage/infrastructure error or a sweep stopped by `--time-limit`.
+Exit codes for all scripts:
+
+- 0: pass.
+- 1: a check failed. `sweep.py` reports joint-limit, collision, clearance and pair-requirement
+  findings, `pose.py` joint-limit findings, and `freecad_assembly.py` violations and residuals.
+- 2: a usage or infrastructure error, or a sweep stopped by `--time-limit`.
 
 ## Limits
 
@@ -83,6 +94,13 @@ violation or residual), 2 usage/infrastructure error or a sweep stopped by `--ti
   Two occurrences of one PN are checked like any other pair. An overlap declared in
   `interfaces.yaml` (interference press fit, heat-set insert) on exactly that occurrence pair is
   not a collision (`pair_policy.py`, shared with cad-model `check`).
+- Collision and clearance differ. The collision and `--min-clearance` checks leave out
+  joint-connected pairs, and a declared fit or insert excuses its pair's overlap. Neither exempts
+  a pair from its own clearance requirement: the sweep measures it at every sample.
+- The sweep caches a pair measurement by the two definitions and their relative placement. When a
+  threshold lies within the most the placement difference can move a cached distance, the sweep
+  measures the pair again (`threshold_rechecks` in `timings_s`). No cached value decides a verdict
+  across a threshold.
 - FreeCAD 1.1.4 stores AngleMin/AngleMax but its solver does not enforce them; `freecad_assembly.py`
   measures every frame itself. freecadcmd exiting 139 after its completion marker is a warning.
 
@@ -97,6 +115,7 @@ NOT Take the worst-case pose from intuition; it comes from `sweep.py` `worst_cas
 L1 MOTION {POSE|SWEEP|FREECAD}: {PASS|FAIL}, {poses or frames}, {timing}
    Collisions: {pose and pair per entry, only if any}
    Clearance: {the three smallest pairs with pose}
+   Pair requirements: {pair, required, measured minimum and pose per failing row, only if any}
    Worst case: {criterion, pose, metric, STEP path}
 ```
 CAP 80w clean · 160w with findings

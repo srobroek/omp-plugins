@@ -3,8 +3,9 @@
 Definition checks (STEP read-back volume, BRep validity, solid structure, slivers) run once per PN;
 assembly checks run per occurrence: every component of assembly.step must be an occurrence of the
 manifest at its recorded placement, interference covers every occurrence pair (two occurrences of
-one PN included), connectivity welds occurrences, and each occurrence's GLB node is judged
-watertight alone. A version 1 version (written before occurrences) reads as one occurrence per PN.
+one PN included), each clearance requirement of hw/interfaces.yaml holds on its pair, connectivity
+welds occurrences, and each occurrence's GLB node is judged watertight alone. A version 1 version
+(written before occurrences) reads as one occurrence per PN.
 """
 
 from __future__ import annotations
@@ -224,6 +225,15 @@ def declared_heat_sets(hw: Path, assembly: Any = None) -> list[dict[str, Any]]:
         raise build.UsageError(str(error)) from error
 
 
+def declared_clearances(hw: Path, assembly: Any = None) -> list[dict[str, Any]]:
+    """cad-motion pair_policy's clearance requirements, `pair` as sorted occurrence ids."""
+    policy = load_pair_policy()
+    try:
+        return policy.declared_clearances(hw, policy.read_interfaces(hw), assembly or _Unrecorded())
+    except policy.PolicyError as error:
+        raise build.UsageError(str(error)) from error
+
+
 def interference(geometry: dict[tuple[str, str], dict[str, Any]], named: list[tuple[str, str]] | None,
                  joint_pairs: set[tuple[str, str]], allowed: set[tuple[str, str]],
                  declared: Iterable[dict[str, Any]] = (), heat_sets: Iterable[dict[str, Any]] = (),
@@ -269,6 +279,32 @@ def interference(geometry: dict[tuple[str, str], dict[str, Any]], named: list[tu
             "declared_pairs": declarations, "declared_heat_sets": inserts, "declared_fit_findings": declared_fit_findings,
             "min_clearance": {"pair": smallest["pair"], "clearance_mm": smallest["clearance_mm"]} if smallest else None,
             **rows}
+
+
+def pair_clearance(geometry: dict[tuple[str, str], dict[str, Any]], requirements: Iterable[dict[str, Any]],
+                   refs: Mapping[str, str] | None = None) -> dict[str, Any]:
+    """Each declared clearance requirement at the built (nominal) pose, one row per requirement.
+
+    A requirement holds on its pair whatever joins it: joint-connected and fitted pairs are measured
+    like any other. It fails when the measured clearance is below it (compared unrounded), when the
+    measurement failed, or when the version has no such pair.
+    """
+    refs = refs or {}
+    rows = []
+    for item in sorted(requirements, key=lambda item: (item["pair"], item["source"])):
+        a, b = item["pair"]
+        measured = geometry.get((a, b))
+        gap = None if measured is None else measured["clearance_mm"]
+        row = {"pair": [a, b], "refs": [refs.get(a, a), refs.get(b, b)], "required_mm": item["min_clearance_mm"],
+               "clearance_mm": gap, "status": _status(gap is not None and gap >= item["min_clearance_mm"]),
+               "interface": item["interface"], "source": item["source"]}
+        if measured is None:
+            row["error"] = "the version has no such occurrence pair"
+        elif "error" in measured:
+            row["error"] = measured["error"]
+        rows.append(row)
+    return {"status": _status(all(row["status"] == "pass" for row in rows)), "blocking": True,
+            "requirements": rows}
 
 
 def rigid_bodies(ids: Iterable[str], joints: Iterable[dict[str, Any]]) -> dict[str, str]:
@@ -465,11 +501,13 @@ def check(hw: Path, label: str, named: list[tuple[str, str]] | None, allowed: It
     assembly = pose.load_assembly(hw)
     declared = declared_press_fits(hw, assembly)
     heat_sets = declared_heat_sets(hw, assembly)
+    requirements = declared_clearances(hw, assembly)
     checks = {
         "step_readback": step_readback(folder, manifest, parts, step, occurrences),
         "brep_validity": brep_validity(parts, manifest),
         "solid_structure": solid_structure(parts, expected_solids, baseline, previous),
         "interference": interference(geometry, named_pairs, joint_pairs, allowed_pairs, declared, heat_sets, refs),
+        "pair_clearance": pair_clearance(geometry, requirements, refs),
         "connection": connection(geometry, placed, joints),
         "build_volume": build_volume(hw, parts),
         "slivers_tolerances": slivers_and_tolerances(parts),

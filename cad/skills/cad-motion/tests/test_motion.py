@@ -18,6 +18,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 SCRIPTS = HERE.parent / "scripts"
@@ -209,6 +210,35 @@ subassemblies:
 joints:
   - {id: J-001, type: fixed, parent: TST-0201, child: "@arm-p", axis: [0, 0, 1], origin: [0, 0, 0], min: 0, max: 0, nominal: 0}
 """
+# Two arms 0.8 mm apart: @arm-a 0.8 mm above the plate on a revolute joint, its tab (y 5..10) facing
+# @arm-b (fixed, y 10.8..20.8) over x 0..5, z 0.8..5. Turning @arm-a from 0 to -10 deg lowers its
+# largest y, so both gaps are smallest, 0.8 mm, at J-001 = 0: 0.838 mm at -5 deg, 0.952 mm at -10 deg.
+GAP_YAML = """occurrences:
+  - {id: arm-a, PN: TST-0202, placement: {translation_mm: [0, 0, 0.8]}}
+  - {id: arm-b, PN: TST-0202, placement: {translation_mm: [0, 15.8, 0]}}
+subassemblies:
+  - {id: gap, title: Arms 0.8 mm apart, parts: [TST-0201], occurrences: ["@arm-a", "@arm-b"]}
+joints:
+  - {id: J-001, type: revolute, parent: TST-0201, child: "@arm-a", axis: [0, 0, 1], origin: [0, 0, 0], min: -10, max: 0, nominal: 0}
+  - {id: J-002, type: fixed, parent: TST-0201, child: "@arm-b", axis: [0, 0, 1], origin: [0, 0, 0], min: 0, max: 0, nominal: 0}
+"""
+
+
+def assembly_of(text: str):
+    """sweep.py's pose.Assembly of an assembly.yaml text whose TST-0202 is part-local. sweep.py runs
+    with the pose module freecad_assembly.py loaded last, so its MotionError and Rigid are that module's."""
+    import yaml
+
+    motion = sweep.pose
+    return motion.Assembly(motion.assembly_data.normalize(yaml.safe_load(text), {"TST-0202": "part_local"}), (), {})
+
+
+def chain_of(text: str):
+    import yaml
+
+    assembly = assembly_of(text)
+    joints = [sweep.pose.make_joint(raw, assembly.attachable) for raw in yaml.safe_load(text)["joints"]]
+    return sweep.pose.build_chain(joints, assembly.occurrences)
 
 
 class OccurrenceKinematicsTests(unittest.TestCase):
@@ -253,6 +283,111 @@ class OccurrenceKinematicsTests(unittest.TestCase):
         self.assertAlmostEqual(checks["joints"]["J-001"]["observed_max"], 90.0, places=6)
         self.assertAlmostEqual(checks["joints"]["J-002"]["observed_max"], 0.0, places=6)
 
+
+class PairRequirementTests(unittest.TestCase):
+    """Clearance requirements: pair_policy's reader, sweep's options and its threshold-safe cache; needs no OCP."""
+
+    policy = sweep.pair_policy
+
+    @staticmethod
+    def requirement(pair: list[str], minimum: object = 1.0, kind: str = "clearance", number: int = 1) -> dict:
+        return {"id": f"IF-00{number}", "from": "a", "to": "b", "type": kind, "description": "Gap.", "pair": pair,
+                "min_clearance_mm": minimum}
+
+    def declared(self, *interfaces: dict, text: str = GAP_YAML) -> list[dict]:
+        return self.policy.declared_clearances(Path("hw"), list(interfaces), assembly_of(text))
+
+    def test_a_requirement_names_its_sorted_occurrence_pair_and_source(self) -> None:
+        self.assertEqual(self.declared(self.requirement(["@arm-b", "TST-0201"], 0.5)),
+                         [{"pair": ["TST-0201", "arm-b"], "min_clearance_mm": 0.5, "interface": "IF-001",
+                           "source": "interfaces.yaml#/interfaces/0"}])
+
+    def test_a_clearance_interface_without_a_pair_stays_descriptive(self) -> None:
+        descriptive = {"id": "IF-001", "from": "head", "to": "desk", "type": "clearance", "description": "Clears."}
+        self.assertEqual(self.declared(descriptive), [])
+
+    def test_a_malformed_requirement_is_refused(self) -> None:
+        pair = ["@arm-a", "@arm-b"]
+        without_minimum = {key: value for key, value in self.requirement(pair).items() if key != "min_clearance_mm"}
+        cases = {"zero": self.requirement(pair, 0), "negative": self.requirement(pair, -0.5),
+                 "boolean": self.requirement(pair, True), "not finite": self.requirement(pair, math.inf),
+                 "text": self.requirement(pair, "1"), "another type": self.requirement(pair, kind="mounting"),
+                 "one end": self.requirement(["@arm-a"]), "one ref twice": self.requirement(["@arm-a", "@arm-a"]),
+                 "no minimum": without_minimum}
+        for name, interface in cases.items():
+            with self.subTest(name), self.assertRaisesRegex(self.policy.PolicyError, "a clearance requirement needs"):
+                self.declared(interface)
+
+    def test_an_unresolved_or_ambiguous_reference_is_refused(self) -> None:
+        with self.assertRaisesRegex(sweep.pose.MotionError, "@arm-z"):
+            self.declared(self.requirement(["@arm-a", "@arm-z"]))
+        with self.assertRaisesRegex(sweep.pose.MotionError, "ambiguous.*@arm-a, @arm-b"):
+            self.declared(self.requirement(["TST-0202", "TST-0201"]))
+
+    def test_two_references_to_one_occurrence_are_refused(self) -> None:
+        with self.assertRaisesRegex(self.policy.PolicyError, "both ends are the same occurrence"):
+            self.declared(self.requirement(["TST-0202", "@arm-p"]), text=PLACED_YAML)
+
+    def test_an_occurrence_pair_takes_one_requirement(self) -> None:
+        with self.assertRaisesRegex(self.policy.PolicyError, "already has a clearance requirement at "
+                                                             "interfaces.yaml#/interfaces/0"):
+            self.declared(self.requirement(["@arm-a", "@arm-b"]), self.requirement(["@arm-b", "@arm-a"], 2.0, number=2))
+
+    def test_an_option_overrides_the_record_or_adds_a_requirement(self) -> None:
+        declared = self.declared(self.requirement(["@arm-b", "@arm-a"], 0.5))
+        found = sweep.pair_requirements(chain_of(GAP_YAML), declared, ["@arm-b:@arm-a=1.0", "TST-0201:@arm-a=0.75"])
+        self.assertEqual(found, {
+            ("arm-a", "arm-b"): {"required_mm": 1.0, "source": "--pair-clearance @arm-b:@arm-a=1.0",
+                                 "overrides": "interfaces.yaml#/interfaces/0"},
+            ("TST-0201", "arm-a"): {"required_mm": 0.75, "source": "--pair-clearance TST-0201:@arm-a=0.75"}})
+
+    def test_a_malformed_option_is_a_usage_error(self) -> None:
+        chain = chain_of(GAP_YAML)
+        for spec in ("@arm-a:@arm-b", "@arm-a@arm-b=1", "@arm-a:@arm-b=0", "@arm-a:@arm-b=-1", "@arm-a:@arm-b=nan",
+                     "@arm-a:@arm-b=mm", "@arm-a:@arm-a=1", "@arm-a:@arm-z=1", "TST-0202:@arm-a=1"):
+            with self.subTest(spec), self.assertRaises(sweep.pose.MotionError):
+                sweep.pair_requirements(chain, [], [spec])
+
+    def test_a_record_requirement_outside_the_chain_is_a_usage_error(self) -> None:
+        stray = [{"pair": ["TST-0201", "TST-0999"], "min_clearance_mm": 1.0, "interface": "IF-001",
+                  "source": "interfaces.yaml#/interfaces/0"}]
+        with self.assertRaisesRegex(sweep.pose.MotionError, "TST-0999 is not in the swept chain"):
+            sweep.pair_requirements(chain_of(GAP_YAML), stray, [])
+
+    @staticmethod
+    def geometry(radius: float):
+        """A Geometry over two stand-in definitions, A fixed and B (of `radius`) placed in A's frame."""
+        geometry = object.__new__(sweep.Geometry)
+        geometry.chain = mock.Mock(pn=lambda oid: oid, ref=lambda oid: oid)
+        geometry.definitions = {"A": mock.Mock(shape="a"), "B": mock.Mock(shape="b")}
+        geometry.cache, geometry.radii = {}, {"A": 1.0, "B": radius}
+        geometry.evaluations = geometry.cache_hits = geometry.rechecks = 0
+        return geometry
+
+    def measure(self, geometry, placements: list, thresholds: list, distances: list) -> list:
+        with mock.patch.object(sweep.pose, "placed", side_effect=lambda shape, rigid: shape), \
+                mock.patch.object(sweep.pose, "interference", side_effect=[(d, 0.0) for d in distances]):
+            return [geometry.pair("A", "B", placement, (threshold,))[0]
+                    for placement, threshold in zip(placements, thresholds)]
+
+    def test_a_cache_hit_is_measured_again_when_a_threshold_lies_within_its_placement_bound(self) -> None:
+        """10.0000001 and 10.0000004 share the key rounded to 1e-6; 3e-7 mm apart, a cached 1.0000002 mm
+        may be below 1.0 mm at the second placement, never below 0.5 mm."""
+        rigid = sweep.pose.Rigid
+        at = [rigid(rigid.identity().rot, (x, 0.0, 0.0)) for x in (10.0000001, 10.0000001, 10.0000004, 10.0000004)]
+        geometry = self.geometry(radius=1.0)
+        self.assertEqual(self.measure(geometry, at, [1.0, 1.0, 0.5, 1.0], [1.0000002, 0.9999999]),
+                         [1.0000002, 1.0000002, 1.0000002, 0.9999999])
+        self.assertEqual((geometry.evaluations, geometry.cache_hits, geometry.rechecks), (2, 2, 1))
+
+    def test_the_placement_bound_scales_a_rotation_by_the_moved_definitions_radius(self) -> None:
+        """A 4e-7 deg turn rounds to the same key and moves points 50 mm out by about 3.5e-7 mm."""
+        turned = sweep.pose.Rigid.rotation((0.0, 0.0, 1.0), 4e-7, (0.0, 0.0, 0.0))
+        for radius, rechecks in ((50.0, 1), (1.0, 0)):
+            with self.subTest(radius=radius):
+                geometry = self.geometry(radius)
+                self.measure(geometry, [sweep.pose.Rigid.identity(), turned], [1.0, 1.0], [1.0000002, 1.0000002])
+                self.assertEqual(geometry.rechecks, rechecks)
 
 
 @unittest.skipUnless(shutil.which("uv"), "uv is required to build and read STEP through OCP")
@@ -417,6 +552,63 @@ class StepTests(unittest.TestCase):
         self.assertIn("ambiguous", proc.stderr)
         self.assertIn("@arm-a, @arm-b", proc.stderr)
 
+    def gap_sweep(self, between: float | None, plate: float | None, *options: str):
+        """Sweep GAP_YAML (J-001 at -10, -5 and 0 deg) with interfaces.yaml requiring `between` mm for
+        @arm-a / @arm-b and `plate` mm for the joint-connected TST-0201 / @arm-a (None: no requirement)."""
+        import yaml
+
+        hw = self.twins(GAP_YAML)
+        declared = [(1, ["@arm-a", "@arm-b"], between), (2, ["TST-0201", "@arm-a"], plate)]
+        (hw / "interfaces.yaml").write_text(yaml.safe_dump({"interfaces": [
+            {"id": f"IF-00{n}", "from": pair[0], "to": pair[1], "type": "clearance", "description": "Running gap.",
+             "pair": pair, "min_clearance_mm": minimum} for n, pair, minimum in declared if minimum is not None]}),
+            encoding="utf-8")
+        proc, result = self.run_script("sweep.py", "--hw", str(hw), "--parts-dir", str(self.root / "fx" / "twins"),
+                                       "--steps", "3", "--grid", "0", *options, "--worst-step", str(hw / "worst.step"))
+        return proc, result, {tuple(row["pair"]): row for row in result.get("pair_clearance", [])}
+
+    def test_a_pair_requirement_above_the_gap_fails_and_one_below_it_passes(self) -> None:
+        proc, result, rows = self.gap_sweep(1.0, 1.0)
+        self.assertEqual(proc.returncode, 1, proc.stderr[-2000:])
+        self.assertEqual((result["status"], result["collisions"], result["clearance_findings"]), ("fail", [], []))
+        # The plate and @arm-a are joint-connected, so no collision pair, but their requirement still holds.
+        self.assertEqual(result["pairs"]["excluded_adjacent"], [["TST-0201", "@arm-a"], ["TST-0201", "@arm-b"]])
+        # The arms are closest at J-001 = 0, the last sample; the plate gap is 0.8 mm at every sample,
+        # so the earliest, J-001 = -10, keeps the tie.
+        for pair, (angle, index) in ((("@arm-a", "@arm-b"), (0.0, 2)), (("TST-0201", "@arm-a"), (-10.0, 0))):
+            with self.subTest(pair=pair):
+                row = rows[pair]
+                self.assertEqual((row["status"], row["required_mm"], row["clearance_mm"], row["samples_below"]),
+                                 ("fail", 1.0, 0.8, 3))
+                self.assertEqual((row["independent_pose"], row["pose"]), ({"J-001": angle},) * 2)
+                self.assertEqual(row["sample"], {"index": index, "source": "sweep:J-001"})
+        self.assertEqual((rows[("@arm-a", "@arm-b")]["interface"], rows[("@arm-a", "@arm-b")]["source"]),
+                         ("IF-001", "interfaces.yaml#/interfaces/0"))
+
+        proc, result, rows = self.gap_sweep(0.5, 0.5)
+        self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+        self.assertEqual(result["status"], "pass")
+        self.assertEqual({pair: (row["status"], row["clearance_mm"], row["samples_below"]) for pair, row in rows.items()},
+                         {("@arm-a", "@arm-b"): ("pass", 0.8, 0), ("TST-0201", "@arm-a"): ("pass", 0.8, 0)})
+
+    def test_a_pair_clearance_option_overrides_the_record_or_adds_a_requirement(self) -> None:
+        proc, result, rows = self.gap_sweep(0.5, None, "--pair-clearance", "@arm-a:@arm-b=1.0",
+                                            "--pair-clearance", "TST-0201:@arm-a=0.75")
+        self.assertEqual(proc.returncode, 1, proc.stderr[-2000:])
+        between, plate = rows[("@arm-a", "@arm-b")], rows[("TST-0201", "@arm-a")]
+        self.assertEqual((between["status"], between["required_mm"], between["clearance_mm"]), ("fail", 1.0, 0.8))
+        self.assertEqual((between["source"], between["overrides"]),
+                         ("--pair-clearance @arm-a:@arm-b=1.0", "interfaces.yaml#/interfaces/0"))
+        self.assertEqual((plate["status"], plate["required_mm"], plate["source"]),
+                         ("pass", 0.75, "--pair-clearance TST-0201:@arm-a=0.75"))
+        self.assertNotIn("overrides", plate)
+
+    def test_an_unresolved_requirement_reference_is_a_usage_error(self) -> None:
+        proc, result, _ = self.gap_sweep(0.5, None, "--pair-clearance", "@arm-a:@arm-z=1.0")
+        self.assertEqual((proc.returncode, result), (2, {}), proc.stderr[-2000:])
+        self.assertIn("--pair-clearance @arm-a:@arm-z=1.0", proc.stderr)
+        self.assertIn("@arm-z", proc.stderr)
+
     def test_an_assembly_step_with_the_wrong_rest_placement_is_refused(self) -> None:
         hw = self.twins(TWINS_YAML)
         posed = self.root / "twins-posed.step"
@@ -483,8 +675,12 @@ class StepTests(unittest.TestCase):
         return hw
 
     def v6_sweep(self, misphased: int | None, criterion: str) -> tuple[Path, subprocess.CompletedProcess[str], dict]:
-        """The one-driver sweep of the V6 doc: 145 samples, 5 crank degrees apart, no grid."""
+        """The one-driver sweep of the V6 doc: 145 samples, 5 crank degrees apart, no grid, with every
+        valve required to keep VALVE_GAP from its piston (v6_record.interfaces)."""
+        import yaml
+
         hw = self.v6_hw(misphased)
+        (hw / "interfaces.yaml").write_text(yaml.safe_dump(v6_record.interfaces(), sort_keys=False), encoding="utf-8")
         proc, result = self.run_script("sweep.py", "--hw", str(hw), "--parts-dir", str(self.v6), "--steps", "145",
                                        "--grid", "0", "--worst-criterion", criterion,
                                        "--worst-step", str(hw / "worst.step"))
@@ -512,6 +708,22 @@ class StepTests(unittest.TestCase):
         self.assertAlmostEqual(worst["pose"]["J-013"], 0.0, places=6)
         self.assertTrue(worst["command"].endswith(f"--set J-001=240.0 --out {hw / 'worst.step'}"), worst["command"])
         self.assertEqual(worst["command"].count("--set"), 1)  # independent settings only
+
+        # Valve 3 breaks its 1 mm requirement wherever lift + displacement > 0, the 11 samples around
+        # its TDC; deepest, 18 mm^3 at crank 240, where 0 mm ties the other overlaps. At crank 600, its
+        # other TDC, the closed valve sits exactly 1 mm above the crown, which passes.
+        requirements = {tuple(sorted(row["pair"])): row for row in result["pair_clearance"]}
+        below = [q for q in range(0, 721, 5) if misphased_depth(q) > -v6_record.VALVE_GAP + 1e-9]
+        self.assertEqual(below, list(range(215, 266, 5)))
+        valve = requirements[("@piston-3", "@valve-3")]
+        self.assertEqual(result["pair_clearance"][0], valve)  # smallest margin first
+        self.assertEqual((valve["status"], valve["required_mm"], valve["clearance_mm"], valve["samples_below"]),
+                         ("fail", 1.0, 0.0, len(below)))
+        self.assertEqual((valve["independent_pose"], valve["sample"]), ({"J-001": 240.0}, {"index": 48, "source": "sweep:J-001"}))
+        self.assertAlmostEqual(valve["overlap_mm3"], 18.0, places=3)
+        self.assertEqual(valve["pose"]["J-043"], 3.0)
+        self.assertEqual({pair: row["status"] for pair, row in requirements.items() if pair != ("@piston-3", "@valve-3")},
+                         {(f"@piston-{c}", f"@valve-{c}"): "pass" for c in (1, 2, 4, 5, 6)})
 
         step = hw / "worst.step"
         evidence = json.loads((hw / "worst.step.json").read_text(encoding="utf-8"))
@@ -561,6 +773,15 @@ class StepTests(unittest.TestCase):
         self.assertEqual((worst["clearance_mm"], worst["margin_mm"]), (result["min_clearance"][0]["clearance_mm"],) * 2)
         self.assertEqual(sorted(worst["pair"]), sorted(result["min_clearance"][0]["pair"]))
         self.assertTrue((hw / "worst.step.json").is_file())
+
+        # Each valve keeps exactly its 1 mm requirement, closed at its cylinder's first TDC.
+        requirements = {tuple(sorted(row["pair"])): row for row in result["pair_clearance"]}
+        self.assertEqual(len(requirements), 6)
+        for cylinder, _, _, phase in v6_record.CYLINDERS:
+            row = requirements[(f"@piston-{cylinder}", f"@valve-{cylinder}")]
+            self.assertEqual((row["status"], row["required_mm"], row["clearance_mm"], row["samples_below"]),
+                             ("pass", 1.0, 1.0, 0), cylinder)
+            self.assertEqual(row["independent_pose"], {"J-001": -phase % 360}, cylinder)
 
     def test_pose_refuses_a_dependent_joint(self) -> None:
         out = self.root / "v6-dependent.step"

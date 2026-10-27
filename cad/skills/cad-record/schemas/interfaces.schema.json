@@ -17,6 +17,15 @@
           "to": {"type": "string", "minLength": 1},
           "type": {"type": "string", "enum": ["mounting", "motion", "electrical", "thermal", "clearance", "other"]},
           "description": {"type": "string", "minLength": 1},
+          "pair": {
+            "description": "A clearance requirement's two parts, each a PN placed at most once or an @occurrence reference",
+            "type": "array", "minItems": 2, "maxItems": 2, "uniqueItems": true,
+            "items": {"$ref": "assembly.schema.json#/$defs/part_ref"}
+          },
+          "min_clearance_mm": {
+            "description": "The smallest distance the pair may come to, at the nominal pose and at every swept pose",
+            "type": "number", "exclusiveMinimum": 0
+          },
           "limits": {
             "type": "object",
             "properties": {
@@ -25,7 +34,10 @@
               "heat_set": {"type": "array", "minItems": 1, "items": {"$ref": "drawing.schema.json#/$defs/heat_set"}}
             }
           }
-        }
+        },
+        "dependentRequired": {"pair": ["min_clearance_mm"], "min_clearance_mm": ["pair"]},
+        "if": {"required": ["pair"]},
+        "then": {"properties": {"type": {"const": "clearance"}}}
       }
     }
   }

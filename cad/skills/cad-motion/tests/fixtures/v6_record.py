@@ -17,7 +17,8 @@ TDC instead, crank 240 deg: the valve then dips into the piston crown, a collisi
 where lift > VALVE_GAP + |displacement|.
 
 `build_fixtures.py` builds the geometry from these constants; the tests write `record()` as
-hw/assembly.yaml and `PARTS` as hw/parts/<PN>/part.yaml.
+hw/assembly.yaml, `interfaces()` (each valve head at least VALVE_GAP from its piston crown) as
+hw/interfaces.yaml, and `PARTS` as hw/parts/<PN>/part.yaml.
 """
 
 from __future__ import annotations
@@ -127,3 +128,14 @@ def record(misphased: int | None = None) -> dict:
                            "occurrences": [f"@{o['id']}" for o in occurrences]}],
         "joints": joints,
     }
+
+
+def interfaces(minimum: float = VALVE_GAP) -> dict:
+    """The interfaces.yaml mapping: one clearance requirement per cylinder, its valve head at least
+    `minimum` mm from its piston crown. The default is the closed valve's gap at TDC, which a
+    correctly phased valve keeps exactly."""
+    return {"interfaces": [
+        {"id": f"IF-{cylinder:03d}", "from": f"valve-{cylinder}", "to": f"piston-{cylinder}", "type": "clearance",
+         "description": f"Valve {cylinder} head clears the piston {cylinder} crown through the cycle.",
+         "pair": [f"@valve-{cylinder}", f"@piston-{cylinder}"], "min_clearance_mm": minimum}
+        for cylinder, *_ in CYLINDERS]}
