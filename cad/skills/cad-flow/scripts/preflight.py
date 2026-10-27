@@ -14,7 +14,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from dataclasses import asdict, dataclass
+import time
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -40,6 +41,7 @@ class Check:
     required: bool
     detail: str
     fix: str
+    elapsed_s: float = 0.0
 
     def __post_init__(self) -> None:
         if self.status not in {"pass", "fail", "warn"}:
@@ -62,8 +64,9 @@ class Report:
     @property
     def summary(self) -> str:
         counts = self.counts
+        times = ", ".join(f"{check.id} {check.elapsed_s:.1f}s" for check in self.checks)
         return (f"CAD preflight: {counts['pass']} passed, {counts['fail']} failed, "
-                f"{counts['warn']} warnings; exit {self.exit_code}.")
+                f"{counts['warn']} warnings; exit {self.exit_code}. Elapsed: {times}.")
 
     def as_json(self) -> dict[str, Any]:
         return {"summary": self.summary, "exit_code": self.exit_code, "counts": self.counts,
@@ -71,8 +74,8 @@ class Report:
 
 
 def _check(identifier: str, name: str, status: str, detail: str, fix: str,
-           required: bool = True) -> Check:
-    return Check(identifier, name, status, required, detail, fix)
+           required: bool = True, elapsed_s: float = 0.0) -> Check:
+    return Check(identifier, name, status, required, detail, fix, elapsed_s)
 
 
 def _uv_check(environ: Mapping[str, str]) -> tuple[Check, str | None]:
@@ -91,142 +94,140 @@ def _uv_check(environ: Mapping[str, str]) -> tuple[Check, str | None]:
     return (_check("uv", "uv", "pass", result.stdout.strip(), ""), uv)
 
 
-def _kernel_probe(uv: str, name: str, python: str, dependencies: Sequence[str], module: str,
-                  expected: str, timeout: int = KERNEL_TIMEOUT, distribution: str | None = None) -> Check:
-    dependency_lines = ", ".join(json.dumps(dependency) for dependency in dependencies)
-    distribution = distribution or module
-    code = (f"import importlib.metadata, json, {module}\n"
-            f"print('CAD_PREFLIGHT:' + json.dumps(importlib.metadata.version({distribution!r})))\n")
-    source = ("# /// script\n"
-              f"# requires-python = {json.dumps(python)}\n"
-              f"# dependencies = [{dependency_lines}]\n"
-              "# ///\n" + code)
+def _script_probe(uv: str, name: str, runner: Path, module: str, expected: str,
+                 distribution: str | None = None, timeout: int = 300, sync_timeout: int = 1800,
+                 fix: str | None = None, chromium: bool = False) -> Check:
+    """Sync a runner's uv environment and import with its selected interpreter."""
+    guidance = fix or f"Resolve the {name} dependency environment used by {runner.name}, then retry."
     try:
-        with tempfile.TemporaryDirectory(prefix=f"cad-preflight-{name}-") as temporary:
-            script = Path(temporary) / "probe.py"
-            script.write_text(source, encoding="utf-8")
-            result = subprocess.run([uv, "run", "--script", str(script)], cwd=temporary, capture_output=True,
-                                    text=True, timeout=timeout, check=False)
+        synced = subprocess.run([uv, "sync", "--script", str(runner)], capture_output=True, text=True,
+                                timeout=sync_timeout, check=False)
     except subprocess.TimeoutExpired:
-        return _check(name, name, "fail", f"uv did not resolve and import {module} within {timeout} seconds.",
-                      f"Retry with network access and allow uv to resolve the pinned {name} environment.")
+        return _check(name, name, "fail", f"uv sync --script {runner.name} timed out after {sync_timeout}s.", guidance)
     except OSError as error:
-        return _check(name, name, "fail", f"Could not run the {name} uv environment: {error}.",
-                      f"Install/repair uv, then run the {name} kernel runner once to resolve its environment.")
-
+        return _check(name, name, "fail", f"Could not sync {runner.name}: {error}.", guidance)
+    if synced.returncode != 0:
+        reason = (synced.stderr or synced.stdout).strip().splitlines()
+        detail = reason[-1] if reason else f"uv sync exited {synced.returncode}"
+        return _check(name, name, "fail", f"Could not prepare {runner.name}: {detail}.", guidance)
+    try:
+        found = subprocess.run([uv, "python", "find", "--script", str(runner)], capture_output=True,
+                               text=True, timeout=30, check=False)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        return _check(name, name, "fail", f"Could not find {runner.name}'s Python: {error}.", guidance)
+    if found.returncode != 0 or not found.stdout.strip():
+        reason = (found.stderr or found.stdout).strip().splitlines()
+        detail = reason[-1] if reason else f"uv python find exited {found.returncode}"
+        return _check(name, name, "fail", f"Could not locate {runner.name}'s Python: {detail}.", guidance)
+    python = found.stdout.strip()
+    distribution = distribution or module
+    if chromium:
+        code = ("import importlib.metadata, json\nfrom pathlib import Path\n"
+                "from playwright.sync_api import sync_playwright\n"
+                "with sync_playwright() as p:\n"
+                f" version = importlib.metadata.version({distribution!r})\n"
+                " print('CAD_PREFLIGHT:' + json.dumps({'version': version, 'path': p.chromium.executable_path, "
+                "'exists': Path(p.chromium.executable_path).is_file()}))\n")
+    else:
+        code = (f"import importlib.metadata, json, {module}\n"
+                f"print('CAD_PREFLIGHT:' + json.dumps(importlib.metadata.version({distribution!r})))\n")
+    try:
+        result = subprocess.run([python, "-c", code], capture_output=True, text=True,
+                                timeout=timeout, check=False)
+    except subprocess.TimeoutExpired:
+        return _check(name, name, "fail", f"Importing {module} timed out after {timeout}s.", guidance)
+    except OSError as error:
+        return _check(name, name, "fail", f"Could not run {runner.name}'s Python: {error}.", guidance)
     marker = next((line.removeprefix("CAD_PREFLIGHT:") for line in result.stdout.splitlines()
                    if line.startswith("CAD_PREFLIGHT:")), None)
     if result.returncode != 0 or marker is None:
-        detail = (result.stderr or result.stdout).strip().splitlines()
-        reason = detail[-1] if detail else f"uv exited {result.returncode} without an import result"
-        return _check(name, name, "fail", f"The pinned {module} import failed: {reason}.",
-                      f"Run the {name} kernel runner once with network access, resolve the import error, then retry.")
+        reason = (result.stderr or result.stdout).strip().splitlines()
+        detail = reason[-1] if reason else f"Python probe exited {result.returncode} without a result"
+        return _check(name, name, "fail", f"The {module} import failed: {detail}.", guidance)
     try:
         version = json.loads(marker)
     except json.JSONDecodeError:
         version = marker
+    if chromium:
+        if version.get("version") != expected:
+            return _check(name, name, "fail", f"Imported playwright {version.get('version')}; expected {expected}.", guidance)
+        if not version.get("exists"):
+            return _check(name, name, "fail", f"Chromium executable is missing at {version.get('path')}.", guidance)
+        return _check(name, name, "pass", f"Playwright {expected} Chromium executable exists at {version['path']}.", "")
     if version != expected:
-        return _check(name, name, "fail", f"Imported {module} {version}; expected {expected}.",
-                      f"Use the pinned {name} environment declared by cad-model.")
-    return _check(name, name, "pass", f"{module} {version} imports in its pinned uv environment.", "")
+        return _check(name, name, "fail", f"Imported {module} {version}; expected {expected}.", guidance)
+    return _check(name, name, "pass", f"{module} {version} imports from {runner.name}'s uv environment.", "")
 
 
-def _freecad_checks(environ: Mapping[str, str]) -> list[Check]:
+
+def _ocp_viewer_check(uv: str) -> Check:
+    runner = CAD_ROOT / "skills" / "cad-viewer" / "scripts" / "viewer.py"
+    return _script_probe(uv, "ocp-viewer", runner, "ocp_viewer", "1.2.0",
+                         timeout=300, sync_timeout=1800)
+
+
+
+
+
+
+def _timed_freecad_checks(environ: Mapping[str, str]) -> list[Check]:
+    checks: list[Check] = []
+    started = time.monotonic()
+    print("[preflight] freecad-command: checking...", file=sys.stderr, flush=True)
     command = freecad_runtime.find_freecadcmd(environ)
-    if command is None:
-        command_detail = "FreeCAD 1.1.4 freecadcmd was not found via FREECADCMD, PATH, or the macOS app."
-        command_fix = ("Install FreeCAD 1.1.4; set FREECADCMD to its freecadcmd executable or add "
-                       "freecadcmd to PATH. See cad-drawings/SKILL.md for macOS and Linux install steps.")
-        found = False
-    else:
-        found = command.is_file() and os.access(command, os.X_OK)
-        command_detail = f"FreeCAD command: {command}" if found else f"Configured FreeCAD command is missing or not executable: {command}."
-        command_fix = ("Install FreeCAD 1.1.4; set FREECADCMD to an executable freecadcmd or add it to PATH. "
-                       "See cad-drawings/SKILL.md for macOS and Linux install steps.")
-    checks = [_check("freecad-command", "FreeCAD command", "pass" if found else "fail", command_detail,
-                     "" if found else command_fix)]
+    found = command is not None and command.is_file() and os.access(command, os.X_OK)
+    detail = f"FreeCAD command: {command}" if found else (
+        f"Configured FreeCAD command is missing or not executable: {command}." if command else
+        "FreeCAD 1.1.4 freecadcmd was not found via FREECADCMD, PATH, or the macOS app.")
+    fix = ("Install FreeCAD 1.1.4; set FREECADCMD to its freecadcmd executable or add freecadcmd to PATH. "
+           "See cad-drawings/SKILL.md for macOS and Linux install steps.")
+    command_check = _check("freecad-command", "FreeCAD command", "pass" if found else "fail", detail,
+                           "" if found else fix)
+    checks.append(replace(command_check, elapsed_s=time.monotonic() - started))
+    print(f"[preflight] freecad-command: {checks[-1].status} ({checks[-1].elapsed_s:.1f}s)",
+          file=sys.stderr, flush=True)
 
-    version = None
-    version_error = "FreeCAD command unavailable."
-    if found and command is not None:
+    started = time.monotonic()
+    print("[preflight] freecad-version: checking...", file=sys.stderr, flush=True)
+    version: str | None = None
+    detail = "FreeCAD command unavailable."
+    if found and command:
         try:
             with tempfile.TemporaryDirectory(prefix="cad-preflight-freecad-") as temporary:
                 result_file = Path(temporary) / "version.json"
                 script = Path(temporary) / "version.py"
-                script.write_text(
-                    "import FreeCAD as App, json\n"
-                    f"open({str(result_file)!r}, 'w', encoding='utf-8').write(json.dumps(App.Version()))\n",
-                    encoding="utf-8")
-                result = subprocess.run([str(command), str(script)], capture_output=True, text=True, timeout=90,
-                                        check=False, env=dict(environ))
-                if result.returncode != 0:
-                    version_error = (result.stderr or result.stdout).strip().splitlines()[-1:]
-                    version_error = version_error[0] if version_error else f"freecadcmd exited {result.returncode}"
-                elif result_file.is_file():
-                    reported = json.loads(result_file.read_text(encoding="utf-8"))
-                    version = ".".join(str(component) for component in reported[:3])
-                    version_error = f"FreeCAD reported {version}."
+                script.write_text("import FreeCAD as App, json\n"
+                                  f"open({str(result_file)!r}, 'w', encoding='utf-8').write(json.dumps(App.Version()))\n",
+                                  encoding="utf-8")
+                result = subprocess.run([str(command), str(script)], capture_output=True, text=True,
+                                        timeout=90, check=False, env=dict(environ))
+                if result.returncode == 0 and result_file.is_file():
+                    version = ".".join(str(part) for part in json.loads(result_file.read_text())[:3])
+                    detail = f"FreeCAD reported {version}."
                 else:
-                    version_error = "freecadcmd produced no version result; FreeCAD may not have started."
+                    lines = (result.stderr or result.stdout).strip().splitlines()
+                    detail = lines[-1] if lines else "freecadcmd produced no version result."
         except (OSError, subprocess.TimeoutExpired, ValueError, json.JSONDecodeError) as error:
-            version_error = f"Could not query FreeCAD version: {error}."
-    version_ok = version == "1.1.4"
-    checks.append(_check("freecad-version", "FreeCAD version", "pass" if version_ok else "fail",
-                         version_error if version_ok else version_error + " Required version is 1.1.4.", command_fix))
+            detail = f"Could not query FreeCAD version: {error}."
+    version_check = _check("freecad-version", "FreeCAD version", "pass" if version == "1.1.4" else "fail",
+                           detail if version == "1.1.4" else detail + " Required version is 1.1.4.", fix)
+    checks.append(replace(version_check, elapsed_s=time.monotonic() - started))
+    print(f"[preflight] freecad-version: {checks[-1].status} ({checks[-1].elapsed_s:.1f}s)",
+          file=sys.stderr, flush=True)
 
+    started = time.monotonic()
+    print("[preflight] techdraw-templates: checking...", file=sys.stderr, flush=True)
     templates = freecad_runtime.templates_dir(command)
-    missing = [relative for relative in EXPECTED_TEMPLATES if not (templates / relative).is_file()]
-    template_ok = found and not missing
-    if not found:
-        detail = f"TechDraw template directory cannot be verified without freecadcmd: {templates}."
-    elif missing:
-        detail = f"Missing TechDraw templates under {templates}: {', '.join(missing)}."
-    else:
-        detail = f"TechDraw templates found in {templates}: {', '.join(EXPECTED_TEMPLATES)}."
-    checks.append(_check("techdraw-templates", "TechDraw templates", "pass" if template_ok else "fail", detail,
-                         "Install the complete FreeCAD 1.1.4 bundle; TechDraw templates must be beside its freecadcmd."
-                         if not template_ok else ""))
+    missing = [item for item in EXPECTED_TEMPLATES if not (templates / item).is_file()]
+    okay = bool(found and not missing)
+    detail = (f"Missing TechDraw templates under {templates}: {', '.join(missing)}." if missing else
+              f"TechDraw templates found in {templates}: {', '.join(EXPECTED_TEMPLATES)}.")
+    template_check = _check("techdraw-templates", "TechDraw templates", "pass" if okay else "fail", detail,
+                            "Install the complete FreeCAD 1.1.4 bundle; TechDraw templates must be beside freecadcmd.")
+    checks.append(replace(template_check, elapsed_s=time.monotonic() - started))
+    print(f"[preflight] techdraw-templates: {checks[-1].status} ({checks[-1].elapsed_s:.1f}s)",
+          file=sys.stderr, flush=True)
     return checks
-
-
-def _playwright_check(uv: str) -> Check:
-    source = ("# /// script\n# requires-python = \">=3.11\"\n"
-              "# dependencies = [\"playwright==1.64.1\"]\n# ///\n"
-              "import json\nfrom pathlib import Path\nfrom playwright.sync_api import sync_playwright\n"
-              "with sync_playwright() as p:\n"
-              " print('CAD_PREFLIGHT:' + json.dumps({'version': p.chromium.name, 'path': p.chromium.executable_path, 'exists': Path(p.chromium.executable_path).is_file()}))\n")
-    try:
-        with tempfile.TemporaryDirectory(prefix="cad-preflight-playwright-") as temporary:
-            script = Path(temporary) / "probe_chromium.py"
-            script.write_text(source, encoding="utf-8")
-            result = subprocess.run([uv, "run", "--script", str(script)], cwd=temporary, capture_output=True,
-                                    text=True, timeout=240, check=False)
-    except (OSError, subprocess.TimeoutExpired) as error:
-        reason = "timed out" if isinstance(error, subprocess.TimeoutExpired) else str(error)
-        return _check("playwright-chromium", "Playwright Chromium", "fail", f"Playwright probe {reason}.",
-                      "Run `uv run --with playwright==1.64.1 playwright install chromium`, then retry.")
-    marker = next((line.removeprefix("CAD_PREFLIGHT:") for line in result.stdout.splitlines()
-                   if line.startswith("CAD_PREFLIGHT:")), None)
-    try:
-        browser = json.loads(marker) if marker else None
-    except json.JSONDecodeError:
-        browser = None
-    if result.returncode != 0 or not browser or not browser.get("exists"):
-        detail = (result.stderr or result.stdout).strip().splitlines()
-        reason = detail[-1] if detail else (f"Chromium executable missing at {browser.get('path')}" if browser else
-                                             "Playwright did not report a Chromium executable")
-        return _check("playwright-chromium", "Playwright Chromium", "fail", reason,
-                      "Run `uv run --with playwright==1.64.1 playwright install chromium`, then retry.")
-    return _check("playwright-chromium", "Playwright Chromium", "pass",
-                  f"Playwright 1.64.1 Chromium executable exists at {browser['path']}.", "")
-
-
-def _ocp_viewer_check(uv: str) -> Check:
-    dependencies = ("cadquery-ocp-novtk==8.0.1.1.0", "ocp_viewer==1.2.0", "playwright==1.64.1", "pyyaml>=6.0")
-    return _kernel_probe(uv, "ocp-viewer", "==3.12.*", dependencies, "ocp_viewer", "1.2.0",
-                         timeout=KERNEL_TIMEOUT, distribution="ocp_viewer")
-
-
 def _vendor_check(environ: Mapping[str, str]) -> Check:
     # The cad-render import map is authoritative; check every SRI-pinned path it can request.
     sys.path.insert(0, str(CONCEPT_SCRIPTS))
@@ -345,32 +346,58 @@ def _harness_check(harness: str, cwd: Path, home: Path, environ: Mapping[str, st
                   detail, "" if present else fix, required=False)
 
 
+def _run_uv_check(environ: Mapping[str, str]) -> tuple[Check, str | None]:
+    print("[preflight] uv: checking...", file=sys.stderr, flush=True)
+    started = time.monotonic()
+    check, uv = _uv_check(environ)
+    elapsed = time.monotonic() - started
+    check = replace(check, elapsed_s=elapsed)
+    print(f"[preflight] uv: {check.status} ({elapsed:.1f}s)", file=sys.stderr, flush=True)
+    return check, uv
+
+
+def _run_check(name: str, function: Any) -> Check:
+    print(f"[preflight] {name}: checking...", file=sys.stderr, flush=True)
+    started = time.monotonic()
+    try:
+        check = function()
+    except (OSError, ValueError, json.JSONDecodeError) as error:
+        check = _check(name, name, "fail", f"Check failed unexpectedly: {error}.", "Review the reported error and retry.")
+    elapsed = time.monotonic() - started
+    check = replace(check, elapsed_s=elapsed)
+    print(f"[preflight] {name}: {check.status} ({elapsed:.1f}s)", file=sys.stderr, flush=True)
+    return check
+
+
 def run_checks(environ: Mapping[str, str] | None = None, cwd: Path | None = None,
                home: Path | None = None, harness: str | None = None) -> Report:
     env = os.environ if environ is None else environ
     workdir = cwd or Path.cwd()
     home_dir = home or Path(env.get("HOME", str(Path.home())))
     checks: list[Check] = []
-    uv_check, uv = _uv_check(env)
+    uv_check, uv = _run_uv_check(env)
     checks.append(uv_check)
-    checks.extend(_freecad_checks(env))
+    checks.extend(_timed_freecad_checks(env))
     if uv:
-        checks.append(_kernel_probe(uv, "cadquery", ">=3.12,<3.13",
-                                    ("cadquery==2.8.0", "cadquery-ocp==7.9.3.1.1", "vtk==9.6.2"),
-                                    "cadquery", "2.8.0"))
-        checks.append(_kernel_probe(uv, "build123d", ">=3.12,<3.13",
-                                    ("build123d==0.13.0", "cadquery-ocp-novtk==8.0.1.1.0", "bd_warehouse==0.4.0"),
-                                    "build123d", "0.13.0"))
-        checks.append(_playwright_check(uv))
-        checks.append(_ocp_viewer_check(uv))
+        probes = (
+            ("cadquery", lambda: _script_probe(uv, "cadquery", CAD_ROOT / "skills" / "cad-model" / "scripts" / "run_cadquery.py",
+                                                "cadquery", "2.8.0", timeout=300, sync_timeout=1800)),
+            ("build123d", lambda: _script_probe(uv, "build123d", CAD_ROOT / "skills" / "cad-model" / "scripts" / "run_build123d.py",
+                                                 "build123d", "0.13.0", timeout=300, sync_timeout=1800)),
+            ("playwright-chromium", lambda: _chromium_check(uv)),
+            ("ocp-viewer", lambda: _ocp_viewer_check(uv)),
+        )
+        checks.extend(_run_check(name, probe) for name, probe in probes)
     else:
-        for name in ("cadquery", "build123d", "playwright-chromium", "ocp-viewer"):
-            checks.append(_check(name, name, "fail", "Cannot resolve this environment because uv is unavailable.",
-                                  "Install uv and ensure its bin directory is on PATH."))
-    checks.append(_vendor_check(env))
-    checks.append(_beads_check(workdir, env))
+        checks.extend(_run_check(name, lambda name=name: _check(
+            name, name, "fail", "Cannot resolve this environment because uv is unavailable.",
+            "Install uv and ensure its bin directory is on PATH."))
+                      for name in ("cadquery", "build123d", "playwright-chromium", "ocp-viewer"))
+    checks.append(_run_check("three-vendor-cache", lambda: _vendor_check(env)))
+    checks.append(_run_check("beads", lambda: _beads_check(workdir, env)))
     harnesses = (harness,) if harness else ("omp", "claude", "opencode", "kiro")
-    checks.extend(_harness_check(name, workdir, home_dir, env) for name in harnesses)
+    checks.extend(_run_check(f"harness-{name}", lambda name=name: _harness_check(name, workdir, home_dir, env))
+                  for name in harnesses)
     return Report(tuple(checks))
 
 

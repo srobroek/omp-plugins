@@ -56,9 +56,9 @@ Run the environment check before starting a CAD project:
 uv run --script cad/skills/cad-flow/scripts/preflight.py
 ```
 
-It reports every check with a pass, fail, or warning, including a fix hint, and exits non-zero when any required runtime check fails. Use `--json` for machine-readable results or `--harness omp|claude|opencode|kiro` to inspect one harness. FreeCAD 1.1.4 and its TechDraw templates, separately resolvable CadQuery 2.8 and build123d 0.13 environments, Playwright Chromium, the SRI-checked three.js cache, and ocp_viewer are required. Beads and harness installation detection are warnings. This plugin ships no MCP server, so preflight performs no MCP check.
-
-The `cad-flow` GROUND step runs the same check and must stop on required failures. For platform-specific FreeCAD installation instructions, see `cad/skills/cad-drawings/SKILL.md`.
+The preflight reports each check as pass, fail, or warning, with a fix hint and elapsed time. It exits non-zero when any required runtime check fails. Use `--json` for machine-readable results or `--harness omp|claude|opencode|kiro` to check one harness. Kernel, viewer, and browser checks sync the same uv runner environments used by the CAD pipeline, then import through each environment's Python interpreter. Each check is time-bounded and prints progress with its elapsed time.
+FreeCAD 1.1.4 and TechDraw templates, CadQuery 2.8, build123d 0.13, Playwright Chromium, the SRI-checked three.js cache, and ocp_viewer are required. Beads and detected harness installation are warnings. This plugin ships no MCP server, so there is no MCP check.
+The `cad-flow` GROUND step runs preflight and stops on required failures. See `cad/skills/cad-drawings/SKILL.md` for FreeCAD installation steps.
 
 ## Flow
 

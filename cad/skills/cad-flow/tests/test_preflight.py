@@ -26,8 +26,16 @@ class ReportTests(unittest.TestCase):
         ))
         self.assertEqual(report.exit_code, 1)
         self.assertEqual(report.counts, {"pass": 1, "fail": 1, "warn": 0})
-        self.assertEqual(report.summary, "CAD preflight: 1 passed, 1 failed, 0 warnings; exit 1.")
-        self.assertEqual(report.as_json()["checks"][1]["fix"], "install it")
+
+    def test_report_json_includes_elapsed_time(self) -> None:
+        report = preflight.Report((preflight.Check("uv", "uv", "pass", True, "uv", "", 1.25),))
+        self.assertEqual(report.as_json()["checks"][0]["elapsed_s"], 1.25)
+        self.assertIn("uv 1.2s", report.summary)
+
+    def test_required_failure_keeps_json_fix_and_text_hint(self) -> None:
+        report = preflight.Report((preflight.Check("freecad", "FreeCAD", "fail", True, "missing", "install it"),))
+        self.assertEqual(report.exit_code, 1)
+        self.assertEqual(report.as_json()["checks"][0]["fix"], "install it")
         self.assertIn("Fix: install it", preflight.render_text(report))
 
     def test_optional_warning_does_not_fail_report(self) -> None:
@@ -37,6 +45,28 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(report.exit_code, 0)
         self.assertEqual(report.counts["warn"], 1)
 
+
+    def test_kernel_probe_syncs_runner_and_uses_its_python(self) -> None:
+        runner = SCRIPT.parents[1] / "cad-model" / "scripts" / "run_cadquery.py"
+        calls = []
+
+        class Result:
+            returncode = 0
+            stdout = "CAD_PREFLIGHT:\"2.8.0\"\n"
+            stderr = ""
+
+        def run(args, **kwargs):
+            calls.append(args)
+            if args[1:3] == ["python", "find"]:
+                return type("Found", (), {"returncode": 0, "stdout": "/resolved/uv/python\n", "stderr": ""})()
+            return Result()
+
+        with patch.object(preflight.subprocess, "run", side_effect=run):
+            check = preflight._script_probe("uv", "cadquery", runner, "cadquery", "2.8.0")
+        self.assertEqual(check.status, "pass")
+        self.assertEqual(calls[0][1:3], ["sync", "--script"])
+        self.assertEqual(calls[0][-1], str(runner))
+        self.assertEqual(calls[-1][:2], ["/resolved/uv/python", "-c"])
     def test_main_returns_report_exit_code_and_json(self) -> None:
         report = preflight.Report((preflight.Check("uv", "uv", "fail", True, "missing", "install"),))
         with patch.object(preflight, "run_checks", return_value=report), patch("sys.stdout") as stdout:
@@ -57,7 +87,7 @@ class FreeCADTests(unittest.TestCase):
             path = root / "empty-path"
             path.mkdir()
             missing = root / "missing" / "freecadcmd"
-            checks = preflight._freecad_checks({"FREECADCMD": str(missing), "PATH": str(path)})
+            checks = preflight._timed_freecad_checks({"FREECADCMD": str(missing), "PATH": str(path)})
         command = checks[0]
         self.assertEqual(command.status, "fail")
         self.assertIn("Configured FreeCAD command is missing", command.detail)
@@ -65,7 +95,6 @@ class FreeCADTests(unittest.TestCase):
         self.assertIn("FREECADCMD", command.fix)
         self.assertEqual(checks[1].status, "fail")
         self.assertEqual(checks[2].status, "fail")
-
 
 if __name__ == "__main__":
     unittest.main()
