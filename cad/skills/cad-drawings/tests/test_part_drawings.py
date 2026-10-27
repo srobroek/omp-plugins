@@ -142,8 +142,10 @@ class PinDrawingGate(unittest.TestCase):
         part = self.hw / "parts" / "LMP-0005" / "part.yaml"
         original = part.read_text(encoding="utf-8")
         try:
-            part.write_text(original.replace("  sheet: {sizes: [A3, A2], scale: auto}\n",
-                                             "  sheet: {sizes: [A3], scale: 100:1}\n"), encoding="utf-8")
+            part.write_text(original.replace("    press_step: {size: general}\n", "").replace(
+                "    - {id: head_chamfer_size, operation: chamfer, features: [head_chamfer], "
+                "tolerance: {deviation_mm: [-0.1, 0.1]}}\n", ""), encoding="utf-8")
+            self.assertNotEqual(part.read_text(encoding="utf-8"), original)
             proc = run(UV, "run", "--script", str(DRAWING), str(self.hw), "--version", "v1",
                        "--part", "LMP-0005", "--part", "LMP-0002", "--output-dir",
                        str(Path(self.tmp.name) / "isolate-failure"), "--timeout", "900", "--jobs", "2")
@@ -152,9 +154,12 @@ class PinDrawingGate(unittest.TestCase):
         self.assertEqual(proc.returncode, 1)
         results = json.loads(proc.stdout)["parts"]
         self.assertEqual([result["pn"] for result in results], ["LMP-0005", "LMP-0002"])
-        self.assertEqual(results[0]["status"], "fail")
-        self.assertEqual(results[1]["status"], "pass")
-        self.assertTrue((Path(results[1]["output_dir"]) / "package.json").is_file())
+        self.assertEqual([result["status"] for result in results], ["fail", "pass"])
+        failed = Path(results[0]["output_dir"])
+        self.assertTrue((failed / "rejected.json").is_file())
+        self.assertFalse((failed / "package.json").exists())
+        passed = Path(results[1]["output_dir"])
+        self.assertTrue((passed / "sheet-1.pdf").is_file())
 
     def test_removed_dimension_intent_fails_the_gate(self) -> None:
         part = self.hw / "parts" / "LMP-0005" / "part.yaml"
