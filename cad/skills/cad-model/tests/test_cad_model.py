@@ -9,6 +9,8 @@ cadmodel directly and need neither uv nor OCP.
 
 from __future__ import annotations
 
+import csv
+import itertools
 import json
 import math
 import os
@@ -27,11 +29,12 @@ HERE = Path(__file__).resolve().parent
 FIXTURES = HERE / "fixtures"
 SCRIPTS = HERE.parent / "scripts"
 CLI = SCRIPTS / "cad_model.py"
+BOM_SCRIPT = HERE.parents[1] / "cad-bom" / "scripts" / "bom.py"
 KERNELS = ("cadquery", "build123d")
 FINDING_KEYS = {"pn", "check", "type", "message", "where"}
 
 sys.path.insert(0, str(SCRIPTS))
-from cadmodel import build, check, diff, occ  # noqa: E402 - stdlib-only imports; OCP loads on first use
+from cadmodel import build, check, diff, mesh, occ  # noqa: E402 - stdlib-only imports; OCP loads on first use
 
 AP242 = "AP242_MANAGED_MODEL_BASED_3D_ENGINEERING"
 
@@ -405,6 +408,150 @@ def joints(*specs: tuple[str, str, str, str]) -> list[dict]:
 def gaps(pairs: dict[tuple[str, str], float | None]) -> dict:
     """check's pair geometry from clearances; no shared volume, none measured where the gap is None."""
     return {pair: {"clearance_mm": gap, "interference_mm3": None if gap is None else 0.0} for pair, gap in pairs.items()}
+
+
+INSERT = "TST-0003"
+# One part-local insert placed six times around the base block (x/y -20..20, z 0..20), each held to it
+# by a fixed joint. The insert is the base template at size 4, height 4, bore 1: a block x/y -2..2,
+# z 0..4, bored through along Z. Each entry: translation_mm, rotation (None for none).
+INSERTS = {
+    "ins-1": ([10, 10, 18], None),    # 2 mm into the base top: the one declared press fit
+    "ins-2": ([-10, 10, 18], None),   # the same overlap, with no fit declared
+    "ins-3": ([10, -10, 20], None),   # on the base top ...
+    "ins-4": ([11, -10, 20], None),   # ... sharing x 9..12 with ins-3
+    "ins-5": ([-10, -10, 22], {"axis": [1, 0, 0], "angle_deg": 90}),  # turned about +X: y -14..-10, z 20..24
+    "ins-6": ([0, 22, 8], None),      # against the base's +Y side
+}
+INSERT_V = 4 * 4 * 4 - math.pi * 0.25 * 4
+PRESSED_V = 4 * 4 * 2 - math.pi * 0.25 * 2      # an insert 2 mm into the base, less its own bore
+STACKED_V = 3 * 4 * 4 - 2 * math.pi * 0.25 * 4  # ins-3 and ins-4 over x 9..12, less both bores
+
+
+def insert_project(root: Path) -> Path:
+    """The base block and the six INSERTS, with a press fit declared on `@ins-1` only (CadQuery)."""
+    hw = root / "inserts" / "hw"
+    hw.mkdir(parents=True)
+    (hw / "product.yaml").write_text("id: inserts\n", encoding="utf-8")
+    occurrences = "".join(
+        f"  - {{id: {oid}, PN: {INSERT}, placement: {{translation_mm: {move}"
+        + (f", rotation: {{axis: {turn['axis']}, angle_deg: {turn['angle_deg']}}}" if turn else "") + "}}\n"
+        for oid, (move, turn) in INSERTS.items())
+    members = ", ".join(f'"@{oid}"' for oid in INSERTS)
+    fixed = "".join(f'  - {{id: J-00{n}, type: fixed, parent: {BASE}, child: "@{oid}", axis: [0, 0, 1], '
+                    f"origin: [0, 0, 0], min: 0, max: 0, nominal: 0}}\n" for n, oid in enumerate(INSERTS, start=1))
+    (hw / "assembly.yaml").write_text(
+        f"occurrences:\n{occurrences}subassemblies:\n  - {{id: frame, title: Base and inserts, parts: [{BASE}], "
+        f"occurrences: [{members}]}}\njoints:\n{fixed}", encoding="utf-8")
+    (hw / "interfaces.yaml").write_text(
+        f'interfaces:\n  - id: IF-001\n    limits:\n      press_fit: {{fit: 5 H7/p6, pair: [{BASE}, "@ins-1"]}}\n',
+        encoding="utf-8")
+    set_model(hw, BASE, "cadquery", "base.py", {"size": 40.0, "height": 20.0, "bore": 6.0}, *PARTS[BASE][:2])
+    set_model(hw, INSERT, "cadquery", "base.py", {"size": 4.0, "height": 4.0, "bore": 1.0}, "Insert", "PETG")
+    with (hw / "parts" / INSERT / "part.yaml").open("a", encoding="utf-8") as part:
+        part.write("model_frame: part_local\n")
+    return hw
+
+
+@unittest.skipUnless(shutil.which("uv"), "uv is required for the kernel environments")
+class OccurrenceBuildTests(unittest.TestCase):
+    """One part-local PN placed six times: one definition, six placed instances (CadQuery only)."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.hw = insert_project(Path(cls.tmp.name))
+        cls.folder = cls.hw / "versions" / "v1"
+        cls.built = cli("run", str(cls.hw), "--label", "v1")
+        cls.checked = cli("check", "v1", "--hw", str(cls.hw))
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls.tmp.cleanup()
+
+    def setUp(self) -> None:
+        self.assertEqual(self.built[0].returncode, 0, self.built[0].stderr[-3000:])
+
+    def version_json(self, name: str) -> dict:
+        return json.loads((self.folder / name).read_text(encoding="utf-8"))
+
+    def pair_rows(self) -> dict[tuple[str, ...], dict]:
+        interference = self.checked[1]["checks"]["interference"]
+        return {tuple(row["pair"]): row for row in interference["pairs"] + interference["joint_pairs"]}
+
+    def test_assembly_step_has_one_definition_and_one_component_per_occurrence(self) -> None:
+        readback = self.checked[1]["checks"]["step_readback"]
+        self.assertEqual(readback["status"], "pass", json.dumps(readback, indent=1)[:3000])
+        self.assertEqual((readback["definitions"], readback["components"], readback["unbound_components"],
+                          readback["missing_occurrences"]), (2, 7, [], []))
+        self.assertEqual(readback["occurrences"]["ins-5"]["component"], f"{INSERT} Insert [@ins-5]")
+        self.assertEqual(self.version_json("manifest.json")["parts"][INSERT]["occurrences"], list(INSERTS))
+
+    def test_check_measures_every_occurrence_pair_including_same_pn_pairs(self) -> None:
+        rows = self.pair_rows()
+        self.assertEqual(set(rows), set(itertools.combinations(sorted([BASE, *INSERTS]), 2)))  # 21, 15 same-PN
+        stacked = rows[("ins-3", "ins-4")]
+        self.assertEqual((stacked["refs"], stacked["interferes"], stacked["allowed"], stacked["ok"]),
+                         (["@ins-3", "@ins-4"], True, False, False))
+        self.assertAlmostEqual(stacked["interference_mm3"], STACKED_V, places=3)
+
+    def test_a_fit_declared_on_one_insert_does_not_excuse_the_other(self) -> None:
+        proc, result, _ = self.checked
+        rows = self.pair_rows()
+        declared, undeclared = rows[(BASE, "ins-1")], rows[(BASE, "ins-2")]
+        self.assertEqual((declared["interferes"], declared["allowed"], declared["ok"]), (True, True, True))
+        self.assertEqual((undeclared["interferes"], undeclared["allowed"], undeclared["ok"]), (True, False, False))
+        for row in (declared, undeclared):
+            self.assertAlmostEqual(row["interference_mm3"], PRESSED_V, places=3)
+        self.assertEqual([item["pair"] for item in result["checks"]["interference"]["declared_pairs"]],
+                         [[BASE, "ins-1"]])
+        self.assertEqual(sorted(pair for pair, row in rows.items() if not row["ok"]),
+                         [(BASE, "ins-2"), ("ins-3", "ins-4")])
+        self.assertEqual((proc.returncode, result["blocking_failures"]), (1, ["interference"]), proc.stderr[-2000:])
+
+    def test_one_glb_definition_is_two_nodes_and_the_second_resolves_to_its_own(self) -> None:
+        part_map = self.version_json("part-map.json")
+        gltf = mesh.gltf_json(self.folder / "assembly.glb")
+        first, second = (part_map["occurrences"][oid] for oid in ("ins-1", "ins-2"))
+        self.assertEqual((first["nodes"], second["nodes"]),
+                         ([f"{INSERT} Insert [@ins-1]"], [f"{INSERT} Insert [@ins-2]"]))
+        self.assertEqual((first["meshes"], second["meshes"]), ([f"{INSERT} Insert"], [f"{INSERT} Insert"]))
+        self.assertNotEqual(first["node_indices"], second["node_indices"])
+        one, two = (gltf["nodes"][entry["node_indices"][0]] for entry in (first, second))
+        self.assertEqual(two["name"], f"{INSERT} Insert [@ins-2]")
+        positions = [gltf["meshes"][node["mesh"]]["primitives"][0]["attributes"]["POSITION"] for node in (one, two)]
+        self.assertEqual(positions[0], positions[1])  # one definition's triangles, instanced by both nodes
+        # @ins-2 sits at (-10, 10, 18) mm, Z up; the GLB is in metres, Y up: (x, z, -y) / 1000.
+        assert_vectors(self, two["translation"], [-0.010, 0.018, -0.010], places=9)
+        self.assertEqual(part_map["parts"][INSERT]["occurrences"], sorted(INSERTS))
+
+    def test_metrics_keep_the_unit_definition_and_place_each_instance(self) -> None:
+        metrics = self.version_json("metrics.json")
+        unit = metrics["parts"][INSERT]
+        self.assertEqual(unit["model_frame"], "part_local")
+        self.assertAlmostEqual(unit["volume_mm3"], INSERT_V, places=4)
+        assert_same_holes(self, unit["holes"], [{"id": "H1", "diameter_mm": 1.0, "axis": [0.0, 0.0, -1.0],
+                                                 "position": [0.0, 0.0, 4.0], "depth_mm": 4.0, "through": True}], 6)
+        totals = metrics["totals"]
+        self.assertEqual(totals["quantity"], {BASE: 1, INSERT: 6})
+        self.assertAlmostEqual(totals["volume_mm3"], BASE_V + 6 * INSERT_V, places=3)
+        self.assertAlmostEqual(totals["mass_g"], metrics["parts"][BASE]["mass_g"] + 6 * unit["mass_g"], places=6)
+        # ins-5: Rx(90) takes (x, y, z) to (x, -z, y), then moves by (-10, -10, 22).
+        turned = metrics["occurrences"]["ins-5"]
+        assert_vectors(self, turned["bbox_mm"]["min"], [-12.0, -14.0, 20.0], places=6)
+        assert_vectors(self, turned["bbox_mm"]["max"], [-8.0, -10.0, 24.0], places=6)
+        assert_same_holes(self, turned["holes"], [{"id": "H1", "diameter_mm": 1.0, "axis": [0.0, 1.0, 0.0],
+                                                   "position": [-10.0, -14.0, 22.0], "depth_mm": 4.0,
+                                                   "through": True}], 6)
+        assert_vectors(self, metrics["occurrences"]["ins-2"]["bbox_mm"]["min"], [-12.0, 8.0, 18.0], places=6)
+
+    def test_bom_rolls_the_six_instances_into_one_row_of_quantity_six(self) -> None:
+        out = Path(self.tmp.name) / "bom.csv"
+        proc = subprocess.run(["uv", "run", "--quiet", "--script", str(BOM_SCRIPT), str(self.folder / "assembly.step"),
+                               "--hw", str(self.hw), "--out", str(out)], capture_output=True, text=True, check=False)
+        self.assertEqual(proc.returncode, 0, proc.stdout[-2000:] + proc.stderr[-2000:])
+        with out.open(encoding="utf-8", newline="") as handle:
+            rows = list(csv.DictReader(handle))
+        self.assertEqual({row["PN"]: row["qty"] for row in rows}, {BASE: "1", INSERT: "6"})
 
 
 class CheckRuleTests(unittest.TestCase):
