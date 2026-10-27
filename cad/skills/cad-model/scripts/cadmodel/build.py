@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
-from cadmodel import holes, mesh, occ
+from cadmodel import holes, mesh, occ, scriptenv
 from cadmodel.motion import load_pose
 
 SCRIPTS = Path(__file__).resolve().parents[1]
@@ -151,7 +151,7 @@ def run_kernels(requests: Mapping[str, list[dict[str, str]]]) -> dict[str, dict[
         procs: dict[str, tuple[subprocess.Popen[str], float]] = {}
         try:
             for kernel in requests:
-                proc = subprocess.Popen(["uv", "run", "--quiet", "--script", str(RUNNERS[kernel])],
+                proc = subprocess.Popen(scriptenv.script_command(RUNNERS[kernel]),
                                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                         text=True, start_new_session=True)
                 procs[kernel] = (proc, time.perf_counter())
