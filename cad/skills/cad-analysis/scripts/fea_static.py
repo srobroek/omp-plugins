@@ -17,6 +17,7 @@ from typing import Any
 
 import yaml
 
+from fea_part_selection import OCCURRENCE_REF
 from freecad_lookup import find_freecad
 
 
@@ -120,8 +121,12 @@ def load_case(path: Path) -> dict[str, Any]:
         not isinstance(solid_index, int) or isinstance(solid_index, bool) or solid_index < 1
     ):
         raise CaseError("solid_index must be a positive 1-based integer")
-    if solid_index is not None and part is not None:
-        raise CaseError("part and solid_index are mutually exclusive")
+    occurrence = raw.get("occurrence")
+    if occurrence is not None and (not isinstance(occurrence, str) or OCCURRENCE_REF.fullmatch(occurrence) is None):
+        raise CaseError('occurrence must be one occurrence reference "@id"; select a part placed once by part')
+    selectors = [key for key in ("part", "occurrence", "solid_index") if raw.get(key) is not None]
+    if len(selectors) > 1:
+        raise CaseError(f"{' and '.join(selectors)} are mutually exclusive")
     required_safety_factor = raw.get("required_safety_factor")
     if required_safety_factor is not None and (
         not isinstance(required_safety_factor, (int, float))
@@ -173,6 +178,7 @@ def run_job(case_path: Path, case: dict[str, Any], timeout: float = 600.0) -> tu
         "run_id": run_id,
         "step": case["_step"],
         "part": case.get("part"),
+        "occurrence": case.get("occurrence"),
         "solid_index": case.get("solid_index"),
         "required_safety_factor": case.get("required_safety_factor"),
         "pose": case.get("pose"),
@@ -192,7 +198,7 @@ from femmesh.gmshtools import GmshTools
 from femtools.ccxtools import CcxTools
 JOB=json.loads({job_json!r})
 sys.path.insert(0, os.path.dirname(JOB["selection_module"]))
-from fea_part_selection import select_solid_index
+from fea_part_selection import select_occurrence, select_solid_index
 def selected_faces(obj, selector):
     if "indices" in selector:
         indices=selector["indices"]
@@ -206,27 +212,52 @@ def selected_faces(obj, selector):
     if not indices: raise RuntimeError("face selector matched no faces")
     if any(i > len(obj.Shape.Faces) for i in indices): raise RuntimeError("face index is out of range")
     return [(obj, "Face%d" % i) for i in indices]
+def import_components(path, doc):
+    # One object per STEP component, labelled by its component name (an explicit occurrence's ends
+    # [@id]) and placed once by its own placement. UseBaseName is a user preference: it is changed
+    # in memory only and restored before FreeCAD saves preferences at exit.
+    params=App.ParamGet("User parameter:BaseApp/Preferences/Mod/Import")
+    had="UseBaseName" in params.GetBools(); previous=params.GetBool("UseBaseName", True)
+    params.SetBool("UseBaseName", False)
+    try: Import.insert(path, doc.Name, useLinkGroup=True)
+    finally:
+        if had: params.SetBool("UseBaseName", previous)
+        else: params.RemBool("UseBaseName")
+def placed_shape(obj):
+    # The object's shape at its own placement, then at each enclosing assembly's, each applied once.
+    shape=Part.getShape(obj); group=obj
+    while True:
+        parents=[p for p in group.InList if p.TypeId in ("App::LinkGroup", "App::Part")]
+        if not parents: return shape
+        group=parents[0]; shape=shape.copy(); shape.Placement=group.Placement.multiply(shape.Placement)
+def selected_occurrence(doc):
+    import_components(JOB["step"], doc); doc.recompute()
+    objects=list(doc.Objects)
+    try: source=objects[select_occurrence([o.Label for o in objects], JOB["occurrence"])]
+    except ValueError as e: raise RuntimeError(str(e))
+    solids=placed_shape(source).Solids
+    if len(solids) != 1: raise RuntimeError("occurrence %s has %d solids; the static solver analyses exactly one" % (JOB["occurrence"], len(solids)))
+    geom=doc.addObject("Part::Feature", "SelectedOccurrence"); geom.Shape=solids[0]
+    return geom
+def selected_part(doc):
+    Import.insert(JOB["step"], doc.Name); doc.recompute()
+    solids=[(o, solid) for o in doc.Objects if hasattr(o, "Shape") and not o.Shape.isNull()
+            for solid in o.Shape.Solids]
+    if not solids: raise RuntimeError("STEP contains no solid geometry")
+    names=[[name for name in (obj.Label, obj.Name) if name] for obj, _ in solids]
+    try: selected=select_solid_index(names, JOB.get("part"), JOB.get("solid_index"))
+    except ValueError as e: raise RuntimeError(str(e))
+    source,solid=solids[selected]
+    if len(source.Shape.Solids) == 1: return source
+    geom=doc.addObject("Part::Feature", "SelectedPart")
+    geom.Label=source.Label
+    geom.Shape=solid
+    geom.Placement=source.Placement
+    return geom
 def run():
     doc=App.newDocument("StaticAnalysis")
     try:
-        Import.insert(JOB["step"], doc.Name); doc.recompute()
-        solids=[(o, solid) for o in doc.Objects if hasattr(o, "Shape") and not o.Shape.isNull()
-                for solid in o.Shape.Solids]
-        if not solids: raise RuntimeError("STEP contains no solid geometry")
-        names=[[name for name in (obj.Label, obj.Name) if name] for obj, _ in solids]
-        if JOB.get("solid_index") is not None:
-            try: selected=select_solid_index(names, JOB.get("part"), JOB["solid_index"])
-            except ValueError as e: raise RuntimeError(str(e))
-        else:
-            try: selected=select_solid_index(names, JOB.get("part"))
-            except ValueError as e: raise RuntimeError(str(e))
-        source,solid=solids[selected]
-        geom=source
-        if len(source.Shape.Solids) != 1:
-            geom=doc.addObject("Part::Feature", "SelectedPart")
-            geom.Label=source.Label
-            geom.Shape=solid
-            geom.Placement=source.Placement
+        geom=selected_occurrence(doc) if JOB.get("occurrence") is not None else selected_part(doc)
         a=ObjectsFem.makeAnalysis(doc, "Analysis")
         solver=ObjectsFem.makeSolverCalculiXCcxTools(doc, "CalculiXCcxTools")
         solver.AnalysisType="static"; solver.GeometricalNonlinearity="linear"; solver.WorkingDir=os.path.dirname(JOB["output"]); solver.SplitInputWriter=False; solver.MatrixSolverType="spooles"; a.addObject(solver)
@@ -280,7 +311,7 @@ def run():
         problems=fea.check_prerequisites()
         if problems: raise RuntimeError("CalculiX prerequisites failed: %r" % problems)
         fea.write_inp_file(); fea.ccx_run(); fea.load_results(); solve_seconds=time.perf_counter()-solver_started
-        result={{"run_id":JOB["run_id"], "part":JOB.get("part"), "solid_index":JOB.get("solid_index"), "max_von_mises_mpa":max_stress, "max_displacement_mm":max_displacement, "safety_factor_yield":safety_factor, "node_count":nodes, "element_count":elements, "solve_time_seconds":solve_seconds}}
+        result={{"run_id":JOB["run_id"], "part":JOB.get("part"), "occurrence":JOB.get("occurrence"), "solid_index":JOB.get("solid_index"), "max_von_mises_mpa":max_stress, "max_displacement_mm":max_displacement, "safety_factor_yield":safety_factor, "node_count":nodes, "element_count":elements, "solve_time_seconds":solve_seconds}}
         result["solver_versions"]={{"freecad":".".join(App.Version()[:3])}}
         result["warnings"]=[]
         result["worst_case_pose"]={{"step":JOB["step"], **({{"pose":JOB["pose"]}} if JOB.get("pose") is not None else {{}})}}

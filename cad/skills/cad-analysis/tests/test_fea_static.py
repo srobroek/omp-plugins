@@ -13,11 +13,33 @@ import unittest
 from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts/fea_static.py"
+OCCURRENCE_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "build_occurrence_step.py"
+POSE_PATH = Path(__file__).resolve().parents[2] / "cad-motion" / "scripts" / "pose.py"
 FREECADCMD = Path("/Applications/FreeCAD.app/Contents/Resources/bin/freecadcmd")
 SPIKE = Path("/tmp/cad-spike-freecad")
 sys.path.insert(0, str(SCRIPT.parent))
-from fea_part_selection import select_solid_index
+from fea_part_selection import select_occurrence, select_solid_index
 from fea_static import CaseError, apply_required_safety_factor, error, load_case, result_exit_code, run_directory
+
+CASE_TAIL = """material: {name: Aluminium 6061, E: 69000, nu: 0.33, density: 2700, yield: 276}
+fixed_faces: {plane: {axis: y, value: 50, tolerance: 0.000001}}
+loads:
+  - selector: {plane: {axis: y, value: 150, tolerance: 0.000001}}
+    force: [0, 0, -50]
+mesh_size: 5
+"""
+
+
+def load_pose():
+    """cad-motion's pose module: the writer of `<PN> <title> [@id]` component names."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("cad_motion_pose", POSE_PATH)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["cad_motion_pose"] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 class SolidSelectionContracts(unittest.TestCase):
@@ -34,6 +56,94 @@ class SolidSelectionContracts(unittest.TestCase):
     def test_ambiguous_part_lists_available_product_numbers(self) -> None:
         with self.assertRaisesRegex(ValueError, "matches 2 STEP solids.*LMP-0002"):
             select_solid_index([["LMP-0002 Lower link"], ["LMP-0002 Lower link copy"]], "LMP-0002")
+
+    def test_repeated_part_points_to_the_occurrence_selector(self) -> None:
+        with self.assertRaisesRegex(ValueError, 'matches 2 STEP solids; a part placed more than once is selected by '
+                                                'occurrence: "@id"'):
+            select_solid_index([["TST-0301 Beam"], ["TST-0301 Beam001"]], "TST-0301")
+
+
+class OccurrenceSelectionContracts(unittest.TestCase):
+    def test_selects_the_component_named_by_cad_motion_for_that_occurrence(self) -> None:
+        pose = load_pose()
+        beam = pose.Part("TST-0301", "TST-0301 Beam", None)
+        labels = ["beam-pair", "TST-0301 Beam"] + [
+            pose.component_name(beam, pose.assembly_data.Occurrence(oid, "TST-0301", pose.assembly_data.IDENTITY, True))
+            for oid in ("beam-a", "beam-b")
+        ]
+        self.assertEqual(select_occurrence(labels, "@beam-b"), 3)
+        self.assertEqual(select_occurrence(labels, "@beam-a"), 2)
+
+    def test_unknown_occurrence_lists_the_available_occurrences(self) -> None:
+        with self.assertRaisesRegex(ValueError, "'@beam-c' matches no STEP component.*@beam-a, @beam-b"):
+            select_occurrence(["TST-0301 Beam [@beam-b]", "TST-0301 Beam [@beam-a]"], "@beam-c")
+
+    def test_step_without_occurrence_names_says_so(self) -> None:
+        with self.assertRaisesRegex(ValueError, r"no component name carries \[@id\]"):
+            select_occurrence(["LMP-0002 Lower link", "=>[0:1:1:2]"], "@ring-base")
+
+    def test_case_accepts_one_occurrence_reference_and_one_selector(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "assembly.step").touch()
+            case = root / "case.yaml"
+            for selection, accepted in (('occurrence: "@beam-b"', True), ("occurrence: beam-b", False),
+                                        ("occurrence: TST-0301", False),
+                                        ('occurrence: "@beam-b"\npart: TST-0301', False),
+                                        ('occurrence: "@beam-b"\nsolid_index: 1', False)):
+                case.write_text(f"step: assembly.step\n{selection}\n{CASE_TAIL}", encoding="utf-8")
+                with self.subTest(selection=selection):
+                    if accepted:
+                        self.assertEqual(load_case(case)["occurrence"], "@beam-b")
+                    else:
+                        with self.assertRaises(CaseError):
+                            load_case(case)
+
+
+@unittest.skipUnless(FREECADCMD.is_file(), "FreeCAD 1.1.4 freecadcmd is not installed")
+@unittest.skipUnless(shutil.which("uv"), "uv is required to write the occurrence STEP through OCP")
+class OccurrenceAnalysis(unittest.TestCase):
+    """One beam definition placed twice (fixtures/build_occurrence_step.py): `@beam-b` is turned and moved, so
+    its end faces lie on y = 50 and y = 150, where neither the definition nor `@beam-a` has a face."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.tmp = tempfile.TemporaryDirectory(prefix="cad-fea-occurrence-")
+        cls.root = Path(cls.tmp.name)
+        cls.step = cls.root / "beams.step"
+        built = subprocess.run(["uv", "run", "--quiet", "--script", str(OCCURRENCE_FIXTURE), str(cls.step)],
+                               capture_output=True, text=True, check=False, timeout=900)
+        if built.returncode != 0:
+            raise RuntimeError(f"occurrence fixture build failed: {built.stderr[-2000:]}")
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls.tmp.cleanup()
+
+    def analyse(self, name: str, selection: str) -> tuple[int, dict]:
+        case = self.root / name / "case.yaml"
+        case.parent.mkdir()
+        case.write_text(f"step: {self.step}\n{selection}\n{CASE_TAIL}", encoding="utf-8")
+        run = subprocess.run([sys.executable, str(SCRIPT), str(case)], capture_output=True, text=True, timeout=900)
+        return run.returncode, json.loads(run.stdout)
+
+    def test_explicit_occurrence_is_analysed_once_at_its_placement(self) -> None:
+        status, report = self.analyse("beam-b", 'occurrence: "@beam-b"')
+        self.assertEqual(status, 0, report)
+        self.assertEqual(report["occurrence"], "@beam-b")
+        # The cantilever of test_cantilever_matches_beam_theory_within_five_percent: 120 MPa, 2.31884 mm.
+        self.assertLess(abs(report["max_von_mises_mpa"] / 120.0 - 1), 0.05)
+        self.assertLess(abs(report["max_displacement_mm"] / 2.31884 - 1), 0.05)
+
+    def test_repeated_part_number_is_ambiguous(self) -> None:
+        status, report = self.analyse("by-part", "part: TST-0301")
+        self.assertEqual(status, 2, report)
+        self.assertRegex(report["error"]["message"], 'matches 2 STEP solids; .*occurrence: "@id"')
+
+    def test_unknown_occurrence_lists_the_placed_ones(self) -> None:
+        status, report = self.analyse("beam-c", 'occurrence: "@beam-c"')
+        self.assertEqual(status, 2, report)
+        self.assertIn("Available occurrences: @beam-a, @beam-b", report["error"]["message"])
 
 
 class StaticFEAContracts(unittest.TestCase):
