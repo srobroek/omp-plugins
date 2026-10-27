@@ -18,14 +18,13 @@ from xml.etree import ElementTree as ET
 from defusedxml import ElementTree as SafeET
 
 import freecad_runtime
+from drawing_document import scale_text
 from layout_check import SVG_NS, TEXT_ADVANCE, TEXT_ASCENT, TEXT_DESCENT, Box, SheetRegions, geometry_box
 
 FREECAD_NS = "https://www.freecad.org/wiki/index.php?title=Svg_Namespace"
 TEMPLATES = freecad_runtime.templates_dir(freecad_runtime.find_freecadcmd())
 # Sample values the review found leaking from stock templates; never acceptable on a sheet.
 STOCK_PLACEHOLDERS = frozenset({"A. Nemesis", "B. Hecate", "YYYY-MM-DD", "X / Y"})
-# Largest first; ISO 5455 recommended enlargement and reduction scales.
-STANDARD_SCALES = (50.0, 20.0, 10.0, 5.0, 2.0, 1.0, 1/2, 1/5, 1/10, 1/20, 1/50, 1/100, 1/200, 1/500, 1/1000)
 
 VIEW_SPACING = 12.0       # TechDraw spacingX/spacingY: clear gap between neighbouring views
 FRAME_CLEARANCE = 1.0     # between the drawing frame or title block and the view-plus-annotation envelope
@@ -79,15 +78,6 @@ class SheetSpec:
             return {"top": across, "right": across, "bottom": 0.0, "left": 0.0}
         return {"top": 0.0, "right": 0.0, "bottom": across,
                 "left": outside + MAX_DIM_CHARS * TEXT_ADVANCE * TEXT_SIZE}
-
-
-def candidate_scales(requested: float) -> list[float]:
-    """The requested scale, then each smaller standard scale."""
-    return [requested, *(s for s in STANDARD_SCALES if s < requested * (1 - 1e-9))]
-
-
-def _ratio(scale: float) -> tuple[str, str]:
-    return (f"{scale:.4g}", "1") if scale >= 1 else ("1", f"{1/scale:.4g}")
 
 
 def _element(tag: str, attributes: dict[str, Any] | None = None, text: str | None = None) -> ET.Element:
@@ -255,7 +245,7 @@ SPECS = {
         regions=SheetRegions(frame=Box(20.0, 10.0, 287.0, 200.0), title_block=Box(107.0, 152.0, 287.0, 200.0),
                              symbol_cell=Box(247.0, 152.0, 287.0, 164.0)),
         symbol_ids=("extras_outlines", "extras_centre_lines"), relabels=(),
-        fields=_iso_fields, decorate_title_block=_iso_title_block, scale_text=lambda s: " : ".join(_ratio(s)),
+        fields=_iso_fields, decorate_title_block=_iso_title_block, scale_text=lambda s: scale_text("iso", s),
     ),
     "asme": SheetSpec(
         regime="asme", template=TEMPLATES / "ASME/ANSIA_Landscape.svg", projection_type="Third angle",
@@ -263,7 +253,7 @@ SPECS = {
                              symbol_cell=Box(145.36, 170.98, 159.85, 180.33)),
         symbol_ids=("line5117", "line5119", "polygon5123", "circle5125", "circle5127"),
         relabels=(("text3380", "Released:"),),  # the stock template labels two rows "Approved:"
-        fields=_asme_fields, decorate_title_block=_asme_title_block, scale_text=lambda s: ":".join(_ratio(s)),
+        fields=_asme_fields, decorate_title_block=_asme_title_block, scale_text=lambda s: scale_text("asme", s),
     ),
 }
 
