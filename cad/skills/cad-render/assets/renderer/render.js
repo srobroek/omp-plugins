@@ -105,12 +105,13 @@ function vertexSample(meshes) {
 }
 
 // Camera that fits every point inside the frame with STUDIO.margin, looking along -direction.
-function fitCamera(camera, points, direction) {
+function fitCamera(camera, points, direction, frameScale = 1) {
   const back = new THREE.Vector3(...direction).normalize();
   const forward = back.clone().negate();
-  const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0)).normalize();
+  const right = new THREE.Vector3().crossVectors(forward,
+    Math.abs(forward.y) > 0.98 ? new THREE.Vector3(0, 0, 1) : new THREE.Vector3(0, 1, 0)).normalize();
   const up = new THREE.Vector3().crossVectors(right, forward).normalize();
-  const tanV = Math.tan((camera.fov * Math.PI) / 360) * (1 - STUDIO.margin);
+  const tanV = Math.tan((camera.fov * Math.PI) / 360) * (1 - STUDIO.margin) * frameScale;
   const tanH = tanV * camera.aspect;
   const target = new THREE.Box3().setFromPoints(points).getCenter(new THREE.Vector3());
   let distance = 0;
@@ -383,6 +384,13 @@ async function boot() {
   });
   const maskSubject = maskPart(MASK_SUBJECT);
   const maskOther = maskPart(MASK_OTHER);
+  const maskGhost = new THREE.ShaderMaterial({
+    uniforms: { groundY: zones.groundY, band: zones.band, level: { value: 0.8 } },
+    vertexShader: HEIGHT_VERTEX,
+    fragmentShader: MASK_PART_FRAGMENT,
+    transparent: true,
+    depthWrite: false,
+  });
   const maskFloor = new THREE.ShaderMaterial({
     uniforms: { heights: { value: heights.texture }, overhang: zones.overhang },
     vertexShader: UV_VERTEX,
@@ -572,12 +580,15 @@ async function boot() {
 
   // Class mask (0 empty, 1 other part, 2 subject) and floor zones (1 grounded rim on a part,
   // 2 overhung floor, else 0), both one byte per pixel in top-down rows.
-  function renderMask(subject) {
+  function renderMask(subject, ghostOccluders = false) {
     const rgba = new Uint8Array(width * height * 4);
     world.background = null;
     const toneMapping = renderer.toneMapping;
     renderer.toneMapping = THREE.NoToneMapping;
-    withMaterials((pn) => (subject.has(pn) ? maskSubject : maskOther), maskFloor, () => {
+    withMaterials((pn) => {
+      if (subject.has(pn)) return maskSubject;
+      return ghostOccluders ? maskGhost : maskOther;
+    }, maskFloor, () => {
       renderer.setRenderTarget(maskTarget);
       renderer.setClearColor(0x000000, 1);
       renderer.clear();
@@ -600,8 +611,45 @@ async function boot() {
     }
     return { mask, floor };
   }
+  function withGhostContext(subject, body) {
+    const saved = new Map();
+    for (const [pn, part] of parts) {
+      if (subject.has(pn)) continue;
+      for (const mesh of part.meshes) {
+        saved.set(mesh, mesh.material);
+        const ghost = mesh.material.clone();
+        ghost.transparent = true;
+        ghost.opacity = 0.22;
+        ghost.depthWrite = false;
+        mesh.material = ghost;
+      }
+    }
+    try { return body(); }
+    finally {
+      for (const [mesh, material] of saved) {
+        mesh.material.dispose();
+        mesh.material = material;
+      }
+    }
+  }
 
-  async function capture(name) {
+  function withIsolatedSubject(subject, body) {
+    const hidden = [];
+    for (const [pn, part] of parts) {
+      if (subject.has(pn)) continue;
+      for (const node of part.nodes) {
+        hidden.push([node, node.visible]);
+        node.visible = false;
+      }
+    }
+    try { root.updateMatrixWorld(true); return body(); }
+    finally {
+      for (const [node, visible] of hidden) node.visible = visible;
+      root.updateMatrixWorld(true);
+    }
+  }
+
+  async function capture(name, options = {}) {
     const view = scene.views.find((v) => v.name === name);
     if (!view) throw new Error(`unknown view ${name}`);
     const started = performance.now();
@@ -609,11 +657,12 @@ async function boot() {
     const subject = new Set(view.subject ?? [...parts.keys()]);
     for (const [pn, part] of parts) {
       for (let i = 0; i < part.nodes.length; i += 1) part.nodes[i].visible = part.rest[i].visible;
-      if (view.isolated && !subject.has(pn)) {
+      if ((view.isolated || options.isolated === true) && !subject.has(pn)) {
         for (const node of part.nodes) node.visible = false;
       }
     }
-    if (view.isolated) restOnFloor(view.subject[0]);
+    const isolated = view.isolated || options.isolated === true;
+    if (isolated) restOnFloor(view.subject[0]);
     const subjectMeshes = [...subject].flatMap((pn) => {
       if (!parts.has(pn)) throw new Error(`view ${name}: unknown part ${pn}`);
       return parts.get(pn).meshes;
@@ -622,16 +671,24 @@ async function boot() {
     subjectMeshes.forEach((mesh) => sceneBox.expandByObject(mesh));
     const radius = stage(sceneBox, view.isolated ? name : Boolean(view.explode));
     const points = view.isolated ? isolatedFramingPoints(subjectMeshes) : framingPoints(subjectMeshes);
-    const fit = fitCamera(camera, points, view.direction);
+    const fit = fitCamera(camera, points, options.direction ?? view.direction, options.frameScale ?? 1);
     const subjectRadius = new THREE.Box3().setFromPoints(vertexSample(subjectMeshes)).getSize(new THREE.Vector3()).length() / 2;
     const aoRadius = subjectRadius * STUDIO.aoRadius;
     gtao.updateGtaoMaterial({ radius: aoRadius, thickness: aoRadius, distanceExponent: 1, distanceFallOff: 1, scale: 1 });
     gtao.updatePdMaterial({ lumaPhi: 10, depthPhi: 2, normalPhi: 3, radius: 6, rings: 2, samples: 16 });
-    composer.render();
-    copyCtx.drawImage(renderer.domElement, 0, 0);
-    const pixels = copyCtx.getImageData(0, 0, width, height).data;
-    const png = copy.toDataURL("image/png");
-    const { mask, floor } = renderMask(subject);
+    const renderFrame = () => {
+      composer.render();
+      copyCtx.drawImage(renderer.domElement, 0, 0);
+      const pixels = copyCtx.getImageData(0, 0, width, height).data;
+      const png = copy.toDataURL("image/png");
+      const { mask, floor } = renderMask(subject, options.ghost === true);
+      return { pixels, png, mask, floor };
+    };
+    const visible = options.ghost ? withGhostContext(subject, renderFrame) : renderFrame();
+    const visibleSubjectPixels = visible.mask.reduce((count, cls) => count + (cls === 2), 0);
+    const isolatedMask = view.subject ? withIsolatedSubject(subject, () => renderMask(subject).mask) : visible.mask;
+    const isolatedSubjectPixels = isolatedMask.reduce((count, cls) => count + (cls === 2), 0);
+    const { mask, floor, pixels, png } = visible;
     const applied = {};
     for (const [pn, part] of parts) applied[pn] = readBack(part.material);
     return {
@@ -653,6 +710,7 @@ async function boot() {
         far: camera.far,
       },
       subject: [...subject],
+      visible_subject_fraction: isolatedSubjectPixels ? visibleSubjectPixels / isolatedSubjectPixels : 0,
       explode: Boolean(view.explode),
       materials: applied,
       scene_radius_m: radius,

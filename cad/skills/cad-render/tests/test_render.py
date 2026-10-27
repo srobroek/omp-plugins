@@ -170,14 +170,60 @@ class QualityHeuristics(unittest.TestCase):
         self.assertTrue(quality.passed, quality.failures)
         self.assertGreaterEqual(quality.metrics["support_shadow_ratio"], 0.025)
 
-    def test_a_blank_or_shadowless_close_up_still_fails(self) -> None:
+    def test_a_blank_close_up_fails_and_shadowless_close_up_warns(self) -> None:
         self.assertEqual(render.assess(frame(), closeup=True).failures, ["BLANK"])
-        self.assertEqual(render.assess(frame(subject=(30, 20, 70, 60)), closeup=True).failures, ["NO_SHADOW"])
+        shadowless = render.assess(frame(subject=(30, 20, 70, 60)), closeup=True)
+        self.assertTrue(shadowless.passed)
+        self.assertEqual(shadowless.warnings, ["NO_SHADOW"])
     def test_frame_rejects_mismatched_buffers(self) -> None:
         with self.assertRaises(ValueError):
             render.Frame(4, 4, bytes(64), bytes(16), bytes(10))
 
 
+class RetryLadder(unittest.TestCase):
+    @staticmethod
+    def capture_frame(name: str, rendered, *, fraction: float = 1.0) -> dict:
+        rgba = rendered.rgba
+        return {"view": name, "width": rendered.width, "height": rendered.height,
+                "png": "data:image/png;base64,AA==", "rgba": rgba,
+                "mask": rendered.mask, "floor": rendered.floor, "visible_subject_fraction": fraction,
+                "camera": {"position": [0, 0, 1], "target": [0, 0, 0], "up": [0, 1, 0],
+                           "fov_deg": 28, "aspect": 1.33}}
+
+    def test_enclosed_subject_retries_and_records_each_attempt(self) -> None:
+        calls = []
+        def capture(options: dict) -> dict:
+            calls.append(options)
+            fraction = 1.0 if options.get("ghost") else 0.1
+            return self.capture_frame("closeup-LMP-0004", frame(**GOOD), fraction=fraction)
+        _, quality, attempts = render._retry_view("closeup-LMP-0004", capture)
+        self.assertTrue(quality.passed)
+        self.assertEqual(attempts[-1]["strategy"], "ghosted-context")
+        self.assertTrue(all("metrics" in row and "camera" in row for row in attempts))
+        self.assertEqual(len(attempts), len(calls))
+
+    def test_shadowless_closeup_passes_as_warning_without_retry(self) -> None:
+        rendered = frame(subject=GOOD["subject"])
+        _, quality, attempts = render._retry_view(
+            "closeup-LMP-0004", lambda options: self.capture_frame("closeup-LMP-0004", rendered))
+        self.assertTrue(quality.passed)
+        self.assertEqual(quality.warnings, ["NO_SHADOW"])
+        self.assertEqual([row["strategy"] for row in attempts], ["original"])
+
+    def test_empty_render_fails_after_blank_retry(self) -> None:
+        rendered = frame()
+        _, quality, attempts = render._retry_view("iso", lambda options: self.capture_frame("iso", rendered))
+        self.assertFalse(quality.passed)
+        self.assertEqual(quality.failures, ["BLANK"])
+        self.assertEqual([row["strategy"] for row in attempts], ["original", "blank-retry"])
+
+    def test_fixed_view_reframes_clipped_subject(self) -> None:
+        initial = frame(subject=(30, 20, 120, 60))
+        reframed = frame(subject=(30, 20, 70, 60))
+        _, quality, attempts = render._retry_view(
+            "front", lambda options: self.capture_frame("front", reframed if options else initial))
+        self.assertTrue(quality.passed)
+        self.assertEqual([row["strategy"] for row in attempts], ["original", "reframe"])
 class Materials(unittest.TestCase):
     table = materials.MaterialTable.load()
 
@@ -287,7 +333,11 @@ class Cache(unittest.TestCase):
             out = Path(tmp) / "v1"
             self.write(out, status="fail")
             self.assertIsNone(render.cache_hit(out, self.key, ["iso"]))
-
+    def test_warning_manifest_is_cacheable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "v1"
+            self.write(out, status="warn")
+            self.assertIsNotNone(render.cache_hit(out, self.key, ["iso"]))
 
 class CacheKey(unittest.TestCase):
     """build_scene's key against a cad-model version of the template record (no real GLB)."""

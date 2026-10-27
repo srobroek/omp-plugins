@@ -36,11 +36,11 @@ infrastructure error, nothing written.
 
 | Finding | Classification | Meaning and action |
 |---|---|---|
-| `BLANK` | unusable | subject under 0.5% of frame or nothing but backdrop; retry once, then fail if still blank |
-| `CLIPPED` | unusable | a subject pixel touches the frame edge; reframe and retry, then fail if still clipped |
-| `OCCLUDED` | unusable close-up | less than 25% of the isolated subject's visible pixels remain in context; retry alternate angles, ghost occluders, then use isolated fallback |
-| `NO_SHADOW` | warning | shadow below the configured floor or support threshold; keep PNG and report warning |
-| `INVERTED_SHADOW` | warning | the floor contact is no darker than the shadow core under a high overhang; keep PNG and report warning |
+| `BLANK` | unusable | subject under 0.5% of frame or nothing but backdrop; retry once on fixed views, use the close-up ladder before failing |
+| `CLIPPED` | unusable | a subject pixel touches the frame edge; reframe; close-ups continue through the camera/ghost/isolated ladder |
+| `OCCLUDED` | unusable close-up | less than 25% of isolated subject pixels remain visible; retry alternate camera angles, ghost context, then isolated fallback |
+| `NO_SHADOW` | warning | shadow below threshold; keep PNG and report warning |
+| `INVERTED_SHADOW` | warning | contact shadow is no darker than high-overhang shadow; keep PNG and report warning |
 
 Every attempt records its strategy, camera, findings, and metrics in the manifest. A requested view
 is never silently dropped. Report warnings and the strategy used, with the absolute PNG path for
@@ -60,9 +60,8 @@ cad-concept's `tokens.css`. A rerun with the same key and intact PNGs prints `"c
 
 ## Rules
 
-MUST Map a new `part.yaml` material or finish in `assets/materials.json` before rendering; `rule: unmapped` renders neutral grey.
-MUST Treat exit 1 as a failed render for the batch; report each view's `failures` and numbers verbatim.
-MUST Run once with network access to fill the pinned three.js cache (`~/.cache/cad-concept/vendor`, SRI-checked); later runs are offline.
+MUST Treat exit 1 as a failed render for the batch; report unusable findings and metrics verbatim.
+MUST Keep warning-only renders; report warning, retry strategy, and each requested view's absolute PNG path.
 MUST Install the headless browser once per machine: `uv run --with playwright==1.64.1 playwright install chromium`. The manifest's `renderer.playwright` is the installed version.
 DEFAULT Default views are iso, front, side, and exploded at 1600x1200; `--size WxH` overrides.
 NOT Render L0 concept variants here; `cad-concept` owns them.

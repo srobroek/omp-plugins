@@ -684,24 +684,124 @@ def camera_record(camera: dict[str, Any]) -> dict[str, Any]:
             "frame": "assembly (mm, +Z up)"}
 
 
+def _frame_from_capture(result: dict[str, Any]) -> Frame:
+    if not result.get("png", "").startswith("data:image/png;base64,"):
+        raise InfraError(f"view {result.get('view', '?')}: capture is not a PNG data URL")
+    def pixels(key: str) -> bytes:
+        value = result[key]
+        return base64.b64decode(value) if isinstance(value, str) else value
+    return Frame(result["width"], result["height"], *(pixels(key) for key in ("rgba", "mask", "floor")))
+
+
+def _capture_attempt(page: Any, name: str, options: dict[str, Any]) -> dict[str, Any]:
+    return page.evaluate("({name, options}) => window.cadRender.capture(name, options)",
+                         {"name": name, "options": options})
+
+
+def _retry_view(name: str, capture: Callable[[dict[str, Any]], dict[str, Any]]) -> tuple[dict[str, Any], Quality, list[dict[str, Any]]]:
+    attempts: list[dict[str, Any]] = []
+    closeup = view_kind(name) == "closeup"
+    isolated = view_kind(name) == "part"
+
+    def attempt(strategy: str, options: dict[str, Any] | None = None) -> tuple[dict[str, Any], Quality]:
+        result = capture(options or {})
+        quality = assess(_frame_from_capture(result), closeup=closeup and not bool(options and options.get("isolated")),
+                         isolated=isolated or bool(options and options.get("isolated")),
+                         visible_fraction=result.get("visible_subject_fraction"))
+        attempts.append({"strategy": strategy, "camera": camera_record(result["camera"]),
+                         "camera_options": options or {}, "metrics": quality.metrics,
+                         "failures": quality.failures, "warnings": quality.warnings})
+        return result, quality
+
+    result, quality = attempt("original")
+    strategy = "original"
+    if quality.failures and closeup:
+        candidates = [(result, quality, {}, "original")]
+        for direction in ALTERNATE_CLOSEUP_DIRECTIONS:
+            options = {"direction": to_glb(direction), "frameScale": 1.15}
+            candidate, candidate_quality = attempt("alternate-camera", options)
+            candidates.append((candidate, candidate_quality, options, "alternate-camera"))
+        result, quality, best_options, strategy = max(
+            candidates, key=lambda item: item[0].get("visible_subject_fraction", 0))
+        if quality.failures:
+            result, quality = attempt("ghosted-context", {**best_options, "ghost": True})
+            strategy = "ghosted-context"
+        if quality.failures:
+            result, quality = attempt("isolated-part", {"isolated": True})
+            strategy = "isolated-part"
+            result["retry_note"] = "Context close-up unusable after alternate cameras and ghosted context; isolated component shown instead."
+    elif quality.failures:
+        if "CLIPPED" in quality.failures:
+            result, quality = attempt("reframe", {"frameScale": 0.8})
+            strategy = "reframe"
+        if quality.failures and "BLANK" in quality.failures:
+            result, quality = attempt("blank-retry", {"direction": to_glb(DIRECTIONS[view_kind(name)])})
+            strategy = "blank-retry"
+    result["retry"] = {"strategy": strategy, "attempts": attempts}
+    return result, quality, attempts
+
+
+def capture_views(url: str, views: list[str], size: tuple[int, int]) -> tuple[dict[str, Any], dict[str, Any], dict[str, float]]:
+    from playwright.sync_api import Error as PlaywrightError
+    from playwright.sync_api import sync_playwright
+
+    results: dict[str, Any] = {}
+    timings: dict[str, float] = {}
+    errors: list[str] = []
+    started = time.monotonic()
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True, args=CHROMIUM_ARGS)
+            try:
+                page = browser.new_page(viewport={"width": size[0], "height": size[1]}, device_scale_factor=1)
+                page.on("pageerror", lambda exc: errors.append(f"pageerror: {exc}"))
+                page.on("console", lambda msg: msg.type == "error" and errors.append(f"console: {msg.text}"))
+                timings["browser_start_s"] = round(time.monotonic() - started, 3)
+                page.goto(url, wait_until="load")
+                page.wait_for_function("window.cadRender !== undefined || document.body.dataset.state === 'error'",
+                                       timeout=BOOT_TIMEOUT_MS)
+                if page.evaluate("window.cadRender === undefined"):
+                    raise InfraError(f"renderer page did not start: {page.text_content('#status')}; page errors: {errors}")
+                info = page.evaluate("window.cadRender.ready")
+                timings["load_s"] = round(time.monotonic() - started - timings["browser_start_s"], 3)
+                info["chromium"] = browser.version
+                for name in views:
+                    t0 = time.monotonic()
+                    result, quality, _ = _retry_view(name, lambda options: _capture_attempt(page, name, options))
+                    result["_quality"] = quality
+                    results[name] = result
+                    timings[name] = round(time.monotonic() - t0, 3)
+            finally:
+                browser.close()
+    except PlaywrightError as exc:
+        raise InfraError(f"browser: {exc.message}; page errors: {errors}") from exc
+    if errors:
+        raise InfraError(f"renderer page reported errors: {errors}")
+    if info.get("unmapped_meshes"):
+        raise InfraError(f"GLB meshes owned by no part-map PN: {info['unmapped_meshes']}")
+    return info, results, timings
+
+
 def grade(results: dict[str, Any]) -> tuple[dict[str, Any], dict[str, bytes], bool]:
     """Per-view manifest records and PNG bytes; every frame graded from its own pixels."""
     views: dict[str, Any] = {}
     pngs: dict[str, bytes] = {}
     passed = True
-    for name, r in results.items():
-        header, _, b64 = r["png"].partition(",")
-        if header != "data:image/png;base64":
-            raise InfraError(f"view {name}: capture is not a PNG data URL")
+    for name, result in results.items():
+        _, _, b64 = result["png"].partition(",")
         pngs[name] = base64.b64decode(b64)
-        frame = Frame(r["width"], r["height"], *(base64.b64decode(r[k]) for k in ("rgba", "mask", "floor")))
-        quality = assess(frame, closeup=view_kind(name) == "closeup", isolated=view_kind(name) == "part")
+        quality: Quality = result["_quality"]
         passed &= quality.passed
-        views[name] = {"png": f"{name}.png", "sha256": sha256(pngs[name]), "subject": r["subject"],
-                       "explode": r["explode"], "camera": camera_record(r["camera"]),
-                       "quality": {"status": "pass" if quality.passed else "fail",
-                                   "failures": quality.failures, **quality.metrics},
-                       "page_render_ms": r["render_ms"]}
+        views[name] = {
+            "png": f"{name}.png", "sha256": sha256(pngs[name]), "subject": result["subject"],
+            "explode": result["explode"], "camera": camera_record(result["camera"]),
+            "retry": result["retry"],
+            "quality": {"status": "fail" if quality.failures else ("warn" if quality.warnings else "pass"),
+                        "failures": quality.failures, "warnings": quality.warnings, **quality.metrics},
+            "page_render_ms": result["render_ms"],
+        }
+        if result.get("retry_note"):
+            views[name]["retry"]["note"] = result["retry_note"]
     return views, pngs, passed
 
 
@@ -773,7 +873,7 @@ def run(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         record["applied"] = results[views[0]]["materials"][pn]
     manifest = {
         "version": version.label,
-        "status": "pass" if passed else "fail",
+        "status": "fail" if not passed else ("warn" if any(r["quality"]["warnings"] for r in view_records.values()) else "pass"),
         "created_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "views": view_records,
         "materials": materials,
@@ -794,6 +894,8 @@ def run(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     summary = {"status": manifest["status"], "cache": "miss", "version": version.label, "out_dir": str(out_dir),
                "pngs": {v: str(out_dir / f"{v}.png") for v in views},
                "failures": {v: r["quality"]["failures"] for v, r in view_records.items() if r["quality"]["failures"]},
+               "warnings": {v: r["quality"]["warnings"] for v, r in view_records.items() if r["quality"]["warnings"]},
+               "strategies": {v: r["retry"]["strategy"] for v, r in view_records.items()},
                "wall_s": manifest["wall_s"], "view_wall_s": timings}
     return (0 if passed else 1), summary
 
