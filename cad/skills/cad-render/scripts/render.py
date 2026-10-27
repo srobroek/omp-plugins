@@ -20,15 +20,10 @@ Playwright, and writes:
     HW/renders/<version>/<view>.png   one per view
     HW/renders/<version>/manifest.json
 
-Each frame is graded from its own pixels plus a subject mask and floor zones: BLANK (nothing but
-backdrop), CLIPPED (the subject touches the frame edge), NO_SHADOW (no floor shadow, or no support
-contact shading for a close-up), INVERTED_SHADOW (the floor at a grounded rim is no darker than under an overhang).
-A rerun whose source (GLB, part map, manifest, metrics, assembly.yaml), materials, and renderer
-hashes match a passing manifest is a cache hit.
+Each frame is graded from its pixels and subject mask. BLANK, CLIPPED, and close-up OCCLUDED (less than 25% of the subject's isolated visible pixels remain visible) make a view unusable; NO_SHADOW and INVERTED_SHADOW are cosmetic warnings and keep the PNG.
+A rerun whose source (GLB, part map, manifest, metrics, assembly.yaml), materials, and renderer hashes match a passing or warning manifest is a cache hit.
 
-stdout: one JSON summary. Exit 0 = every view passed (or cache hit), 1 = a render-quality
-failure (renders and manifest are still written, status "fail"), 2 = usage or infrastructure
-error (nothing written).
+stdout: one JSON summary. Exit 0 = every view is usable (pass or warn, including cache hits), 1 = an unusable view remains after its retry ladder (renders and manifest are still written), 2 = usage or infrastructure error (nothing written).
 """
 
 from __future__ import annotations
@@ -51,7 +46,7 @@ from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import unquote, urlsplit
 
 HERE = Path(__file__).resolve()
@@ -83,13 +78,19 @@ DIRECTIONS = {
     "closeup": (0.8, -1.0, 1.4),
     "part": (0.9, -1.3, 1.1),
 }
+ALTERNATE_CLOSEUP_DIRECTIONS = (
+    (0.0, -1.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (-1.0, 0.0, 0.0),
+    (0.0, 0.0, 1.0), (0.0, 0.0, -1.0), (0.8, -1.0, 1.4),
+)
+MIN_VISIBLE_FRACTION = 0.25  # retain at least one quarter of the isolated subject projection
 MOVABLE_GAP = 0.3  # exploded gap of a moving child: fraction of its bounding-box diagonal
 FIXED_GAP = 1.6  # exploded pull of a fixed child (pin, fastener) along its axis: x its length
 
-# Quality heuristic thresholds, on 8-bit sRGB values. Tuned on the cad-design reference arm.
 BACKDROP_TOLERANCE = 6  # max channel difference still counted as backdrop
 MIN_SUBJECT_COVERAGE = 0.005  # subject pixels / frame pixels below which a frame is blank
 MIN_CONTENT_COVERAGE = 0.005  # non-backdrop pixels / frame pixels below which a frame is blank
+UNUSABLE_FINDINGS = frozenset({"BLANK", "CLIPPED", "OCCLUDED"})
+WARNING_FINDINGS = frozenset({"NO_SHADOW", "INVERTED_SHADOW"})
 SHADOW_DELTA = 10  # a ground pixel this much darker than the backdrop (luminance) is shadow
 MIN_SHADOW_RATIO = 0.04  # shadow pixels / product pixels needed for a visible ground shadow
 MIN_SHADOW_DEPTH = 22  # backdrop luminance minus the 2nd-percentile shadow luminance
@@ -264,6 +265,7 @@ class Frame:
 class Quality:
     passed: bool
     failures: list[str]
+    warnings: list[str] = field(default_factory=list)
     metrics: dict[str, Any] = field(default_factory=dict)
 
 
@@ -349,11 +351,9 @@ def _contact_lumas(frame: Frame) -> list[float]:
     return out
 
 
-def assess(frame: Frame, *, closeup: bool = False, isolated: bool = False) -> Quality:
-    """Grade one render: BLANK, CLIPPED, NO_SHADOW, or INVERTED_SHADOW; see the module docstring.
-
-    Close-ups may use contact shading on a supporting part instead of requiring a floor shadow.
-    Their floor or support shadow must cover 4 % of the subject and be at least SHADOW_DELTA deep."""
+def assess(frame: Frame, *, closeup: bool = False, isolated: bool = False,
+           visible_fraction: float | None = None) -> Quality:
+    """Classify composition defects as unusable and shadow findings as cosmetic warnings."""
     w, h, rgba, mask = frame.width, frame.height, frame.rgba, frame.mask
     total = w * h
     subject = mask.count(2)
@@ -419,25 +419,30 @@ def assess(frame: Frame, *, closeup: bool = False, isolated: bool = False) -> Qu
     if closeup and support_ratio > shadow_ratio:
         shadow_ratio = support_ratio
 
-    failures = []
+    findings = []
     if subject_cov < MIN_SUBJECT_COVERAGE or content_cov < MIN_CONTENT_COVERAGE:
-        failures.append("BLANK")
+        findings.append("BLANK")
     else:
         if any(edges.values()):
-            failures.append("CLIPPED")
+            findings.append("CLIPPED")
+        if closeup and visible_fraction is not None and visible_fraction < MIN_VISIBLE_FRACTION:
+            findings.append("OCCLUDED")
         min_depth = SHADOW_DELTA if closeup or isolated else MIN_SHADOW_DEPTH
         floor_pass = (shadow_ratio >= MIN_SHADOW_RATIO and floor_depth >= min_depth) or (
             not closeup and not isolated and contact_depth is not None and contact_depth >= min_depth
         )
         support_pass = closeup and support_ratio >= 0.025 and support_depth >= SHADOW_DELTA
         if not floor_pass and not support_pass:
-            failures.append("NO_SHADOW")
+            findings.append("NO_SHADOW")
         if not isolated and contact_depth is not None and overhang_depth is not None and contact_depth <= overhang_depth:
-            failures.append("INVERTED_SHADOW")
-    return Quality(not failures, failures, {
+            findings.append("INVERTED_SHADOW")
+    failures = [finding for finding in findings if finding in UNUSABLE_FINDINGS]
+    warnings = [finding for finding in findings if finding in WARNING_FINDINGS]
+    metrics = {
         "backdrop_rgb": list(backdrop),
         "subject_coverage": round(subject_cov, 5),
         "content_coverage": round(content_cov, 5),
+        "visible_subject_fraction": None if visible_fraction is None else round(visible_fraction, 5),
         "subject_edge_px": edges,
         "subject_margin_px": margins,
         "shadow_ratio": round(shadow_ratio, 4),
@@ -448,10 +453,12 @@ def assess(frame: Frame, *, closeup: bool = False, isolated: bool = False) -> Qu
         "support_shadow_ratio": round(support_ratio, 4),
         "support_shadow_depth": round(support_depth, 1),
         "thresholds": {"min_subject_coverage": MIN_SUBJECT_COVERAGE, "min_content_coverage": MIN_CONTENT_COVERAGE,
+                       "min_visible_fraction": MIN_VISIBLE_FRACTION,
                        "min_shadow_ratio": 0.025 if closeup else MIN_SHADOW_RATIO,
                        "min_shadow_depth": SHADOW_DELTA if closeup or isolated else MIN_SHADOW_DEPTH,
                        "shadow_delta": SHADOW_DELTA, "contact_band_px": list(CONTACT_BAND_PX)},
-    })
+    }
+    return Quality(not failures, failures, warnings, metrics)
 
 
 
@@ -555,7 +562,7 @@ def cache_hit(out_dir: Path, key: dict[str, Any], views: list[str]) -> dict[str,
         manifest = json.loads(path.read_text(encoding="utf-8"))
     except ValueError:
         return None
-    if manifest.get("status") != "pass" or manifest.get("cache_key") != key:
+    if manifest.get("status") not in {"pass", "warn"} or manifest.get("cache_key") != key:
         return None
     for view in views:
         entry = manifest.get("views", {}).get(view)
@@ -677,24 +684,124 @@ def camera_record(camera: dict[str, Any]) -> dict[str, Any]:
             "frame": "assembly (mm, +Z up)"}
 
 
+def _frame_from_capture(result: dict[str, Any]) -> Frame:
+    if not result.get("png", "").startswith("data:image/png;base64,"):
+        raise InfraError(f"view {result.get('view', '?')}: capture is not a PNG data URL")
+    def pixels(key: str) -> bytes:
+        value = result[key]
+        return base64.b64decode(value) if isinstance(value, str) else value
+    return Frame(result["width"], result["height"], *(pixels(key) for key in ("rgba", "mask", "floor")))
+
+
+def _capture_attempt(page: Any, name: str, options: dict[str, Any]) -> dict[str, Any]:
+    return page.evaluate("({name, options}) => window.cadRender.capture(name, options)",
+                         {"name": name, "options": options})
+
+
+def _retry_view(name: str, capture: Callable[[dict[str, Any]], dict[str, Any]]) -> tuple[dict[str, Any], Quality, list[dict[str, Any]]]:
+    attempts: list[dict[str, Any]] = []
+    closeup = view_kind(name) == "closeup"
+    isolated = view_kind(name) == "part"
+
+    def attempt(strategy: str, options: dict[str, Any] | None = None) -> tuple[dict[str, Any], Quality]:
+        result = capture(options or {})
+        quality = assess(_frame_from_capture(result), closeup=closeup and not bool(options and options.get("isolated")),
+                         isolated=isolated or bool(options and options.get("isolated")),
+                         visible_fraction=result.get("visible_subject_fraction"))
+        attempts.append({"strategy": strategy, "camera": camera_record(result["camera"]),
+                         "camera_options": options or {}, "metrics": quality.metrics,
+                         "failures": quality.failures, "warnings": quality.warnings})
+        return result, quality
+
+    result, quality = attempt("original")
+    strategy = "original"
+    if quality.failures and closeup:
+        candidates = [(result, quality, {}, "original")]
+        for direction in ALTERNATE_CLOSEUP_DIRECTIONS:
+            options = {"direction": to_glb(direction), "frameScale": 1.15}
+            candidate, candidate_quality = attempt("alternate-camera", options)
+            candidates.append((candidate, candidate_quality, options, "alternate-camera"))
+        result, quality, best_options, strategy = max(
+            candidates, key=lambda item: item[0].get("visible_subject_fraction", 0))
+        if quality.failures:
+            result, quality = attempt("ghosted-context", {**best_options, "ghost": True})
+            strategy = "ghosted-context"
+        if quality.failures:
+            result, quality = attempt("isolated-part", {"isolated": True})
+            strategy = "isolated-part"
+            result["retry_note"] = "Context close-up unusable after alternate cameras and ghosted context; isolated component shown instead."
+    elif quality.failures:
+        if "CLIPPED" in quality.failures:
+            result, quality = attempt("reframe", {"frameScale": 0.8})
+            strategy = "reframe"
+        if quality.failures and "BLANK" in quality.failures:
+            result, quality = attempt("blank-retry", {"direction": to_glb(DIRECTIONS[view_kind(name)])})
+            strategy = "blank-retry"
+    result["retry"] = {"strategy": strategy, "attempts": attempts}
+    return result, quality, attempts
+
+
+def capture_views(url: str, views: list[str], size: tuple[int, int]) -> tuple[dict[str, Any], dict[str, Any], dict[str, float]]:
+    from playwright.sync_api import Error as PlaywrightError
+    from playwright.sync_api import sync_playwright
+
+    results: dict[str, Any] = {}
+    timings: dict[str, float] = {}
+    errors: list[str] = []
+    started = time.monotonic()
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True, args=CHROMIUM_ARGS)
+            try:
+                page = browser.new_page(viewport={"width": size[0], "height": size[1]}, device_scale_factor=1)
+                page.on("pageerror", lambda exc: errors.append(f"pageerror: {exc}"))
+                page.on("console", lambda msg: msg.type == "error" and errors.append(f"console: {msg.text}"))
+                timings["browser_start_s"] = round(time.monotonic() - started, 3)
+                page.goto(url, wait_until="load")
+                page.wait_for_function("window.cadRender !== undefined || document.body.dataset.state === 'error'",
+                                       timeout=BOOT_TIMEOUT_MS)
+                if page.evaluate("window.cadRender === undefined"):
+                    raise InfraError(f"renderer page did not start: {page.text_content('#status')}; page errors: {errors}")
+                info = page.evaluate("window.cadRender.ready")
+                timings["load_s"] = round(time.monotonic() - started - timings["browser_start_s"], 3)
+                info["chromium"] = browser.version
+                for name in views:
+                    t0 = time.monotonic()
+                    result, quality, _ = _retry_view(name, lambda options: _capture_attempt(page, name, options))
+                    result["_quality"] = quality
+                    results[name] = result
+                    timings[name] = round(time.monotonic() - t0, 3)
+            finally:
+                browser.close()
+    except PlaywrightError as exc:
+        raise InfraError(f"browser: {exc.message}; page errors: {errors}") from exc
+    if errors:
+        raise InfraError(f"renderer page reported errors: {errors}")
+    if info.get("unmapped_meshes"):
+        raise InfraError(f"GLB meshes owned by no part-map PN: {info['unmapped_meshes']}")
+    return info, results, timings
+
+
 def grade(results: dict[str, Any]) -> tuple[dict[str, Any], dict[str, bytes], bool]:
     """Per-view manifest records and PNG bytes; every frame graded from its own pixels."""
     views: dict[str, Any] = {}
     pngs: dict[str, bytes] = {}
     passed = True
-    for name, r in results.items():
-        header, _, b64 = r["png"].partition(",")
-        if header != "data:image/png;base64":
-            raise InfraError(f"view {name}: capture is not a PNG data URL")
+    for name, result in results.items():
+        _, _, b64 = result["png"].partition(",")
         pngs[name] = base64.b64decode(b64)
-        frame = Frame(r["width"], r["height"], *(base64.b64decode(r[k]) for k in ("rgba", "mask", "floor")))
-        quality = assess(frame, closeup=view_kind(name) == "closeup", isolated=view_kind(name) == "part")
+        quality: Quality = result["_quality"]
         passed &= quality.passed
-        views[name] = {"png": f"{name}.png", "sha256": sha256(pngs[name]), "subject": r["subject"],
-                       "explode": r["explode"], "camera": camera_record(r["camera"]),
-                       "quality": {"status": "pass" if quality.passed else "fail",
-                                   "failures": quality.failures, **quality.metrics},
-                       "page_render_ms": r["render_ms"]}
+        views[name] = {
+            "png": f"{name}.png", "sha256": sha256(pngs[name]), "subject": result["subject"],
+            "explode": result["explode"], "camera": camera_record(result["camera"]),
+            "retry": result["retry"],
+            "quality": {"status": "fail" if quality.failures else ("warn" if quality.warnings else "pass"),
+                        "failures": quality.failures, "warnings": quality.warnings, **quality.metrics},
+            "page_render_ms": result["render_ms"],
+        }
+        if result.get("retry_note"):
+            views[name]["retry"]["note"] = result["retry_note"]
     return views, pngs, passed
 
 
@@ -766,7 +873,7 @@ def run(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         record["applied"] = results[views[0]]["materials"][pn]
     manifest = {
         "version": version.label,
-        "status": "pass" if passed else "fail",
+        "status": "fail" if not passed else ("warn" if any(r["quality"]["warnings"] for r in view_records.values()) else "pass"),
         "created_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "views": view_records,
         "materials": materials,
@@ -787,6 +894,8 @@ def run(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     summary = {"status": manifest["status"], "cache": "miss", "version": version.label, "out_dir": str(out_dir),
                "pngs": {v: str(out_dir / f"{v}.png") for v in views},
                "failures": {v: r["quality"]["failures"] for v, r in view_records.items() if r["quality"]["failures"]},
+               "warnings": {v: r["quality"]["warnings"] for v, r in view_records.items() if r["quality"]["warnings"]},
+               "strategies": {v: r["retry"]["strategy"] for v, r in view_records.items()},
                "wall_s": manifest["wall_s"], "view_wall_s": timings}
     return (0 if passed else 1), summary
 

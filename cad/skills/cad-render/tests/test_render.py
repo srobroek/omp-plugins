@@ -9,6 +9,7 @@ Stdlib only; the live render (Playwright, three.js) is exercised by scripts/rend
 from __future__ import annotations
 
 import importlib.util
+import base64
 import json
 import re
 import shutil
@@ -101,6 +102,14 @@ class QualityHeuristics(unittest.TestCase):
         quality = render.assess(frame(subject=(30, 20, 120, 60), shadow=(40, 60, 95, 75)))
         self.assertEqual(quality.failures, ["CLIPPED"])
         self.assertEqual(quality.metrics["subject_edge_px"]["right"], 40)
+    def test_closeup_below_visible_fraction_threshold_is_occluded(self) -> None:
+        quality = render.assess(frame(**GOOD), closeup=True, visible_fraction=0.249)
+        self.assertIn("OCCLUDED", quality.failures)
+        self.assertEqual(quality.metrics["visible_subject_fraction"], 0.249)
+
+    def test_closeup_at_visible_fraction_threshold_is_not_occluded(self) -> None:
+        quality = render.assess(frame(**GOOD), closeup=True, visible_fraction=0.25)
+        self.assertNotIn("OCCLUDED", quality.failures)
 
     def test_a_subject_cut_at_the_top_is_clipped(self) -> None:
         self.assertIn("CLIPPED", render.assess(frame(subject=(30, 0, 70, 50), shadow=(40, 50, 95, 75))).failures)
@@ -109,35 +118,37 @@ class QualityHeuristics(unittest.TestCase):
         quality = render.assess(frame(**GOOD, other=(0, 30, 30, 45)))
         self.assertTrue(quality.passed, quality.failures)
 
-    def test_no_shadow_fails(self) -> None:
-        self.assertEqual(render.assess(frame(subject=GOOD["subject"])).failures, ["NO_SHADOW"])
+    def test_no_shadow_is_a_cosmetic_warning(self) -> None:
+        quality = render.assess(frame(subject=GOOD["subject"]))
+        self.assertTrue(quality.passed)
+        self.assertEqual(quality.failures, [])
+        self.assertEqual(quality.warnings, ["NO_SHADOW"])
 
-    def test_the_spike_faint_contact_shadow_fails(self) -> None:
-        """The render spike's radial catcher darkened the floor by at most 3 luminance levels."""
-        self.assertEqual(render.assess(frame(**GOOD, shadow_drop=3)).failures, ["NO_SHADOW"])
+    def test_faint_shadow_is_a_cosmetic_warning(self) -> None:
+        self.assertEqual(render.assess(frame(**GOOD, shadow_drop=3)).warnings, ["NO_SHADOW"])
 
-    def test_a_shadow_too_light_to_read_fails(self) -> None:
-        self.assertEqual(render.assess(frame(**GOOD, shadow_drop=14)).failures, ["NO_SHADOW"])
+    def test_too_light_shadow_is_a_cosmetic_warning(self) -> None:
+        self.assertEqual(render.assess(frame(**GOOD, shadow_drop=14)).warnings, ["NO_SHADOW"])
 
-    def test_a_shadow_too_small_to_read_fails(self) -> None:
+    def test_too_small_shadow_is_a_cosmetic_warning(self) -> None:
         quality = render.assess(frame(subject=GOOD["subject"], shadow=(40, 60, 46, 63)))
-        self.assertEqual(quality.failures, ["NO_SHADOW"])
+        self.assertEqual(quality.warnings, ["NO_SHADOW"])
 
     def test_a_dark_anti_aliased_rim_is_not_a_shadow(self) -> None:
         """A 2 px dark fringe hugging the product is edge blending, not a ground shadow."""
         quality = render.assess(frame(subject=GOOD["subject"], shadow=(28, 18, 72, 62), shadow_drop=80))
-        self.assertEqual(quality.failures, ["NO_SHADOW"])
+        self.assertEqual(quality.warnings, ["NO_SHADOW"])
         self.assertEqual(quality.metrics["shadow_ratio"], 0.0)
-
     def test_a_contact_darker_than_the_overhang_shadow_passes(self) -> None:
         quality = render.assess(frame(**GROUNDED, shadow_drop=40, overhung_drop=12))
         self.assertTrue(quality.passed, quality.failures)
         self.assertEqual((quality.metrics["contact_depth"], quality.metrics["overhang_depth"]), (40.0, 12.0))
 
-    def test_an_overhang_shadow_darker_than_the_contact_is_inverted(self) -> None:
+    def test_an_overhang_shadow_darker_than_contact_warns_but_passes(self) -> None:
         """Head 85e4829914: the shade 117 mm up cast the darkest shadow, the base barely grounded."""
         quality = render.assess(frame(**GROUNDED, shadow_drop=12, overhung_drop=40))
-        self.assertEqual(quality.failures, ["INVERTED_SHADOW"])
+        self.assertTrue(quality.passed)
+        self.assertEqual(quality.warnings, ["INVERTED_SHADOW"])
 
     def test_without_floor_zones_the_inversion_check_is_skipped(self) -> None:
         quality = render.assess(frame(**GOOD))
@@ -160,14 +171,84 @@ class QualityHeuristics(unittest.TestCase):
         self.assertTrue(quality.passed, quality.failures)
         self.assertGreaterEqual(quality.metrics["support_shadow_ratio"], 0.025)
 
-    def test_a_blank_or_shadowless_close_up_still_fails(self) -> None:
+    def test_a_blank_close_up_fails_and_shadowless_close_up_warns(self) -> None:
         self.assertEqual(render.assess(frame(), closeup=True).failures, ["BLANK"])
-        self.assertEqual(render.assess(frame(subject=(30, 20, 70, 60)), closeup=True).failures, ["NO_SHADOW"])
+        shadowless = render.assess(frame(subject=(30, 20, 70, 60)), closeup=True)
+        self.assertTrue(shadowless.passed)
+        self.assertEqual(shadowless.warnings, ["NO_SHADOW"])
     def test_frame_rejects_mismatched_buffers(self) -> None:
         with self.assertRaises(ValueError):
             render.Frame(4, 4, bytes(64), bytes(16), bytes(10))
 
 
+class RetryLadder(unittest.TestCase):
+    @staticmethod
+    def capture_frame(name: str, rendered, *, fraction: float = 1.0) -> dict:
+        rgba = rendered.rgba
+        return {"view": name, "width": rendered.width, "height": rendered.height,
+                "png": "data:image/png;base64,AA==", "rgba": rgba,
+                "mask": rendered.mask, "floor": rendered.floor, "visible_subject_fraction": fraction,
+                "camera": {"position": [0, 0, 1], "target": [0, 0, 0], "up": [0, 1, 0],
+                           "fov_deg": 28, "aspect": 1.33}}
+
+    def test_enclosed_subject_retries_and_records_each_attempt(self) -> None:
+        calls = []
+        def capture(options: dict) -> dict:
+            calls.append(options)
+            fraction = 1.0 if options.get("ghost") else 0.1
+            return self.capture_frame("closeup-LMP-0004", frame(**GOOD), fraction=fraction)
+        _, quality, attempts = render._retry_view("closeup-LMP-0004", capture)
+        self.assertTrue(quality.passed)
+        self.assertEqual(attempts[-1]["strategy"], "ghosted-context")
+        self.assertTrue(all("metrics" in row and "camera" in row for row in attempts))
+    def test_isolated_retry_resets_subject_visibility_ratio(self) -> None:
+        attempts = []
+        def capture(options: dict) -> dict:
+            isolated = options.get("isolated", False)
+            attempts.append(isolated)
+            rendered = frame(**GOOD)
+            return self.capture_frame("closeup-LMP-0004", rendered, fraction=1.0 if isolated else 0.1)
+        _, quality, records = render._retry_view("closeup-LMP-0004", capture)
+        self.assertTrue(quality.passed)
+        self.assertEqual(records[-1]["strategy"], "isolated-part")
+        self.assertEqual(records[-1]["metrics"]["visible_subject_fraction"], 1.0)
+    def test_isolated_mode_mask_hides_all_non_subject_parts(self) -> None:
+        hidden = []
+        def capture(options: dict) -> dict:
+            hidden.append(options.get("isolated", False))
+            rendered = frame(**GOOD)
+            if options.get("isolated"):
+                rendered = render.Frame(rendered.width, rendered.height, rendered.rgba,
+                                        bytes(2 if value == 1 else value for value in rendered.mask), rendered.floor)
+            return self.capture_frame("closeup-LMP-0004", rendered,
+                                      fraction=1.0 if options.get("isolated") else 0.1)
+        result, _, _ = render._retry_view("closeup-LMP-0004", capture)
+        mask = base64.b64decode(result["mask"])
+        self.assertTrue(hidden[-1])
+        self.assertNotIn(1, mask)
+
+    def test_shadowless_closeup_passes_as_warning_without_retry(self) -> None:
+        rendered = frame(subject=GOOD["subject"])
+        _, quality, attempts = render._retry_view(
+            "closeup-LMP-0004", lambda options: self.capture_frame("closeup-LMP-0004", rendered))
+        self.assertTrue(quality.passed)
+        self.assertEqual(quality.warnings, ["NO_SHADOW"])
+        self.assertEqual([row["strategy"] for row in attempts], ["original"])
+
+    def test_empty_render_fails_after_blank_retry(self) -> None:
+        rendered = frame()
+        _, quality, attempts = render._retry_view("iso", lambda options: self.capture_frame("iso", rendered))
+        self.assertFalse(quality.passed)
+        self.assertEqual(quality.failures, ["BLANK"])
+        self.assertEqual([row["strategy"] for row in attempts], ["original", "blank-retry"])
+
+    def test_fixed_view_reframes_clipped_subject(self) -> None:
+        initial = frame(subject=(30, 20, 120, 60))
+        reframed = frame(subject=(30, 20, 70, 60))
+        _, quality, attempts = render._retry_view(
+            "front", lambda options: self.capture_frame("front", reframed if options else initial))
+        self.assertTrue(quality.passed)
+        self.assertEqual([row["strategy"] for row in attempts], ["original", "reframe"])
 class Materials(unittest.TestCase):
     table = materials.MaterialTable.load()
 
@@ -277,7 +358,11 @@ class Cache(unittest.TestCase):
             out = Path(tmp) / "v1"
             self.write(out, status="fail")
             self.assertIsNone(render.cache_hit(out, self.key, ["iso"]))
-
+    def test_warning_manifest_is_cacheable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "v1"
+            self.write(out, status="warn")
+            self.assertIsNotNone(render.cache_hit(out, self.key, ["iso"]))
 
 class CacheKey(unittest.TestCase):
     """build_scene's key against a cad-model version of the template record (no real GLB)."""
