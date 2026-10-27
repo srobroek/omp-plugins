@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Part drawings: annotation-class layout rules, and the completeness gate on the real lamp template pin.
+"""Part drawings: annotation-class layout rules, and the completeness gate on real lamp template parts.
 
 Run: uv run --with pyyaml --with defusedxml --with jsonschema python -m unittest discover -s cad/skills/cad-drawings/tests
 The gate tests build the lamp template through ``cad_model.py run`` (CadQuery runner, needs ``uv``;
-a cold OCP import can take minutes) and draw LMP-0005 in FreeCAD's freecadcmd.
+a cold OCP import can take minutes) and draw the LMP-0005 pin and the catalogue parts in FreeCAD's freecadcmd.
 """
 
 from __future__ import annotations
@@ -72,7 +72,7 @@ def run(*args: str, timeout: float = 3600) -> subprocess.CompletedProcess[str]:
 
 @unittest.skipUnless(FREECAD_PRESENT and UV, "the gate tests need uv and FreeCAD's freecadcmd")
 class PinDrawingGate(unittest.TestCase):
-    """LMP-0005 from the lamp template: measured values, fits from cad-fits, and failing removals."""
+    """LMP-0005 and the catalogue parts: measured values, fits from cad-fits, vendor limits and failing removals."""
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -87,8 +87,8 @@ class PinDrawingGate(unittest.TestCase):
     def tearDownClass(cls) -> None:
         cls.tmp.cleanup()
 
-    def draw(self, label: str, out: str) -> tuple[int, dict]:
-        proc = run(UV, "run", "--script", str(DRAWING), str(self.hw), "--version", label, "--part", "LMP-0005",
+    def draw(self, label: str, out: str, pn: str = "LMP-0005") -> tuple[int, dict]:
+        proc = run(UV, "run", "--script", str(DRAWING), str(self.hw), "--version", label, "--part", pn,
                    "--output-dir", str(Path(self.tmp.name) / out), timeout=900)
         return proc.returncode, json.loads(proc.stdout)["parts"][0]
 
@@ -139,6 +139,41 @@ class PinDrawingGate(unittest.TestCase):
         coverage = json.loads((Path(result["output_dir"]) / "coverage.json").read_text(encoding="utf-8"))
         tip = next(row for row in coverage["rows"] if row["characteristic"] == "tip_face.location")
         self.assertAlmostEqual(abs(tip["value_mm"]), 31.0, places=6)
+
+    def test_vendor_sheet_controls_only_the_specification_limits(self) -> None:
+        code, result = self.draw("v1", "vendor", "LMP-0009")
+        self.assertEqual((code, result["status"], result["type"]), (0, "pass", "vendor_specification"),
+                         result.get("findings"))
+        package = Path(result["output_dir"])
+        rows = {row["characteristic"]: row for row in json.loads((package / "coverage.json").read_text())["rows"]}
+        self.assertEqual(set(rows), {"bore_diameter", "head_diameter", "body_length", "overall_length",
+                                     "head_thickness", "knurl_diameter"})   # no general-tolerance envelope sizes
+        self.assertEqual(rows["bore_diameter"]["tolerance"]["kind"], "vendor")
+        self.assertTrue(rows["head_thickness"]["reference"] and rows["head_thickness"]["tolerance"] is None)
+        texts = re.findall(r"<text[^>]*>([^<]*)</text>", (package / "sheet-1.svg").read_text(encoding="utf-8"))
+        self.assertIn("⌀5.1 ±0.05", texts)
+        self.assertIn("(⌀7.97)", texts)
+        self.assertFalse(any("2768" in text for text in texts), texts)   # a bought item takes no general tolerance
+        package_json = json.loads((package / "package.json").read_text(encoding="utf-8"))
+        sourcing = package_json["provenance"]["sourcing_inputs"]
+        self.assertEqual([s["url"].startswith("https://") for s in sourcing], [True])  # the PDF stays outside hw/
+
+    def test_open_procurement_fields_block_release_and_undeclared_ones_fail(self) -> None:
+        code, result = self.draw("v1", "insert", "LMP-0010")
+        self.assertEqual((code, result["status"]), (0, "pass"), result.get("findings"))
+        blockers = [b["message"] for b in result["release"]["blockers"]]
+        self.assertTrue(any(m.startswith("manufacturer_part_number is open") for m in blockers), blockers)
+        code, result = self.draw("v1", "ring", "LMP-0011")
+        self.assertEqual((code, result["status"]), (0, "not_required"))   # a standard part needs no sheet
+        part = self.hw / "parts" / "LMP-0011" / "part.yaml"
+        original = part.read_text(encoding="utf-8")
+        try:
+            part.write_text(re.sub(r"  open:\n    manufacturer_part_number: .*\n", "", original), encoding="utf-8")
+            code, result = self.draw("v1", "ring-undeclared", "LMP-0011")
+        finally:
+            part.write_text(original, encoding="utf-8")
+        self.assertEqual((code, result["status"]), (1, "fail"))
+        self.assertEqual([f["code"] for f in result["findings"]], ["procurement_incomplete"])
 
 
 if __name__ == "__main__":

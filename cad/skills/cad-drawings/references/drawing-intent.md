@@ -42,6 +42,7 @@ meet a chamfer, round, taper, surface or socket face; otherwise request a `lengt
   `operation`, `full_depth_anchor`).
 - `dimensions`: extra measured requests (`length`, `plane_separation`, `axis_distance`, ...) with an
   explicit `tolerance` (`deviation_mm` or a named policy); below 0.5 mm ISO 2768-1 has no general value.
+  A `plane_separation` is drawn from its first feature's plane to its second's.
 - `geometric_tolerances`: `{id, characteristic, features, zone_mm, diameter_zone?, datum_frame?}`.
 - `notes`: `{kind: process|edge|finish|material|inspection|general, text, reference?}`; a detail drawing
   needs an `edge` and a `finish` note. Notes never carry dimension values.
@@ -52,3 +53,21 @@ meet a chamfer, round, taper, surface or socket face; otherwise request a `lengt
 `interfaces.yaml` binds interface sizes: `press_fit`, `running_fit`, `locating_fit` with `hole` and
 `shaft` endpoints `{PN, feature, region?}`; `heat_set[].feature` for the host seat; and
 `retaining_ring.feature` with `groove_d` such as `4.8 h10` for the shaft groove.
+
+## Vendor specification and source control sheets
+
+A catalogue item (`procurement.mode: catalog`) with `drawing.type: vendor_specification` or
+`source_control` gets a sheet that controls only what its specification states:
+
+- Every face still binds, but the envelope is illustrative: no face needs a feature intent, and no
+  general tolerance or end location applies.
+- The characteristics are the `dimensions` requests, each with the specification's limits as
+  `deviation_mm` or marked `reference: true`, and any feature `thread` (`operation: vendor`).
+- The procurement table prints designation, manufacturer and part numbers, specification and hash.
+
+`procurement` needs `designation`, `manufacturer`, `manufacturer_part_number` and `specification`
+(`reference`, `revision`, `sha256`, and an `artifact` under `hw/` or a `url`). A field the buyer cannot
+fill yet goes in `open` with the reason: the sheet prints it as OPEN and release stays blocked. A
+`url` without an `artifact` makes the frozen copy a sourcing input outside the record: the sheet says
+so and `package.json` lists it under `provenance.sourcing_inputs`. A standard or catalogue part
+without `drawing` intent gets no sheet; its procurement record is still checked.

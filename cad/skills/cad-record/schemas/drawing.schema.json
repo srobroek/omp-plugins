@@ -245,13 +245,25 @@
         "supplier_part_number": {"type": "string", "minLength": 1},
         "designation": {"type": "string", "minLength": 1},
         "specification": {
-          "type": "object", "additionalProperties": false, "required": ["reference", "revision", "artifact", "sha256"],
+          "description": "the datasheet or standard that defines the item, identified by its sha256; with only a url the frozen copy is a sourcing input kept outside the record",
+          "type": "object", "additionalProperties": false, "required": ["reference", "revision", "sha256"],
+          "anyOf": [{"required": ["artifact"]}, {"required": ["url"]}],
           "properties": {
             "reference": {"type": "string", "minLength": 1},
             "revision": {"type": "string", "minLength": 1},
             "artifact": {"description": "frozen copy of the specification, relative to hw/",
                          "type": "string", "pattern": "^(?!/)(?!.*(^|/)\\.\\.(/|$)).+$"},
+            "url": {"description": "where the publisher serves the specification", "type": "string", "pattern": "^https://\\S+$"},
             "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+          }
+        },
+        "open": {
+          "description": "orderable identity fields deliberately left open, each with the reason; every one blocks release",
+          "type": "object", "additionalProperties": false, "minProperties": 1,
+          "properties": {
+            "manufacturer": {"type": "string", "minLength": 1},
+            "manufacturer_part_number": {"type": "string", "minLength": 1},
+            "supplier_part_number": {"type": "string", "minLength": 1}
           }
         },
         "approved_sources": {

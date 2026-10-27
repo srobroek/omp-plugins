@@ -102,6 +102,11 @@ def _ray_state(shape: Any, start: Any, direction: Any, length: float) -> str:
     return "floor" if nearest < 0.02 else "cavity"
 
 
+def _box(face: Any) -> Any:
+    """The face's exact bounding box: FreeCAD's quick ``BoundBox`` can cut off part of a torus face."""
+    return face.optimalBoundingBox(False, False)
+
+
 def extract_faces(shape: Any) -> list[dict[str, Any]]:
     """Plain geometry of every face of a FreeCAD shape: surface parameters, edges, neighbours, samples."""
     import FreeCAD as App  # noqa: PLC0415
@@ -115,7 +120,7 @@ def extract_faces(shape: Any) -> list[dict[str, Any]]:
     for index, face in enumerate(shape.Faces):
         surface = face.Surface
         support = SUPPORT_CLASSES.get(type(surface).__name__, "other")
-        box = face.BoundBox
+        box = _box(face)
         u0, u1, v0, v1 = face.ParameterRange
         mid_u, mid_v = (u0 + u1) / 2, (v0 + v1) / 2
         record: dict[str, Any] = {
@@ -123,6 +128,8 @@ def extract_faces(shape: Any) -> list[dict[str, Any]]:
             "bbox": [box.XMin, box.YMin, box.ZMin, box.XMax, box.YMax, box.ZMax],
             "edges": [], "samples": []}
         for edge in face.Edges:
+            if edge.Degenerated:  # a collapsed edge (sphere pole, cone apex) has no curve
+                continue
             others = sorted(owners.get(edge.hashCode(), set()) - {index})
             entry: dict[str, Any] = {"neighbour": others[0] if others else None, "points": _edge_points(edge)}
             curve = edge.Curve
@@ -177,7 +184,7 @@ def bind_patches(shape: Any, locators: Mapping[str, Mapping[str, Any]]) -> dict[
 
     faces = shape.Faces
     supports = [SUPPORT_CLASSES.get(type(face.Surface).__name__, "other") for face in faces]
-    boxes = [face.BoundBox for face in faces]
+    boxes = [_box(face) for face in faces]
     bound: dict[str, list[list[int]]] = {}
     for feature_id, locator in sorted(locators.items()):
         matches_per_patch = []

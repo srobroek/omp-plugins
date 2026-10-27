@@ -8,3 +8,61 @@ mass_target: 62
 make_buy: make
 supplier: null
 decisions: [DR-002, DR-004]
+drawing:
+  type: detail
+  tolerance_policy: fdm_bureau
+  datum_features:
+    A: {feature: knuckle_seating_face, role: plane}
+    B: {feature: seat, role: axis}
+    C: {feature: cap, role: axis}
+  coordinate_frame:
+    origin: {intersection: [A, B]}
+    y: {normal_to: A}
+    z: {parallel_to: C, toward: cap_top}
+  views:
+    - {id: plan, kind: orthographic, along_axis: C, toward: cap_top}
+    - {id: section_mid, kind: section, through: C}
+    - {id: side, kind: orthographic, along_axis: B, toward: knuckle_seating_face}
+    - {id: underside, kind: orthographic, opposite: plan}
+  features:
+    knuckle_seating_face: {size: general}
+    knuckle_far_face: {size: general}
+    knuckle_upper_flat: {size: general}
+    knuckle_lower_flat: {size: general}
+    knuckle_round: {size: general}
+    knuckle_rounds: {size: general}
+    seat: {size: interface}
+    seat_counterbore: {size: general}
+    counterbore_floor: {size: general}
+    bore_entry_chamfers: {size: general}
+    neck_transition: {profile: controlled_model}
+    neck: {size: general}
+    neck_end: {size: general}
+    cable_run: {size: general}
+    cable_entry: {size: general}
+    cable_entry_floor: {size: general}
+    cap: {size: general}
+    cap_roll: {size: general}
+    cap_top: {size: general}
+    cap_inner_wall: {size: general}
+    cap_ceiling: {size: general}
+    socket_boss: {size: general}
+    boss_face: {size: general}
+    insert_hole: {size: interface}
+    grip_flutes: {size: general}
+    flute_lower_ends: {size: general}
+    flute_upper_ends: {size: general}
+    shade_profile: {profile: controlled_model}
+    rim_round: {size: general}
+  geometric_tolerances:
+    - {id: seat_perpendicularity, characteristic: perpendicularity, features: [seat], zone_mm: 0.2, diameter_zone: true, datum_frame: [A]}
+    - {id: insert_hole_coaxiality, characteristic: coaxiality, features: [insert_hole], zone_mm: 0.2, diameter_zone: true, datum_frame: [C]}
+    - {id: form_profile, characteristic: profile_surface, features: [neck_transition, shade_profile], zone_mm: 0.4, datum_frame: [A, B, C]}
+  notes:
+    - {kind: process, text: "FDM, printed shade-down; drill or ream the bushing seat and the insert hole to their limits after printing."}
+    - {kind: finish, text: "As printed; the bushing seat and the insert hole are post-processed."}
+    - {kind: edge, text: "Undefined edges deburred, no sharp edges; ISO 13715 edge values to be confirmed (DR-004)."}
+    - {kind: inspection, text: "Heat-set the LMP-0009 bushing with its head in the counterbore, and the LMP-0010 M10x1-6H insert flush with the boss face (DR-004)."}
+  manufacturing:
+    interface_condition: post_processed
+  sheet: {sizes: [A3, A2], scale: auto}

@@ -34,6 +34,7 @@ from feature_geometry import Face, ResolvedFeature, Vector
 FITS = Path(__file__).resolve().parents[2] / "cad-fits" / "scripts" / "fits.py"
 EPS = fg.GEOMETRY_EPS
 FIT_KEYS = ("press_fit", "running_fit", "locating_fit")
+VENDOR_TYPES = ("vendor_specification", "source_control")
 DIMENSIONED_KINDS = ("plane_face", "bore", "shaft", "slot", "chamfer", "round", "groove", "socket", "taper",
                      "surface", "engraving")
 # ISO 2768-1:1989 Table 1 (linear) and Table 2 (external radii and chamfer heights): range upper bounds in mm
@@ -312,10 +313,10 @@ def resolve_frame(drawing: Mapping[str, Any], features: Mapping[str, ResolvedFea
     else:
         origin = _intersection([ref(name) for name in origin_spec["intersection"]])
     axes: dict[str, Vector] = {}
-    for name in ("z", "x", "y"):
-        spec = frame_spec.get(name)
-        if not spec:
-            continue
+    # axes a plane or axis fixes come first, so an axis aimed toward a point is squared to them
+    declared = [name for name in ("z", "x", "y") if frame_spec.get(name)]
+    for name in sorted(declared, key=lambda n: not ({"normal_to", "parallel_to"} & set(frame_spec[n]))):
+        spec = frame_spec[name]
         if "normal_to" in spec or "parallel_to" in spec:
             target = ref(spec.get("normal_to") or spec.get("parallel_to"))
             if target.direction is None:
@@ -455,6 +456,8 @@ class Measurer:
         self.faces = {f.index: f for f in faces}
         self.policies = policies(product)
         self.intents: Mapping[str, Mapping[str, Any]] = self.drawing.get("features") or {}
+        # a vendor or source-control sheet controls only what the item's specification states
+        self.vendor = self.drawing.get("type") in VENDOR_TYPES
         self.result = Measured(frame=None)
         self.positioned: set[str] = set()     # features a position tolerance locates (basic dimensions)
         self.coaxial: set[str] = set()
@@ -478,6 +481,8 @@ class Measurer:
         return policy
 
     def general(self, feature: str, operation: str, value: float, leg: float | None = None) -> Tolerance | None:
+        if self.vendor:
+            return None
         policy = self.policy(feature)
         if policy is None:
             return None
@@ -532,6 +537,9 @@ class Measurer:
                     self.locate(axis[0], frame.coords(datum.point)["xyz".index(axis[0])])
         for feature_id in sorted(features):
             feature = features[feature_id]
+            if self.vendor:
+                self._vendor_thread(feature, frame)
+                continue
             if feature_id not in self.intents:
                 self.add(finding("dimension_coverage_incomplete", f"feature {feature_id} has no drawing intent in "
                                  f"part.yaml drawing.features", feature=feature_id))
@@ -550,13 +558,24 @@ class Measurer:
                              f"drawing_features hook did not locate", feature=feature_id))
         self._requests(frame)
         self._geometric(frame)
-        self._closure(frame)
+        if not self.vendor:  # the vendor envelope is illustrative: its ends need no location
+            self._closure(frame)
         return self.result
 
-    # feature kinds ---------------------------------------------------------------------------------
-    def _is_datum(self, feature_id: str) -> bool:
-        return any(d.feature == feature_id for d in (self.result.frame.datums.values() if self.result.frame else ()))
+    def _vendor_thread(self, feature: ResolvedFeature, frame: DatumFrame) -> None:
+        """On a vendor sheet only a declared thread and the dimension requests are characteristics."""
+        thread = self.intents.get(feature.id, {}).get("thread")
+        if not thread:
+            return
+        cylinders = [f for f in self.own(feature) if f.support_type == "cylinder"]
+        instances = cylinder_instances(cylinders)
+        if len(instances) != 1:
+            self.add(finding("thread_spec_incomplete", f"{feature.id}: a thread needs one cylinder axis",
+                             feature=feature.id))
+            return
+        self._thread(feature, frame, instances[0], thread, inward=bool(cylinders[0].inward))
 
+    # feature kinds ---------------------------------------------------------------------------------
     def _plane_face(self, feature: ResolvedFeature, frame: DatumFrame) -> None:
         planes = self.own(feature)
         if any(f.support_type != "plane" for f in planes):
@@ -571,15 +590,21 @@ class Measurer:
                               "request an angle and location or make it a controlled-model surface")
         value = frame.coords(first.point)["xyz".index(axis[0])]
         self.locate(axis[0], value)
-        if self._is_datum(feature.id) or abs(value) < EPS:
+        if abs(value) < EPS:
             return
         self.char(feature, "location", value, feature.faces, axis=axis[0], details={"normal": first.normal})
+
+    @staticmethod
+    def _on_datum_axis(feature_id: str, inst: Instance, frame: DatumFrame) -> bool:
+        """A feature on another datum feature's axis shares its centre line; that datum's location covers it."""
+        return any(d.role == "axis" and d.feature != feature_id and fg.parallel(d.direction, inst.axis_dir)
+                   and fg.axis_distance(inst.axis_point, d.point, d.direction) < EPS for d in frame.datums.values())
 
     def _axis_location(self, feature: ResolvedFeature, frame: DatumFrame, instances: Sequence[Instance]) -> None:
         axes = [frame.axis_of(inst.axis_dir) for inst in instances]
         if any(a is None for a in axes):
             raise IntentError("dimension_coverage_incomplete", "its axis is not parallel to a frame axis")
-        if self._is_datum(feature.id) and len(instances) == 1:
+        if len(instances) == 1 and self._on_datum_axis(feature.id, instances[0], frame):
             return
         along = axes[0][0]
         across = [a for a in "xyz" if a != along]
@@ -732,11 +757,17 @@ class Measurer:
         if inward and (floors or cones):
             depth = max(inst.t1 - inst.t0 for inst in instances)
             heat = self._heat_depth(feature)
-            if heat is not None and depth + 1e-6 < heat:
-                self.add(finding("fit_geometry_mismatch", f"{feature.id} is {depth:.3f} mm deep, less than the heat-set "
-                                 f"minimum {heat} mm", feature=feature.id))
+            tolerance = None
+            if heat is not None:
+                if depth + 1e-6 < heat:
+                    self.add(finding("fit_geometry_mismatch", f"{feature.id} is {depth:.3f} mm deep, less than the "
+                                     f"heat-set minimum {heat} mm", feature=feature.id))
+                # the insert's minimum depth is the lower limit; the process policy gives the upper deviation
+                general = self.general(feature.id, "depth", depth)
+                tolerance = Tolerance("heat_set", min(Decimal(0), Decimal(str(heat)) - Decimal(str(round(depth, 6)))),
+                                      general.upper if general else Decimal(0), source=f"heat_set depth_min {heat}")
             self.char(feature, "depth", depth, [f.index for f in floors] + list(instances[0].faces),
-                      quantity=len(instances), details={"floor": True})
+                      quantity=len(instances), tolerance=tolerance, details={"floor": True})
             if axis is not None:
                 for inst in instances:
                     for t in (inst.t0, inst.t1):
@@ -1025,7 +1056,14 @@ class Measurer:
             spec = request.get("tolerance")
             if spec and "deviation_mm" in spec:
                 low, high = spec["deviation_mm"]
-                tolerance = Tolerance("explicit", Decimal(str(low)), Decimal(str(high)), source=f"dimension {request['id']}")
+                if self.vendor:  # the limits the item's specification publishes
+                    document = (self.part.get("procurement") or {}).get("specification") or {}
+                    tolerance = Tolerance("vendor", Decimal(str(low)), Decimal(str(high)),
+                                          designation=document.get("reference"),
+                                          source=f"{document.get('reference')} rev {document.get('revision')}")
+                else:
+                    tolerance = Tolerance("explicit", Decimal(str(low)), Decimal(str(high)),
+                                          source=f"dimension {request['id']}")
             elif spec and "policy" in spec:
                 policy = self.policies.get(spec["policy"])
                 deviation = policy.linear(abs(value)) if policy else None
@@ -1064,9 +1102,8 @@ class Measurer:
                 if any(abs(c - l) < EPS for c in coords for l in located):
                     for c in coords:
                         self.locate(axis[0], c)
-            return value, faces, axis[0] if axis else None
-        if operation in ("thickness", "distance") and len(features) == 2:
-            pass
+            # measured from the first feature: the characteristic's faces are the second plane's, its target
+            return value, list(features[1].faces), axis[0] if axis else None
         if operation == "axis_distance" and len(features) == 2:
             a, b = (cylinder_instances([self.faces[i] for i in f.faces])[0] for f in features)
             if not fg.parallel(a.axis_dir, b.axis_dir):

@@ -221,9 +221,11 @@ def check_procurement(part: dict[str, Any], path: str, hw: Path, findings: list[
         findings.append(finding(path, f"procurement/mode {mode} contradicts drawing/type {drawing_type}: a made-to-drawing "
                                       "part needs a detail drawing, a catalogue item a vendor_specification or "
                                       "source_control sheet"))
+    for field in sorted(set(procurement.get("open", {})) & set(procurement)):
+        findings.append(finding(path, f"procurement/open/{field}: {field} is both set and declared open"))
     specification = procurement.get("specification")
-    if specification is None:
-        return
+    if specification is None or "artifact" not in specification:
+        return  # a url-only specification is a sourcing input: its frozen copy is kept outside hw/
     root = hw.resolve()
     artifact = root / specification["artifact"]
     try:

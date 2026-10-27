@@ -73,17 +73,32 @@ def tolerance_text(tol: Tolerance | None, measured: float, regime: str) -> tuple
     if tol.kind == "fit":
         low, high = nominal + tol.lower, nominal + tol.upper
         if regime == "asme":
-            return f"{number(high)}/{number(low)}", f" ({number(nominal)} {tol.designation})"
+            return limits(high, low), f" ({number(nominal)} {tol.designation})"
         return f"{number(nominal)} {tol.designation}", f" ({signed(tol.upper)}/{signed(tol.lower)})"
     if tol.lower == -tol.upper:
         return number(nominal), f" ±{number(tol.upper)}"
     return number(nominal), f" {signed(tol.upper)}/{signed(tol.lower)}"
 
 
+def limits(high: Decimal, low: Decimal) -> str:
+    """ASME Y14.5 limit dimensioning: both limits carry the same number of decimal places."""
+    places = max(len(number(v).partition(".")[2]) for v in (high, low))
+    return f"{float(high):.{places}f}/{float(low):.{places}f}"
+
+
+def times(regime: str) -> str:
+    """The multiplication sign: ASME Y14.5 writes X, ISO 129-1 the × sign."""
+    return "X" if regime == "asme" else "×"
+
+
+def count_prefix(quantity: int, regime: str) -> str:
+    """'4× ' (ISO) or '4X ' (ASME) before a dimension that applies to several places."""
+    return f"{quantity}{times(regime)} " if quantity > 1 else ""
+
+
 def size_text(char: Characteristic, regime: str, symbol: str = "") -> str:
     nominal, suffix = tolerance_text(char.tolerance, char.value, regime)
-    count = f"{char.quantity}× " if char.quantity > 1 else ""
-    return f"{count}{symbol}{nominal}{suffix}"
+    return f"{count_prefix(char.quantity, regime)}{symbol}{nominal}{suffix}"
 
 
 GDT_SYMBOLS = {"position": "⌖", "coaxiality": "◎", "perpendicularity": "⟂", "parallelism": "∥", "flatness": "⏥",
@@ -243,8 +258,11 @@ class Presentation:
     unplaced: list[dict[str, Any]] = field(default_factory=list)
 
 
+LINEAR_OPERATIONS = ("location", "axis_location", "floor_location", "plane_separation", "thickness", "distance")
+
+
 def _preferred(char: Characteristic, plans: Sequence[ViewPlan]) -> list[ViewPlan]:
-    if char.operation in ("location", "axis_location", "floor_location"):
+    if char.operation in LINEAR_OPERATIONS:
         # a dimension from a datum needs both ends on the sheet: projected views, then sections
         return sorted((p for p in plans if p.kind != "detail"), key=lambda p: ("part", "section").index(p.kind))
     wanted = {"section": ("section",), "detail": ("detail",), "visible": ("part",)}.get(char.presentation)
@@ -326,7 +344,7 @@ def build_presentation(chars: Sequence[Characteristic], frame: DatumFrame, bindi
     for char in chars:
         own = [faces[i] for i in char.faces]
         placed = False
-        if char.operation in ("location", "axis_location", "floor_location"):
+        if char.operation in LINEAR_OPERATIONS:
             for plan in _preferred(char, plans):
                 item = _linear(char, frame, binding, faces, views[plan.id], regime)
                 if item is not None:
@@ -336,13 +354,15 @@ def build_presentation(chars: Sequence[Characteristic], frame: DatumFrame, bindi
                     break
         else:
             text = _callout_text(char, regime)
+            if text is not None and char.reference:   # a reference dimension is bracketed (ISO 129-1, ASME Y14.5)
+                text = f"({text})"
             choice = None if text is None else _best_view(own, _preferred(char, plans), views,
                                                           {v for (f, v) in callouts if f == char.feature})
             if choice is not None:
                 plan_id, points = choice
                 existing = callouts.get((char.feature, plan_id)) or callout_for(char.feature, plan_id, points)
                 for line in text.split("\n"):
-                    prefix = f"{char.quantity}× "
+                    prefix = count_prefix(char.quantity, regime)
                     if existing.lines and char.quantity > 1 and line.startswith(prefix) \
                             and existing.lines[0].startswith(prefix):
                         line = line[len(prefix):]
@@ -354,7 +374,10 @@ def build_presentation(chars: Sequence[Characteristic], frame: DatumFrame, bindi
             result.unplaced.append({"characteristic": char.id, "feature": char.feature, "operation": char.operation,
                                     "presentation": char.presentation})
     # feature control frames join their feature's callout, or start one
+    profiled = {c.feature: c.id for c in chars if c.operation == "profile"}
     for tolerance in geometric:
+        if tolerance["characteristic"] == "profile_surface" and all(f in profiled for f in tolerance["features"]):
+            continue   # each controlled surface's profile characteristic draws this frame
         cells = [GDT_SYMBOLS[tolerance["characteristic"]],
                  ("⌀" if tolerance.get("diameter_zone") else "") + number(tolerance["zone_mm"]),
                  *tolerance.get("datum_frame", [])]
@@ -364,6 +387,10 @@ def build_presentation(chars: Sequence[Characteristic], frame: DatumFrame, bindi
         if char.operation == "profile":
             cells = [GDT_SYMBOLS["profile_surface"], number(char.value), *char.details.get("datum_frame", [])]
             _attach_frame(result, callouts, char.feature, char.id, cells, binding, faces, views, callout_for)
+    for tolerance in geometric:
+        key, first = f"geometric.{tolerance['id']}", profiled.get(tolerance["features"][0])
+        if key not in result.placed and first in result.placed:
+            result.placed[key] = result.placed[first]
     # datum features: an axis datum tags its feature's size callout, a plane datum gets its own symbol
     for datum in sorted(frame.datums.values(), key=lambda d: d.label):
         key = f"datum.{datum.label}"
@@ -426,14 +453,14 @@ def _callout_text(char: Characteristic, regime: str) -> str | None:
         return size_text(char, regime, "R")
     if op == "chamfer":
         nominal, suffix = tolerance_text(char.tolerance, char.value, regime)
-        count = f"{char.quantity}× " if char.quantity > 1 else ""
-        return f"{count}{nominal}{suffix} × {number(char.details.get('angle_deg', 45.0), 1)}°"
+        return (f"{count_prefix(char.quantity, regime)}{nominal}{suffix} {times(regime)} "
+                f"{number(char.details.get('angle_deg', 45.0), 1)}°")
     if op == "depth":
         nominal, suffix = tolerance_text(char.tolerance, char.value, regime)
         return f"↧{nominal}{suffix}" if asme else f"depth {nominal}{suffix}"
     if op in ("width", "length"):
         nominal, suffix = tolerance_text(char.tolerance, char.value, regime)
-        count = f"{char.quantity}× " if char.quantity > 1 else ""
+        count = count_prefix(char.quantity, regime)
         word = op.upper() if asme else op
         return f"{count}{word} {nominal}{suffix}"
     if op == "across_flats":
@@ -443,7 +470,7 @@ def _callout_text(char: Characteristic, regime: str) -> str | None:
         return f"{name.upper()} {nominal}{suffix} A/F" if asme else f"{name} s {nominal}{suffix}"
     if op == "angle":
         nominal, suffix = tolerance_text(char.tolerance, char.value, regime)
-        count = f"{char.quantity}× " if char.quantity > 1 else ""
+        count = count_prefix(char.quantity, regime)
         return f"{count}{nominal}°{suffix.replace(' ±', ' ±') + ('°' if suffix else '')}"
     if op == "pattern":
         details = char.details
@@ -455,7 +482,7 @@ def _callout_text(char: Characteristic, regime: str) -> str | None:
                        + (f", {number(step, 2)}° apart" if len(angles) > 2 else ""))
         else:
             spacing = "at " + ", ".join(f"{number(a, 2)}°" for a in angles) + f" from {reference}"
-        return f"{char.quantity}× on ⌀{number(char.value)} {'BC' if asme else 'PCD'}\n{spacing}"
+        return f"{count_prefix(char.quantity, regime)}on ⌀{number(char.value)} {'BC' if asme else 'PCD'}\n{spacing}"
     if op == "thread":
         details = char.details
         depth = details.get("full_depth")
@@ -467,7 +494,7 @@ def _callout_text(char: Characteristic, regime: str) -> str | None:
         return None   # the profile tolerance prints as a feature control frame
     if op == "extent":
         size = char.details["size"]
-        return f"engraving {number(size[0])} × {number(size[1])}"
+        return f"engraving {number(size[0])} {times(regime)} {number(size[1])}"
     return None
 
 
@@ -484,6 +511,9 @@ def _linear(char: Characteristic, frame: DatumFrame, binding: Mapping[str, Resol
     if not horizontal and not fg.parallel(vector, plan.up):
         return None
     origin = _datum_reference(char.axis, frame, binding, faces, view)
+    if char.operation in ("plane_separation", "thickness", "distance") and len(char.details.get("features", ())) == 2:
+        start = visible_anchors([faces[i] for i in binding[char.details["features"][0]].faces], view)
+        origin = start[0] if start else None   # between two planes: from the first one, not the datum
     if origin is None:
         return None
     if char.operation == "axis_location":
@@ -812,6 +842,8 @@ def _view_label(view: ViewData, size: float, regime: str) -> tuple[SvgAnnotation
         return None
     if plan.kind == "section":
         text = f"{plan.label}-{plan.label}" if regime == "iso" else f"SECTION {plan.label}-{plan.label}"
+        if plan.scale != "auto":   # a section at its own scale states it
+            text += f" ({plan.scale})" if regime == "iso" else f" SCALE {plan.scale}"
     elif plan.kind == "detail":
         scale = view.geometry.scale
         ratio = f"{number(scale, 4)}:1" if scale >= 1 else f"1:{number(1 / scale, 4)}"
@@ -952,7 +984,7 @@ def section_marks(base: ViewData, plan: ViewPlan, size: float, regime: str) -> t
     ux, uy = a[0] - centre[0], a[1] - centre[1]
     length = math.hypot(ux, uy) or 1.0
     ux, uy = ux / length, uy / length
-    reach = math.hypot(box.x1 - box.x0, box.y1 - box.y0) / 2 + 4.0
+    reach = math.hypot(box.x1 - box.x0, box.y1 - box.y0) + 4.0   # past both edges from any origin, then clipped
 
     def clip(p: tuple[float, float]) -> tuple[float, float]:  # just outside the view box
         return (min(max(p[0], box.x0 - 4.0), box.x1 + 4.0), min(max(p[1], box.y0 - 4.0), box.y1 + 4.0))

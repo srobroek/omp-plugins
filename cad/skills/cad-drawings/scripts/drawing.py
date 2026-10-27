@@ -260,7 +260,8 @@ def sheet_notes(context: drawing_contract.DrawingContext, part: drawing_contract
                              {"step_sha256": part.step_sha256}))
     manufacturing = drawing.get("manufacturing") or {}
     if manufacturing.get("dimensions_apply"):
-        notes.append(SvgNote("finish-stage", "Dimensions apply " + manufacturing["dimensions_apply"].replace("_", " ") + "."))
+        text = "Dimensions apply " + manufacturing["dimensions_apply"].replace("_", " ") + "."
+        notes.append(SvgNote("finish-stage", text.upper() if asme else text))
     for step in manufacturing.get("post_processing", []):
         notes.append(SvgNote(f"post-{len(notes)}", step))
     for index, note in enumerate(drawing.get("notes", [])):
@@ -270,9 +271,12 @@ def sheet_notes(context: drawing_contract.DrawingContext, part: drawing_contract
 
 
 def measured_policy(context: drawing_contract.DrawingContext, record: Mapping[str, Any]) -> drawing_intent.Policy | None:
+    """The general tolerance policy of a detail drawing; a vendor item's sheet has none."""
+    drawing = record.get("drawing") or {}
+    if drawing.get("type") in drawing_intent.VENDOR_TYPES:
+        return None
     defined = drawing_intent.policies(context.product)
-    name = (record.get("drawing") or {}).get("tolerance_policy") or \
-        (context.product.get("drawing") or {}).get("general_tolerance_policy")
+    name = drawing.get("tolerance_policy") or (context.product.get("drawing") or {}).get("general_tolerance_policy")
     return defined.get(name) if name else None
 
 
@@ -281,26 +285,30 @@ def metadata(context: drawing_contract.DrawingContext, part: drawing_contract.Pa
     record = part.record
     drawing = record.get("drawing") or {}
     policy = measured_policy(context, record)
+    vendor = drawing.get("type") in drawing_intent.VENDOR_TYPES
     standards = tuple((context.product.get("drawing") or {}).get("standards", {}).values())
+    general = policy.label if policy else ("per specification" if vendor else str(context.product["general_tolerance"]))
     return SheetMetadata(drawing_number=part.pn, revision=str(record["rev"]), title=str(record["title"]),
                          document_type=DOCUMENT_TYPES[drawing.get("type", "detail")], sheet_number=number,
                          sheet_count=count, scale=scale, material=str(record["material"]),
-                         general_tolerance=policy.label if policy else str(context.product["general_tolerance"]),
-                         standards=standards[:4])
+                         general_tolerance=general, standards=standards[:4])
 
 
 def procurement_findings(record: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Content failures of a catalogue item's orderable identity; a field declared ``open`` is a release blocker."""
     procurement = record.get("procurement") or {}
     found = []
     if procurement.get("mode") == "catalog":
+        declared = {**procurement.get("open", {}), **procurement}
         if not procurement.get("designation"):
             found.append(drawing_intent.finding("procurement_incomplete", "a catalogue item needs a designation"))
-        if not procurement.get("manufacturer") or not procurement.get("manufacturer_part_number"):
-            found.append(drawing_intent.finding("procurement_incomplete", "a catalogue item needs its manufacturer and "
-                                                "manufacturer part number"))
+        for field in ("manufacturer", "manufacturer_part_number"):
+            if not declared.get(field):
+                found.append(drawing_intent.finding("procurement_incomplete", f"a catalogue item needs its {field} "
+                                                    f"or a procurement.open entry giving why it is open"))
         if not procurement.get("specification"):
-            found.append(drawing_intent.finding("procurement_incomplete", "a catalogue item needs a frozen datasheet or "
-                                                "specification (reference, revision, artifact under hw/, sha256)"))
+            found.append(drawing_intent.finding("procurement_incomplete", "a catalogue item needs its specification "
+                                                "(reference, revision, sha256 and an artifact under hw/ or a url)"))
         if (record.get("drawing") or {}).get("type") == "source_control":
             if not procurement.get("approved_sources") or not procurement.get("qualification_evidence"):
                 found.append(drawing_intent.finding("procurement_incomplete", "a source control drawing needs approved "
@@ -311,15 +319,27 @@ def procurement_findings(record: Mapping[str, Any]) -> list[dict[str, Any]]:
 def procurement_table(record: Mapping[str, Any]) -> SvgTable:
     procurement = record.get("procurement") or {}
     spec = procurement.get("specification") or {}
-    rows = [("Designation", procurement.get("designation", "—")),
-            ("Manufacturer", procurement.get("manufacturer", "—")),
-            ("Manufacturer PN", procurement.get("manufacturer_part_number", "—")),
-            ("Supplier PN", procurement.get("supplier_part_number", "—")),
+    open_fields = procurement.get("open", {})
+
+    def cell(field: str) -> str:
+        return procurement.get(field) or (f"OPEN: {open_fields[field]}" if field in open_fields else "—")
+
+    rows = [("Designation", cell("designation")), ("Manufacturer", cell("manufacturer")),
+            ("Manufacturer PN", cell("manufacturer_part_number")), ("Supplier PN", cell("supplier_part_number")),
             ("Specification", f"{spec.get('reference', '—')} rev {spec.get('revision', '—')}"),
             ("Spec. sha256", spec.get("sha256", "—")[:16])]
     for source in procurement.get("approved_sources", []):
         rows.append(("Approved source", f"{source['name']} {source.get('part_number', '')}".strip()))
     return SvgTable("procurement", ("Procurement", "Value"), tuple(rows))
+
+
+def sourcing_note(record: Mapping[str, Any]) -> SvgNote | None:
+    """A specification known only by url and hash is a sourcing input the record does not hold."""
+    spec = (record.get("procurement") or {}).get("specification") or {}
+    if not spec or "artifact" in spec:
+        return None
+    return SvgNote("sourcing", f"Specification {spec['reference']} rev {spec['revision']} is a sourcing input kept "
+                               f"outside this record: {spec['url']} (sha256 {spec['sha256'][:16]}).")
 
 
 # --- one part -------------------------------------------------------------------------------------------
@@ -334,11 +354,13 @@ def run_part(context: drawing_contract.DrawingContext, pn: str, output_dir: Path
     if not drawing:
         if (record.get("procurement") or {}).get("mode") == "catalog":
             status = "fail" if procurement else "not_required"
-            return {"pn": pn, "status": status, "findings": procurement}, 1 if procurement else 0
+            blockers = completeness.release_blockers(record)
+            return {"pn": pn, "status": status, "findings": procurement,
+                    "release": {"ready": not blockers, "blockers": blockers}}, 1 if procurement else 0
         return fail("drawing_intent_missing", f"{pn} has no part.yaml drawing intent", pn=pn), 1
     if part.features is None:
         return fail("drawing_intent_missing", f"{pn}'s model.py defines no drawing_features hook", pn=pn), 1
-    vendor = drawing["type"] in ("vendor_specification", "source_control")
+    vendor = drawing["type"] in drawing_intent.VENDOR_TYPES
     work = output_dir.parent / f".{output_dir.name}.work-{uuid.uuid4().hex}"
     work.mkdir(parents=True)
     try:
@@ -350,10 +372,6 @@ def run_part(context: drawing_contract.DrawingContext, pn: str, output_dir: Path
             binding = fg.Binding(binding.features, binding.owner,
                                  tuple(f for f in binding.findings if f["code"] != "geometry_unaccounted"))
         measured = drawing_intent.measure(pn, record, context.product, context.interfaces, binding, faces)
-        if vendor:
-            measured.characteristics = [c for c in measured.characteristics
-                                        if (drawing.get("features") or {}).get(c.feature, {}).get("size") == "interface"
-                                        or c.requested]
         if measured.frame is None:
             report = completeness.evaluate(pn, record, context.interfaces, binding, measured, None, part.step_sha256)
             return {"pn": pn, "status": "fail", "coverage": report.to_dict()}, 1
@@ -400,10 +418,15 @@ def compose_and_publish(context: drawing_contract.DrawingContext, part: drawing_
     notes = sheet_notes(context, part, measured, regime)
     tables = [procurement_table(record)] if vendor else []
     if vendor:
-        notes.append(SvgNote("vendor", ("ILLUSTRATIVE ENVELOPE; ONLY DIMENSIONED INTERFACES ARE CONTROLLED. "
-                                        "DO NOT MANUFACTURE TO THIS SHEET." if regime == "asme" else
-                                        "Envelope geometry is illustrative; only the dimensioned interfaces are "
-                                        "controlled requirements. Do not manufacture to this sheet.")))
+        notes.insert(0, SvgNote("vendor", ("DIMENSIONS IN MILLIMETERS. ONLY DIMENSIONED INTERFACES ARE CONTROLLED, TO THE "
+                                        "ITEM SPECIFICATION; ENVELOPE GEOMETRY IS ILLUSTRATIVE. DO NOT MANUFACTURE TO "
+                                        "THIS SHEET." if regime == "asme" else
+                                        "Dimensions in mm. Only the dimensioned interfaces are controlled, to the item's "
+                                        "specification; the envelope geometry is illustrative. Do not manufacture to "
+                                        "this sheet.")))
+    sourcing = sourcing_note(record)
+    if sourcing is not None:
+        notes.append(sourcing)
 
     def presentation_for(views: Mapping[str, sheet.ViewData]) -> sheet.Presentation:
         return sheet.build_presentation(measured.characteristics, measured.frame, binding.features, faces, views,

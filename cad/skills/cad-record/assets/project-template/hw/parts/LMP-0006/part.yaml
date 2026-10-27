@@ -2,7 +2,7 @@ PN: LMP-0006
 rev: X1
 title: M5 x 25 shoulder pin
 material: Stainless steel A2
-process: purchased
+process: cnc
 finish: Passivated
 mass_target: 5.1
 make_buy: buy

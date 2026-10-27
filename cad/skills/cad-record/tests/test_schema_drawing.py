@@ -250,8 +250,24 @@ class DrawingRecordAdditions(unittest.TestCase):
             "no mode": (lambda p: p["procurement"].pop("mode"), "'mode' is a required property"),
             "unknown mode": (lambda p: p["procurement"].update(mode="cots"), "procurement/mode"),
             "empty approved sources": (lambda p: p["procurement"].update(approved_sources=[]), "procurement/approved_sources"),
+            "specification without artifact or url": (lambda p: p["procurement"]["specification"].pop("artifact"),
+                                                      "procurement/specification"),
+            "specification url not https": (lambda p: p["procurement"]["specification"].update(url="ftp://acme/dp.pdf"),
+                                            "procurement/specification/url"),
+            "open field that is also set": (lambda p: p["procurement"].update(open={"manufacturer": "to be chosen"}),
+                                            "procurement/open/manufacturer: manufacturer is both set and declared open"),
+            "open field outside the identity": (lambda p: p["procurement"].update(open={"designation": "later"}),
+                                                "procurement/open"),
         }
         self.run_cases(cases, lambda: self.parts["TST-0002"])
+
+    def test_url_specification_without_a_frozen_copy_validates(self) -> None:
+        procurement = self.parts["TST-0002"]["procurement"]
+        procurement["specification"].pop("artifact")
+        procurement["specification"]["url"] = "https://acme.example/dp-datasheet.pdf"
+        procurement.pop("supplier_part_number")
+        procurement["open"] = {"supplier_part_number": "no distributor selected"}
+        self.assert_valid()
 
     def test_made_to_drawing_needs_a_detail_drawing(self) -> None:
         self.parts["TST-0001"]["drawing"]["type"] = "source_control"
