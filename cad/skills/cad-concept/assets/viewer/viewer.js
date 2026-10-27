@@ -329,7 +329,7 @@ function fitView() {
   requestRender();
 }
 
-
+// --- selection --------------------------------------------------------------
 function selectVariant(id) {
   const variant = state.variants.find((v) => v.def.id === id) ?? state.variants[0];
   if (!variant) return;
@@ -386,9 +386,33 @@ function renderVariantList(scene) {
   }
 }
 
+// Click a part to highlight its variant independently of canvas orbit gestures.
+const raycaster = new THREE.Raycaster();
+let pressAt = null;
+ui.canvas.addEventListener("pointerdown", (event) => {
+  pressAt = { x: event.clientX, y: event.clientY };
+});
+ui.canvas.addEventListener("pointerup", (event) => {
+  if (!pressAt || Math.hypot(event.clientX - pressAt.x, event.clientY - pressAt.y) > 4) return;
+  const rect = ui.canvas.getBoundingClientRect();
+  const ndc = new THREE.Vector2(
+    ((event.clientX - rect.left) / rect.width) * 2 - 1,
+    -((event.clientY - rect.top) / rect.height) * 2 + 1,
+  );
+  raycaster.setFromCamera(ndc, camera);
+  const hit = raycaster.intersectObjects(state.variants.flatMap((variant) => variant.meshes), false)[0];
+  if (hit) selectVariant(hit.object.userData.variantId);
+});
+
+// --- loading and live reload ------------------------------------------------
 function setStatus(text, kind = "info") {
   ui.status.textContent = text;
   document.body.dataset.state = kind;
+}
+
+function setControlsEnabled(on) {
+  ui.shot.disabled = !on;
+  ui.fit.disabled = !on;
 }
 
 function showOverlay(kind, title, body) {
@@ -454,6 +478,7 @@ async function loadScene({ reason }) {
     fitView();
     state.framed = true;
   }
+  setControlsEnabled(true);
   const time = new Date().toLocaleTimeString();
   setStatus(`${reason} ${state.file} · ${state.variants.length} variants · ${time}`);
   window.dispatchEvent(new CustomEvent("cad-concept:loaded", { detail: { file: state.file, reason } }));
@@ -466,6 +491,7 @@ async function load(reason) {
       const wanted = new URLSearchParams(location.search).get("scene");
       state.file = scenes.includes(wanted) ? wanted : scenes[0] ?? null;
       if (!state.file) {
+        setControlsEnabled(false);
         showOverlay("empty", "No scene files yet", "Write a *.scene.json into the scene directory; the viewer loads it as soon as it appears.");
         setStatus("Waiting for a scene file");
         return;
@@ -480,6 +506,7 @@ async function load(reason) {
       ui.notice.textContent = `Reload failed, showing the last good scene. ${message}`;
       setStatus(`Reload of ${state.file} failed`, "error");
     } else {
+      setControlsEnabled(false);
       showOverlay("error", "The scene could not be shown", message);
       setStatus(`Could not load ${state.file ?? "the scene list"}`, "error");
     }
@@ -534,7 +561,6 @@ function compositeScreenshot() {
   }
   return out.toDataURL("image/png");
 }
-
 
 async function saveScreenshot() {
   ui.shot.setAttribute("aria-busy", "true");
