@@ -18,7 +18,8 @@ TRIGGER
 1. Export the assembly as STEP AP242 with product names that start with the PN
    (`PIN-0001` or `PIN-0001 Dowel pin`).
 2. `uv run --script skill://cad-bom/scripts/bom.py ASSEMBLY.step --hw hw [--out hw/bom.csv]`
-   → writes `bom.csv` with columns `level,PN,rev,qty,title,material,process,make_buy,supplier,mass`
+   → writes `bom.csv` with columns `level,PN,rev,qty,title,material,process,make_buy,supplier,mass,`
+   `unit,designation,manufacturer,manufacturer_part_number,supplier_part_number,specification_ref,specification_rev`
    and prints a JSON summary: `status`, `rows`, `total_qty`, `missing_part_yaml`,
    `missing_in_step`, `unidentified`.
 3. Exit 1 means the record and the model disagree; bom.csv is still written. Resolve each list:
@@ -33,6 +34,10 @@ TRIGGER
 - `qty` counts instances per one parent. A repeated subassembly is one row with its qty; its children appear once beneath it. `total_qty` in the JSON multiplies through.
 - An assembly product without a PN is a phantom group; its children merge into the nearest numbered parent.
 - Assemblies need no part.yaml; leaf parts do. `mass` copies `mass_target` (grams).
+- `unit` is `pcs`: `qty` counts STEP instances. `designation`, `manufacturer`,
+  `manufacturer_part_number` and `supplier_part_number` copy part.yaml `procurement`;
+  `specification_ref` and `specification_rev` copy its `specification` `reference` and `revision`.
+  They stay blank when the part declares none.
 
 ## Rules
 

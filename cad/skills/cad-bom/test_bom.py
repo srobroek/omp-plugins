@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import importlib.util
 import json
 import os
@@ -33,6 +34,13 @@ PARTS = {
     "BRK-0002": "rev: X1\ntitle: Bracket\nmaterial: 6082-T6\nprocess: cnc\nmake_buy: make\nmass_target: 3.5\n",
     "SCR-0001": "rev: A\ntitle: Screw M3x8\nmaterial: A2-70\nprocess: purchased\nmake_buy: buy\nmass_target: 0.6\n",
 }
+DATASHEET = b"%PDF-1.4 dowel pin datasheet stand-in\n"
+PIN_PROCUREMENT = (
+    "procurement:\n  mode: catalog\n  manufacturer: Misumi\n  manufacturer_part_number: MSTH4-12\n"
+    "  supplier_part_number: MSTH4-12-EU\n  designation: ISO 8734 4 x 12 A1\n"
+    "  specification: {reference: Misumi MSTH datasheet, revision: '2024-03', artifact: specs/msth.pdf,\n"
+    f"                  sha256: {hashlib.sha256(DATASHEET).hexdigest()}}}\n"
+)
 
 
 def write_parts(hw: Path, parts: dict[str, str]) -> None:
@@ -79,6 +87,21 @@ class RollUpTests(unittest.TestCase):
         self.assertEqual(bom.Node("PIN-0001 pin", False).pn, "PIN-0001")
         self.assertIsNone(bom.Node("PIN-00012", False).pn)
         self.assertIsNone(bom.Node("pin-0001", False).pn)
+
+    def test_procurement_columns_come_from_part_yaml(self) -> None:
+        pin = bom.Node("PIN-0001", False)
+        top = bom.Node("ASM-0001", True, [(pin, 2)])
+        procurement = {"mode": "catalog", "manufacturer": "Misumi", "manufacturer_part_number": "MSTH4-12",
+                       "supplier_part_number": "MSTH4-12-EU", "designation": "ISO 8734 4 x 12 A1",
+                       "specification": {"reference": "Misumi MSTH datasheet", "revision": "2024-03"}}
+        rows = bom.roll_up([top], {"PIN-0001": {"rev": "X1", "procurement": procurement}})["rows"]
+        self.assertTrue(all(set(row) == set(bom.COLUMNS) for row in rows), rows)
+        self.assertEqual({k: rows[1][k] for k in bom.COLUMNS[10:]}, {
+            "unit": "pcs", "designation": "ISO 8734 4 x 12 A1", "manufacturer": "Misumi",
+            "manufacturer_part_number": "MSTH4-12", "supplier_part_number": "MSTH4-12-EU",
+            "specification_ref": "Misumi MSTH datasheet", "specification_rev": "2024-03"})
+        self.assertEqual({k: rows[0][k] for k in bom.COLUMNS[10:]},
+                         {"unit": "pcs", **{k: "" for k in bom.COLUMNS[11:]}}, "an assembly has no part.yaml")
 
 
 class ConsoleRedirectTests(unittest.TestCase):
@@ -177,6 +200,9 @@ class StepRoundTripTests(unittest.TestCase):
                 "rev: X2\ntitle: Base plate\nmaterial: PETG\nprocess: fdm\nfinish: deburred\n"
                 "make_buy: make\nmass_target: 40\n"
             )
+            parts["PIN-0001"] += PIN_PROCUREMENT
+            (hw / "specs").mkdir()
+            (hw / "specs" / "msth.pdf").write_bytes(DATASHEET)
             for pn, text in parts.items():
                 folder = hw / "parts" / pn
                 folder.mkdir(parents=True)
@@ -202,6 +228,9 @@ class StepRoundTripTests(unittest.TestCase):
 
             bom_proc, _ = self.run_bom(hw)
             self.assertEqual(bom_proc.returncode, 0, bom_proc.stderr)
+            pin = rows_by_level_pn(hw / "bom.csv")[("1", "PIN-0001")]
+            self.assertEqual((pin["unit"], pin["designation"], pin["specification_rev"]),
+                             ("pcs", "ISO 8734 4 x 12 A1", "2024-03"))
             validation = subprocess.run(
                 [sys.executable, str(RECORD_VALIDATOR), str(project)],
                 capture_output=True, text=True, check=False, timeout=60,
