@@ -249,7 +249,7 @@ class StepTests(unittest.TestCase):
         proc, result = self.run_script("pose.py", "--hw", str(TEMPLATE_HW), "--step", str(self.lamp / "lamp-arm.step"),
                                        "--set", "J-002=-90", "--out", str(out))
         self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
-        self.assertEqual(sorted(result["placements"]), [f"LMP-000{n}" for n in range(1, 8)])
+        self.assertEqual(sorted(result["placements"]), [f"LMP-{n:04d}" for n in range(1, 14)])
         self.assertIn("PRODUCT('LMP-0003 Upper link'", out.read_text(encoding="utf-8"))
 
     def cad_model_version(self) -> Path:

@@ -1,0 +1,10 @@
+PN: LMP-0013
+rev: X1
+title: Retaining ring DIN 471 - 5x0.6
+material: Spring steel C60S
+process: purchased
+finish: Phosphated and oiled
+mass_target: 0.081
+make_buy: buy
+supplier: null
+decisions: [DR-004]

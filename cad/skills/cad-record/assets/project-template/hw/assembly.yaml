@@ -1,10 +1,10 @@
 subassemblies:
   - id: base_sub
-    title: Base subassembly (base plate and pivot boss)
-    parts: [LMP-0001]
+    title: Base subassembly (base plate and pivot boss, its bushing)
+    parts: [LMP-0001, LMP-0008]
   - id: arm_sub
-    title: Arm subassembly (lower link, upper link, and head)
-    parts: [LMP-0002, LMP-0003, LMP-0004, LMP-0005, LMP-0006, LMP-0007]
+    title: Arm subassembly (lower link, upper link, and head, with pins, bushing, insert, and rings)
+    parts: [LMP-0002, LMP-0003, LMP-0004, LMP-0005, LMP-0006, LMP-0007, LMP-0009, LMP-0010, LMP-0011, LMP-0012, LMP-0013]
 joints:
   - id: J-001
     type: revolute
@@ -55,6 +55,60 @@ joints:
     type: fixed
     parent: LMP-0003
     child: LMP-0007
+    axis: [0, 1, 0]
+    origin: [360, 0, 40]
+    min: 0
+    max: 0
+    nominal: 0
+  - id: J-007
+    type: fixed
+    parent: LMP-0001
+    child: LMP-0008
+    axis: [0, 0, 1]
+    origin: [0, 0, 40]
+    min: 0
+    max: 0
+    nominal: 0
+  - id: J-008
+    type: fixed
+    parent: LMP-0004
+    child: LMP-0009
+    axis: [0, 1, 0]
+    origin: [360, 0, 40]
+    min: 0
+    max: 0
+    nominal: 0
+  - id: J-009
+    type: fixed
+    parent: LMP-0004
+    child: LMP-0010
+    axis: [0, 0, 1]
+    origin: [430, 0, 50]
+    min: 0
+    max: 0
+    nominal: 0
+  - id: J-010
+    type: fixed
+    parent: LMP-0005
+    child: LMP-0011
+    axis: [0, 0, 1]
+    origin: [0, 0, 40]
+    min: 0
+    max: 0
+    nominal: 0
+  - id: J-011
+    type: fixed
+    parent: LMP-0006
+    child: LMP-0012
+    axis: [0, 1, 0]
+    origin: [160, 0, 40]
+    min: 0
+    max: 0
+    nominal: 0
+  - id: J-012
+    type: fixed
+    parent: LMP-0007
+    child: LMP-0013
     axis: [0, 1, 0]
     origin: [360, 0, 40]
     min: 0

@@ -41,7 +41,7 @@ MUST Keep BOM columns in this order: `level,PN,rev,qty,title,material,process,ma
 - `requirements.yaml`: `REQ-###` statements with rationale, source, priority, method, and verification criteria.
 - `interfaces.yaml`: mating, motion, clearance, electrical, or thermal contracts.
 - `assembly.yaml`: subassemblies, part references, and joints with travel limits.
-- `parts/<PN>/part.yaml`: part number and revision, material, process, finish, mass target in grams, make/buy, optional supplier, and optional `decisions: [DR-###, ...]` references validated against `hw/decisions/`; `model.py` is the parametric CAD source. In the lamp-arm template, F3 reference-mass targets are provisional and documented in `decisions/DR-002.md`.
+- `parts/<PN>/part.yaml`: part number and revision, material, process, finish, mass target in grams, make/buy, optional supplier, and optional `decisions: [DR-###, ...]` references validated against `hw/decisions/`; `model.py` is the parametric CAD source. In the lamp-arm template, F3 reference-mass targets are provisional and documented in `decisions/DR-002.md`; `decisions/DR-004.md` records the catalogue parts, their heat-set seats, and the tolerances proposed for review.
 - `bom.csv`: hierarchical EBOM; values and fields are checked against part records.
 - `verification.csv`: requirement verification status and evidence; every requirement needs a row before release.
 - `decisions/DR-###.md`: dated rationale and consequences for design decisions.

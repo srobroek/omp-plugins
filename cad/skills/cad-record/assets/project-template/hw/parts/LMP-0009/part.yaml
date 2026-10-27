@@ -1,0 +1,10 @@
+PN: LMP-0009
+rev: X1
+title: Bushing SPIROL CMPL 4 X 6 EK CL8100
+material: Brass C36000
+process: purchased
+finish: Plain
+mass_target: 1.9
+make_buy: buy
+supplier: null
+decisions: [DR-004]

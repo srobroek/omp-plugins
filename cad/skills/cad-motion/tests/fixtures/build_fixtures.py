@@ -6,7 +6,7 @@
 
 Usage: uv run --script build_fixtures.py OUT_DIR
 
-OUT_DIR/lamp/       LMP-0001..LMP-0007 as one STEP per part, plus
+OUT_DIR/lamp/       LMP-0001..LMP-0013 as one STEP per part, plus
                     lamp-arm.step (one assembly STEP of the same parts). The
                     geometry is a stand-in for the cad-record lamp-arm template,
                     whose model.py files are placeholders; it follows the
@@ -40,6 +40,12 @@ LAMP_TITLES = {
     "LMP-0005": "M5 x 30 shoulder pin",
     "LMP-0006": "M5 x 25 shoulder pin",
     "LMP-0007": "M5 x 20 shoulder pin",
+    "LMP-0008": "Bushing SPIROL CMPL 4 X 8 EK CL8000",
+    "LMP-0009": "Bushing SPIROL CMPL 4 X 6 EK CL8100",
+    "LMP-0010": "Heat-set insert QT M10x1 x 12.7 OD 12.6",
+    "LMP-0011": "Retaining ring DIN 471 - 5x0.6",
+    "LMP-0012": "Retaining ring DIN 471 - 5x0.6",
+    "LMP-0013": "Retaining ring DIN 471 - 5x0.6",
 }
 PIN_R, BORE_R, LUG_R = 2.5, 2.6, 6.0  # M5 shank in a 5.2 mm bore: 0.1 mm radial clearance
 
@@ -75,6 +81,10 @@ def cut(shape, *tools):
     return shape
 
 
+def tube(base: tuple[float, float, float], direction: tuple[float, float, float], outer: float, inner: float, height: float):
+    return cut(cylinder(base, direction, outer, height), cylinder(base, direction, inner, height))
+
+
 Y, Z = (0.0, 1.0, 0.0), (0.0, 0.0, 1.0)
 
 
@@ -95,7 +105,7 @@ def lamp_shapes() -> dict[str, object]:
     )
     head = cut(
         fuse(box(360, 2, 34, 400, 10, 46), cylinder((360, 2, 40), Y, LUG_R, 8), cylinder((420, 0, 10), Z, 30, 30)),
-        cylinder((360, 0, 40), Y, BORE_R, 12),
+        cylinder((360, 0, 40), Y, BORE_R, 12), cylinder((430, 0, 30), Z, 6.0, 10),  # pin bore, insert hole
     )
     return {
         "LMP-0001": base,
@@ -106,6 +116,13 @@ def lamp_shapes() -> dict[str, object]:
         "LMP-0005": fuse(cylinder((0, 0, 16), Z, PIN_R, 30), cylinder((0, 0, 46.5), Z, 4, 3)),
         "LMP-0006": fuse(cylinder((160, -12.5, 40), Y, PIN_R, 25), cylinder((160, 10.5, 40), Y, 4, 3)),
         "LMP-0007": fuse(cylinder((360, -9.5, 40), Y, PIN_R, 20), cylinder((360, -13.5, 40), Y, 4, 3)),
+        # Bushings, insert and rings: tubes on the template's J-007..J-012 axes.
+        "LMP-0008": tube((0, 0, 21.5), Z, 4.0, BORE_R, 8),
+        "LMP-0009": tube((360, 2, 40), Y, 4.0, BORE_R, 7),
+        "LMP-0010": tube((430, 0, 30), Z, 6.3, 4.5, 10),
+        "LMP-0011": tube((0, 0, 16.5), Z, 3.2, PIN_R, 0.6),
+        "LMP-0012": tube((160, -12, 40), Y, 3.2, PIN_R, 0.6),
+        "LMP-0013": tube((360, 9, 40), Y, 3.2, PIN_R, 0.6),
     }
 
 

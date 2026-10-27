@@ -1,0 +1,10 @@
+PN: LMP-0010
+rev: X1
+title: Heat-set insert QT M10x1 x 12.7 OD 12.6
+material: Brass
+process: purchased
+finish: Cleaned
+mass_target: 6.7
+make_buy: buy
+supplier: null
+decisions: [DR-004]

@@ -3,8 +3,8 @@ rev: X1
 title: Upper link
 material: Aluminum 6061-T6
 process: cnc
-finish: Bead-blast and clear anodize
+finish: As machined; deburred
 mass_target: 138
 make_buy: make
 supplier: null
-decisions: [DR-002, DR-003]
+decisions: [DR-002, DR-003, DR-004]
