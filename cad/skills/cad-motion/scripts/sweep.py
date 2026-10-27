@@ -50,7 +50,10 @@ pose.py's INTERFERENCE_MM3, 1e-3) on a pair whose overlap hw/interfaces.yaml
 does not declare (pair_policy.py: an interference press fit or a heat-set
 insert on exactly that occurrence pair); a clearance finding is a minimum
 distance below `--min-clearance` mm (off at 0), compared before the output
-rounds it to 4 decimals.
+rounds it to 4 decimals, on a checked pair that hw/interfaces.yaml does not
+declare fitted. A fitted pair (a press fit, running fit or heat-set insert on
+exactly that occurrence pair, `pairs.declared_fit`) is fitted or contacting by
+design and inherits no global running clearance, joint-connected or not.
 
 Pair requirements: each clearance requirement of hw/interfaces.yaml (an
 interface `type: clearance` with `pair: [REF, REF]` and `min_clearance_mm`;
@@ -73,9 +76,10 @@ Worst case, by `--worst-criterion`; ties go to the earliest sample:
         horizontal (XY, gravity along -Z) distance from the first joint origin
         on the end effector's path to the end effector's centre of mass: the
         largest cantilever moment arm, the static FEA load case.
-    minimum_clearance: the smallest clearance margin (minimum distance minus
-        `--min-clearance`) over the checked pairs whose overlap is not
-        declared; a larger undeclared overlap breaks a tie.
+    minimum_clearance: the smallest clearance margin, a pair's minimum
+        distance minus its tightest applicable requirement: its explicit
+        clearance requirement, and `--min-clearance` on a checked pair that is
+        not fitted; a larger undeclared overlap breaks a tie.
     maximum_interference: the largest undeclared overlap volume above
         `--volume-tol`; none when nothing collides.
 These are geometric criteria; none of them is a stress load case by itself.
@@ -130,8 +134,9 @@ pair_policy = sys.modules.get("cad_motion_pair_policy") or _load("cad_motion_pai
 CRITERIA = {
     "max_horizontal_reach": "horizontal (XY) distance from the {joint} origin to the {effector} centre of mass; "
                             "gravity along -Z; collision-free poses only",
-    "minimum_clearance": "smallest minimum distance minus the required {required} mm over the checked pairs "
-                         "whose overlap is not declared; a larger undeclared overlap breaks a tie",
+    "minimum_clearance": "smallest minimum distance minus the pair's tightest requirement: its clearance "
+                         "requirement, and the required {required} mm on a checked pair that is not fitted; "
+                         "a larger undeclared overlap breaks a tie",
     "maximum_interference": "largest undeclared overlap volume above {volume_tol} mm^3",
 }
 MAX_LISTED = 50
@@ -288,21 +293,27 @@ def rounded(values: dict[str, float]) -> dict[str, float]:
 
 
 def sweep(chain: Any, geometry: Geometry, samples: list[Sample], pairs: list[tuple[str, str]],
-          allowed: set[tuple[str, str]], requirements: dict[tuple[str, str], dict[str, Any]], effector: str,
-          reference: tuple[float, float, float], volume_tol: float, criterion: str, required: float,
-          deadline: float) -> SweepState:
-    """Evaluate every sample; `allowed` holds the sorted occurrence pairs whose overlap is declared.
+          allowed: set[tuple[str, str]], fitted: set[tuple[str, str]],
+          requirements: dict[tuple[str, str], dict[str, Any]], effector: str, reference: tuple[float, float, float],
+          volume_tol: float, criterion: str, required: float, deadline: float) -> SweepState:
+    """Evaluate every sample. `allowed` holds the sorted occurrence pairs whose overlap is declared,
+    `fitted` those declared as a fit or insert, which `required` (--min-clearance) does not bind.
 
     `requirements` (pair_requirements) are measured on their pairs at every sample whether or not the
-    pairs are checked. The worst sample under `criterion` has the smallest rank; a strict comparison
-    keeps the earliest on a tie.
+    pairs are checked. A pair's margin is its distance minus its tightest applicable requirement.
+    The worst sample under `criterion` has the smallest rank; a strict comparison keeps the earliest
+    on a tie.
     """
     state = SweepState()
     checked = set(pairs)
     measured = [*pairs, *(pair for pair in requirements if pair not in checked)]
-    thresholds = {pair: (*((required,) if required > 0 and pair in checked else ()),
-                         *((requirements[pair]["required_mm"],) if pair in requirements else ()))
-                  for pair in measured}
+    applicable: dict[tuple[str, str], list[tuple[float, str]]] = {}  # (required mm, source), explicit first
+    for pair in measured:
+        applicable[pair] = [(requirements[pair]["required_mm"], requirements[pair]["source"])] if pair in requirements else []
+        if pair in checked and tuple(sorted(pair)) not in fitted:
+            applicable[pair].append((required, "--min-clearance"))
+    thresholds = {pair: tuple(value for value, _ in options if value > 0) for pair, options in applicable.items()}
+    tightest = {pair: max(options, key=lambda option: option[0]) for pair, options in applicable.items() if options}
     for sample in samples:
         if time.monotonic() > deadline:
             break
@@ -314,7 +325,9 @@ def sweep(chain: Any, geometry: Geometry, samples: list[Sample], pairs: list[tup
             continue
         transforms = chain.transforms(sample.values)
         hits = []
-        closest: tuple[float, float, list[str] | None] = (math.inf, math.inf, None)  # margin, distance, pair
+        # ((margin, -undeclared overlap), distance, pair, (required mm, source)) of the smallest margin
+        closest: tuple[tuple[float, float], float, list[str] | None, tuple[float, str] | None] = \
+            ((math.inf, 0.0), math.inf, None, None)
         overlap: tuple[float, list[str] | None] = (0.0, None)  # largest undeclared volume above volume_tol
         for a, b in measured:
             distance, volume = geometry.pair(a, b, transforms[a].inverse() @ transforms[b], thresholds[(a, b)])
@@ -325,21 +338,21 @@ def sweep(chain: Any, geometry: Geometry, samples: list[Sample], pairs: list[tup
                 seen["samples_below"] += distance < requirement["required_mm"]
                 if (distance, -volume) < (seen["clearance_mm"], -seen["overlap_mm3"]):
                     seen.update(clearance_mm=distance, overlap_mm3=volume, sample=sample)
-            if (a, b) not in checked:
-                continue
             refs = [chain.ref(a), chain.ref(b)]
-            best = state.clearance.get((a, b))
-            if best is None or distance < best["clearance_mm"]:
-                state.clearance[(a, b)] = {"pair": refs, "clearance_mm": distance, "pose": rounded(sample.values),
-                                           "independent_pose": rounded(sample.settings)}
-            if tuple(sorted((a, b))) in allowed:
-                continue
-            if distance - required < closest[0]:
-                closest = (distance - required, distance, refs)
-            if volume > volume_tol:
-                hits.append({"pair": refs, "volume_mm3": round(volume, 4)})
-                if volume > overlap[0]:
-                    overlap = (volume, refs)
+            undeclared = 0.0
+            if (a, b) in checked:
+                best = state.clearance.get((a, b))
+                if best is None or distance < best["clearance_mm"]:
+                    state.clearance[(a, b)] = {"pair": refs, "clearance_mm": distance, "pose": rounded(sample.values),
+                                               "independent_pose": rounded(sample.settings)}
+                if tuple(sorted((a, b))) not in allowed and volume > volume_tol:
+                    undeclared = volume
+                    hits.append({"pair": refs, "volume_mm3": round(volume, 4)})
+                    if volume > overlap[0]:
+                        overlap = (volume, refs)
+            limit = tightest.get((a, b))
+            if limit is not None and (distance - limit[0], -undeclared) < closest[0]:
+                closest = ((distance - limit[0], -undeclared), distance, refs, limit)
         low, high = geometry.bounds(effector, transforms[effector])
         state.envelope_min = [min(m, v) for m, v in zip(state.envelope_min, low)]
         state.envelope_max = [max(m, v) for m, v in zip(state.envelope_max, high)]
@@ -355,12 +368,13 @@ def sweep(chain: Any, geometry: Geometry, samples: list[Sample], pairs: list[tup
             rank, metric, pair = (-reach,), {"reach_mm": round(reach, 3),
                                              "centre_of_mass": [round(v, 4) for v in centre]}, None
         elif criterion == "minimum_clearance":
-            if closest[2] is None:
+            if closest[3] is None:
                 continue
-            rank = (closest[0], -overlap[0])
-            metric = {"clearance_mm": round(closest[1], 4), "required_mm": required,
-                      "margin_mm": round(closest[0], 4), "overlap_mm3": round(overlap[0], 4)}
-            pair = overlap[1] or closest[2]  # an overlapping pair is at distance 0, the smallest margin
+            margin = closest[0][0]
+            rank = (margin, -overlap[0])
+            metric = {"clearance_mm": round(closest[1], 4), "required_mm": closest[3][0],
+                      "requirement": closest[3][1], "margin_mm": round(margin, 4), "overlap_mm3": round(overlap[0], 4)}
+            pair = closest[2]
         else:  # maximum_interference
             if not hits:
                 continue
@@ -370,17 +384,19 @@ def sweep(chain: Any, geometry: Geometry, samples: list[Sample], pairs: list[tup
     return state
 
 
-def clearance_report(clearance: dict[tuple[str, str], dict[str, Any]],
-                     required: float) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def clearance_report(clearance: dict[tuple[str, str], dict[str, Any]], required: float,
+                     fitted: set[tuple[str, str]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """(per-pair minimum clearance smallest first, findings for the pairs below `required` mm).
 
-    The comparison uses the measured distance; only the output rounds it to 4 decimals.
+    A fitted pair (sorted occurrence ids in `fitted`) is listed but never a finding. The comparison
+    uses the measured distance; only the output rounds it to 4 decimals.
     """
-    ordered = sorted(clearance.values(), key=lambda item: item["clearance_mm"])
-    rows = [{**item, "clearance_mm": round(item["clearance_mm"], 4)} for item in ordered]
+    ordered = sorted(clearance.items(), key=lambda item: item[1]["clearance_mm"])
+    rows = [{**item, "clearance_mm": round(item["clearance_mm"], 4)} for _, item in ordered]
     findings = [{"check": "min_clearance", "pair": row["pair"], "clearance_mm": row["clearance_mm"],
                  "required_mm": required, "pose": row["pose"]}
-                for item, row in zip(ordered, rows) if item["clearance_mm"] < required]
+                for (pair, item), row in zip(ordered, rows)
+                if item["clearance_mm"] < required and tuple(sorted(pair)) not in fitted]
     return rows, findings
 
 
@@ -495,7 +511,8 @@ def write_evidence(args: argparse.Namespace, chain: Any, definitions: dict[str, 
         "pose": sample.values,
         "units": {j.id: j.unit for j in chain.movable},
         "inputs": {"hw": str(args.hw), "assembly_yaml_sha256": sha256(args.hw / "assembly.yaml"),
-                   "geometry": geometry_option(args), "attach": list(args.attach)},
+                   "geometry": geometry_option(args), "attach": list(args.attach),
+                   "pair_clearance": list(args.pair_clearance)},
         "step": {"path": str(args.worst_step), "sha256": digest},
         "occurrences": occurrences,
         "command": pose_command(args, sample.settings),
@@ -503,14 +520,17 @@ def write_evidence(args: argparse.Namespace, chain: Any, definitions: dict[str, 
     return path
 
 
-def declared_policy(hw: Path, assembly: Any) -> tuple[set[tuple[str, str]], list[dict[str, Any]]]:
-    """(the sorted occurrence pairs hw/interfaces.yaml allows to overlap, its clearance requirements),
-    both from pair_policy.py."""
+def declared_policy(hw: Path, assembly: Any) -> tuple[set[tuple[str, str]], set[tuple[str, str]], list[dict[str, Any]]]:
+    """(the sorted occurrence pairs hw/interfaces.yaml allows to overlap, those it declares fitted, its
+    clearance requirements), all from pair_policy.py."""
     try:
         interfaces = pair_policy.read_interfaces(hw)
-        allowed = pair_policy.allowed_pairs(pair_policy.declared_press_fits(hw, interfaces, assembly),
-                                            pair_policy.declared_heat_sets(hw, interfaces, assembly))
-        return allowed, pair_policy.declared_clearances(hw, interfaces, assembly)
+        press_fits = pair_policy.declared_press_fits(hw, interfaces, assembly)
+        heat_sets = pair_policy.declared_heat_sets(hw, interfaces, assembly)
+        fitted = pair_policy.fitted_pairs(press_fits, pair_policy.declared_running_fits(hw, interfaces, assembly),
+                                          heat_sets)
+        return (pair_policy.allowed_pairs(press_fits, heat_sets), fitted,
+                pair_policy.declared_clearances(hw, interfaces, assembly))
     except pair_policy.PolicyError as error:
         raise pose.MotionError(str(error)) from error
 
@@ -551,7 +571,7 @@ def main(argv: list[str] | None = None) -> int:
         if bound > args.max_poses:
             raise pose.MotionError(f"{bound} poses exceed --max-poses {args.max_poses}; lower --steps or --grid")
         pairs, excluded = pairs_to_check(chain, args.include_pair)
-        allowed, declared = declared_policy(args.hw, assembly)
+        allowed, fitted, declared = declared_policy(args.hw, assembly)
         requirements = pair_requirements(chain, declared, args.pair_clearance)
         effector = end_effector(chain, args.end_effector)
         path = [j for j in chain.path(effector) if j.movable]
@@ -560,7 +580,7 @@ def main(argv: list[str] | None = None) -> int:
         geometry = Geometry(chain, {pn: definitions[pn] for pn in {chain.pn(oid) for oid in chain.ids}})
         loaded = time.monotonic()
         samples = generate_poses(chain, args.steps, args.grid)
-        state = sweep(chain, geometry, samples, pairs, allowed, requirements, effector, path[0].origin,
+        state = sweep(chain, geometry, samples, pairs, allowed, fitted, requirements, effector, path[0].origin,
                       args.volume_tol, args.worst_criterion, args.min_clearance, loaded + args.time_limit)
         swept = time.monotonic()
         complete = state.evaluated == len(samples)
@@ -589,7 +609,7 @@ def main(argv: list[str] | None = None) -> int:
     except (pose.MotionError, OSError) as error:
         print(f"sweep: {error}", file=sys.stderr)
         return 2
-    clearance, findings = clearance_report(state.clearance, args.min_clearance)
+    clearance, findings = clearance_report(state.clearance, args.min_clearance, fitted)
     requirement_rows = pair_clearance_report(chain, requirements, state.pair_clearance)
     failed = bool(state.collisions or findings or state.limits or any(r["status"] == "fail" for r in requirement_rows))
     status = "incomplete" if not complete else ("fail" if failed else "pass")
@@ -603,7 +623,8 @@ def main(argv: list[str] | None = None) -> int:
                   "dependent_joints": [j.id for j in chain.dependent],
                   "spacing": {j.id: (j.max - j.min) / (args.steps - 1) for j in chain.independent}},
         "pairs": {"checked": refs, "excluded_adjacent": [[chain.ref(a), chain.ref(b)] for a, b in excluded],
-                  "declared_overlap": [[chain.ref(a), chain.ref(b)] for a, b in pairs if tuple(sorted((a, b))) in allowed]},
+                  "declared_overlap": [[chain.ref(a), chain.ref(b)] for a, b in pairs if tuple(sorted((a, b))) in allowed],
+                  "declared_fit": [[chain.ref(a), chain.ref(b)] for a, b in pairs if tuple(sorted((a, b))) in fitted]},
         "occurrences": {oid: chain.pn(oid) for oid in chain.ids},
         "collision_pose_count": len(state.collisions),
         "collisions": state.collisions[:MAX_LISTED],

@@ -59,8 +59,9 @@ record with couplings (exit 2). Verify coupled motion with `pose.py` and `sweep.
    `timings_s`. Only independent joints are sampled; every coupled joint is derived at each sample.
    `--worst-criterion` picks the worst case:
    `max_horizontal_reach` (default; collision-free poses, the end effector's cantilever arm),
-   `minimum_clearance` (smallest clearance margin), or `maximum_interference` (largest undeclared
-   overlap). One-driver engine over 720 degrees at 5 degree steps:
+   `minimum_clearance` (smallest margin: a pair's distance minus its tightest requirement), or
+   `maximum_interference` (largest undeclared overlap). One-driver engine over 720 degrees at 5
+   degree steps:
    `uv run --script skill://cad-flow/scripts/run.py cad-motion/scripts/sweep.py --hw hw --version vN --steps 145 --grid 0 --worst-criterion minimum_clearance --worst-step worst.step`
    Pair requirements: the sweep measures every clearance requirement in `hw/interfaces.yaml`
    (`type: clearance`, `pair: [REF, REF]`, `min_clearance_mm`, such as valve-to-piston >= 1 mm) at
@@ -95,8 +96,11 @@ Exit codes for all scripts:
   `interfaces.yaml` (interference press fit, heat-set insert) on exactly that occurrence pair is
   not a collision (`pair_policy.py`, shared with cad-model `check`).
 - Collision and clearance differ. The collision and `--min-clearance` checks leave out
-  joint-connected pairs, and a declared fit or insert excuses its pair's overlap. Neither exempts
-  a pair from its own clearance requirement: the sweep measures it at every sample.
+  joint-connected pairs. `--min-clearance` also leaves out a pair declared as a press fit, running
+  fit or heat-set insert (`pairs.declared_fit`), joint-connected or not: fitted or contacting by
+  design, it inherits no global running clearance. An interference fit or an insert excuses its
+  pair's overlap. None of these exempts a pair from its own clearance requirement: the sweep
+  measures it at every sample.
 - The sweep caches a pair measurement by the two definitions and their relative placement. When a
   threshold lies within the most the placement difference can move a cached distance, the sweep
   measures the pair again (`threshold_rechecks` in `timings_s`). No cached value decides a verdict

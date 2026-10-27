@@ -162,9 +162,15 @@ class ClearanceTests(unittest.TestCase):
     def test_a_clearance_just_below_the_requirement_fails_though_it_rounds_up(self) -> None:
         measured = {("TST-0001", "TST-0003"): {"pair": ["TST-0001", "TST-0003"], "clearance_mm": 0.49996,
                                                "pose": {"J-001": 0.0}}}
-        rows, findings = sweep.clearance_report(measured, 0.5)
+        rows, findings = sweep.clearance_report(measured, 0.5, set())
         self.assertEqual(rows[0]["clearance_mm"], 0.5)
         self.assertEqual([f["pair"] for f in findings], [["TST-0001", "TST-0003"]])
+
+    def test_a_fitted_pair_is_listed_but_never_a_clearance_finding(self) -> None:
+        measured = {("TST-0003", "TST-0001"): {"pair": ["TST-0003", "TST-0001"], "clearance_mm": 0.0,
+                                               "pose": {"J-001": 0.0}}}
+        rows, findings = sweep.clearance_report(measured, 0.5, {("TST-0001", "TST-0003")})
+        self.assertEqual(([row["clearance_mm"] for row in rows], findings), ([0.0], []))
 
 
 class ConsoleRedirectTests(unittest.TestCase):
@@ -222,6 +228,18 @@ joints:
   - {id: J-001, type: revolute, parent: TST-0201, child: "@arm-a", axis: [0, 0, 1], origin: [0, 0, 0], min: -10, max: 0, nominal: 0}
   - {id: J-002, type: fixed, parent: TST-0201, child: "@arm-b", axis: [0, 0, 1], origin: [0, 0, 0], min: 0, max: 0, nominal: 0}
 """
+# GAP_YAML with @arm-b at y 10..20, touching @arm-a's tab at J-001 = 0 (0 mm; 0.038 mm at -5 deg).
+TOUCH_YAML = GAP_YAML.replace("[0, 15.8, 0]", "[0, 15, 0]").replace("Arms 0.8 mm apart", "Arms touching")
+# A heat-set insert declared on @arm-a (host) and @arm-b: a checked pair, not joint-connected.
+HEAT_SET = {"id": "IF-001", "from": "arm-a", "to": "arm-b", "type": "mounting", "description": "Insert in the arm.",
+            "limits": {"heat_set": [{"pair": ["@arm-a", "@arm-b"], "hole_d": 4.0, "insert": "M3 x 4",
+                                     "source": "https://example.com/m3-insert"}]}}
+
+
+def clearance_interface(number: int, pair: list[str], minimum: float) -> dict:
+    """An interfaces.yaml clearance requirement IF-00<number>."""
+    return {"id": f"IF-00{number}", "from": pair[0], "to": pair[1], "type": "clearance", "description": "Running gap.",
+            "pair": pair, "min_clearance_mm": minimum}
 
 
 def assembly_of(text: str):
@@ -332,6 +350,30 @@ class PairRequirementTests(unittest.TestCase):
         with self.assertRaisesRegex(self.policy.PolicyError, "already has a clearance requirement at "
                                                              "interfaces.yaml#/interfaces/0"):
             self.declared(self.requirement(["@arm-a", "@arm-b"]), self.requirement(["@arm-b", "@arm-a"], 2.0, number=2))
+
+    def test_running_fits_press_fits_and_inserts_name_the_fitted_pairs(self) -> None:
+        running = {"id": "IF-001", "from": "a", "to": "b", "type": "motion", "description": "Pivots.",
+                   "limits": {"running_fit": {"fit": "5 f7", "pair": ["@arm-a", "TST-0201"]}}}
+        endpoints = {"id": "IF-002", "from": "a", "to": "b", "type": "motion", "description": "Pivots.",
+                     "limits": {"running_fit": {"fit": "5 H7/g6", "hole": {"PN": "TST-0202", "occurrence": "@arm-b",
+                                                                           "feature": "bore"},
+                                                "shaft": {"PN": "TST-0201", "feature": "pin"}}}}
+        assembly, hw = assembly_of(GAP_YAML), Path("hw")
+        interfaces = [running, endpoints, HEAT_SET]
+        fits = self.policy.declared_running_fits(hw, interfaces, assembly)
+        self.assertEqual([(fit["pair"], fit["fit"], fit["source"]) for fit in fits], [
+            (["TST-0201", "arm-a"], "5 f7", "interfaces.yaml#/interfaces/0/limits/running_fit"),
+            (["TST-0201", "arm-b"], "5 H7/g6", "interfaces.yaml#/interfaces/1/limits/running_fit")])
+        self.assertEqual(fits[1]["endpoints"]["hole"], {"PN": "TST-0202", "occurrence": "@arm-b", "feature": "bore"})
+        fitted = self.policy.fitted_pairs(self.policy.declared_press_fits(hw, interfaces, assembly), fits,
+                                          self.policy.declared_heat_sets(hw, interfaces, assembly))
+        self.assertEqual(fitted, {("TST-0201", "arm-a"), ("TST-0201", "arm-b"), ("arm-a", "arm-b")})
+
+    def test_a_running_fit_on_one_occurrence_twice_is_refused(self) -> None:
+        twice = {"id": "IF-001", "from": "a", "to": "b", "type": "motion", "description": "Pivots.",
+                 "limits": {"running_fit": {"fit": "5 f7", "pair": ["TST-0202", "@arm-p"]}}}
+        with self.assertRaisesRegex(self.policy.PolicyError, "both ends are the same occurrence"):
+            self.policy.declared_running_fits(Path("hw"), [twice], assembly_of(PLACED_YAML))
 
     def test_an_option_overrides_the_record_or_adds_a_requirement(self) -> None:
         declared = self.declared(self.requirement(["@arm-b", "@arm-a"], 0.5))
@@ -552,20 +594,23 @@ class StepTests(unittest.TestCase):
         self.assertIn("ambiguous", proc.stderr)
         self.assertIn("@arm-a, @arm-b", proc.stderr)
 
-    def gap_sweep(self, between: float | None, plate: float | None, *options: str):
-        """Sweep GAP_YAML (J-001 at -10, -5 and 0 deg) with interfaces.yaml requiring `between` mm for
-        @arm-a / @arm-b and `plate` mm for the joint-connected TST-0201 / @arm-a (None: no requirement)."""
+    def twins_sweep(self, assembly: str, interfaces: list[dict], *options: str):
+        """Sweep `assembly` over the twins geometry (J-001 at -10, -5 and 0 deg) with `interfaces` as
+        hw/interfaces.yaml; returns the process, the result and its pair_clearance rows by pair."""
         import yaml
 
-        hw = self.twins(GAP_YAML)
-        declared = [(1, ["@arm-a", "@arm-b"], between), (2, ["TST-0201", "@arm-a"], plate)]
-        (hw / "interfaces.yaml").write_text(yaml.safe_dump({"interfaces": [
-            {"id": f"IF-00{n}", "from": pair[0], "to": pair[1], "type": "clearance", "description": "Running gap.",
-             "pair": pair, "min_clearance_mm": minimum} for n, pair, minimum in declared if minimum is not None]}),
-            encoding="utf-8")
+        hw = self.twins(assembly)
+        (hw / "interfaces.yaml").write_text(yaml.safe_dump({"interfaces": interfaces}), encoding="utf-8")
         proc, result = self.run_script("sweep.py", "--hw", str(hw), "--parts-dir", str(self.root / "fx" / "twins"),
                                        "--steps", "3", "--grid", "0", *options, "--worst-step", str(hw / "worst.step"))
         return proc, result, {tuple(row["pair"]): row for row in result.get("pair_clearance", [])}
+
+    def gap_sweep(self, between: float | None, plate: float | None, *options: str):
+        """Sweep GAP_YAML requiring `between` mm for @arm-a / @arm-b and `plate` mm for the
+        joint-connected TST-0201 / @arm-a (None: no requirement)."""
+        declared = [(1, ["@arm-a", "@arm-b"], between), (2, ["TST-0201", "@arm-a"], plate)]
+        return self.twins_sweep(GAP_YAML, [clearance_interface(n, pair, minimum) for n, pair, minimum in declared
+                                           if minimum is not None], *options)
 
     def test_a_pair_requirement_above_the_gap_fails_and_one_below_it_passes(self) -> None:
         proc, result, rows = self.gap_sweep(1.0, 1.0)
@@ -608,6 +653,49 @@ class StepTests(unittest.TestCase):
         self.assertEqual((proc.returncode, result), (2, {}), proc.stderr[-2000:])
         self.assertIn("--pair-clearance @arm-a:@arm-z=1.0", proc.stderr)
         self.assertIn("@arm-z", proc.stderr)
+
+    def test_a_fitted_pair_inherits_no_min_clearance_but_keeps_its_own_requirement(self) -> None:
+        proc, result, _ = self.twins_sweep(TOUCH_YAML, [], "--min-clearance", "0.5")
+        self.assertEqual(proc.returncode, 1, proc.stderr[-2000:])
+        self.assertEqual([(f["pair"], f["clearance_mm"]) for f in result["clearance_findings"]],
+                         [(["@arm-a", "@arm-b"], 0.0)])
+
+        # Declared as a heat-set insert, the 0 mm pair passes the global 0.5 mm running clearance.
+        proc, result, _ = self.twins_sweep(TOUCH_YAML, [HEAT_SET], "--min-clearance", "0.5")
+        self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+        self.assertEqual((result["status"], result["clearance_findings"], result["collisions"]), ("pass", [], []))
+        self.assertEqual((result["pairs"]["checked"], result["pairs"]["declared_fit"]),
+                         ([["@arm-a", "@arm-b"]], [["@arm-a", "@arm-b"]]))
+        self.assertEqual(result["min_clearance"][0]["clearance_mm"], 0.0)  # still reported
+
+        # An explicit 0.5 mm requirement on that fitted pair still holds.
+        proc, result, rows = self.twins_sweep(TOUCH_YAML, [HEAT_SET, clearance_interface(2, ["@arm-a", "@arm-b"], 0.5)],
+                                              "--min-clearance", "0.5")
+        self.assertEqual(proc.returncode, 1, proc.stderr[-2000:])
+        self.assertEqual(result["clearance_findings"], [])
+        row = rows[("@arm-a", "@arm-b")]
+        self.assertEqual((row["status"], row["required_mm"], row["clearance_mm"], row["independent_pose"]),
+                         ("fail", 0.5, 0.0, {"J-001": 0.0}))
+
+    def test_the_minimum_clearance_worst_case_follows_the_tightest_requirement(self) -> None:
+        criterion = ("--worst-criterion", "minimum_clearance")
+        proc, result, _ = self.gap_sweep(None, None, *criterion)
+        self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+        worst = result["worst_case"]
+        self.assertEqual((worst["pair"], worst["independent_pose"], worst["clearance_mm"], worst["required_mm"],
+                          worst["requirement"], worst["margin_mm"]),
+                         (["@arm-a", "@arm-b"], {"J-001": 0.0}, 0.8, 0.0, "--min-clearance", 0.8))
+
+        # 1 mm on the plate gap (0.8 mm at every sample) is the tightest margin: -0.2 mm, the earliest sample.
+        proc, result, _ = self.gap_sweep(None, 1.0, *criterion)
+        self.assertEqual(proc.returncode, 1, proc.stderr[-2000:])
+        worst = result["worst_case"]
+        self.assertEqual((worst["pair"], worst["independent_pose"], worst["clearance_mm"], worst["required_mm"],
+                          worst["requirement"], worst["margin_mm"]),
+                         (["TST-0201", "@arm-a"], {"J-001": -10.0}, 0.8, 1.0, "interfaces.yaml#/interfaces/0", -0.2))
+        evidence = json.loads(Path(worst["evidence"]).read_text(encoding="utf-8"))
+        self.assertEqual((evidence["pair"], evidence["metric"]["requirement"]),
+                         (["TST-0201", "@arm-a"], "interfaces.yaml#/interfaces/0"))
 
     def test_an_assembly_step_with_the_wrong_rest_placement_is_refused(self) -> None:
         hw = self.twins(TWINS_YAML)
@@ -768,10 +856,14 @@ class StepTests(unittest.TestCase):
             row = rows[(f"@piston-{cylinder}", f"@valve-{cylinder}")]
             # Closest at the cylinder's first TDC, its valve closed: the head's gap above the crown.
             self.assertEqual((row["clearance_mm"], row["independent_pose"]), (v6_record.VALVE_GAP, {"J-001": -phase % 360}))
+        # The tightest margin is a valve's: exactly its 1 mm requirement, 0 mm to spare, first at crank 0,
+        # where cylinders 1 and 4 are at TDC; the smallest unrequired gap (--min-clearance 0) is wider.
         worst = result["worst_case"]
-        self.assertEqual((worst["criterion"], worst["required_mm"], worst["overlap_mm3"]), ("minimum_clearance", 0.0, 0.0))
-        self.assertEqual((worst["clearance_mm"], worst["margin_mm"]), (result["min_clearance"][0]["clearance_mm"],) * 2)
-        self.assertEqual(sorted(worst["pair"]), sorted(result["min_clearance"][0]["pair"]))
+        self.assertEqual((worst["criterion"], worst["required_mm"], worst["margin_mm"], worst["overlap_mm3"]),
+                         ("minimum_clearance", 1.0, 0.0, 0.0))
+        self.assertEqual((worst["pair"], worst["independent_pose"], worst["requirement"]),
+                         (["@piston-1", "@valve-1"], {"J-001": 0.0}, "interfaces.yaml#/interfaces/0"))
+        self.assertGreater(result["min_clearance"][0]["clearance_mm"], 0.0)
         self.assertTrue((hw / "worst.step.json").is_file())
 
         # Each valve keeps exactly its 1 mm requirement, closed at its cylinder's first TDC.
