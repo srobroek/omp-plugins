@@ -17,6 +17,11 @@ assembly by the product they instance, and writes an indented BOM:
             with its qty, and its children once beneath it
     rev, title, material, process, make_buy, supplier, mass
             from hw/parts/<PN>/part.yaml; mass is mass_target verbatim
+    unit    "pcs": qty counts STEP instances
+    designation, manufacturer, manufacturer_part_number, supplier_part_number
+            from part.yaml `procurement`
+    specification_ref, specification_rev
+            from part.yaml `procurement.specification` reference and revision
 
 An assembly product whose name carries no part number is a phantom grouping:
 its children roll up into the nearest numbered ancestor with multiplied qty.
@@ -45,8 +50,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-COLUMNS = ("level", "PN", "rev", "qty", "title", "material", "process", "make_buy", "supplier", "mass")
+COLUMNS = ("level", "PN", "rev", "qty", "title", "material", "process", "make_buy", "supplier", "mass",
+           "unit", "designation", "manufacturer", "manufacturer_part_number", "supplier_part_number",
+           "specification_ref", "specification_rev")
 PART_FIELDS = ("rev", "title", "material", "process", "make_buy", "supplier")
+PROCUREMENT_FIELDS = ("designation", "manufacturer", "manufacturer_part_number", "supplier_part_number")
 PN_PREFIX = re.compile(r"^([A-Z]{2,5}-\d{4})(?![0-9])")
 PN_EXACT = re.compile(r"^[A-Z]{2,5}-\d{4}$")
 
@@ -217,8 +225,13 @@ def roll_up(roots: list[Node], parts: dict[str, dict[str, Any]]) -> dict[str, An
         title = meta.get("title")
         if title is None:
             title = node.name[len(pn):].strip(" _-:") or None
-        row = {"level": str(level), "PN": pn, "qty": str(qty), "mass": _cell(meta.get("mass_target"))}
+        row = {"level": str(level), "PN": pn, "qty": str(qty), "mass": _cell(meta.get("mass_target")), "unit": "pcs"}
         row.update({key: _cell(meta.get(key)) for key in PART_FIELDS})
+        procurement = meta.get("procurement") if isinstance(meta.get("procurement"), dict) else {}
+        specification = procurement.get("specification") if isinstance(procurement.get("specification"), dict) else {}
+        row.update({key: _cell(procurement.get(key)) for key in PROCUREMENT_FIELDS})
+        row["specification_ref"] = _cell(specification.get("reference"))
+        row["specification_rev"] = _cell(specification.get("revision"))
         row["title"] = _cell(title)
         rows.append(row)
         for child, count in numbered_children(node, 1):

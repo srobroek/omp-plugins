@@ -138,8 +138,8 @@ def _fits_module() -> Any:
     return module
 
 
-def declared_press_fits(hw: Path) -> list[dict[str, Any]]:
-    """Read press-fit pair declarations and classify them with cad-fits' ISO 286 tables."""
+def _interfaces(hw: Path) -> list[Any]:
+    """The interfaces list of hw/interfaces.yaml; empty when the file is absent."""
     path = hw / "interfaces.yaml"
     try:
         document = yaml.safe_load(path.read_text(encoding="utf-8"))
@@ -149,10 +149,42 @@ def declared_press_fits(hw: Path) -> list[dict[str, Any]]:
         raise build.UsageError(f"{path}: cannot read interfaces: {error}") from error
     if not isinstance(document, dict) or not isinstance(document.get("interfaces"), list):
         raise build.UsageError(f"{path}: expected an interfaces list")
+    return document["interfaces"]
 
-    fits = _fits_module()
+
+def _text(value: Any) -> bool:
+    return isinstance(value, str) and bool(value)
+
+
+def _fit_parts(fit: dict[str, Any], where: str) -> tuple[list[str], dict[str, Any] | None]:
+    """The hole and shaft PNs of a fit, and its feature endpoints when it declares them instead of a pair."""
+    endpoints = {side: fit[side] for side in ("hole", "shaft") if side in fit}
+    if "pair" in fit and not endpoints:
+        pair = fit["pair"]
+        if not isinstance(pair, list) or len(pair) != 2 or not all(_text(pn) for pn in pair) or pair[0] == pair[1]:
+            raise build.UsageError(f"{where}: expected fit and two distinct part numbers")
+        return list(pair), None
+    if "pair" not in fit and len(endpoints) == 2 and all(
+            isinstance(e, dict) and _text(e.get("PN")) and isinstance(e.get("feature"), str) and e["feature"]
+            for e in endpoints.values()) and endpoints["hole"]["PN"] != endpoints["shaft"]["PN"]:
+        return [endpoints["hole"]["PN"], endpoints["shaft"]["PN"]], {
+            side: {key: endpoints[side][key] for key in ("PN", "feature", "region") if key in endpoints[side]}
+            for side in ("hole", "shaft")}
+    raise build.UsageError(f"{where}: expected fit with either a part pair or hole and shaft endpoints "
+                           "{PN, feature} on two distinct parts")
+
+
+def declared_press_fits(hw: Path) -> list[dict[str, Any]]:
+    """Read press-fit declarations and classify them with cad-fits' ISO 286 tables.
+
+    A fit names its parts as a `pair` or as feature-specific `hole` and `shaft` endpoints; an
+    endpoint declaration is reported with its `endpoints`.
+    """
+    path = hw / "interfaces.yaml"
+    interfaces = _interfaces(hw)
+    fits = _fits_module() if interfaces else None
     declared = []
-    for index, interface in enumerate(document["interfaces"]):
+    for index, interface in enumerate(interfaces):
         if not isinstance(interface, dict):
             continue
         limits = interface.get("limits")
@@ -163,10 +195,9 @@ def declared_press_fits(hw: Path) -> list[dict[str, Any]]:
         if not isinstance(press, dict):
             raise build.UsageError(f"{path}:{source}: expected a fit and part pair")
         designation = press.get("fit")
-        pair = press.get("pair")
-        if (not isinstance(designation, str) or not isinstance(pair, list) or len(pair) != 2
-                or not all(isinstance(pn, str) and pn for pn in pair) or pair[0] == pair[1]):
+        if not isinstance(designation, str):
             raise build.UsageError(f"{path}:{source}: expected fit and two distinct part numbers")
+        pair, endpoints = _fit_parts(press, f"{path}:{source}")
         parts = designation.split(maxsplit=1)
         if len(parts) != 2:
             raise build.UsageError(f"{path}:{source}: fit must contain a nominal size and ISO fit")
@@ -177,19 +208,52 @@ def declared_press_fits(hw: Path) -> list[dict[str, Any]]:
             classified = fit_data["type"]
         except (InvalidOperation, ValueError, fits.FitError, KeyError) as error:
             raise build.UsageError(f"{path}:{source}: cannot classify {designation!r}: {error}") from error
-        declared.append({"pair": sorted(tuple(pair)), "fit": designation, "classification": classified,
-                         "interface": interface.get("id"), "source": source})
+        entry = {"pair": sorted(pair), "fit": designation, "classification": classified,
+                 "interface": interface.get("id"), "source": source}
+        if endpoints is not None:
+            entry["endpoints"] = endpoints
+        declared.append(entry)
+    return declared
+
+
+def declared_heat_sets(hw: Path) -> list[dict[str, Any]]:
+    """Read heat-set insert declarations, `limits.heat_set: [{pair: [host PN, insert PN], hole_d, insert, source}]`.
+
+    An installed insert overlaps its bore by design, so each pair is allowed to interfere; unlike a
+    press fit, no measured overlap is required, because a model may draw the insert at its bore size.
+    """
+    path = hw / "interfaces.yaml"
+    declared = []
+    for index, interface in enumerate(_interfaces(hw)):
+        limits = interface.get("limits") if isinstance(interface, dict) else None
+        entries = limits.get("heat_set") if isinstance(limits, dict) else None
+        if entries is None:
+            continue
+        if not isinstance(entries, list):
+            raise build.UsageError(f"{path}:interfaces.yaml#/interfaces/{index}/limits/heat_set: expected a list")
+        for number, entry in enumerate(entries):
+            source = f"interfaces.yaml#/interfaces/{index}/limits/heat_set/{number}"
+            pair = entry.get("pair") if isinstance(entry, dict) else None
+            hole_d = entry.get("hole_d") if isinstance(entry, dict) else None
+            if (not isinstance(pair, list) or len(pair) != 2 or not all(_text(pn) for pn in pair) or pair[0] == pair[1]
+                    or isinstance(hole_d, bool) or not isinstance(hole_d, (int, float)) or hole_d <= 0
+                    or not isinstance(entry.get("insert"), str) or not entry["insert"]):
+                raise build.UsageError(f"{path}:{source}: expected pair [host PN, insert PN], a positive hole_d "
+                                       "and an insert designation")
+            declared.append({"pair": sorted(pair), "host": pair[0], "insert": entry["insert"], "hole_d": hole_d,
+                             "interface": interface.get("id"), "source": source})
     return declared
 
 
 def interference(geometry: dict[tuple[str, str], dict[str, Any]], named: list[tuple[str, str]] | None,
                  joint_pairs: set[tuple[str, str]], allowed: set[tuple[str, str]],
-                 declared: Iterable[dict[str, Any]] = ()) -> dict[str, Any]:
-    """Only a classified declared interference fit excuses overlap; clearance mismatches fail."""
+                 declared: Iterable[dict[str, Any]] = (), heat_sets: Iterable[dict[str, Any]] = ()) -> dict[str, Any]:
+    """Only a classified declared interference fit or a declared heat-set insert excuses overlap."""
     threshold = load_pose().INTERFERENCE_MM3
     declarations = sorted(declared, key=lambda item: (item["pair"], item["source"]))
+    inserts = sorted(heat_sets, key=lambda item: (item["pair"], item["source"]))
     declared_allowed = {tuple(item["pair"]) for item in declarations if item["classification"] == "interference"}
-    effective_allowed = allowed | declared_allowed
+    effective_allowed = allowed | declared_allowed | {tuple(item["pair"]) for item in inserts}
     pairs = sorted(set(geometry) if named is None else {tuple(sorted(p)) for p in named})
     selected = set(pairs)
     unknown = [list(p) for p in pairs if p not in geometry]
@@ -220,7 +284,7 @@ def interference(geometry: dict[tuple[str, str], dict[str, Any]], named: list[tu
     ok = all(e["ok"] for e in every) and not unknown and not unknown_allowed and not declared_fit_findings
     return {"status": _status(ok), "blocking": True, "selection": "all" if named is None else "named",
             "threshold_mm3": threshold, "unknown_pairs": unknown, "unknown_allowed": unknown_allowed,
-            "declared_pairs": declarations, "declared_fit_findings": declared_fit_findings,
+            "declared_pairs": declarations, "declared_heat_sets": inserts, "declared_fit_findings": declared_fit_findings,
             "min_clearance": {"pair": smallest["pair"], "clearance_mm": smallest["clearance_mm"]} if smallest else None,
             **rows}
 
@@ -308,11 +372,13 @@ def check(hw: Path, label: str, named: list[tuple[str, str]] | None, allowed: It
     joint_pairs = {tuple(entry["pair"]) for entry in joints}
     geometry = pair_geometry(placed)
     declared = declared_press_fits(hw)
+    heat_sets = declared_heat_sets(hw)
     checks = {
         "step_readback": step_readback(folder, manifest, parts, placed),
         "brep_validity": brep_validity(parts, manifest),
         "solid_structure": solid_structure(parts, expected_solids, baseline, previous),
-        "interference": interference(geometry, named, joint_pairs, {tuple(sorted(p)) for p in allowed}, declared),
+        "interference": interference(geometry, named, joint_pairs, {tuple(sorted(p)) for p in allowed}, declared,
+                                     heat_sets),
         "connection": connection(geometry, placed, joints),
         "slivers_tolerances": slivers_and_tolerances(parts),
         "mesh_watertight": mesh_watertight(folder, manifest["parts"]),
