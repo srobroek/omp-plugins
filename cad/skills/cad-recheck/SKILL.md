@@ -29,7 +29,7 @@ The installer refuses to replace a different `core.hooksPath` or ignore non-samp
 
 - A part definition changes: its model, its geometry parameters or its `model_frame`. Rerun:
   - that PN's per-part checks, once: model read-back, form, DFM, fits and the part drawing;
-  - `cad-model check` interference and connection for every pair that includes one of its occurrences;
+  - `cad-model check` interference, connection and clearance requirements (`pair_clearance`) for every pair that includes one of its occurrences;
   - the `cad-motion` sweeps that move one of its occurrences;
   - the FEA cases that select it by `part` or `occurrence`.
 - One occurrence's `placement` changes. Rerun that occurrence's pair checks and the sweeps that include it. The PN's per-part checks stay valid.
@@ -43,6 +43,7 @@ The installer refuses to replace a different `core.hooksPath` or ignore non-samp
   - the FEA cases that cite that `worst.step.json` as `evidence`.
 - An occurrence is added or removed. Rerun the BOM row of its PN (the quantity is the occurrence count), the pair checks of a new occurrence, and the assembly drawings that list the PN.
 - A material or process changes. Rerun that PN's per-part checks, the quantity-weighted assembly mass, and the FEA cases on that PN.
+- A batch adds or changes a clearance requirement in `hw/interfaces.yaml` (`type: clearance` with `pair` and `min_clearance_mm`). Rerun `cad-record` validation, `cad-model check`, whose `pair_clearance` holds it at the nominal pose, and every sweep that moves either occurrence of the pair, which holds it at every sample.
 
 The stamp hashes the whole staged `hw/` tree, so any staged change needs a new stamp. This list decides only which checks to rerun before that stamp.
 

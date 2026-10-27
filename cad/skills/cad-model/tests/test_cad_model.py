@@ -554,6 +554,50 @@ class OccurrenceBuildTests(unittest.TestCase):
         self.assertEqual({row["PN"]: row["qty"] for row in rows}, {BASE: "1", INSERT: "6"})
 
 
+@unittest.skipUnless(shutil.which("uv"), "uv is required for the kernel environments")
+class PairClearanceBuildTests(unittest.TestCase):
+    """The swing arm built 0.8 mm above the base, on its revolute joint, against a clearance
+    requirement on that joint-connected pair (CadQuery only)."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.hw = two_part_project(Path(cls.tmp.name), "cadquery")
+        set_arm(cls.hw, "cadquery", z0=20.8)  # the plate's underside 0.8 mm above the base top at z 20
+        cls.built = cli("run", str(cls.hw), "--label", "v1")
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls.tmp.cleanup()
+
+    def checked(self, minimum: float) -> tuple[subprocess.CompletedProcess[str], dict]:
+        self.assertEqual(self.built[0].returncode, 0, self.built[0].stderr[-3000:])
+        (self.hw / "interfaces.yaml").write_text(
+            "interfaces:\n  - {id: IF-001, from: arm, to: base, type: clearance, description: The arm clears the base.,"
+            f" pair: [{ARM_PN}, {BASE}], min_clearance_mm: {minimum}}}\n", encoding="utf-8")
+        proc, result, _ = cli("check", "v1", "--hw", str(self.hw))
+        return proc, result
+
+    def test_a_requirement_above_the_gap_blocks_and_one_below_it_passes(self) -> None:
+        proc, result = self.checked(1.0)
+        self.assertEqual(proc.returncode, 1, proc.stderr[-2000:])
+        self.assertEqual(result["blocking_failures"], ["pair_clearance"])
+        # J-001 joins the pair, so interference lists it as a joint pair; the requirement holds all the same.
+        self.assertEqual([row["pair"] for row in result["checks"]["interference"]["joint_pairs"]], [[BASE, ARM_PN]])
+        (row,) = result["checks"]["pair_clearance"]["requirements"]
+        self.assertEqual({key: row[key] for key in ("pair", "refs", "required_mm", "status", "interface", "source")},
+                         {"pair": [BASE, ARM_PN], "refs": [BASE, ARM_PN], "required_mm": 1.0, "status": "fail",
+                          "interface": "IF-001", "source": "interfaces.yaml#/interfaces/0"})
+        self.assertAlmostEqual(row["clearance_mm"], 0.8, places=6)
+
+        proc, result = self.checked(0.5)
+        self.assertEqual(proc.returncode, 0, json.dumps(result.get("checks"), indent=1)[:4000] + proc.stderr[-2000:])
+        (row,) = result["checks"]["pair_clearance"]["requirements"]
+        self.assertEqual((result["checks"]["pair_clearance"]["status"], row["status"], row["required_mm"]),
+                         ("pass", "pass", 0.5))
+        self.assertAlmostEqual(row["clearance_mm"], 0.8, places=6)
+
+
 class CheckRuleTests(unittest.TestCase):
     """check's verdicts on given measurements; needs no OCP."""
     def test_build_volume_accepts_axis_permutation(self) -> None:
@@ -672,6 +716,51 @@ class CheckRuleTests(unittest.TestCase):
         self.assertEqual(result["status"], "fail")
         self.assertEqual(result["declared_fit_findings"][0]["type"], "declared_fit_not_realized")
         self.assertEqual(result["declared_fit_findings"][0]["source"], declared[0]["source"])
+
+    @staticmethod
+    def requirement(pair: tuple[str, str], minimum: float) -> dict:
+        return {"pair": list(pair), "min_clearance_mm": minimum, "interface": "IF-002",
+                "source": "interfaces.yaml#/interfaces/1"}
+
+    def test_a_pair_requirement_fails_above_the_measured_clearance_and_passes_at_or_below_it(self) -> None:
+        geometry = gaps({(BASE, ARM_PN): 0.8})
+        for minimum, status in ((1.0, "fail"), (0.8, "pass"), (0.5, "pass")):
+            with self.subTest(minimum=minimum):
+                result = check.pair_clearance(geometry, [self.requirement((BASE, ARM_PN), minimum)], {ARM_PN: "@arm"})
+                self.assertEqual((result["status"], result["blocking"]), (status, True))
+                self.assertEqual(result["requirements"], [
+                    {"pair": [BASE, ARM_PN], "refs": [BASE, "@arm"], "required_mm": minimum, "clearance_mm": 0.8,
+                     "status": status, "interface": "IF-002", "source": "interfaces.yaml#/interfaces/1"}])
+
+    def test_a_pair_requirement_compares_the_unrounded_clearance(self) -> None:
+        result = check.pair_clearance(gaps({(BASE, ARM_PN): 0.79996}), [self.requirement((BASE, ARM_PN), 0.8)])
+        self.assertEqual(result["status"], "fail")
+
+    def test_an_unmeasured_or_absent_pair_fails_its_requirement(self) -> None:
+        geometry = gaps({(BASE, ARM_PN): None})
+        geometry[(BASE, ARM_PN)]["error"] = "Standard_Failure"
+        result = check.pair_clearance(geometry, [self.requirement((BASE, ARM_PN), 0.5), self.requirement((BASE, PIN), 0.5)])
+        self.assertEqual(result["status"], "fail")
+        self.assertEqual([(row["status"], row.get("error")) for row in result["requirements"]],
+                         [("fail", "Standard_Failure"), ("fail", "the version has no such occurrence pair")])
+        self.assertEqual(check.pair_clearance(geometry, [])["status"], "pass")
+
+    def test_a_clearance_requirement_record_resolves_through_the_pair_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            hw = Path(tmp)
+            path = hw / "interfaces.yaml"
+            requirement = ("interfaces:\n  - {id: IF-001, from: arm, to: base, type: clearance, description: Gap.,"
+                           " pair: [%s, %s], min_clearance_mm: %s}\n")
+            path.write_text(requirement % (ARM_PN, BASE, 0.5), encoding="utf-8")
+            self.assertEqual(check.declared_clearances(hw), [{"pair": [BASE, ARM_PN], "min_clearance_mm": 0.5,
+                                                              "interface": "IF-001",
+                                                              "source": "interfaces.yaml#/interfaces/0"}])
+            path.write_text(requirement % (ARM_PN, BASE, 0), encoding="utf-8")
+            with self.assertRaisesRegex(build.UsageError, "a clearance requirement needs"):
+                check.declared_clearances(hw)
+            path.write_text(requirement % ('"@arm-a"', BASE, 0.5), encoding="utf-8")
+            with self.assertRaisesRegex(build.UsageError, "no assembly record"):
+                check.declared_clearances(hw)
 
     def test_press_fit_record_is_classified_by_cad_fits(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

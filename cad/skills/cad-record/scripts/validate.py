@@ -260,10 +260,12 @@ def check_procurement(part: dict[str, Any], path: str, hw: Path, findings: list[
 
 def check_interfaces(interfaces: dict[str, Any], path: str, part_records: dict[str, Any],
                      inventory: assembly_data.Inventory | None, findings: list[dict[str, str]]) -> None:
-    """Fit endpoints and heat-set pairs must name existing parts, each resolving to one physical occurrence.
+    """Fit endpoints, heat-set pairs and clearance-requirement pairs must name existing parts, each
+    resolving to one physical occurrence.
 
     An `@id` names an occurrence; a bare PN must have at most one occurrence. A `from`/`to` that
-    starts with `@` must resolve; other `from`/`to` strings stay descriptive.
+    starts with `@` must resolve; other `from`/`to` strings stay descriptive. A clearance
+    requirement joins two distinct occurrences, and each occurrence pair has at most one.
     """
 
     def resolve(ref: str, where: str) -> str | None:
@@ -296,10 +298,23 @@ def check_interfaces(interfaces: dict[str, Any], path: str, part_records: dict[s
             findings.append(finding(path, f"{where}: {error}"))
             return None
 
+    requirements: dict[frozenset[str | None], str] = {}  # resolved clearance pair -> the interface declaring it
     for index, interface in enumerate(interfaces["interfaces"]):
         for side in ("from", "to"):
             if interface[side].startswith("@"):
                 resolve(interface[side], f"interfaces/{index}/{side}")
+        if "pair" in interface:
+            where, (a, b) = f"interfaces/{index}/pair", interface["pair"]
+            ids = frozenset((resolve(a, where), resolve(b, where)))
+            if None in ids:
+                pass  # the unresolved reference is already a finding
+            elif len(ids) == 1:
+                findings.append(finding(path, f"{where}: {a} and {b} are the same occurrence"))
+            elif ids in requirements:
+                findings.append(finding(path, f"{where}: {a} / {b} already has a clearance requirement at "
+                                              f"{requirements[ids]}"))
+            else:
+                requirements[ids] = f"interfaces/{index}"
         limits = interface.get("limits", {})
         for kind in ("press_fit", "running_fit", "locating_fit"):
             fit = limits.get(kind)

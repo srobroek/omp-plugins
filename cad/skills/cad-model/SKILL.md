@@ -31,6 +31,9 @@ TRIGGER
    to interfere automatically. `build_volume` checks each FDM part against `hw/product.yaml`'s printer envelope.
    It reports an axis-aligned orientation when one fits. Otherwise, it reports the oriented box axes.
    Oversized parts block the check. An undeclared volume warns without blocking.
+   `pair_clearance` holds each clearance requirement in `hw/interfaces.yaml` (`type: clearance`,
+   `pair`, `min_clearance_mm`) at the nominal pose, joint-connected and fitted pairs included; a
+   pair below its requirement blocks the check.
    `blocking_failures` names every failed blocking check.
 4. Diff: `uv run --script skill://cad-flow/scripts/run.py cad-model/scripts/cad_model.py diff vA vB --hw hw` → per-part
    volume and bbox deltas, added/removed parts, exact shared / A-only / B-only volumes.
