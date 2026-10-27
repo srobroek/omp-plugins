@@ -22,6 +22,7 @@ OUTPUTS = {
     "kiro": ROOT / "harness" / "kiro" / "agents",
     "opencode": ROOT / "harness" / "opencode" / "agents",
 }
+OPENCODE_COMMAND = ROOT / "harness" / "opencode" / "commands" / "cad-flow.md"
 CLAUDE_MANIFEST = ROOT / ".claude-plugin" / "plugin.json"
 OMP_MANIFEST = ROOT / ".omp-plugin" / "plugin.json"
 AGENT_NAMES = ("cad-mech-reviewer", "cad-dfm-reviewer")
@@ -131,9 +132,19 @@ def claude_manifest() -> str:
     return json.dumps({"name": omp["name"], "description": omp["description"], "agents": agents}, indent=2) + "\n"
 
 
+def opencode_command() -> str:
+    return """---
+description: Prototype-to-CAD flow (cad plugin)
+---
+
+When the user provides arguments, load the `cad-flow` skill and follow it for $ARGUMENTS. Otherwise, load the existing `hw/` design record and resume the workflow from its current state.
+"""
+
+
 def generated() -> dict[Path, str]:
     outputs = {output_path(agent, harness): render(agent, harness) for harness in OUTPUTS for agent in AGENT_NAMES}
     outputs[CLAUDE_MANIFEST] = claude_manifest()
+    outputs[OPENCODE_COMMAND] = opencode_command()
     return outputs
 
 

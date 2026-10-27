@@ -22,9 +22,9 @@ claude plugin install cad@srobroek-omp
 claude --plugin-dir /path/to/omp-plugins/cad
 ```
 
-The plugin's `.claude-plugin/plugin.json` loads the reviewers generated for Claude Code from `harness/claude/agents/`, as `cad:cad-mech-reviewer` and `cad:cad-dfm-reviewer`. The files in `agents/` are the OMP sources; Claude Code does not load them.
+The plugin's `.claude-plugin/plugin.json` loads the reviewers generated for Claude Code from `harness/claude/agents/`. Claude Code names them `cad:cad-mech-reviewer` and `cad:cad-dfm-reviewer`. The files in `agents/` are the OMP sources. Claude Code does not load them. Start the workflow with `/cad:cad-flow`, the plugin's `cad-flow` skill. If needed, verify the exact command with `claude --plugin-dir <checkout>/cad`.
 
-This plugin ships no Kiro or OpenCode package, so copy its generated agents into your project. Run these commands from the project root, with `CAD` set to the `cad` directory of an omp-plugins checkout.
+This plugin has no Kiro or OpenCode package. Copy its generated agents and, for OpenCode, the command into your project. Run these commands from the project root. Set `CAD` to the `cad` directory of an omp-plugins checkout.
 
 For Kiro, link the plugin at `cad/` in the workspace root and copy the agents into `.kiro/agents/`. Each reviewer loads its skill as `skill://cad/skills/<skill>/SKILL.md`, which Kiro resolves from the workspace root, so the plugin must sit at exactly that path:
 
@@ -36,15 +36,18 @@ cp cad/harness/kiro/agents/*.json .kiro/agents/
 
 `kiro-cli agent list` then shows both reviewers as workspace agents. To use the workflow skills from another Kiro agent, add `skill://cad/skills/**/SKILL.md` to that agent's `resources`.
 
-For OpenCode, copy the agents into `.opencode/agents/` and the skills into `.opencode/skills/`:
+For OpenCode, copy the agents into `.opencode/agents/`. Copy the command into `.opencode/commands/` and the skills into `.opencode/skills/`.
 
 ```sh
-mkdir -p .opencode/agents .opencode/skills
+mkdir -p .opencode/agents .opencode/skills .opencode/commands
 cp "$CAD"/harness/opencode/agents/*.md .opencode/agents/
+cp "$CAD"/harness/opencode/commands/*.md .opencode/commands/
 cp -R "$CAD"/skills/. .opencode/skills/
 ```
 
-Copy the files again after you update the checkout. The workflow instructions use project files, previews, feedback, and agent delegation rather than harness-specific commands.
+OpenCode lists `/cad-flow` and the skills in its skills list. The cad plugin does not appear under `/plugins` because there is no OpenCode package yet. Run `/cad-flow a desk lamp arm` to start. Run `/cad-flow` to resume the existing `hw/` design record. After you update the checkout, copy the files again. The workflow uses project files, previews, feedback, and agent delegation rather than harness-specific commands.
+
+In OMP, use the `cad-flow` skill. In Kiro, use the linked `cad/` workspace skill `cad-flow`. In Claude Code, use `/cad:cad-flow` as documented above.
 
 Install a Beads workspace for the workflow formulas and approval gates. Plugin installation takes effect in a new session.
 
