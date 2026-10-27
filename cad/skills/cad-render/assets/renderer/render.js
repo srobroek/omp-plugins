@@ -276,7 +276,9 @@ async function boot() {
       mesh.receiveShadow = true;
       owned.add(mesh);
     }
-    parts.set(part.pn, { nodes, meshes, material, rest: nodes.map((n) => n.position.clone()) });
+    parts.set(part.pn, { nodes, meshes, material, rest: nodes.map((n) => ({
+      parent: n.parent, position: n.position.clone(), quaternion: n.quaternion.clone(), visible: n.visible,
+    })) });
   }
   const unmapped = [];
   root.traverse((o) => { if (o.isMesh && !owned.has(o)) unmapped.push(o.name); });
@@ -393,7 +395,12 @@ async function boot() {
 
   function applyExplode(on) {
     for (const part of parts.values()) {
-      part.nodes.forEach((node, i) => node.position.copy(part.rest[i]));
+      part.nodes.forEach((node, i) => {
+        if (node.parent !== part.rest[i].parent) part.rest[i].parent.attach(node);
+        node.position.copy(part.rest[i].position);
+        node.quaternion.copy(part.rest[i].quaternion);
+        node.visible = part.rest[i].visible;
+      });
     }
     root.updateMatrixWorld(true);
     if (!on) return;
@@ -407,6 +414,50 @@ async function boot() {
       });
     }
     root.updateMatrixWorld(true);
+  }
+
+  function restOnFloor(pn) {
+    const part = parts.get(pn);
+    const box = new THREE.Box3().makeEmpty();
+    part.meshes.forEach((mesh) => box.expandByObject(mesh));
+    const size = box.getSize(new THREE.Vector3());
+    const axes = [new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 0, 1)];
+    axes.sort((a, b) => {
+      const extent = (d) => Math.abs(d.x) * size.x + Math.abs(d.y) * size.y + Math.abs(d.z) * size.z;
+      return extent(a) - extent(b);
+    });
+    // Align the narrowest principal bounding-box axis to vertical for a broad, stable resting face.
+    const rotation = new THREE.Quaternion().setFromUnitVectors(axes[0], new THREE.Vector3(0, 1, 0));
+    const centre = box.getCenter(new THREE.Vector3());
+    const pivot = new THREE.Object3D();
+    root.add(pivot);
+    pivot.position.copy(centre);
+    pivot.quaternion.copy(rotation);
+    root.updateMatrixWorld(true);
+    for (const node of part.nodes) {
+      const position = node.getWorldPosition(new THREE.Vector3());
+      const orientation = node.getWorldQuaternion(new THREE.Quaternion());
+      pivot.add(node);
+      node.position.copy(position.sub(centre));
+      node.quaternion.copy(orientation);
+    }
+    root.updateMatrixWorld(true);
+    const resting = new THREE.Box3().makeEmpty();
+    part.meshes.forEach((mesh) => resting.expandByObject(mesh));
+    pivot.position.y += groundY - resting.min.y;
+    root.updateMatrixWorld(true);
+  }
+
+  function isolatedFramingPoints(meshes) {
+    const box = new THREE.Box3().makeEmpty();
+    meshes.forEach((mesh) => box.expandByObject(mesh));
+    const source = vertexSample(meshes);
+    const points = [...source];
+    for (const p of source) {
+      const t = (p.y - box.min.y) / keyDir.y;
+      points.push(new THREE.Vector3(p.x - keyDir.x * t, box.min.y, p.z - keyDir.z * t));
+    }
+    return points;
   }
 
   // Points of the subject and of their key-light projection on the floor, so the frame holds the
@@ -556,13 +607,22 @@ async function boot() {
     const started = performance.now();
     applyExplode(view.explode);
     const subject = new Set(view.subject ?? [...parts.keys()]);
+    for (const [pn, part] of parts) {
+      for (let i = 0; i < part.nodes.length; i += 1) part.nodes[i].visible = part.rest[i].visible;
+      if (view.isolated && !subject.has(pn)) {
+        for (const node of part.nodes) node.visible = false;
+      }
+    }
+    if (view.isolated) restOnFloor(view.subject[0]);
     const subjectMeshes = [...subject].flatMap((pn) => {
       if (!parts.has(pn)) throw new Error(`view ${name}: unknown part ${pn}`);
       return parts.get(pn).meshes;
     });
-    const sceneBox = new THREE.Box3().setFromObject(root);
-    const radius = stage(sceneBox, Boolean(view.explode));
-    const fit = fitCamera(camera, framingPoints(subjectMeshes), view.direction);
+    const sceneBox = new THREE.Box3().makeEmpty();
+    subjectMeshes.forEach((mesh) => sceneBox.expandByObject(mesh));
+    const radius = stage(sceneBox, view.isolated ? name : Boolean(view.explode));
+    const points = view.isolated ? isolatedFramingPoints(subjectMeshes) : framingPoints(subjectMeshes);
+    const fit = fitCamera(camera, points, view.direction);
     const subjectRadius = new THREE.Box3().setFromPoints(vertexSample(subjectMeshes)).getSize(new THREE.Vector3()).length() / 2;
     const aoRadius = subjectRadius * STUDIO.aoRadius;
     gtao.updateGtaoMaterial({ radius: aoRadius, thickness: aoRadius, distanceExponent: 1, distanceFallOff: 1, scale: 1 });

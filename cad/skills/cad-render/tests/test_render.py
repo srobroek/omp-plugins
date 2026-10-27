@@ -143,13 +143,26 @@ class QualityHeuristics(unittest.TestCase):
         quality = render.assess(frame(**GOOD))
         self.assertEqual((quality.metrics["contact_depth"], quality.metrics["overhang_depth"]), (None, None))
 
-    def test_a_faint_shadow_passes_a_close_up_but_not_a_full_assembly_view(self) -> None:
-        """A close-up may frame only a part high above the floor, whose true shadow is faint."""
-        faint = frame(**GOOD, shadow_drop=14)
-        self.assertTrue(render.assess(faint, closeup=True).passed)
-        self.assertEqual(render.assess(faint).failures, ["NO_SHADOW"])
-        self.assertEqual(render.assess(frame(**GOOD, shadow_drop=3), closeup=True).failures, ["NO_SHADOW"])
+    def test_a_close_up_can_use_contact_shading_on_its_support(self) -> None:
+        supported = frame(subject=(45, 35, 70, 55), other=(25, 30, 90, 70))
+        rgba = bytearray(supported.rgba)
+        for y in range(36, 70, render.SAMPLE_STRIDE):
+            for x in range(26, 90, render.SAMPLE_STRIDE):
+                if supported.mask[y * supported.width + x] == 1 and not any(
+                    supported.mask[(y + dy) * supported.width + x + dx] == 2
+                    for dy in range(-render.PART_CLEARANCE_PX, render.PART_CLEARANCE_PX + 1)
+                    for dx in range(-render.PART_CLEARANCE_PX, render.PART_CLEARANCE_PX + 1)
+                ):
+                    i = (y * supported.width + x) * 4
+                    rgba[i:i + 3] = bytes((105, 109, 112))
+        quality = render.assess(render.Frame(supported.width, supported.height, bytes(rgba), supported.mask,
+                                             supported.floor), closeup=True)
+        self.assertTrue(quality.passed, quality.failures)
+        self.assertGreaterEqual(quality.metrics["support_shadow_ratio"], 0.025)
 
+    def test_a_blank_or_shadowless_close_up_still_fails(self) -> None:
+        self.assertEqual(render.assess(frame(), closeup=True).failures, ["BLANK"])
+        self.assertEqual(render.assess(frame(subject=(30, 20, 70, 60)), closeup=True).failures, ["NO_SHADOW"])
     def test_frame_rejects_mismatched_buffers(self) -> None:
         with self.assertRaises(ValueError):
             render.Frame(4, 4, bytes(64), bytes(16), bytes(10))
@@ -335,12 +348,14 @@ class CacheKey(unittest.TestCase):
 
 
 class Views(unittest.TestCase):
-    def test_close_ups_name_an_existing_part(self) -> None:
-        self.assertEqual(render.parse_views(["iso", "closeup-LMP-0004", "iso"], ["LMP-0004"]), ["iso", "closeup-LMP-0004"])
-        with self.assertRaises(render.InfraError):
-            render.parse_views(["closeup-LMP-0009"], ["LMP-0004"])
-        with self.assertRaises(render.InfraError):
-            render.parse_views(["top"], ["LMP-0004"])
+    def test_closeup_and_part_views_require_existing_parts(self) -> None:
+        self.assertEqual(render.parse_views(["iso", "closeup-LMP-0004", "part-LMP-0005", "iso"],
+                                           ["LMP-0004", "LMP-0005"]),
+                         ["iso", "closeup-LMP-0004", "part-LMP-0005"])
+        self.assertEqual(render.view_kind("part-LMP-0005"), "part")
+        for token in ("closeup-LMP-0009", "part-LMP-0009", "top"):
+            with self.subTest(token=token), self.assertRaises(render.InfraError):
+                render.parse_views([token], ["LMP-0004"])
 
 
 class RendererPage(unittest.TestCase):

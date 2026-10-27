@@ -1,12 +1,12 @@
 ---
 name: cad-render
-description: Renders each cad-model version into PBR product PNGs (iso, front, side, exploded, close-ups) for stage gates. Triggers on "render v3", "show me the renders".
+description: Renders cad-model versions into PBR product PNGs (iso, front, side, exploded, close-ups, part views) for stage gates. Triggers on "render v3", "show me the renders".
 ---
 
 # CAD Product Render
 
 Stages L1 LAYOUT to L4 ANALYSIS: every commit batch renders its version after `cad-model run`,
-and every stage gate shows the renders. L0 CONCEPT is excluded; it stays on `cad-concept`.
+and every stage gate shows the renders. Use `cad-concept` for L0 CONCEPT variants.
 Paths below are relative to this skill's directory, `skill://cad-render/`.
 Interactive look-dev (environment, exposure, shadow and AO tuning by eye) runs in OCP CAD
 Viewer Studio mode through `cad-viewer`; this skill is the unattended renderer.
@@ -21,10 +21,11 @@ TRIGGER
 ## Workflow
 
 1. Build first: `skill://cad-model` `run` writes `hw/versions/vN/` and `latest.json`.
-2. Render: `uv run --script scripts/render.py hw [--version latest|vN] [--views iso front side exploded closeup-<PN>]`
+2. Render: `uv run --script scripts/render.py hw [--version latest|vN] [--views iso front side exploded closeup-<PN> part-<PN>]`
    -> `hw/renders/<vN>/<view>.png` and `manifest.json` (version, camera per view, material
    applied per PN, three and Chromium versions, wall times); JSON summary on stdout.
-3. Close-ups: add `closeup-<PN>` for each part the batch changed.
+3. Close-ups: add `closeup-<PN>` for each part/interface to show, or `part-<PN>` for a studio view of
+   one part in stable resting orientation with the other assembly parts hidden.
 4. Read every PNG before describing it. Name the material each PN shows from
    `manifest.json` `materials.<PN>` (`rule`, `label`, `applied`).
 5. Gate: put the PNG paths in the gate report, one line each on what the image shows.
@@ -36,8 +37,13 @@ Exit codes: 0 every view passed, or a cache hit; 1 a quality failure, with rende
 |---|---|---|
 | `BLANK` | subject under 0.5 % of the frame, or nothing but backdrop | GLB empty or a WebGL failure; rerun with `--force`, then report |
 | `CLIPPED` | a subject pixel touches the frame edge | report the view; framing is automatic |
-| `NO_SHADOW` | shadow area under 4 % of product area, or under 22 luminance levels deep; a `closeup-<PN>` view needs only the 4 % area at 10 levels, since it may frame just a part high above the floor | report the view; check the ground part sits at the GLB minimum |
+| `NO_SHADOW` | under 4 % floor shadow at 22 levels, or under 2.5 % floor/support shadow at 10 levels for close-ups and isolated parts | report the view; check contact shading |
 | `INVERTED_SHADOW` | the floor 3 to 10 px below a part standing on the floor is no darker (median) than the shadow core under a part high above it | report the view; the floor shadow must darken towards contact |
+| `part-<PN>` | renders only one part in a stable resting orientation on the studio floor | use for individual component inspection |
+
+`part-<PN>` hides every other part, rests it on the floor, and frames the part with its floor shadow.
+
+
 
 The floor shows only a baked studio shadow: a dark contact shadow at the foot of every part on
 the floor, plus a wide, faint softbox shadow whose penumbra grows and darkness falls with a
