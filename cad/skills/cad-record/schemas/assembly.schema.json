@@ -50,7 +50,8 @@
           "nominal": {"type": "number"}
         }
       }
-    }
+    },
+    "drawing": {"$ref": "#/$defs/assembly_drawing"}
   },
   "$defs": {
     "vector": {"type": "array", "prefixItems": [{"type": "number"}, {"type": "number"}, {"type": "number"}], "minItems": 3, "maxItems": 3},
@@ -79,6 +80,61 @@
         "item": {"type": "integer", "minimum": 1},
         "PN": {"$ref": "#/$defs/pn"},
         "occurrences": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/occurrence_ref"}}
+      }
+    },
+    "assembly_drawing": {
+      "description": "Assembly drawing intent: identity, views, presentation-only explode offsets, parts-list items, subassembly sheets and installation operations",
+      "type": "object", "additionalProperties": false,
+      "required": ["number", "rev", "title", "views", "items"],
+      "properties": {
+        "number": {"type": "string", "minLength": 1},
+        "rev": {"type": "string", "minLength": 1},
+        "title": {"type": "string", "minLength": 1},
+        "scope": {"enum": ["modeled_mechanical_assembly", "complete_assembly"]},
+        "excludes": {"description": "What a modelled scope leaves out, named on the drawing", "type": "array", "items": {"type": "string", "minLength": 1}},
+        "views": {
+          "type": "array", "minItems": 1,
+          "items": {
+            "type": "object", "additionalProperties": false, "required": ["id", "kind", "direction"],
+            "properties": {
+              "id": {"type": "string", "pattern": "^[a-z][a-z0-9_-]*$"},
+              "kind": {"enum": ["assembled", "exploded"]},
+              "direction": {"enum": ["front", "back", "left", "right", "top", "bottom", "iso"]}
+            }
+          }
+        },
+        "explode": {
+          "description": "Exploded-view offsets in mm, assembly frame; each occurrence also moves by its kinematic ancestors' offsets",
+          "type": "array",
+          "items": {
+            "type": "object", "additionalProperties": false, "required": ["ref", "offset_mm"],
+            "properties": {"ref": {"$ref": "#/$defs/part_ref"}, "offset_mm": {"$ref": "#/$defs/vector"}}
+          }
+        },
+        "items": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/drawing_item"}},
+        "subassembly_sheets": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z][a-z0-9_-]*$"}},
+        "operations": {"type": "array", "items": {"$ref": "#/$defs/assembly_operation"}}
+      }
+    },
+    "assembly_operation": {
+      "description": "One installation step: `part` goes into `into` along `direction` (in the receiving part's model frame) until the acceptance holds; the fit, insert or ring comes from the interface limit of the same kind",
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "kind", "part", "into", "interface", "direction", "acceptance"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^[a-z][a-z0-9_-]*$"},
+        "kind": {"enum": ["press_fit", "heat_set", "retaining_ring"]},
+        "part": {"$ref": "#/$defs/part_ref"},
+        "into": {"$ref": "#/$defs/part_ref"},
+        "interface": {"type": "string", "pattern": "^IF-[0-9]{3}$"},
+        "direction": {"$ref": "#/$defs/vector"},
+        "acceptance": {
+          "type": "object", "additionalProperties": false, "required": ["kind", "features"],
+          "properties": {
+            "kind": {"enum": ["seated", "standoff", "flush", "engaged"]},
+            "features": {"type": "array", "minItems": 1, "maxItems": 2, "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"}}
+          }
+        },
+        "verify_joint": {"type": "string", "pattern": "^J-[0-9]{3}$"}
       }
     }
   }
