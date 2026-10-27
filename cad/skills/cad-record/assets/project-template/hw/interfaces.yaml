@@ -7,7 +7,7 @@ interfaces:
     limits:
       rotation_deg: [-10, 80]
       press_fit: {fit: 5 H7/p6, pair: [LMP-0002, LMP-0005]}
-      running_fit: {fit: 5 f7, pair: [LMP-0008, LMP-0005], hole_limits: [5.05, 5.15], note: "pin journal 5 f7 in the SPIROL CL8000 bore 5.05/5.15: diametral clearance 0.060/0.172 (cad-fits STK-101, DR-004)"}
+      running_fit: {fit: 5 f7, pair: [LMP-0008, LMP-0005], note: "pin journal 5 f7 in the SPIROL CL8000 bore 5.05/5.15 (vendor limits, not ISO 286): diametral clearance 0.060/0.172 (cad-fits STK-101, DR-004)"}
       heat_set:
         - {pair: [LMP-0001, LMP-0008], hole_d: 7.77, hole_tol: [-0.04, 0.04], depth_min: 8.0, insert: "SPIROL CMPL 4 X 8 EK CL8000", source: "https://www.spirol.com/assets/files/cmpl-cl8000-cl8100-specification-flyer-us.pdf", note: "knurl 7.97 nominal in the 7.73/7.81 recommended hole: 0.16/0.24 diametral embedment (STK-102)"}
       retaining_ring: {pair: [LMP-0005, LMP-0011], ring: "DIN 471 - 5x0.6", groove_d: 4.8 h10, groove_w: 0.7 H13, source: "https://www.beneri.com/en/prodotto/din-471"}
@@ -29,7 +29,7 @@ interfaces:
     limits:
       rotation_deg: [-45, 45]
       press_fit: {fit: 5 H7/p6, pair: [LMP-0003, LMP-0007]}
-      running_fit: {fit: 5 f7, pair: [LMP-0009, LMP-0007], hole_limits: [5.05, 5.15], note: "pin journal 5 f7 in the SPIROL CL8100 bore 5.05/5.15: diametral clearance 0.060/0.172 (cad-fits STK-101, DR-004)"}
+      running_fit: {fit: 5 f7, pair: [LMP-0009, LMP-0007], note: "pin journal 5 f7 in the SPIROL CL8100 bore 5.05/5.15 (vendor limits, not ISO 286): diametral clearance 0.060/0.172 (cad-fits STK-101, DR-004)"}
       heat_set:
         - {pair: [LMP-0004, LMP-0009], hole_d: 7.77, hole_tol: [-0.04, 0.04], depth_min: 6.0, insert: "SPIROL CMPL 4 X 6 EK CL8100", source: "https://www.spirol.com/assets/files/cmpl-cl8000-cl8100-specification-flyer-us.pdf", note: "knurl 7.97 nominal in the 7.73/7.81 recommended hole: 0.16/0.24 diametral embedment (STK-102); head seats in a 10.0 x 1.0 counterbore on the +Y face"}
       retaining_ring: {pair: [LMP-0007, LMP-0013], ring: "DIN 471 - 5x0.6", groove_d: 4.8 h10, groove_w: 0.7 H13, source: "https://www.beneri.com/en/prodotto/din-471"}
