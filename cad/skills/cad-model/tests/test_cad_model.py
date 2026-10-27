@@ -561,7 +561,7 @@ class CheckRuleTests(unittest.TestCase):
             hw = Path(tmp)
             (hw / "parts" / "TST-0001").mkdir(parents=True)
             (hw / "product.yaml").write_text(
-                "build_volume: {x_mm: 10, y_mm: 35, z_mm: 5, margin_mm: 0}\n", encoding="utf-8")
+                "build_volume: {x_mm: 35, y_mm: 10, z_mm: 5, margin_mm: 0}\n", encoding="utf-8")
             (hw / "parts" / "TST-0001" / "part.yaml").write_text("process: fdm\n", encoding="utf-8")
             shape = mock.Mock()
             with mock.patch.object(occ, "bbox", return_value=((-17.5, -5.0, -2.5), (17.5, 5.0, 2.5))):
@@ -570,7 +570,20 @@ class CheckRuleTests(unittest.TestCase):
         self.assertEqual(result["status"], "pass")
         row = result["parts"]["TST-0001"]
         self.assertEqual((row["orientation"], row["method"], row["size_mm"]),
-                         ("yxz", "axis_aligned", [10.0, 35.0, 5.0]))
+                         ("xyz", "axis_aligned", [35.0, 10.0, 5.0]))
+
+    def test_build_volume_chooses_lowest_print_height(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            hw = Path(tmp)
+            (hw / "parts" / "TST-0001").mkdir(parents=True)
+            (hw / "product.yaml").write_text(
+                "build_volume: {x_mm: 35, y_mm: 20, z_mm: 10, margin_mm: 0}\n", encoding="utf-8")
+            (hw / "parts" / "TST-0001" / "part.yaml").write_text("process: fdm\n", encoding="utf-8")
+            with mock.patch.object(occ, "bbox", return_value=((-17.5, -5.0, -10.0), (17.5, 5.0, 10.0))):
+                with mock.patch.object(occ, "oriented_bbox", side_effect=AssertionError("AABB rotation should fit")):
+                    result = check.build_volume(hw, {"TST-0001": mock.Mock(shape=mock.Mock())})
+        row = result["parts"]["TST-0001"]
+        self.assertEqual((row["orientation"], row["size_mm"]), ("xzy", [35.0, 20.0, 10.0]))
 
     def test_build_volume_falls_back_for_rotated_plate(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

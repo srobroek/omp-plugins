@@ -347,14 +347,21 @@ def _build_volume_candidates(shape: Any, limit: tuple[float, float, float], orie
             continue
         size = tuple(model_size["xyz".index(axis)] for axis in orientation)
         if all(value <= limit[i] + 1e-9 for i, value in enumerate(size)):
-            clearance = min(limit[i] / max(value, 1e-12) for i, value in enumerate(size))
+            clearance = min(limit[i] - size[i] for i in (0, 1))
             candidates.append({"orientation": orientation, "size_mm": size, "clearance": clearance,
                                "method": "axis_aligned"})
     obb_size = None
     if not candidates:
         obb_size, axes = occ.oriented_bbox(shape)
         if all(value <= limit[i] + 1e-9 for i, value in enumerate(obb_size)):
-            clearance = min(limit[i] / max(value, 1e-12) for i, value in enumerate(obb_size))
+            height_axis = min(range(3), key=lambda i: obb_size[i])
+            xy_axes = [i for i in range(3) if i != height_axis]
+            if axes[height_axis][2] < 0:
+                axes = tuple(tuple(-value for value in axis) if i == height_axis else axis
+                             for i, axis in enumerate(axes))
+            axes = tuple(axes[i] for i in (*xy_axes, height_axis))
+            obb_size = tuple(obb_size[i] for i in (*xy_axes, height_axis))
+            clearance = min(limit[i] - obb_size[i] for i in range(3))
             candidates.append({"orientation": "oriented", "size_mm": obb_size, "axes": axes,
                                "clearance": clearance, "method": "oriented"})
     return model_size, candidates, obb_size
@@ -397,7 +404,10 @@ def build_volume(hw: Path, parts: Mapping[str, Any]) -> dict[str, Any]:
                                    f"(usable {tuple(round(value, 3) for value in limit)} mm) in any allowed orientation; "
                                    f"oriented box {tuple(round(value, 3) for value in obb_size)} mm also does not fit"}
             continue
-        best = max(candidates, key=lambda candidate: (candidate["clearance"], candidate["orientation"]))
+        best = next((candidate for candidate in candidates if candidate["orientation"] == "xyz"), None)
+        if best is None:
+            best = min(candidates, key=lambda candidate: (candidate["size_mm"][2],
+                                                           -candidate["clearance"], candidate["orientation"]))
         row = {"status": "pass", "orientation": best["orientation"], "method": best["method"],
                "model_frame_size_mm": [round(value, 6) for value in model_size],
                "size_mm": [round(value, 6) for value in best["size_mm"]],
