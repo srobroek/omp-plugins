@@ -238,7 +238,7 @@ def _install_freecad(environ: Mapping[str, str]) -> None:
         prefix.parent.mkdir(parents=True, exist_ok=True)
         staged = prefix.with_name(f".{prefix.name}.new-{os.getpid()}")
         shutil.rmtree(staged, ignore_errors=True)
-        shutil.copytree(work / "squashfs-root", staged)
+        shutil.copytree(work / "squashfs-root", staged, symlinks=True)
         bin_dir = home / ".local" / "bin"
         bin_dir.mkdir(parents=True, exist_ok=True)
         link = bin_dir / "freecadcmd"
