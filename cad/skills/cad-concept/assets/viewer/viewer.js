@@ -1,7 +1,5 @@
-// cad-concept viewer: renders a concept scene's variants side by side, poses joints
-// live from clamped sliders, and saves composited screenshots through serve.py.
-// Frames match scripts/concept.py: Z up, mm, XYZ Euler degrees; a jointed child is
-// T(origin) * J(value) * T(-origin) * authored transform.
+// cad-concept viewer: renders concept scene variants side by side at their nominal joints.
+// Frames match scripts/concept.py: Z up, mm, XYZ Euler degrees.
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
@@ -25,9 +23,6 @@ const ui = {
   notice: byId("notice"),
   live: byId("live"),
   variants: byId("variant-list"),
-  joints: byId("joint-list"),
-  jointsVariant: byId("joints-variant"),
-  reset: byId("reset-pose"),
   shot: byId("screenshot"),
   fit: byId("fit-view"),
   shotResult: byId("shot-result"),
@@ -36,10 +31,6 @@ const ui = {
 };
 
 class SceneError extends Error {}
-
-function clamp(value, min, max) {
-  return Math.min(max, Math.max(min, value));
-}
 
 // --- three.js setup ---------------------------------------------------------
 
@@ -68,7 +59,6 @@ const state = {
   variants: [],
   labels: [],
   selected: null,
-  pose: new Map(), // variantId -> Map(jointId -> value), survives reloads
   framed: false,
 };
 
@@ -131,8 +121,8 @@ function buildVariant(def, index) {
     for (const child of node.children ?? []) visit(child, object, node.id);
   };
   visit(def.root, root, null);
-  const joints = (def.joints ?? []).map((joint) => attachJoint(def.id, joint, nodes));
-  return { def, index, root, nodes, meshes, joints, box: new THREE.Box3() };
+  for (const joint of def.joints ?? []) attachJoint(def.id, joint, nodes);
+  return { def, index, root, nodes, meshes, box: new THREE.Box3() };
 }
 
 function attachJoint(variantId, def, nodes) {
@@ -149,26 +139,12 @@ function attachJoint(variantId, def, nodes) {
   axis.normalize();
   const origin = new THREE.Vector3(...def.origin);
   const pivot = new THREE.Group();
-  pivot.name = `joint:${def.id}`;
   pivot.position.copy(origin);
   parent.object.add(pivot);
   child.object.position.sub(origin);
   pivot.add(child.object);
-  const arrow = new THREE.ArrowHelper(axis, origin, 70, token("--color-joint"), 16, 9);
-  arrow.visible = false;
-  parent.object.add(arrow);
-  return { def, axis, origin, pivot, arrow, value: def.nominal };
-}
-
-function setJointValue(joint, value) {
-  const v = clamp(Number(value), joint.def.min, joint.def.max);
-  joint.value = v;
-  if (joint.def.type === "revolute") {
-    joint.pivot.quaternion.setFromAxisAngle(joint.axis, v * DEG);
-  } else {
-    joint.pivot.position.copy(joint.origin).addScaledVector(joint.axis, v);
-  }
-  return v;
+  if (def.type === "revolute") pivot.quaternion.setFromAxisAngle(axis, def.nominal * DEG);
+  else pivot.position.addScaledVector(axis, def.nominal);
 }
 
 function validateScene(scene) {
@@ -184,8 +160,7 @@ function buildScene(scene) {
   validateScene(scene);
   const content = new THREE.Group();
   const variants = scene.variants.map((def, index) => buildVariant(def, index));
-  // Lay out side by side along X at the nominal pose so reloads and posing never shift variants.
-  for (const variant of variants) for (const joint of variant.joints) setJointValue(joint, joint.def.nominal);
+  // Lay out side by side along X at their authored nominal joint configurations.
   const sizes = variants.map((v) => new THREE.Box3().setFromObject(v.root));
   const widest = Math.max(...sizes.map((b) => b.max.x - b.min.x));
   const gap = Math.max(120, widest * 0.3);
@@ -354,14 +329,9 @@ function fitView() {
   requestRender();
 }
 
-// --- selection and pose -----------------------------------------------------
-
-function variantById(id) {
-  return state.variants.find((v) => v.def.id === id);
-}
 
 function selectVariant(id) {
-  const variant = variantById(id) ?? state.variants[0];
+  const variant = state.variants.find((v) => v.def.id === id) ?? state.variants[0];
   if (!variant) return;
   state.selected = variant.def.id;
   for (const v of state.variants) {
@@ -373,7 +343,6 @@ function selectVariant(id) {
       mesh.userData.edges.material.color.copy(on ? accentColor : edgeColor);
       mesh.userData.edges.material.opacity = on ? 1 : 0.35;
     }
-    for (const joint of v.joints) joint.arrow.visible = on;
   }
   for (const label of state.labels) {
     const on = label.variant === variant;
@@ -382,84 +351,6 @@ function selectVariant(id) {
   }
   for (const button of ui.variants.querySelectorAll("button")) {
     button.setAttribute("aria-pressed", String(button.dataset.variant === variant.def.id));
-  }
-  renderJointControls(variant);
-  requestRender();
-}
-
-function rememberPose(variant, joint) {
-  if (!state.pose.has(variant.def.id)) state.pose.set(variant.def.id, new Map());
-  state.pose.get(variant.def.id).set(joint.def.id, joint.value);
-}
-
-function formatValue(joint, value) {
-  const unit = joint.def.type === "revolute" ? "°" : " mm";
-  return `${Number(value.toFixed(1))}${unit}`;
-}
-
-function renderJointControls(variant) {
-  ui.jointsVariant.textContent = `· ${variant.def.label}`;
-  ui.joints.replaceChildren();
-  ui.reset.disabled = variant.joints.length === 0;
-  if (variant.joints.length === 0) {
-    const empty = document.createElement("p");
-    empty.className = "joint-empty";
-    empty.textContent = "This variant has no joints. Add a joints entry to pose it.";
-    ui.joints.append(empty);
-    return;
-  }
-  for (const joint of variant.joints) {
-    const id = `joint-${variant.def.id}-${joint.def.id}`;
-    const row = document.createElement("div");
-    row.className = "joint";
-    row.dataset.joint = joint.def.id;
-    const head = document.createElement("div");
-    head.className = "joint-head";
-    const label = document.createElement("label");
-    label.htmlFor = id;
-    label.textContent = joint.def.label ?? joint.def.id;
-    const output = document.createElement("output");
-    output.htmlFor = id;
-    head.append(label, output);
-    const input = document.createElement("input");
-    input.type = "range";
-    input.id = id;
-    input.min = String(joint.def.min);
-    input.max = String(joint.def.max);
-    input.step = joint.def.type === "revolute" ? "1" : "0.5";
-    const limits = document.createElement("div");
-    limits.className = "joint-limits";
-    for (const [word, value] of [["min", joint.def.min], ["max", joint.def.max]]) {
-      const span = document.createElement("span");
-      span.textContent = `${word} ${formatValue(joint, value)}`;
-      limits.append(span);
-    }
-    const sync = () => {
-      input.value = String(joint.value);
-      output.textContent = formatValue(joint, joint.value);
-      input.setAttribute("aria-valuetext", output.textContent);
-      row.dataset.atLimit = String(joint.value === joint.def.min || joint.value === joint.def.max);
-    };
-    input.addEventListener("input", () => {
-      setJointValue(joint, input.value);
-      rememberPose(variant, joint);
-      sync();
-      requestRender();
-    });
-    joint.sync = sync;
-    sync();
-    row.append(head, input, limits);
-    ui.joints.append(row);
-  }
-}
-
-function resetPose() {
-  const variant = variantById(state.selected);
-  if (!variant) return;
-  for (const joint of variant.joints) {
-    setJointValue(joint, joint.def.nominal);
-    rememberPose(variant, joint);
-    joint.sync?.();
   }
   requestRender();
 }
@@ -495,23 +386,6 @@ function renderVariantList(scene) {
   }
 }
 
-// Click (not drag) on a part selects its variant.
-const raycaster = new THREE.Raycaster();
-let pressAt = null;
-ui.canvas.addEventListener("pointerdown", (e) => {
-  pressAt = { x: e.clientX, y: e.clientY };
-});
-ui.canvas.addEventListener("pointerup", (e) => {
-  if (!pressAt || Math.hypot(e.clientX - pressAt.x, e.clientY - pressAt.y) > 4) return;
-  const rect = ui.canvas.getBoundingClientRect();
-  const ndc = new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
-  raycaster.setFromCamera(ndc, camera);
-  const hit = raycaster.intersectObjects(state.variants.flatMap((v) => v.meshes), false)[0];
-  if (hit) selectVariant(hit.object.userData.variantId);
-});
-
-// --- loading and live reload ------------------------------------------------
-
 function setStatus(text, kind = "info") {
   ui.status.textContent = text;
   document.body.dataset.state = kind;
@@ -522,11 +396,6 @@ function showOverlay(kind, title, body) {
   ui.overlay.dataset.kind = kind;
   ui.overlayTitle.textContent = title;
   ui.overlayBody.textContent = body;
-}
-
-function setControlsEnabled(on) {
-  ui.shot.disabled = !on;
-  ui.fit.disabled = !on;
 }
 
 async function fetchJson(url) {
@@ -572,13 +441,6 @@ async function loadScene({ reason }) {
   state.variants = built.variants;
   state.grid = makeGrid(built.content);
   world.add(state.content, state.grid);
-  // Restore the user's pose where the joint still exists, clamped to the new limits.
-  for (const variant of state.variants) {
-    const saved = state.pose.get(variant.def.id);
-    for (const joint of variant.joints) {
-      if (saved?.has(joint.def.id)) setJointValue(joint, saved.get(joint.def.id));
-    }
-  }
   state.labels = makeLabels(state.variants);
   ui.title.textContent = scene.title;
   ui.file.textContent = state.file;
@@ -592,7 +454,6 @@ async function loadScene({ reason }) {
     fitView();
     state.framed = true;
   }
-  setControlsEnabled(true);
   const time = new Date().toLocaleTimeString();
   setStatus(`${reason} ${state.file} · ${state.variants.length} variants · ${time}`);
   window.dispatchEvent(new CustomEvent("cad-concept:loaded", { detail: { file: state.file, reason } }));
@@ -605,7 +466,6 @@ async function load(reason) {
       const wanted = new URLSearchParams(location.search).get("scene");
       state.file = scenes.includes(wanted) ? wanted : scenes[0] ?? null;
       if (!state.file) {
-        setControlsEnabled(false);
         showOverlay("empty", "No scene files yet", "Write a *.scene.json into the scene directory; the viewer loads it as soon as it appears.");
         setStatus("Waiting for a scene file");
         return;
@@ -620,7 +480,6 @@ async function load(reason) {
       ui.notice.textContent = `Reload failed, showing the last good scene. ${message}`;
       setStatus(`Reload of ${state.file} failed`, "error");
     } else {
-      setControlsEnabled(false);
       showOverlay("error", "The scene could not be shown", message);
       setStatus(`Could not load ${state.file ?? "the scene list"}`, "error");
     }
@@ -676,11 +535,6 @@ function compositeScreenshot() {
   return out.toDataURL("image/png");
 }
 
-function currentPose() {
-  return Object.fromEntries(
-    state.variants.map((v) => [v.def.id, Object.fromEntries(v.joints.map((j) => [j.def.id, j.value]))]),
-  );
-}
 
 async function saveScreenshot() {
   ui.shot.setAttribute("aria-busy", "true");
@@ -691,7 +545,7 @@ async function saveScreenshot() {
     const response = await fetch("/api/screenshot", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ scene: state.file, variant: state.selected, pose: currentPose(), png: compositeScreenshot() }),
+      body: JSON.stringify({ scene: state.file, variant: state.selected, png: compositeScreenshot() }),
     });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error ?? `HTTP ${response.status}`);
@@ -709,7 +563,6 @@ async function saveScreenshot() {
 
 // --- wiring -----------------------------------------------------------------
 
-ui.reset.addEventListener("click", resetPose);
 ui.fit.addEventListener("click", fitView);
 ui.shot.addEventListener("click", () => saveScreenshot().catch(() => {}));
 ui.partLabels.addEventListener("change", requestRender);
@@ -733,17 +586,6 @@ window.cadConcept = {
     return state.selected;
   },
   select: selectVariant,
-  setJoint(variantId, jointId, value) {
-    const variant = variantById(variantId);
-    const joint = variant?.joints.find((j) => j.def.id === jointId);
-    if (!joint) throw new Error(`no joint ${variantId}/${jointId}`);
-    const applied = setJointValue(joint, value);
-    rememberPose(variant, joint);
-    joint.sync?.();
-    renderNow();
-    return applied;
-  },
-  pose: currentPose,
   screenshot: compositeScreenshot,
   save: saveScreenshot,
 };

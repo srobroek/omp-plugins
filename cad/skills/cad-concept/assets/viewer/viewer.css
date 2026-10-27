@@ -301,7 +301,6 @@ h2 {
 .variant:focus-visible,
 .button:focus-visible,
 .toggle input:focus-visible,
-.joint input:focus-visible,
 .scene-picker select:focus-visible {
   outline: 2px solid var(--color-focus);
   outline-offset: 2px;
@@ -331,59 +330,6 @@ h2 {
   background: var(--color-accent);
   color: var(--color-fg-inverse);
   font-size: var(--text-xs);
-  font-weight: var(--weight-semibold);
-}
-
-/* joints */
-.joint-list {
-  display: grid;
-  gap: var(--space-4);
-  margin-bottom: var(--space-4);
-}
-
-.joint-empty {
-  margin: 0;
-  color: var(--color-fg-muted);
-  font-size: var(--text-sm);
-}
-
-.joint {
-  display: grid;
-  gap: var(--space-1);
-}
-
-.joint-head {
-  display: flex;
-  justify-content: space-between;
-  gap: var(--space-2);
-}
-
-.joint-head label {
-  font-weight: var(--weight-medium);
-}
-
-.joint-head output {
-  font-family: var(--font-mono);
-  font-size: var(--text-sm);
-}
-
-.joint input[type="range"] {
-  width: 100%;
-  min-height: var(--target-min);
-  margin: 0;
-  accent-color: var(--color-accent);
-}
-
-.joint-limits {
-  display: flex;
-  justify-content: space-between;
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  color: var(--color-fg-muted);
-}
-
-.joint[data-at-limit="true"] output {
-  color: var(--color-accent-strong);
   font-weight: var(--weight-semibold);
 }
 
