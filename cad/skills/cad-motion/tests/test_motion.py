@@ -7,6 +7,7 @@ The STEP tests need `uv`; the FreeCAD test also needs freecadcmd and skips witho
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import math
@@ -22,6 +23,8 @@ HERE = Path(__file__).resolve().parent
 SCRIPTS = HERE.parent / "scripts"
 BUILDER = HERE / "fixtures" / "build_fixtures.py"
 TEMPLATE_HW = HERE.parents[1] / "cad-record" / "assets" / "project-template" / "hw"
+sys.path.insert(0, str(HERE / "fixtures"))
+import v6_record  # noqa: E402 - the kernel-free V6-like record
 
 
 def load(name: str, path: Path):
@@ -53,6 +56,25 @@ def planar_chain(j2_max: float = 180.0):
 def assert_close(case: unittest.TestCase, actual, expected, places: int = 9) -> None:
     for a, e in zip(actual, expected):
         case.assertAlmostEqual(a, e, places=places)
+
+
+def rigid(rows: list[list[float]]):
+    """A pose.Rigid from 3x4 [rot | trans] rows."""
+    return pose.Rigid(tuple(tuple(row[:3]) for row in rows), tuple(row[3] for row in rows))
+
+
+def misphased_depth(q: float) -> float:
+    """How far v6_record.record(misphased=3) dips valve 3's head into piston 3's crown at crank angle q, mm
+    (> 0 overlaps). Worked from the geometry, not from coupling.py: the wrist sits on the bore where
+    |wrist - crankpin| = L; the lift is the LIFT table, interpolated by hand, at cam angle q / 2 plus the
+    TDC-peaking phase 65 - 240 / 2 = -55."""
+    r, rod = v6_record.R, v6_record.L
+    theta = math.radians(q + 120.0)
+    wrist = r * math.cos(theta) + math.sqrt(rod * rod - (r * math.sin(theta)) ** 2)
+    x = (q / 2.0 - 55.0) % 360.0
+    lift = next(y0 + (y1 - y0) * (x - x0) / (x1 - x0)
+                for (x0, y0), (x1, y1) in zip(v6_record.LIFT, v6_record.LIFT[1:]) if x0 <= x <= x1)
+    return lift + (wrist - (rod + r)) - v6_record.VALVE_GAP
 
 
 class KinematicsTests(unittest.TestCase):
@@ -247,6 +269,7 @@ class StepTests(unittest.TestCase):
             raise RuntimeError(f"fixture build failed: {proc.stderr[-2000:]}")
         cls.planar = cls.root / "fx" / "planar"
         cls.lamp = cls.root / "fx" / "lamp"
+        cls.v6 = cls.root / "fx" / "v6"
 
     @classmethod
     def tearDownClass(cls) -> None:
@@ -446,6 +469,122 @@ class StepTests(unittest.TestCase):
         proc, _ = self.run_script("pose.py", "--hw", str(hw), "--version", "v2", "--out", str(self.root / "v2.step"))
         self.assertEqual(proc.returncode, 2)
         self.assertIn("not a built cad-model version", proc.stderr)
+
+    def v6_hw(self, misphased: int | None) -> Path:
+        """A record over the v6 fixture: v6_record.record(misphased) and part records with their frames."""
+        import yaml
+
+        hw = Path(tempfile.mkdtemp(dir=self.root))
+        (hw / "assembly.yaml").write_text(yaml.safe_dump(v6_record.record(misphased), sort_keys=False), encoding="utf-8")
+        for pn, (title, frame) in v6_record.PARTS.items():
+            (hw / "parts" / pn).mkdir(parents=True)
+            (hw / "parts" / pn / "part.yaml").write_text(f"PN: {pn}\ntitle: {title}\nmodel_frame: {frame}\n",
+                                                       encoding="utf-8")
+        return hw
+
+    def v6_sweep(self, misphased: int | None, criterion: str) -> tuple[Path, subprocess.CompletedProcess[str], dict]:
+        """The one-driver sweep of the V6 doc: 145 samples, 5 crank degrees apart, no grid."""
+        hw = self.v6_hw(misphased)
+        proc, result = self.run_script("sweep.py", "--hw", str(hw), "--parts-dir", str(self.v6), "--steps", "145",
+                                       "--grid", "0", "--worst-criterion", criterion,
+                                       "--worst-step", str(hw / "worst.step"))
+        return hw, proc, result
+
+    def test_one_crank_sweeps_the_coupled_v6_and_finds_the_misphased_valve_at_its_tdc(self) -> None:
+        hw, proc, result = self.v6_sweep(3, "maximum_interference")
+        self.assertEqual(proc.returncode, 1, proc.stderr[-2000:])
+        poses = result["poses"]
+        self.assertEqual((poses["planned"], poses["evaluated"], poses["independent_joints"], poses["spacing"]),
+                         (145, 145, ["J-001"], {"J-001": 5.0}))
+        self.assertEqual(len(poses["dependent_joints"]), 20)
+        expected = {float(q): 9.0 * misphased_depth(q) for q in range(0, 721, 5) if 9.0 * misphased_depth(q) > 1e-3}
+        self.assertEqual(sorted(expected), [220.0, 225.0, 230.0, 235.0, 240.0, 245.0, 250.0, 255.0, 260.0])
+        collisions = {c["independent_pose"]["J-001"]: c for c in result["collisions"]}
+        self.assertEqual(sorted(collisions), sorted(expected))
+        for q, collision in collisions.items():
+            self.assertEqual([sorted(p["pair"]) for p in collision["pairs"]], [["@piston-3", "@valve-3"]])
+            self.assertAlmostEqual(collision["pairs"][0]["volume_mm3"], expected[q], places=3)
+        worst = result["worst_case"]
+        self.assertEqual((worst["criterion"], worst["independent_pose"], sorted(worst["pair"])),
+                         ("maximum_interference", {"J-001": 240.0}, ["@piston-3", "@valve-3"]))
+        self.assertAlmostEqual(worst["volume_mm3"], 18.0, places=3)  # 2 mm deep into the crown, 3 x 3 mm head
+        self.assertEqual(worst["pose"]["J-043"], 3.0)
+        self.assertAlmostEqual(worst["pose"]["J-013"], 0.0, places=6)
+        self.assertTrue(worst["command"].endswith(f"--set J-001=240.0 --out {hw / 'worst.step'}"), worst["command"])
+        self.assertEqual(worst["command"].count("--set"), 1)  # independent settings only
+
+        step = hw / "worst.step"
+        evidence = json.loads((hw / "worst.step.json").read_text(encoding="utf-8"))
+        self.assertEqual(evidence["step"]["sha256"], hashlib.sha256(step.read_bytes()).hexdigest())
+        self.assertEqual(evidence["step"]["sha256"], worst["step_sha256"])
+        self.assertEqual((evidence["criterion"], evidence["sample"]), ("maximum_interference",
+                                                                       {"index": 48, "source": "sweep:J-001"}))
+        self.assertEqual((evidence["independent_pose"], evidence["pose"]["J-043"]), ({"J-001": 240.0}, 3.0))
+        self.assertEqual(evidence["occurrences"]["piston-3"],
+                         {"PN": "VSX-0201", "ref": "@piston-3", "component": "VSX-0201 Piston [@piston-3]"})
+        self.assertEqual(evidence["occurrences"]["VSX-0101"]["component"], "VSX-0101 Crankshaft")
+
+        # The worst STEP read back: one definition per PN, one named component per occurrence, and every
+        # posed rod's ends on its crankpin and its piston's wrist pin.
+        probe = self.probe(step)
+        self.assertEqual(probe["definitions"], sorted(v6_record.PARTS))
+        self.assertEqual(len(probe["components"]), 22)
+        self.assertIn("VSX-0211 Connecting rod [@rod-6]", [c["name"] for c in probe["components"]])
+        placed = {c["occurrence"] or c["pn"]: rigid(c["location"]) for c in probe["components"]}
+        for cylinder, x, side, phase in v6_record.CYLINDERS:
+            with self.subTest(cylinder=cylinder):
+                crankpin = placed["VSX-0101"].apply(v6_record.crankpin_rest(x, side, phase))
+                assert_close(self, placed[f"rod-{cylinder}"].apply((0.0, 0.0, -v6_record.L)), crankpin, places=6)
+                assert_close(self, placed[f"rod-{cylinder}"].apply((0.0, 0.0, 0.0)),
+                             placed[f"piston-{cylinder}"].apply((0.0, 0.0, 0.0)), places=6)
+
+        # Replaying the independent setting with pose.py reproduces every placement of the worst STEP.
+        proc, posed = self.run_script("pose.py", "--hw", str(hw), "--parts-dir", str(self.v6), "--set", "J-001=240.0",
+                                      "--out", str(self.root / "v6-replay.step"))
+        self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+        self.assertEqual(sorted(posed["placements"]), sorted(placed))
+        for oid, rows in posed["placements"].items():
+            for row, expected_row in zip(rows, placed[oid].rows()):
+                assert_close(self, row, expected_row, places=6)
+
+    def test_the_correctly_timed_v6_passes_and_reports_its_minimum_clearance(self) -> None:
+        hw, proc, result = self.v6_sweep(None, "minimum_clearance")
+        self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+        self.assertEqual((result["status"], result["collisions"], result["limit_findings"]), ("pass", [], []))
+        rows = {tuple(sorted(row["pair"])): row for row in result["min_clearance"]}
+        for cylinder, _, _, phase in v6_record.CYLINDERS:
+            row = rows[(f"@piston-{cylinder}", f"@valve-{cylinder}")]
+            # Closest at the cylinder's first TDC, its valve closed: the head's gap above the crown.
+            self.assertEqual((row["clearance_mm"], row["independent_pose"]), (v6_record.VALVE_GAP, {"J-001": -phase % 360}))
+        worst = result["worst_case"]
+        self.assertEqual((worst["criterion"], worst["required_mm"], worst["overlap_mm3"]), ("minimum_clearance", 0.0, 0.0))
+        self.assertEqual((worst["clearance_mm"], worst["margin_mm"]), (result["min_clearance"][0]["clearance_mm"],) * 2)
+        self.assertEqual(sorted(worst["pair"]), sorted(result["min_clearance"][0]["pair"]))
+        self.assertTrue((hw / "worst.step.json").is_file())
+
+    def test_pose_refuses_a_dependent_joint(self) -> None:
+        out = self.root / "v6-dependent.step"
+        proc, _ = self.run_script("pose.py", "--hw", str(self.v6_hw(None)), "--parts-dir", str(self.v6),
+                                  "--set", "J-013=-1", "--out", str(out))
+        self.assertEqual(proc.returncode, 2, proc.stderr[-2000:])
+        self.assertIn("J-013 follows J-001 (slider_crank cylinder-3 displacement) and cannot be set", proc.stderr)
+        self.assertFalse(out.exists())
+
+    def test_an_incomplete_sweep_after_a_complete_one_leaves_no_worst_artifact(self) -> None:
+        worst = self.root / "w-stale.step"
+        evidence = worst.with_name("w-stale.step.json")
+        common = ("--hw", str(self.hw(90)), "--parts-dir", str(self.planar), "--steps", "5", "--grid", "0",
+                  "--worst-step", str(worst))
+        proc, result = self.run_script("sweep.py", *common)
+        self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+        recorded = json.loads(evidence.read_text(encoding="utf-8"))
+        self.assertEqual(recorded["step"]["sha256"], hashlib.sha256(worst.read_bytes()).hexdigest())
+        self.assertEqual(recorded["independent_pose"], recorded["pose"])  # no couplings: every joint is set
+        self.assertEqual(result["worst_case"]["command"].count("--set"), 2)
+        proc, result = self.run_script("sweep.py", *common, "--time-limit", "0")
+        self.assertEqual(proc.returncode, 2, proc.stderr[-2000:])
+        self.assertEqual((result["status"], result["worst_case"]), ("incomplete", None))
+        self.assertFalse(worst.exists() or evidence.exists())
 
     @unittest.skipUnless(freecad_assembly.find_freecad(None), "freecadcmd not found")
     def test_freecad_simulation_moves_within_limits(self) -> None:

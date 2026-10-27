@@ -10,6 +10,7 @@ import argparse
 import csv
 import functools
 import hashlib
+import importlib.util
 import json
 import re
 import sys
@@ -22,6 +23,22 @@ from referencing import Registry, Resource
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import assembly_data  # noqa: E402 - the sibling module, beside this script in the skill
+
+
+def _load_coupling() -> Any:
+    """cad-motion's kernel-free coupling laws, the one reader of joint couplings, profiles and mechanisms."""
+    path = Path(__file__).resolve().parents[2] / "cad-motion" / "scripts" / "coupling.py"
+    name = "cad_motion_coupling"
+    if name not in sys.modules:
+        spec = importlib.util.spec_from_file_location(name, path)
+        if spec is None or spec.loader is None:
+            raise ImportError(f"cad-motion coupling.py not found at {path}")
+        sys.modules[name] = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(sys.modules[name])
+    return sys.modules[name]
+
+
+coupling = _load_coupling()
 
 SCHEMAS = Path(__file__).resolve().parent.parent / "schemas"
 BOM_COLUMNS = ["level", "PN", "rev", "qty", "title", "material", "process", "make_buy", "supplier", "mass"]
@@ -345,10 +362,10 @@ def check_joints(assembly: dict[str, Any], inventory: assembly_data.Inventory, p
         else:
             resolved_all = False
         try:
-            lower, nominal, upper = joint["min"], joint["nominal"], joint["max"]
+            lower, upper = joint["min"], joint["max"]
             if lower > upper:
                 findings.append(finding(path, f"{joint_id} minimum exceeds maximum"))
-            if not lower <= nominal <= upper:
+            if "nominal" in joint and not lower <= joint["nominal"] <= upper:  # a coupled joint has none
                 findings.append(finding(path, f"{joint_id} nominal is outside its limits"))
         except (KeyError, TypeError):
             pass
@@ -359,6 +376,23 @@ def check_joints(assembly: dict[str, Any], inventory: assembly_data.Inventory, p
         assembly_data.joint_tree(edges, inventory.ids, lambda oid: inventory.get(oid).ref, connected=False)
     except assembly_data.InventoryError as error:
         findings.extend(finding(path, problem) for problem in error.problems)
+
+
+def check_couplings(assembly: dict[str, Any], path: str, findings: list[dict[str, str]]) -> None:
+    """Joint couplings (cad-motion coupling.py) resolve, form a DAG, and keep every derived coordinate inside
+    its joint's limits while the independent joints it follows move through their own limits."""
+    try:
+        couplings = coupling.parse(assembly)
+    except coupling.CouplingError as error:
+        findings.extend(finding(path, problem) for problem in error.problems)
+        return
+    if not couplings.laws:
+        return
+    movable = [joint for joint in assembly["joints"] if joint["type"] in coupling.JOINT_UNITS]
+    limits = {joint["id"]: (joint["min"], joint["max"]) for joint in movable}
+    nominal = {joint["id"]: joint["nominal"] for joint in movable if "nominal" in joint}
+    units = {joint["id"]: coupling.JOINT_UNITS[joint["type"]] for joint in movable}
+    findings.extend(finding(path, problem) for problem in couplings.range_problems(limits, nominal, units))
 
 
 def bom_totals(bom: list[dict[str, str]], levels: list[int | None]) -> dict[str, int]:
@@ -524,6 +558,7 @@ def validate_project(project_dir: Path) -> list[dict[str, str]]:
 
     if inventory is not None:
         check_joints(documents["assembly.yaml"], inventory, assembly_path, part_records, findings)
+        check_couplings(documents["assembly.yaml"], assembly_path, findings)
         totals = bom_totals(bom, bom_levels)
         for pn, count in inventory.quantities().items():
             placed = inventory.of(pn)

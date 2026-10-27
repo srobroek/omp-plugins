@@ -100,6 +100,59 @@ class OccurrenceSelectionContracts(unittest.TestCase):
                             load_case(case)
 
 
+class SweepEvidenceContracts(unittest.TestCase):
+    """A case may name the worst.step.json a cad-motion sweep wrote beside its worst STEP: the case STEP must be
+    the one it hashes and the case pose its recorded pose. Nothing is posed again."""
+
+    POSE = {"J-001": 240.0, "J-013": -0.0, "J-043": 3.0}
+
+    def setUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+        self.step = self.root / "worst.step"
+        self.step.write_bytes(b"ISO-10303-21; worst pose\n")
+        import hashlib
+        (self.root / "worst.step.json").write_text(json.dumps({
+            "criterion": "maximum_interference", "pose": self.POSE, "independent_pose": {"J-001": 240.0},
+            "step": {"path": str(self.step), "sha256": hashlib.sha256(self.step.read_bytes()).hexdigest()},
+            "occurrences": {"piston-3": {"PN": "VSX-0201"}, "valve-3": {"PN": "VSX-0401"}}}), encoding="utf-8")
+
+    def case(self, extra: str) -> dict:
+        path = self.root / "case.yaml"
+        path.write_text(f"step: worst.step\nevidence: worst.step.json\n{extra}\n{CASE_TAIL}", encoding="utf-8")
+        return load_case(path)
+
+    def test_the_recorded_pose_is_taken_when_the_case_has_none(self) -> None:
+        case = self.case('occurrence: "@piston-3"')
+        self.assertEqual(case["pose"], self.POSE)
+        self.assertEqual(case["_evidence"]["criterion"], "maximum_interference")
+        self.assertEqual(case["_evidence"]["path"], str((self.root / "worst.step.json").resolve()))
+
+    def test_a_pose_copied_from_the_sweep_output_matches(self) -> None:
+        self.assertEqual(self.case("pose: {J-001: 240.0, J-013: 0.0000004, J-043: 3.0}")["pose"]["J-013"], 4e-7)
+
+    def test_a_different_pose_is_refused(self) -> None:
+        with self.assertRaisesRegex(CaseError, "pose is not the pose .*worst.step.json records"):
+            self.case("pose: {J-001: 245.0, J-013: 0.0, J-043: 3.0}")
+        with self.assertRaisesRegex(CaseError, "pose is not the pose"):
+            self.case("pose: {J-001: 240.0}")  # the independent setting alone is not the posed geometry's pose
+
+    def test_a_changed_step_is_refused(self) -> None:
+        self.step.write_bytes(b"ISO-10303-21; another pose\n")
+        with self.assertRaisesRegex(CaseError, "is not the STEP .*worst.step.json records"):
+            self.case("")
+
+    def test_an_occurrence_outside_the_evidence_lists_the_recorded_ones(self) -> None:
+        with self.assertRaisesRegex(CaseError, "occurrence @valve-9 is not in .*available: @piston-3, @valve-3"):
+            self.case('occurrence: "@valve-9"')
+
+    def test_a_file_without_a_step_hash_is_not_evidence(self) -> None:
+        (self.root / "worst.step.json").write_text(json.dumps({"pose": self.POSE}), encoding="utf-8")
+        with self.assertRaisesRegex(CaseError, "is not cad-motion sweep evidence"):
+            self.case("")
+
+
 @unittest.skipUnless(FREECADCMD.is_file(), "FreeCAD 1.1.4 freecadcmd is not installed")
 @unittest.skipUnless(shutil.which("uv"), "uv is required to write the occurrence STEP through OCP")
 class OccurrenceAnalysis(unittest.TestCase):

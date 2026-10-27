@@ -6,7 +6,8 @@
 and check every frame against the joint limits.
 
 Usage:
-    uv run --script freecad_assembly.py --hw HW (--step ASSEMBLY.step | --parts-dir DIR | --version vN|latest)
+    uv run --script skill://cad-flow/scripts/run.py cad-motion/scripts/freecad_assembly.py --hw HW
+        (--step ASSEMBLY.step | --parts-dir DIR | --version vN|latest)
         [--attach REF=PARENT_REF ...] [--report-part REF ...] [--time-step 0.01]
         [--freecad FREECADCMD] [--job-dir DIR] [--timeout 600]
 
@@ -31,6 +32,11 @@ solver-consistency check.
 freecadcmd can exit 139 after finishing. The result counts only when the job
 printed this run's completion marker and wrote a fresh result file carrying
 the same run id; a non-zero exit after that is reported as a warning.
+
+A record with coupled joints (coupling.py) is refused before FreeCAD starts:
+the Assembly simulation drives every joint independently and has no coupling
+callback, so its frames would not be the coupled motion. pose.py and sweep.py
+derive coupled joints from their drivers.
 
 stdout: JSON. stderr: diagnostics.
 Exit 0 = all frames within limits, 1 = a limit violation or joint residual,
@@ -311,6 +317,17 @@ def frame_placements(frames: list[dict[str, Any]], chain: Any, occurrences: list
     return report
 
 
+def refuse_coupled(assembly: Any) -> None:
+    """Refuse a record with coupled joints: the simulation would drive them independently."""
+    couplings = assembly.couplings
+    if couplings.laws:
+        laws = "; ".join(couplings.describe(jid) for jid in couplings.order)
+        raise pose.MotionError(
+            f"coupled joints are not supported by the FreeCAD Assembly simulation, which drives every joint "
+            f"independently ({laws}); verify coupled motion with pose.py --set on an independent joint and "
+            f"sweep.py, which derive every coupled joint from its driver")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="FreeCAD Assembly simulation with limit checks")
     pose.add_geometry_arguments(parser)
@@ -322,6 +339,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--timeout", type=float, default=600.0, help="seconds before freecadcmd is stopped")
     args = parser.parse_args(argv)
     started = time.monotonic()
+    try:
+        refuse_coupled(pose.load_assembly(args.hw))
+    except pose.MotionError as error:
+        print(f"freecad_assembly: {error}", file=sys.stderr)
+        return 2
     freecad = find_freecad(args.freecad)
     if freecad is None:
         print("freecad_assembly: freecadcmd not found; pass --freecad or set FREECADCMD", file=sys.stderr)

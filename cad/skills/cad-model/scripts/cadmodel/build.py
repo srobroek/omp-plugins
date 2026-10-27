@@ -303,7 +303,11 @@ def run(hw: Path, label: str, kernel: str, attach: Iterable[str]) -> tuple[int, 
         parts = pose.load_definitions(hw, work / "parts")
         chain = pose.assembly_chain(assembly, parts, attached)
         pose.require_geometry(chain, parts)
-        values = chain.complete({})
+        values = chain.complete({})  # independent nominals, coupled joints derived from them
+        limits = chain.limit_findings(values)
+        if limits:
+            raise pose.MotionError("the nominal pose is outside the joint limits: "
+                                   + "; ".join(f["message"] for f in limits))
         transforms, motions = chain.transforms(values), chain.motions(values)
         top = f"{pose.product_id(hw)} {label}"
         pose.write_assembly_step(work / "assembly.step", top, parts, [chain.inventory.get(i) for i in chain.ids],

@@ -37,6 +37,10 @@ The installer refuses to replace a different `core.hooksPath` or ignore non-samp
   - their pair checks;
   - the sweeps that move them;
   - the FEA cases on a posed STEP.
+- A joint's `coupling`, or a `profiles` or `mechanisms` entry it uses, changes. Every joint driven by it, directly or through other coupled joints, moves differently (cad-motion `coupling.py`). Rerun `cad-record` validation. Rerun these checks for those joints' child occurrences and every occurrence below them:
+  - their pair checks;
+  - every sweep whose independent joints drive them, with its worst-case STEP and `worst.step.json`;
+  - the FEA cases that cite that `worst.step.json` as `evidence`.
 - An occurrence is added or removed. Rerun the BOM row of its PN (the quantity is the occurrence count), the pair checks of a new occurrence, and the assembly drawings that list the PN.
 - A material or process changes. Rerun that PN's per-part checks, the quantity-weighted assembly mass, and the FEA cases on that PN.
 
