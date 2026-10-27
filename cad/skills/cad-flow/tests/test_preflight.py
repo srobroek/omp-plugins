@@ -154,7 +154,7 @@ class WarmPlanTests(unittest.TestCase):
                 patch.object(preflight, "_beads_check", side_effect=lambda cwd, env: passing("beads")), \
                 patch.object(preflight, "_harness_check", side_effect=lambda name, *a: passing(f"harness-{name}")), \
                 patch("sys.stderr"):
-            report = preflight.run_checks({"HOME": "/home/x"}, Path("/p"), Path("/home/x"), "omp", warm=warm)
+            report = preflight.run_checks({"HOME": "/nowhere"}, Path("/p"), Path("/nowhere"), "omp", warm=warm)
         self.assertEqual([check.id for check in report.checks], order)
         return order, seen
 
