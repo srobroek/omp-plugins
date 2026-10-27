@@ -27,6 +27,7 @@ const ui = {
   variants: byId("variant-list"),
   joints: byId("joint-list"),
   jointsVariant: byId("joints-variant"),
+  jointsIntro: byId("joints-intro"),
   reset: byId("reset-pose"),
   shot: byId("screenshot"),
   fit: byId("fit-view"),
@@ -157,7 +158,7 @@ function attachJoint(variantId, def, nodes) {
   const arrow = new THREE.ArrowHelper(axis, origin, 70, token("--color-joint"), 16, 9);
   arrow.visible = false;
   parent.object.add(arrow);
-  return { def, axis, origin, pivot, arrow, value: def.nominal };
+  return { def, axis, origin, pivot, arrow, value: def.nominal, parentLabel: parent.def.label, childLabel: child.def.label };
 }
 
 function setJointValue(joint, value) {
@@ -392,65 +393,108 @@ function rememberPose(variant, joint) {
   state.pose.get(variant.def.id).set(joint.def.id, joint.value);
 }
 
+// A true minus sign keeps "−110°" from reading as a dash beside the range text.
 function formatValue(joint, value) {
   const unit = joint.def.type === "revolute" ? "°" : " mm";
-  return `${Number(value.toFixed(1))}${unit}`;
+  const rounded = Number(value.toFixed(1));
+  return `${rounded < 0 ? "\u2212" : ""}${Math.abs(rounded)}${unit}`;
+}
+
+// Where the current value sits against the joint's design data, in the words the panel shows.
+function jointStates(joint) {
+  const { min, max, nominal } = joint.def;
+  const states = [];
+  if (joint.value === nominal) states.push("nominal");
+  if (joint.value === min) states.push("at minimum");
+  if (joint.value === max) states.push("at maximum");
+  return states;
+}
+
+function element(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
 }
 
 function renderJointControls(variant) {
   ui.jointsVariant.textContent = `· ${variant.def.label}`;
   ui.joints.replaceChildren();
-  ui.reset.disabled = variant.joints.length === 0;
-  if (variant.joints.length === 0) {
-    const empty = document.createElement("p");
-    empty.className = "joint-empty";
-    empty.textContent = "This variant has no joints. Add a joints entry to pose it.";
-    ui.joints.append(empty);
+  const hasJoints = variant.joints.length > 0;
+  ui.reset.disabled = !hasJoints;
+  ui.jointsIntro.hidden = !hasJoints;
+  if (!hasJoints) {
+    ui.joints.append(element("p", "joint-empty", "This variant has no joints. Add a joints entry to pose it."));
     return;
   }
-  for (const joint of variant.joints) {
-    const id = `joint-${variant.def.id}-${joint.def.id}`;
-    const row = document.createElement("div");
-    row.className = "joint";
-    row.dataset.joint = joint.def.id;
-    const head = document.createElement("div");
-    head.className = "joint-head";
-    const label = document.createElement("label");
-    label.htmlFor = id;
-    label.textContent = joint.def.label ?? joint.def.id;
-    const output = document.createElement("output");
-    output.htmlFor = id;
-    head.append(label, output);
-    const input = document.createElement("input");
-    input.type = "range";
-    input.id = id;
-    input.min = String(joint.def.min);
-    input.max = String(joint.def.max);
-    input.step = joint.def.type === "revolute" ? "1" : "0.5";
-    const limits = document.createElement("div");
-    limits.className = "joint-limits";
-    for (const [word, value] of [["min", joint.def.min], ["max", joint.def.max]]) {
-      const span = document.createElement("span");
-      span.textContent = `${word} ${formatValue(joint, value)}`;
-      limits.append(span);
-    }
-    const sync = () => {
-      input.value = String(joint.value);
-      output.textContent = formatValue(joint, joint.value);
-      input.setAttribute("aria-valuetext", output.textContent);
-      row.dataset.atLimit = String(joint.value === joint.def.min || joint.value === joint.def.max);
-    };
-    input.addEventListener("input", () => {
-      setJointValue(joint, input.value);
-      rememberPose(variant, joint);
-      sync();
-      requestRender();
-    });
-    joint.sync = sync;
+  for (const joint of variant.joints) ui.joints.append(jointRow(variant, joint));
+}
+
+// One joint: name and live value, what moves relative to what, the slider with its nominal
+// tick, and both travel ends. Screen readers get the same facts through the label,
+// aria-valuetext, and aria-describedby; the drawn tick and end labels are aria-hidden.
+function jointRow(variant, joint) {
+  const { def } = joint;
+  const id = `joint-${variant.def.id}-${def.id}`;
+  const [min, max, nominal] = [def.min, def.max, def.nominal].map((v) => formatValue(joint, v));
+  const row = element("div", "joint");
+  row.dataset.joint = def.id;
+  row.style.setProperty("--nominal", String((def.nominal - def.min) / (def.max - def.min)));
+
+  const label = element("label", "joint-name", def.label ?? def.id);
+  label.htmlFor = id;
+  const output = element("output", "joint-value");
+  output.htmlFor = id;
+  const status = element("span", "joint-state");
+  const reading = element("span", "joint-reading");
+  reading.append(output, status);
+  const head = element("div", "joint-head");
+  head.append(label, reading);
+
+  const verb = def.type === "revolute" ? "rotates" : "slides";
+  const motion = element("p", "joint-motion", `${joint.childLabel} ${verb} relative to ${joint.parentLabel}`);
+  motion.id = `${id}-motion`;
+  motion.append(element("span", "visually-hidden", `; range ${min} to ${max}, nominal ${nominal}`));
+
+  const nominalMark = element("div", "joint-nominal");
+  nominalMark.setAttribute("aria-hidden", "true");
+  nominalMark.append(element("span", null, `nominal ${nominal}`));
+
+  const input = element("input");
+  input.type = "range";
+  input.id = id;
+  input.min = String(def.min);
+  input.max = String(def.max);
+  input.step = def.type === "revolute" ? "1" : "0.5";
+  input.setAttribute("aria-describedby", motion.id);
+  const tick = element("span", "joint-tick");
+  tick.setAttribute("aria-hidden", "true");
+  const track = element("div", "joint-track");
+  track.append(tick, input);
+
+  const ends = element("div", "joint-ends");
+  ends.setAttribute("aria-hidden", "true");
+  ends.append(element("span", null, min), element("span", null, max));
+
+  const sync = () => {
+    input.value = String(joint.value);
+    const states = jointStates(joint);
+    output.textContent = formatValue(joint, joint.value);
+    status.textContent = states.join(", ");
+    input.setAttribute("aria-valuetext", [output.textContent, ...states].join(", "));
+    row.dataset.atLimit = String(joint.value === def.min || joint.value === def.max);
+    row.dataset.atNominal = String(joint.value === def.nominal);
+  };
+  input.addEventListener("input", () => {
+    setJointValue(joint, input.value);
+    rememberPose(variant, joint);
     sync();
-    row.append(head, input, limits);
-    ui.joints.append(row);
-  }
+    requestRender();
+  });
+  joint.sync = sync;
+  sync();
+  row.append(head, motion, nominalMark, track, ends);
+  return row;
 }
 
 function resetPose() {

@@ -60,7 +60,11 @@
         </section>
 
         <section class="panel-section" aria-labelledby="joints-heading">
-          <h2 id="joints-heading">Pose <span class="heading-detail" id="joints-variant"></span></h2>
+          <h2 id="joints-heading">Pose preview <span class="heading-detail" id="joints-variant"></span></h2>
+          <p class="joint-intro" id="joints-intro" hidden>
+            Drag a slider to preview how that joint moves in the 3D view. Arrows mark the joint axes.
+            Posing never changes the design. Reset returns every joint to its nominal (design) pose.
+          </p>
           <div class="joint-list" id="joint-list"></div>
           <button type="button" class="button button-ghost" id="reset-pose" disabled>Reset to nominal</button>
         </section>

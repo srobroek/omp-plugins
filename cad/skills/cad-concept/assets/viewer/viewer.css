@@ -341,50 +341,185 @@ h2 {
   margin-bottom: var(--space-4);
 }
 
+.joint-intro,
 .joint-empty {
-  margin: 0;
+  margin: 0 0 var(--space-3);
   color: var(--color-fg-muted);
   font-size: var(--text-sm);
+  line-height: var(--leading-normal);
 }
 
+.joint-intro[hidden] {
+  display: none;
+}
+
+/* --nominal is the design pose as a 0..1 fraction of the travel, set per row by viewer.js;
+   the tick and its label sit over the thumb centre at that value. */
 .joint {
+  --thumb-width: var(--space-3);
+  --nominal-at: calc(var(--thumb-width) / 2 + var(--nominal) * (100% - var(--thumb-width)));
   display: grid;
   gap: var(--space-1);
 }
 
 .joint-head {
   display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
   justify-content: space-between;
-  gap: var(--space-2);
+  gap: var(--space-1) var(--space-2);
 }
 
-.joint-head label {
+.joint-name {
   font-weight: var(--weight-medium);
 }
 
-.joint-head output {
+.joint-reading {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.joint-value {
   font-family: var(--font-mono);
   font-size: var(--text-sm);
 }
 
-.joint input[type="range"] {
-  width: 100%;
-  min-height: var(--target-min);
-  margin: 0;
-  accent-color: var(--color-accent);
+.joint-state {
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-1);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
 }
 
-.joint-limits {
-  display: flex;
-  justify-content: space-between;
+.joint-state:empty {
+  display: none;
+}
+
+.joint[data-at-nominal="true"] .joint-state {
+  border: 1px solid var(--color-border-strong);
+  color: var(--color-fg-muted);
+}
+
+.joint[data-at-limit="true"] .joint-value,
+.joint[data-at-limit="true"] .joint-state {
+  color: var(--color-accent-strong);
+  font-weight: var(--weight-semibold);
+}
+
+.joint[data-at-limit="true"] .joint-state {
+  border: 1px solid var(--color-accent);
+  background: var(--color-accent-subtle);
+}
+
+.joint-motion {
+  margin: 0;
+  color: var(--color-fg-muted);
+  font-size: var(--text-sm);
+}
+
+.joint-nominal,
+.joint-ends {
   font-family: var(--font-mono);
   font-size: var(--text-xs);
   color: var(--color-fg-muted);
 }
 
-.joint[data-at-limit="true"] output {
-  color: var(--color-accent-strong);
-  font-weight: var(--weight-semibold);
+/* The label's left edge meets the tick at the low end and its right edge at the high end,
+   so it never leaves the row. */
+.joint-nominal span {
+  display: block;
+  width: max-content;
+  margin-left: var(--nominal-at);
+  transform: translateX(calc(var(--nominal) * -100%));
+}
+
+.joint-track {
+  position: relative;
+}
+
+.joint-tick {
+  position: absolute;
+  top: 0;
+  bottom: 50%;
+  left: var(--nominal-at);
+  width: 2px;
+  transform: translateX(-50%);
+  background: var(--color-fg-muted);
+  pointer-events: none;
+}
+
+.joint input[type="range"] {
+  position: relative;
+  display: block;
+  width: 100%;
+  min-height: var(--target-min);
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+  appearance: none;
+}
+
+.joint input[type="range"]::-webkit-slider-runnable-track {
+  height: var(--space-1);
+  border-radius: var(--radius-1);
+  background: var(--color-border-strong);
+}
+
+.joint input[type="range"]::-moz-range-track {
+  height: var(--space-1);
+  border-radius: var(--radius-1);
+  background: var(--color-border-strong);
+}
+
+.joint input[type="range"]::-webkit-slider-thumb {
+  width: var(--thumb-width);
+  height: var(--space-5);
+  margin-top: calc((var(--space-1) - var(--space-5)) / 2);
+  border: 1px solid var(--color-surface-raised);
+  border-radius: var(--radius-1);
+  background: var(--color-accent);
+  appearance: none;
+  transition: background-color var(--duration-fast) var(--ease-standard);
+}
+
+.joint input[type="range"]::-moz-range-thumb {
+  width: var(--thumb-width);
+  height: var(--space-5);
+  border: 1px solid var(--color-surface-raised);
+  border-radius: var(--radius-1);
+  background: var(--color-accent);
+  transition: background-color var(--duration-fast) var(--ease-standard);
+}
+
+.joint input[type="range"]:hover::-webkit-slider-thumb {
+  background: var(--color-accent-strong);
+}
+
+.joint input[type="range"]:hover::-moz-range-thumb {
+  background: var(--color-accent-strong);
+}
+
+.joint input[type="range"]:active::-webkit-slider-thumb {
+  background: var(--color-fg);
+}
+
+.joint input[type="range"]:active::-moz-range-thumb {
+  background: var(--color-fg);
+}
+
+.joint-ends {
+  display: flex;
+  justify-content: space-between;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 /* view controls */
