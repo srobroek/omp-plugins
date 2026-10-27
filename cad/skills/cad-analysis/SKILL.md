@@ -20,10 +20,13 @@ TRIGGER
    command also emits result JSON.
 3. For an assembly sweep, run cad-motion `sweep.py ... --worst-step worst.step`, then set
    `step: worst.step`, `part: <PN>` (or `occurrence: "@id"` for a part placed more than once), and
-   `pose` to the sweep result's `worst_case.pose` in this case YAML. The sweep has already posed that
-   STEP: the analysis reads its geometry as placed and records `pose` without applying it again. The
-   fixed-face and load plane selectors use the assembly coordinates of that STEP.
-4. Review warnings, solver versions, and `worst_case_pose` (the analysed STEP and supplied pose).
+   `evidence: worst.step.json` (the sweep's evidence beside its STEP) in this case YAML. The analysis
+   checks that the STEP is the one the evidence hashes and takes the evidence's complete `pose` (a
+   supplied `pose` must equal it). The sweep has already posed that STEP: the analysis reads its
+   geometry as placed and records `pose` without applying it again. The fixed-face and load plane
+   selectors use the assembly coordinates of that STEP.
+4. Review warnings, solver versions, and `worst_case_pose` (the analysed STEP, its pose, and the
+   evidence path, hash and criterion).
 5. Record accepted checks in the hardware project's `verification.csv`.
 
 ## Inputs
@@ -39,6 +42,9 @@ TRIGGER
   instance at its placement in the STEP, applied once. An unknown id lists the occurrences of the STEP,
   and the analysis refuses an occurrence with more than one solid.
 - `pose`: optional mapping of joint IDs to values, copied from cad-motion's `worst_case.pose`.
+- `evidence`: optional path, relative to the case YAML, of a cad-motion sweep's `worst.step.json`.
+  A STEP whose SHA-256 differs, a `pose` other than the recorded one, or an `occurrence` the evidence
+  does not list is an input error (exit 2).
 - `loads`: list of `{selector: <face selector>, force: [Fx, Fy, Fz]}` in N; selector uses the same
   `indices` or `plane` form.
 

@@ -5,11 +5,11 @@
 """Build, check, and diff versions of a hardware design from its part model scripts.
 
 Usage:
-    uv run --script cad_model.py run <hw-dir> --label vN [--kernel auto|cadquery|build123d]
+    uv run --script skill://cad-flow/scripts/run.py cad-model/scripts/cad_model.py run <hw-dir> --label vN [--kernel auto|cadquery|build123d]
                                      [--attach REF=PARENT_REF ...]
-    uv run --script cad_model.py check vN --hw hw [--out FILE]
+    uv run --script skill://cad-flow/scripts/run.py cad-model/scripts/cad_model.py check vN --hw hw [--out FILE]
        [--pair REF:REF ...] [--allow-interference REF:REF ...] [--expect-solids PN=N ...]
-    uv run --script cad_model.py diff vA vB [--hw HW] [--out FILE]
+    uv run --script skill://cad-flow/scripts/run.py cad-model/scripts/cad_model.py diff vA vB [--hw HW] [--out FILE]
 
 A REF is a PN placed once, or `@id` for one occurrence of hw/assembly.yaml.
 

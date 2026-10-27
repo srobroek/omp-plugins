@@ -35,11 +35,11 @@ def pose_module() -> ModuleType:
 
 
 def load_chain(hw: Path) -> Any:
-    """The occurrence chain of hw/assembly.yaml, at the record's rest placements."""
+    """The occurrence chain of hw/assembly.yaml, at the record's rest placements, with its couplings."""
     pose = pose_module()
     try:
         assembly = pose.load_assembly(hw)
-        return pose.build_chain(assembly.joints, assembly.occurrences)
+        return pose.build_chain(assembly.joints, assembly.occurrences, couplings=assembly.couplings)
     except pose.MotionError as error:
         raise ViewerError(str(error)) from error
 
@@ -78,9 +78,10 @@ def plan_animation(chain: Any, shown: dict[str, Any], joint_id: str, start: floa
 
     `shown` maps occurrence id -> the Rigid it is displayed at. The viewer keeps that placement as the
     occurrence's group transform (position, quaternion) and composes a track onto it as position + t and
-    quaternion * q, so t = t_pose - t_shown and q = R_shown^-1 R_pose. Other movable joints stay at
-    their nominal value.
-    Raises LimitError when `start` or `end` is outside the joint's [min, max].
+    quaternion * q, so t = t_pose - t_shown and q = R_shown^-1 R_pose. `joint_id` is an independent joint;
+    the other independent joints stay at their nominal value, and every coupled joint follows its
+    coupling at each keyframe, so the parts it moves get tracks too.
+    Raises LimitError when `start` or `end`, or a coordinate derived from them, is outside its joint's [min, max].
     """
     pose = pose_module()
     if steps < 2:
@@ -93,21 +94,28 @@ def plan_animation(chain: Any, shown: dict[str, Any], joint_id: str, start: floa
         raise ViewerError(str(error)) from error
     if not joint.movable:
         raise ViewerError(f"{joint_id} is a fixed joint; animate a movable joint: "
-                          f"{[j.id for j in chain.movable]}")
+                          f"{[j.id for j in chain.independent]}")
+    if joint_id in chain.couplings.laws:
+        raise ViewerError(f"{chain.couplings.describe(joint_id)}; animate its driver, an independent joint: "
+                          f"{[j.id for j in chain.independent]}")
     for value in (start, end):
         if not math.isfinite(value):
             raise ViewerError(f"{joint_id}: joint values must be finite numbers")
-    findings = [f for value in (start, end) for f in chain.limit_findings(chain.complete({joint_id: value}))]
+    values = tuple(start + (end - start) * i / (steps - 1) for i in range(steps))
+    try:
+        poses = [chain.complete({joint_id: value}) for value in values]
+    except pose.MotionError as error:
+        raise ViewerError(str(error)) from error
+    findings = [f for complete in poses for f in chain.limit_findings(complete)]
     if findings:
-        raise LimitError("; ".join(f["message"] for f in findings), findings)
+        raise LimitError("; ".join(dict.fromkeys(f["message"] for f in findings)), findings)
     missing = [chain.ref(oid) for oid in chain.ids if oid not in shown]
     if missing:
         raise ViewerError(f"parts in assembly.yaml but not in the version: {missing}")
-    values = tuple(start + (end - start) * i / (steps - 1) for i in range(steps))
     times = tuple(seconds * i / (steps - 1) for i in range(steps))
     rows: dict[str, list[tuple[tuple[float, ...], tuple[float, ...]]]] = {oid: [] for oid in chain.ids}
-    for value in values:
-        transforms = chain.transforms(chain.complete({joint_id: value}))
+    for complete in poses:
+        transforms = chain.transforms(complete)
         for oid in chain.ids:
             target, base = transforms[oid], shown[oid]
             turn = (base.inverse() @ target).quaternion()  # quaternion_shown * q = rotation_pose

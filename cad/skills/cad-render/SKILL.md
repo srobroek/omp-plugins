@@ -21,7 +21,7 @@ TRIGGER
 ## Workflow
 
 1. Build first: `skill://cad-model` `run` writes `hw/versions/vN/` and `latest.json`.
-2. Render: `uv run --script scripts/render.py hw [--version latest|vN] [--views iso front side exploded closeup-<PN> part-<PN>]`
+2. Render: `uv run --script skill://cad-flow/scripts/run.py cad-render/scripts/render.py hw [--version latest|vN] [--views iso front side exploded closeup-<PN> part-<PN>]`
    -> `hw/renders/<vN>/<view>.png` and `manifest.json` (version, camera per attempt, quality metrics,
    retry strategy, material applied per PN, three and Chromium versions, wall times); JSON summary on stdout.
 3. Close-ups: add `closeup-<PN>` for each part/interface to show, or `part-<PN>` for a studio view of

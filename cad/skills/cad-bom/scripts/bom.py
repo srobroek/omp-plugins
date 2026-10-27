@@ -4,7 +4,7 @@
 # ///
 """Engineering BOM roll-up from a STEP AP242 assembly and the hw/ design record.
 
-Usage: uv run --script bom.py ASSEMBLY.step --hw HW_DIR [--out HW_DIR/bom.csv]
+Usage: uv run --script skill://cad-flow/scripts/run.py cad-bom/scripts/bom.py ASSEMBLY.step --hw HW_DIR [--out HW_DIR/bom.csv]
 
 Reads the STEP product tree through OCP XDE, groups the components of every
 assembly by the product they instance, and writes an indented BOM:

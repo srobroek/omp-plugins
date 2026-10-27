@@ -27,10 +27,10 @@ TRIGGER
    The files model a base puck, tapered clevis links, a revolved head, stepped shoulder pins bought to their drawing, and catalogue envelopes of the brass bushings, the heat-set insert, and the DIN 471 rings.
 4. On "commit batch" from L1 onward, review the batch with realistic renders through the
    `cad-render` step (later; until it exists, report it as missing, not done). For the
-   reference arm, `uv run --script scripts/review_render.py --out DIR` writes an iso view and
+   reference arm, `uv run --script skill://cad-flow/scripts/run.py cad-design/scripts/review_render.py --out DIR` writes an iso view and
    base, elbow, and head close-ups per kernel. -> read every PNG before describing it.
 5. Export one STEP per part, then run
-   `uv run --script scripts/form_check.py --hw hw --parts-dir DIR --fidelity F2|F3`.
+   `uv run --script skill://cad-flow/scripts/run.py cad-design/scripts/form_check.py --hw hw --parts-dir DIR --fidelity F2|F3`.
    -> JSON per part (validity, area shares, blends) and per joint (bore offset); exit 0 = no
    findings, 1 = findings, 2 = usage error. When DIR also holds build_reference.py's
    `build.json`, form_check adds the in-memory checks: `brep_invalid` with `source: kernel`

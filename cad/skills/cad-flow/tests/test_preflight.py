@@ -77,22 +77,32 @@ class RuntimeProbeTests(unittest.TestCase):
         self.assertIn("import cadquery", calls[0][-1])
         self.assertIn(f"{self.SITE} (environment shared by dependency set)", check.detail)
 
-    def test_path_probe_syncs_its_script_and_imports_with_that_python(self) -> None:
-        orchestrator = runtime("cad-model")
-        calls = []
+    def test_heavy_scripts_probe_the_environment_shared_by_dependency_set(self) -> None:
+        for identifier in ("cad-model", "ocp-viewer", "playwright-chromium"):
+            with self.subTest(identifier=identifier):
+                runtime_item = preflight.CHROMIUM if identifier == "playwright-chromium" else runtime(identifier)
+                calls = []
 
-        def run(args, **kwargs):
-            calls.append(args)
-            if args[1:3] == ["python", "find"]:
-                return completed(args, "/env/bin/python\n")
-            return completed(args, 'CAD_PREFLIGHT:{"version": "8.0.1.1.0", "file": "%s/OCP/__init__.py"}\n' % self.SITE)
+                def run(args, **kwargs):
+                    calls.append(args)
+                    return completed(args, 'CAD_PREFLIGHT:{"version": "%s", "file": "%s/OCP/__init__.py"}\n'
+                                     % (preflight.scriptenv.pinned(runtime_item.script, runtime_item.distribution),
+                                        self.SITE))
 
-        with patch.object(preflight.subprocess, "run", side_effect=run):
-            check = preflight._runtime_check("uv", orchestrator)
-        self.assertEqual(check.status, "pass", check.detail)
-        self.assertEqual(calls[0], ["uv", "sync", "--script", str(orchestrator.script)])
-        self.assertEqual(calls[-1][:2], ["/env/bin/python", "-c"])
-        self.assertIn("of cad_model.py's path", check.detail)
+                with patch.object(preflight.subprocess, "run", side_effect=run):
+                    check = preflight._runtime_check("uv", runtime_item)
+                self.assertEqual(check.status, "pass", check.detail)
+                self.assertEqual(len(calls), 1)
+                self.assertEqual(calls[0][:-2], preflight.scriptenv.python_command(runtime_item.script, uv="uv"))
+                self.assertIn(f"{self.SITE} (environment shared by dependency set)", check.detail)
+
+    def test_heavy_runtime_uses_the_dependency_set_command(self) -> None:
+        for identifier in ("cad-model", "ocp-viewer", "playwright-chromium"):
+            with self.subTest(identifier=identifier):
+                item = preflight.CHROMIUM if identifier == "playwright-chromium" else runtime(identifier)
+                prefix, timeout = preflight._environment("uv", item)
+                self.assertEqual(prefix, preflight.scriptenv.python_command(item.script, uv="uv"))
+                self.assertEqual(timeout, preflight.SYNC_TIMEOUT + preflight.IMPORT_TIMEOUT)
 
     def test_a_version_other_than_the_header_pin_fails(self) -> None:
         def run(args, **kwargs):
@@ -112,20 +122,18 @@ class RuntimeProbeTests(unittest.TestCase):
         self.assertEqual(check.status, "fail")
         self.assertIn("error: no wheel for cadquery-ocp", check.detail)
 
-    def test_chromium_install_runs_playwright_in_the_render_environment(self) -> None:
+    def test_chromium_install_runs_playwright_in_the_environment_shared_by_dependency_set(self) -> None:
         calls = []
 
         def run(args, **kwargs):
             calls.append(args)
-            if args[1:3] == ["python", "find"]:
-                return completed(args, "/render-env/bin/python\n")
             return completed(args, 'CAD_PREFLIGHT:{"version": "1.64.1", "chromium": "150.0", "path": "/c/chrome"}\n')
 
         with patch.object(preflight.subprocess, "run", side_effect=run):
             check = preflight._chromium_check("uv", install=True)
         self.assertEqual(check.status, "pass", check.detail)
-        self.assertEqual(calls[0], ["uv", "sync", "--script", str(preflight.CHROMIUM.script)])
-        self.assertIn(["/render-env/bin/python", "-m", "playwright", "install", "chromium"], calls)
+        self.assertIn([*preflight.scriptenv.python_command(preflight.CHROMIUM.script, uv="uv"), "-m",
+                       "playwright", "install", "chromium"], calls)
         self.assertIn("p.chromium.launch(headless=True)", calls[-1][-1])
 
 

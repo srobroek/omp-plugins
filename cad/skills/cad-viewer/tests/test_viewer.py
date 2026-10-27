@@ -487,6 +487,39 @@ class AnimateLimits(Fixture):
         self.assertAlmostEqual(sum(a * b for a, b in zip(plane["normal"], plane["axis"])), 0.0)
 
 
+class AnimateCoupled(Fixture):
+    """The head joint J-003 follows the elbow J-002 at a quarter of its angle (cad-motion coupling.py)."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        path = self.hw / "assembly.yaml"
+        head = "    min: -45\n    max: 45\n    nominal: 0\n"
+        text = path.read_text(encoding="utf-8")
+        self.assertIn(head, text)
+        path.write_text(text.replace(head, "    min: -45\n    max: 45\n"
+                                           "    coupling: {type: linear, driver: J-002, ratio: 0.25}\n"), encoding="utf-8")
+        self.chain = motion.load_chain(self.hw)
+        self.shown = self.chain.transforms(self.chain.complete({}))
+
+    def test_a_coupled_joint_is_animated_through_its_driver(self) -> None:
+        with self.assertRaisesRegex(ViewerError, r"J-003 follows J-002 \(linear ratio 0.25 offset 0\); animate its "
+                                                 r"driver, an independent joint: \['J-001', 'J-002'\]"):
+            motion.plan_animation(self.chain, self.shown, "J-003", 0.0, 10.0)
+
+    def test_the_driver_moves_the_coupled_joint_with_it(self) -> None:
+        plan = motion.plan_animation(self.chain, self.shown, "J-002", -120.0, 0.0, steps=5)
+        tracks = {t.id: t for t in plan.tracks}
+
+        def turned(track_id: str, key: int) -> float:
+            return math.degrees(2 * math.acos(min(1.0, abs(tracks[track_id].quaternions[key][3]))))
+
+        # Both joints turn about Y. Shown at J-002 -30 and J-003 -7.5; at J-002 -120 the upper link has turned
+        # 90 degrees from it and the head, also carried by J-003 = -30, 90 + 22.5.
+        self.assertAlmostEqual(turned("LMP-0003", 0), 90.0, places=6)
+        self.assertAlmostEqual(turned("LMP-0004", 0), 112.5, places=6)
+        self.assertAlmostEqual(turned("LMP-0004", 3), 0.0, places=6)  # -30 is the shown (nominal) pose
+
+
 class ViewerPairs(unittest.TestCase):
     """Every host change reaches the user's and the presenter's viewer; a capture's measuring moves
     reach the presenter only. ocp_viewer is replaced by a module that records each call's port."""

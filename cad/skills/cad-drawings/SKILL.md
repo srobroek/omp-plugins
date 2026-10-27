@@ -28,6 +28,13 @@ TRIGGER
 - `sheet` places baseline dimensions from the datums, callouts with leaders to visible outline points of the feature's own faces, feature control frames, datum feature symbols, centre lines, section lines and hatching, detail circles. Sheet size and scale come from the policy: the largest standard scale that fits on the smallest allowed sheet and keeps the largest view at least 60 mm long.
 - `completeness.evaluate` writes the coverage rows (feature, requirement, measured value, STEP hash, tolerance, annotation, view, status); `drawing_document.publish_package` runs `layout_check` and the Qt export and publishes only a passing package.
 
+## Assembly drawings
+
+LOAD references/assembly-drawings.md before writing the `drawing` block of `assembly.yaml`.
+
+1. Run `uv run --script skill://cad-flow/scripts/run.py cad-drawings/scripts/assembly_drawing.py hw --version vN --output-dir <dir>`. It produces checked sheets for the top assembly and each `assembly.drawing.subassembly_sheets` group, with assembled and exploded views, item balloons, a parts list from `bom.csv`, and assembly notes.
+2. Re-check a published package with `uv run --script skill://cad-drawings/scripts/assembly_check.py <dir>`.
+
 ## Install FreeCAD
 
 `drawing.py` takes the first `freecadcmd` it finds:

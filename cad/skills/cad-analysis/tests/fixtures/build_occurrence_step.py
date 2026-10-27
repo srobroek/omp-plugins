@@ -4,7 +4,7 @@
 # ///
 """Write an assembly STEP AP242 that places one part definition twice, through cad-motion's writer.
 
-Usage: uv run --script build_occurrence_step.py OUT.step
+Usage: uv run --script skill://cad-flow/scripts/run.py cad-analysis/tests/fixtures/build_occurrence_step.py OUT.step
 
 TST-0301 "Beam" is a 100 x 10 x 5 mm box with one corner at its origin. `@beam-a` is placed at the
 identity. `@beam-b` is turned 90 degrees about +Z and then moved (200, 50, 0), so it spans x 190..200,
