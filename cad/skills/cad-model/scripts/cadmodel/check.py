@@ -334,9 +334,34 @@ def slivers_and_tolerances(parts: dict[str, Any]) -> dict[str, Any]:
     return {"status": _status(all(r["ok"] for r in rows.values()), blocking=False), "blocking": False,
             "sliver_face_mm2": SLIVER_FACE_MM2, "loose_tolerance_mm": LOOSE_TOLERANCE_MM, "parts": rows}
 
+def _build_volume_candidates(shape: Any, limit: tuple[float, float, float], orientations: Iterable[str]
+                             ) -> tuple[tuple[float, float, float], list[dict[str, Any]],
+                                        tuple[float, float, float] | None]:
+    """Return fitting AABB permutations, falling back to its oriented box only when needed."""
+    low, high = occ.bbox(shape)
+    model_size = tuple(high[i] - low[i] for i in range(3))
+    candidates = []
+    for orientation in orientations:
+        if (not isinstance(orientation, str) or len(orientation) != 3
+                or set(orientation) != {"x", "y", "z"}):
+            continue
+        size = tuple(model_size["xyz".index(axis)] for axis in orientation)
+        if all(value <= limit[i] + 1e-9 for i, value in enumerate(size)):
+            clearance = min(limit[i] / max(value, 1e-12) for i, value in enumerate(size))
+            candidates.append({"orientation": orientation, "size_mm": size, "clearance": clearance,
+                               "method": "axis_aligned"})
+    obb_size = None
+    if not candidates:
+        obb_size, axes = occ.oriented_bbox(shape)
+        if all(value <= limit[i] + 1e-9 for i, value in enumerate(obb_size)):
+            clearance = min(limit[i] / max(value, 1e-12) for i, value in enumerate(obb_size))
+            candidates.append({"orientation": "oriented", "size_mm": obb_size, "axes": axes,
+                               "clearance": clearance, "method": "oriented"})
+    return model_size, candidates, obb_size
+
 
 def build_volume(hw: Path, parts: Mapping[str, Any]) -> dict[str, Any]:
-    """Fit each FDM definition's minimum-volume box in the printer envelope."""
+    """Fit each FDM shape's AABB permutations, then its oriented minimum-volume box."""
     import yaml
 
     product_path = hw / "product.yaml"
@@ -357,33 +382,30 @@ def build_volume(hw: Path, parts: Mapping[str, Any]) -> dict[str, Any]:
         if not isinstance(declared, dict):
             rows[pn] = {"status": "warn", "message": "no printer build volume is declared"}
             continue
-        size = occ.oriented_bbox_size(part.shape)
         dimensions = tuple(float(declared[axis]) for axis in ("x_mm", "y_mm", "z_mm"))
         margin = float(declared.get("margin_mm", 0.0))
         limit = tuple(dimension - 2.0 * margin for dimension in dimensions)
-        orientations = declared.get("orientations", BUILD_ORIENTATIONS)
-        fits = []
-        for orientation in orientations:
-            if (not isinstance(orientation, str) or len(orientation) != 3
-                    or set(orientation) != {"x", "y", "z"}):
-                continue
-            oriented_size = tuple(size["xyz".index(axis)] for axis in orientation)
-            if all(value <= limit[i] + 1e-9 for i, value in enumerate(oriented_size)):
-                clearance = min(limit[i] / max(value, 1e-12) for i, value in enumerate(oriented_size))
-                fits.append((orientation, oriented_size, clearance))
-        if fits:
-            orientation, oriented_size, _ = max(fits, key=lambda item: (item[2], item[0]))
-            rows[pn] = {"status": "pass", "orientation": orientation,
-                        "size_mm": [round(value, 6) for value in oriented_size],
-                        "volume_mm": [round(value, 6) for value in dimensions],
-                        "usable_volume_mm": [round(value, 6) for value in limit]}
-        else:
-            rows[pn] = {"status": "fail", "size_mm": [round(value, 6) for value in size],
+        model_size, candidates, obb_size = _build_volume_candidates(
+            part.shape, limit, declared.get("orientations", BUILD_ORIENTATIONS))
+        if not candidates:
+            rows[pn] = {"status": "fail", "size_mm": [round(value, 6) for value in model_size],
+                        "model_frame_size_mm": [round(value, 6) for value in model_size],
                         "volume_mm": [round(value, 6) for value in dimensions],
                         "usable_volume_mm": [round(value, 6) for value in limit],
-                        "message": f"{pn} bounding box {tuple(round(value, 3) for value in size)} mm "
+                        "message": f"{pn} bounding box {tuple(round(value, 3) for value in model_size)} mm "
                                    f"does not fit printer volume {tuple(round(value, 3) for value in dimensions)} mm "
-                                   f"(usable {tuple(round(value, 3) for value in limit)} mm) in any allowed orientation"}
+                                   f"(usable {tuple(round(value, 3) for value in limit)} mm) in any allowed orientation; "
+                                   f"oriented box {tuple(round(value, 3) for value in obb_size)} mm also does not fit"}
+            continue
+        best = max(candidates, key=lambda candidate: (candidate["clearance"], candidate["orientation"]))
+        row = {"status": "pass", "orientation": best["orientation"], "method": best["method"],
+               "model_frame_size_mm": [round(value, 6) for value in model_size],
+               "size_mm": [round(value, 6) for value in best["size_mm"]],
+               "volume_mm": [round(value, 6) for value in dimensions],
+               "usable_volume_mm": [round(value, 6) for value in limit]}
+        if best["method"] == "oriented":
+            row["axes"] = [[round(value, 9) for value in axis] for axis in best["axes"]]
+        rows[pn] = row
     if not isinstance(declared, dict):
         return {"status": "warn", "blocking": False, "blocking_failures": [], "parts": rows,
                 "message": "product.yaml does not declare build_volume"}

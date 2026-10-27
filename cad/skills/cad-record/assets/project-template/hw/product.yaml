@@ -4,9 +4,9 @@ units: mm
 regime: iso
 general_tolerance: "ISO 2768-m"
 build_volume:
-  x_mm: 500
-  y_mm: 500
-  z_mm: 500
+  x_mm: 256 # Bambu Lab X1/P1 class printer envelope
+  y_mm: 256
+  z_mm: 256
   margin_mm: 5
 flow:
   stage: layout

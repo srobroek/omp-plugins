@@ -28,8 +28,8 @@ TRIGGER
    requires every part to declare that kernel.
 3. Check: `uv run --script skill://cad-model/scripts/cad_model.py check vN --hw hw [--out FILE]`
    → check result JSON. `build_volume` checks each FDM part against `hw/product.yaml`'s printer envelope.
-   The check reports a fitting axis-aligned orientation. Oversized parts block the check.
-   An undeclared volume warns without blocking. Declared fits and inserts from `hw/interfaces.yaml` may interfere.
+   It reports an axis-aligned orientation when one fits. Otherwise, it reports the oriented box axes.
+   Oversized parts block the check. An undeclared volume warns without blocking.
    `blocking_failures` names every failed blocking check.
 4. Diff: `uv run --script skill://cad-model/scripts/cad_model.py diff vA vB --hw hw` → per-part
    volume and bbox deltas, added/removed parts, exact shared / A-only / B-only volumes.
