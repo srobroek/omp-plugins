@@ -32,15 +32,15 @@ siblings. A REF is `@id`, or a PN placed once; a bare PN placed twice is refused
 Results key placements by occurrence id and report pairs as REFs. Each occurrence's placement is
 T = D P: its joint motion D times its rest placement P, applied once to the PN's definition.
 
-1. Pose: `uv run --script skill://cad-motion/scripts/pose.py --hw hw --version vN --set J-002=-90 --out posed.step`
+1. Pose: `uv run --script skill://cad-flow/scripts/run.py cad-motion/scripts/pose.py --hw hw --version vN --set J-002=-90 --out posed.step`
    → posed STEP AP242 with product names kept. A value outside [min, max] exits 1 with a
    `joint_limit` finding and writes no STEP.
-2. Sweep: `uv run --script skill://cad-motion/scripts/sweep.py --hw hw --version vN --worst-step worst.step
+2. Sweep: `uv run --script skill://cad-flow/scripts/run.py cad-motion/scripts/sweep.py --hw hw --version vN --worst-step worst.step
    [--steps 19] [--grid 3] [--min-clearance MM] [--include-pair REF:REF] [--end-effector REF]`
    → JSON: `collisions` (pose + pair + volume), `min_clearance` per pair with its pose,
    `reach_envelope`, `worst_case` (max horizontal reach of the end effector's centre of mass,
    collision-free poses only; written to `--worst-step`), and `timings_s`.
-3. FreeCAD: `uv run --script skill://cad-motion/scripts/freecad_assembly.py --hw hw --version vN [--report-part REF]`
+3. FreeCAD: `uv run --script skill://cad-flow/scripts/run.py cad-motion/scripts/freecad_assembly.py --hw hw --version vN [--report-part REF]`
    → JSON: `frames`, start/mid/end `placements`, per-joint `limit_check`, `violations`, `residuals`.
 4. Record each result as a `verification.csv` row: `requirement_id` from requirements.yaml,
    `result` pass|fail from the exit code, `evidence` = script, inputs, pose, and key numbers.

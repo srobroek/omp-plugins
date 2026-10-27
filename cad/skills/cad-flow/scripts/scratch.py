@@ -44,8 +44,11 @@ from pathlib import Path
 from typing import Any
 
 SKILLS = Path(__file__).resolve().parents[2]
-CAD_MODEL = SKILLS / "cad-model" / "scripts" / "cad_model.py"
+CAD_MODEL_SCRIPTS = SKILLS / "cad-model" / "scripts"
 FORM_CHECK = SKILLS / "cad-design" / "scripts" / "form_check.py"
+sys.path.insert(0, str(CAD_MODEL_SCRIPTS))
+from cadmodel import scriptenv  # noqa: E402 - standard library only
+CAD_MODEL = CAD_MODEL_SCRIPTS / "cad_model.py"
 WORK_DIR = ".cad-work"
 NOT_COPIED = frozenset({"versions", "renders", "releases", ".git"})
 UNIT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
@@ -113,10 +116,11 @@ def init(hw: Path, unit: str, parts: list[str], reset: bool) -> tuple[int, dict[
 
 
 def run_tool(argv: list[str], log: Path) -> tuple[int, dict[str, Any] | None]:
-    """Run one `uv run --script` tool with its stderr in `log`; its exit code and stdout JSON (None when unparseable)."""
+    """Run one CAD tool through its PEP 723 dependency-set environment and log stderr/output."""
     try:
         with log.open("w", encoding="utf-8") as stderr:
-            done = subprocess.run(["uv", "run", "--quiet", "--script", *argv], stdout=subprocess.PIPE, stderr=stderr, text=True)
+            done = subprocess.run(scriptenv.script_command(Path(argv[0]), *argv[1:]),
+                                  stdout=subprocess.PIPE, stderr=stderr, text=True)
     except FileNotFoundError as error:
         raise UsageError("uv is not on PATH") from error
     try:

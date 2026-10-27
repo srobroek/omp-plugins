@@ -100,7 +100,7 @@ title = "L1 LAYOUT: define the single-part envelope and interfaces"
 type = "task"
 needs = ["variant-gate"]
 labels = ["cad", "phase:layout"]
-description = "Run skill://cad-model and skill://cad-record. After explicit VARIANT selection, export the chosen concept with `uv run --script skill://cad-concept/scripts/concept.py handoff <scene> --out hw/concept/handoff.json`. Define the one-part subassembly, labelled interfaces, envelope, datums, constraints, joints and motion limits when applicable, plus an EBOM skeleton. Preview the layout live. For each L1 commit batch, run `uv run --script skill://cad-model/scripts/cad_model.py run hw --label vN --kernel {{kernel}}`, then `uv run --script skill://cad-model/scripts/cad_model.py check vN --hw hw [--out FILE]`; press fits declared in `hw/interfaces.yaml` are automatically allowed and a blocking failure stops the batch. Render the successful version with `uv run --script skill://cad-render/scripts/render.py hw --version vN`. Before LAYOUT freeze, defer the broader recheck; on or after freeze, recheck changed parts and dependents with this stage's checks and all earlier stages' checks."
+description = "Run skill://cad-model and skill://cad-record. After explicit VARIANT selection, export the chosen concept with `uv run --script skill://cad-concept/scripts/concept.py handoff <scene> --out hw/concept/handoff.json`. Define the one-part subassembly, labelled interfaces, envelope, datums, constraints, joints and motion limits when applicable, plus an EBOM skeleton. Preview the layout live. For each L1 commit batch, run `uv run --script skill://cad-flow/scripts/run.py cad-model/scripts/cad_model.py run hw --label vN --kernel {{kernel}}`, then `uv run --script skill://cad-flow/scripts/run.py cad-model/scripts/cad_model.py check vN --hw hw [--out FILE]`; press fits declared in `hw/interfaces.yaml` are automatically allowed and a blocking failure stops the batch. Render the successful version with `uv run --script skill://cad-flow/scripts/run.py cad-render/scripts/render.py hw --version vN`. Before LAYOUT freeze, defer the broader recheck; on or after freeze, recheck changed parts and dependents with this stage's checks and all earlier stages' checks."
 
 [steps.metadata]
 skill_hints = "cad-model, cad-record, cad-flow"
@@ -135,7 +135,7 @@ type = "task"
 needs = ["parts-fanout"]
 waits_for = "all-children"
 labels = ["cad", "phase:parts"]
-description = "Accept a part delivery only with its passing scratch build. Decide every proposal and sourcing finding, apply the accepted ones to the shared records yourself, and record the rest as declined. Then commit one batch for the part: `uv run --script skill://cad-model/scripts/cad_model.py run hw --label vN --kernel {{kernel}}`, then `uv run --script skill://cad-model/scripts/cad_model.py check vN --hw hw [--out FILE]`; a blocking failure stops the batch. Run `uv run --script skill://cad-design/scripts/form_check.py --hw hw --parts-dir hw/versions/vN/parts --fidelity F2`; every made part needs F2. Render with `uv run --script skill://cad-render/scripts/render.py hw --version vN` and inspect with cad-viewer. Run skill://cad-recheck for the changed parts and dependents. Record the design entry and bead note."
+description = "Accept a part delivery only with its passing scratch build. Decide every proposal and sourcing finding, apply the accepted ones to the shared records yourself, and record the rest as declined. Then commit one batch for the part: `uv run --script skill://cad-flow/scripts/run.py cad-model/scripts/cad_model.py run hw --label vN --kernel {{kernel}}`, then `uv run --script skill://cad-flow/scripts/run.py cad-model/scripts/cad_model.py check vN --hw hw [--out FILE]`; a blocking failure stops the batch. Run `uv run --script skill://cad-flow/scripts/run.py cad-design/scripts/form_check.py --hw hw --parts-dir hw/versions/vN/parts --fidelity F2`; every made part needs F2. Render with `uv run --script skill://cad-flow/scripts/run.py cad-render/scripts/render.py hw --version vN` and inspect with cad-viewer. Run skill://cad-recheck for the changed parts and dependents. Record the design entry and bead note."
 
 [steps.metadata]
 skill_hints = "cad-model, cad-design, cad-render, cad-viewer, cad-recheck, cad-record"
@@ -170,7 +170,7 @@ type = "task"
 needs = ["detail-fanout"]
 waits_for = "all-children"
 labels = ["cad", "phase:detail"]
-description = "Accept a delivery only with its passing F3 scratch build. Decide every fit, interface, and limit proposal and apply the accepted ones to hw/interfaces.yaml and the other shared records yourself. Commit one batch: cad-model run then check (a blocking failure stops it), `uv run --script skill://cad-design/scripts/form_check.py --hw hw --parts-dir hw/versions/vN/parts --fidelity F3` (every made part needs F3), and the render. Generate the part's drawing from this version with `uv run --script skill://cad-drawings/scripts/drawing.py hw/versions/vN/parts/<PN>.step --part hw/parts/<PN>/part.yaml --product hw/product.yaml --metrics hw/versions/vN/metrics.json --output-dir <dir> [--scale <ratio>]`. Recheck changed parts and dependents with skill://cad-recheck. Record the design entry and bead note."
+description = "Accept a delivery only with its passing F3 scratch build. Decide every fit, interface, and limit proposal and apply the accepted ones to hw/interfaces.yaml and the other shared records yourself. Commit one batch: cad-model run then check (a blocking failure stops it), `uv run --script skill://cad-flow/scripts/run.py cad-design/scripts/form_check.py --hw hw --parts-dir hw/versions/vN/parts --fidelity F3` (every made part needs F3), and the render. Generate the part's drawing from this version with `uv run --script skill://cad-flow/scripts/run.py cad-drawings/scripts/drawing.py hw/versions/vN/parts/<PN>.step --part hw/parts/<PN>/part.yaml --product hw/product.yaml --metrics hw/versions/vN/metrics.json --output-dir <dir> [--scale <ratio>]`. Recheck changed parts and dependents with skill://cad-recheck. Record the design entry and bead note."
 
 [steps.metadata]
 skill_hints = "cad-fits, cad-drawings, cad-design, cad-recheck, cad-record, cad-flow"
@@ -216,7 +216,7 @@ type = "task"
 needs = ["analysis-fanout"]
 waits_for = "all-children"
 labels = ["cad", "phase:analysis"]
-description = "Check each case's inputs, units, selectors, and solver warnings, then write the accepted verification.csv rows yourself, tied to requirements and to version vN. A failed case blocks the gate: record it, and route a design fix through a new L2 or L3 batch. Render the analysed version with `uv run --script skill://cad-render/scripts/render.py hw --version vN`. Recheck affected parts and dependents from flow.recheck_from. No slicer, CAM, or machine tooling."
+description = "Check each case's inputs, units, selectors, and solver warnings, then write the accepted verification.csv rows yourself, tied to requirements and to version vN. A failed case blocks the gate: record it, and route a design fix through a new L2 or L3 batch. Render the analysed version with `uv run --script skill://cad-flow/scripts/run.py cad-render/scripts/render.py hw --version vN`. Recheck affected parts and dependents from flow.recheck_from. No slicer, CAM, or machine tooling."
 
 [steps.metadata]
 skill_hints = "cad-analysis, cad-motion, cad-record, cad-recheck, cad-flow"
@@ -288,7 +288,7 @@ title = "RELEASE: assemble and validate the package"
 type = "task"
 needs = ["design-freeze-gate"]
 labels = ["cad", "phase:release"]
-description = "Run skill://cad-record, skill://cad-bom, and skill://cad-drawings to assemble STEP AP242, drawings, EBOM, verification, and documentation. Generate drawings with `uv run --script skill://cad-drawings/scripts/drawing.py hw/versions/vN/parts/<PN>.step --part hw/parts/<PN>/part.yaml --product hw/product.yaml --metrics hw/versions/vN/metrics.json --output-dir <dir> [--scale <ratio>]`. Include GitBuilding, DIN SPEC 3105-1, and Open Know-How docs. Validate records and evidence. Use FreeCAD 1.1.4 only. No slicer, CAM, or machine tooling. Write `hw/releases/<rev>/manifest.json`."
+description = "Run skill://cad-record, skill://cad-bom, and skill://cad-drawings to assemble STEP AP242, drawings, EBOM, verification, and documentation. Generate drawings with `uv run --script skill://cad-flow/scripts/run.py cad-drawings/scripts/drawing.py hw/versions/vN/parts/<PN>.step --part hw/parts/<PN>/part.yaml --product hw/product.yaml --metrics hw/versions/vN/metrics.json --output-dir <dir> [--scale <ratio>]`. Include GitBuilding, DIN SPEC 3105-1, and Open Know-How docs. Validate records and evidence. Use FreeCAD 1.1.4 only. No slicer, CAM, or machine tooling. Write `hw/releases/<rev>/manifest.json`."
 
 [steps.metadata]
 skill_hints = "cad-record, cad-bom, cad-drawings"

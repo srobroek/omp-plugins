@@ -78,7 +78,7 @@ Each environment check imports its packages in the environment the pipeline uses
 uv run --isolated --no-project --python <requires-python> --with-requirements <runner> python <runner>
 ```
 
-Every plugin copy then loads the same installed kernel, whether it is a project's skill copy, an eval trial, or a worktree. Scripts started with `uv run --script` still get one environment per script path.
+The CAD plugin's heavier scripts (OCP, VTK, ocp_viewer, Playwright, and similar kernels) use one environment per dependency set, shared across project copies. Launch them with `uv run --script skill://cad-flow/scripts/run.py <skill>/scripts/<script.py> [args...]`; the target is relative to `cad/skills/`. The wrapper reads the target's PEP 723 header and runs it through `cadmodel.scriptenv`. `uv run --script` remains appropriate for lightweight scripts.
 
 `--warm` also installs Playwright Chromium and fills the three.js cache. It records its progress and report for this plugin copy under `${XDG_CACHE_HOME:-~/.cache}/cad-flow/warm/`. `--warm --background` starts the warm-up in a detached process and returns once the warm-up has started. `--status [--wait SECONDS]` reports on the last warm-up and exits with one of these codes:
 
@@ -89,7 +89,7 @@ Every plugin copy then loads the same installed kernel, whether it is a project'
 
 The `cad-flow` GROUND step starts the background warm-up and checks its status before the first L1 build. See `cad/skills/cad-drawings/SKILL.md` for FreeCAD installation steps.
 
-Each path a script runs from with `uv run --script` leaves its own environment in the uv cache. To list the stale ones that belong to cad scripts:
+Every path-keyed `uv run --script` environment is isolated to a script path. Heavy-script environments are shared by dependency set through `cad-flow/scripts/run.py`; the cleanup tool lists only path-keyed script environments. To list stale CAD script environments:
 
 ```sh
 uv run --script cad/skills/cad-flow/scripts/clean_envs.py

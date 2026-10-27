@@ -9,7 +9,7 @@
 """Render a cad-model version to product PNGs through the static three.js PBR page.
 
 Usage:
-    uv run --script render.py HW [--version latest|vN] [--views iso front side exploded closeup-REF part-REF ...]
+    uv run --script skill://cad-flow/scripts/run.py cad-render/scripts/render.py HW [--version latest|vN] [--views iso front side exploded closeup-REF part-REF ...]
         [--size 1600x1200] [--force] [--cache-dir DIR]
 
 Resolves the version through HW/versions/latest.json (or HW/versions/vN/), maps each part's

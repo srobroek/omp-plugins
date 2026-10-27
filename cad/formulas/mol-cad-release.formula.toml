@@ -43,7 +43,7 @@ title = "Assemble STEP, drawings, EBOM, verification, and docs"
 type = "task"
 needs = ["gather-release-inputs"]
 labels = ["cad", "phase:release"]
-description = "Run skill://cad-drawings and skill://cad-bom. Assemble STEP AP242, drawings, EBOM, verification matrix, and release docs under hw/releases/{{release_rev}}/. Generate drawings with `uv run --script skill://cad-drawings/scripts/drawing.py hw/versions/vN/parts/<PN>.step --part hw/parts/<PN>/part.yaml --product hw/product.yaml --metrics hw/versions/vN/metrics.json --output-dir <dir> [--scale <ratio>]`. Include GitBuilding, DIN SPEC 3105-1, and Open Know-How docs. Use FreeCAD 1.1.4 and separate CadQuery/build123d environments. Do not add slicer, CAM, or machine tooling."
+description = "Run skill://cad-drawings and skill://cad-bom. Assemble STEP AP242, drawings, EBOM, verification matrix, and release docs under hw/releases/{{release_rev}}/. Generate drawings with `uv run --script skill://cad-flow/scripts/run.py cad-drawings/scripts/drawing.py hw/versions/vN/parts/<PN>.step --part hw/parts/<PN>/part.yaml --product hw/product.yaml --metrics hw/versions/vN/metrics.json --output-dir <dir> [--scale <ratio>]`. Include GitBuilding, DIN SPEC 3105-1, and Open Know-How docs. Use FreeCAD 1.1.4 and separate CadQuery/build123d environments. Do not add slicer, CAM, or machine tooling."
 
 [steps.metadata]
 skill_hints = "cad-drawings, cad-bom, cad-record"
@@ -54,7 +54,7 @@ title = "Validate release manifest and package completeness"
 type = "task"
 needs = ["assemble-package"]
 labels = ["cad", "phase:release"]
-description = "Run skill://cad-record, skill://cad-bom, skill://cad-drawings, and skill://cad-analysis to validate revisions, manifest, STEP AP242, drawings, EBOM, verification, and docs. Static FEA uses `uv run --script skill://cad-analysis/scripts/fea_static.py <case.yaml>`. Confirm the manifest references the frozen design. Record machine-checkable results and all failures."
+description = "Run skill://cad-record, skill://cad-bom, skill://cad-drawings, and skill://cad-analysis to validate revisions, manifest, STEP AP242, drawings, EBOM, verification, and docs. Static FEA uses `uv run --script skill://cad-flow/scripts/run.py cad-analysis/scripts/fea_static.py <case.yaml>`. Confirm the manifest references the frozen design. Record machine-checkable results and all failures."
 
 [steps.metadata]
 skill_hints = "cad-record, cad-bom, cad-drawings, cad-analysis, cad-motion"

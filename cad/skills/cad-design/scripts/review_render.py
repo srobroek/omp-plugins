@@ -12,7 +12,7 @@
 """Review renders of the cad-design reference lamp arm, one PNG set per kernel.
 
 Usage:
-    uv run --script review_render.py --out DIR [--kernels cadquery build123d]
+    uv run --script skill://cad-flow/scripts/run.py cad-design/scripts/review_render.py --out DIR [--kernels cadquery build123d]
         [--parts-root DIR] [--hw HW] [--pose nominal|zero] [--port 0]
 
 Builds each kernel's reference parts with build_reference.py into
@@ -59,6 +59,9 @@ COLORS = {"fdm": "#3a3f44", "cnc": "#c4c9cf", "purchased": "#6f747a"}
 HEAD_COLOR = "#e8e2d6"  # LMP-0004 printed in a light PETG so the shade reads against the dark base
 SCREW_COLOR = "#2b2b2b"
 VIEWPORT = (1400, 1000)
+CAD_MODEL_SCRIPTS = SKILL.parent / "cad-model" / "scripts"
+sys.path.insert(0, str(CAD_MODEL_SCRIPTS))
+from cadmodel import scriptenv  # noqa: E402 - standard library helper
 
 
 def load_module(name: str, path: Path) -> Any:
@@ -84,7 +87,7 @@ def port_open(port: int) -> bool:
 
 def build_parts(kernel: str, out: Path) -> Path:
     parts = out / kernel / "parts"
-    command = [sys.executable, str(HERE / "build_reference.py"), "--kernel", kernel, "--out", str(parts)]
+    command = scriptenv.script_command(HERE / "build_reference.py", "--kernel", kernel, "--out", str(parts))
     result = subprocess.run(command, stdout=subprocess.PIPE, text=True)
     if result.returncode != 0:
         raise RuntimeError(f"build_reference.py --kernel {kernel} exited {result.returncode}: {result.stdout[-2000:]}")
