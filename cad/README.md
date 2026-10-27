@@ -60,6 +60,20 @@ bd formula list
 
 `bd formula list` then shows `cad-product`, `cad-part`, `cad-touch`, and the eight `mol-cad-*` molecules. Copy the formulas again after you update the checkout. Without them, the lead runs the same per-stage worker batches from its own plan, but gates need Beads to close. Plugin installation takes effect in a new session.
 
+## Setup
+
+At the CAD project root, run setup before a new design:
+
+```sh
+uv run --script cad/skills/cad-flow/scripts/setup.py
+```
+
+The default is a dry run. Setup runs preflight, prints fixes, and changes nothing. Use `--yes` for user-level actions. Use `--system` with `--yes` for FreeCAD, Linux Chromium libraries, and uv's downloaded installer.
+
+Setup downloads the official FreeCAD 1.1.4 release asset and checks its SHA-256 digest. On Linux, it extracts FreeCAD to `~/opt/freecad-1.1.4` and links `freecadcmd` in `~/.local/bin`. Add that directory to `PATH`, or set `FREECADCMD` to the link. Setup downloads uv's official installer to a temporary file. It never pipes the download to a shell.
+
+Setup delegates kernel environments, the viewer, Chromium, and the three.js cache to `preflight.py --warm`. It then reruns preflight and prints a summary. When a Beads workspace exists, setup copies formula files to `.beads/formulas/`. Without one, it prints a warning. Pass `--harness opencode`, `--harness kiro`, or `--harness claude` to install harness files.
+
 ## Preflight
 
 Run the environment check before starting a CAD project:
