@@ -5,7 +5,8 @@
 """Pose an assembly at given joint values and write the posed STEP AP242.
 
 Usage:
-    uv run --script pose.py --hw HW (--version vN|latest | --step ASSEMBLY.step | --parts-dir DIR)
+    uv run --script skill://cad-flow/scripts/run.py cad-motion/scripts/pose.py --hw HW
+        (--version vN|latest | --step ASSEMBLY.step | --parts-dir DIR)
         [--attach REF=PARENT_REF ...] [--set J-###=VALUE ...] --out POSED.step
 
 Occurrences: hw/assembly.yaml places part definitions (PNs). An explicit
@@ -56,8 +57,14 @@ the identity for a fixed joint. The occurrence's placement T_i = D_i * P_i,
 with P_i its rest placement, is applied once to its definition geometry.
 An occurrence with geometry but no joint must be connected with a fixed joint
 in assembly.yaml or `--attach REF=PARENT_REF`; attaching a PN that has no
-occurrence adds its identity singleton. A movable joint without `--set`
-takes its `nominal` value.
+occurrence adds its identity singleton. An independent movable joint without
+`--set` takes its `nominal` value.
+
+Couplings (coupling.py): a movable joint with a `coupling` is dependent. It
+authors no `nominal`; its value derives from its driver joint through a linear
+law, a periodic profile, or a slider-crank mechanism, after the independent
+values are set. `--set` takes independent joints only; setting a dependent one
+is a usage error. Every derived value is checked against its joint's limits.
 
 The posed STEP holds one product per PN definition, named `<PN> <title>`,
 placed once per occurrence under one top assembly; an explicit occurrence's
@@ -107,6 +114,7 @@ OCCURRENCE_TAG = re.compile(r" \[@([a-z][a-z0-9_-]*)\]$")
 # A STEP component location matches a rest placement within these bounds (mm, rotation-matrix entries).
 PLACEMENT_TOL_MM, PLACEMENT_TOL_ROT = 1e-6, 1e-9
 ASSEMBLY_DATA_PATH = Path(__file__).resolve().parents[2] / "cad-record" / "scripts" / "assembly_data.py"
+COUPLING_PATH = Path(__file__).resolve().with_name("coupling.py")
 
 Vec = tuple[float, float, float]
 
@@ -115,21 +123,22 @@ class MotionError(RuntimeError):
     """The inputs cannot be used; maps to exit 2."""
 
 
-def _load_assembly_data() -> Any:
-    """cad-record's kernel-free occurrence normalizer, the one reader of assembly.yaml occurrences."""
-    name = "cad_record_assembly_data"
+def _load_module(name: str, path: Path) -> Any:
+    """A kernel-free sibling module, loaded once per process under `name`."""
     if name in sys.modules:
         return sys.modules[name]
-    spec = importlib.util.spec_from_file_location(name, ASSEMBLY_DATA_PATH)
+    spec = importlib.util.spec_from_file_location(name, path)
     if spec is None or spec.loader is None:
-        raise ImportError(f"cad-record assembly_data.py not found at {ASSEMBLY_DATA_PATH}")
+        raise ImportError(f"{path} not found")
     module = importlib.util.module_from_spec(spec)
     sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
 
 
-assembly_data = _load_assembly_data()
+# cad-record's occurrence normalizer, the one reader of assembly.yaml occurrences, and the coupling laws.
+assembly_data = _load_module("cad_record_assembly_data", ASSEMBLY_DATA_PATH)
+coupling = _load_module("cad_motion_coupling", COUPLING_PATH)
 
 # --------------------------------------------------------------------------- rigid transforms
 
@@ -256,7 +265,7 @@ class Joint:
     origin: Vec
     min: float
     max: float
-    nominal: float
+    nominal: float | None  # None for a coupled joint: its value derives from its coupling
 
     @property
     def movable(self) -> bool:
@@ -298,11 +307,13 @@ class Joint:
 @dataclass(frozen=True, eq=False)
 class Assembly:
     """The normalized record: occurrences and groups (an assembly_data.Inventory), joints whose
-    parent and child are occurrence ids, and the PN definitions with their model frames."""
+    parent and child are occurrence ids, the PN definitions with their model frames, and the
+    joint couplings (a coupling.Couplings)."""
 
     inventory: Any  # assembly_data.Inventory
     joints: tuple[Joint, ...]
     frames: Mapping[str, str]  # PN -> part.yaml model_frame, for every part record
+    couplings: Any = coupling.NONE  # coupling.Couplings
 
     @property
     def occurrences(self) -> tuple[Any, ...]:
@@ -346,7 +357,10 @@ def _is_number(value: Any) -> bool:
 
 
 def make_joint(raw: Mapping[str, Any], resolve: Callable[[str, str], str] | None = None) -> Joint:
-    """Validate one assembly.yaml joint mapping; `resolve(ref, where)` turns parent and child into occurrence ids."""
+    """Validate one assembly.yaml joint mapping; `resolve(ref, where)` turns parent and child into occurrence ids.
+
+    A joint with a `coupling` authors no `nominal` (its Joint.nominal is None); coupling.parse checks the law.
+    """
     jid = raw.get("id")
     if not isinstance(jid, str):
         raise MotionError(f"joint without a string id: {raw!r}")
@@ -365,14 +379,17 @@ def make_joint(raw: Mapping[str, Any], resolve: Callable[[str, str], str] | None
     norm = math.sqrt(sum(v * v for v in axis))
     if norm < 1e-12:
         raise MotionError(f"{jid}: axis has zero length")
-    limits = {}
-    for key in ("min", "max", "nominal"):
+    coupled = "coupling" in raw
+    if coupled and "nominal" in raw:
+        raise MotionError(f"{jid}: a coupled joint derives its value from its coupling; remove its nominal")
+    limits: dict[str, float | None] = {"nominal": None}
+    for key in ("min", "max") if coupled else ("min", "max", "nominal"):
         if not _is_number(raw.get(key)):
             raise MotionError(f"{jid}: {key} must be a number")
         limits[key] = float(raw[key])
     if limits["min"] > limits["max"]:
         raise MotionError(f"{jid}: min {limits['min']} exceeds max {limits['max']}")
-    if not limits["min"] <= limits["nominal"] <= limits["max"]:
+    if not coupled and not limits["min"] <= limits["nominal"] <= limits["max"]:
         raise MotionError(f"{jid}: nominal {limits['nominal']} is outside [{limits['min']}, {limits['max']}]")
     return Joint(
         id=jid, type=kind, parent=parent, child=child,
@@ -420,7 +437,11 @@ def load_assembly(hw: Path) -> Assembly:
     duplicates = sorted({i for i in ids if ids.count(i) > 1})
     if duplicates:
         raise MotionError(f"{path}: duplicate joint ids {duplicates}")
-    return Assembly(inventory, joints, frames)
+    try:
+        couplings = coupling.parse(data)
+    except coupling.CouplingError as error:
+        raise MotionError(f"{path}: {error}") from None
+    return Assembly(inventory, joints, frames, couplings)
 
 
 def _bad_joint(raw: Any) -> Joint:
@@ -459,13 +480,15 @@ class Chain:
     """A kinematic tree of occurrences rooted at the ground occurrence; joints are parent-before-child.
 
     `inventory` holds the chain's occurrence records (id, PN, explicit); `rests` their rest
-    placements P_i, which an assembly STEP input may supply for implicit occurrences.
+    placements P_i, which an assembly STEP input may supply for implicit occurrences; `couplings`
+    the laws of its dependent joints.
     """
 
     root: str
     joints: tuple[Joint, ...]
     inventory: Any  # assembly_data.Inventory of the chain's occurrences
     rests: Mapping[str, Rigid]
+    couplings: Any = coupling.NONE  # coupling.Couplings
 
     @property
     def ids(self) -> tuple[str, ...]:
@@ -492,8 +515,13 @@ class Chain:
 
     @property
     def independent(self) -> tuple[Joint, ...]:
-        """The author-settable joints. Without couplings every movable joint is independent."""
-        return self.movable
+        """The author-settable joints: every movable joint without a coupling."""
+        return tuple(j for j in self.movable if j.id not in self.couplings.laws)
+
+    @property
+    def dependent(self) -> tuple[Joint, ...]:
+        """The coupled joints, in chain order; `complete` derives their values."""
+        return tuple(j for j in self.movable if j.id in self.couplings.laws)
 
     def joint(self, jid: str) -> Joint:
         for joint in self.joints:
@@ -514,22 +542,36 @@ class Chain:
         return path[::-1]
 
     def complete(self, settings: Mapping[str, float]) -> dict[str, float]:
-        """The full coordinate map: every movable joint's value, an independent joint without a setting at nominal."""
+        """The full coordinate map, in chain order: the independent joints at `settings`, the others at
+        nominal, then every dependent joint derived through its coupling. Setting a dependent joint is refused."""
         independent = {j.id for j in self.independent}
         for jid in settings:
+            if jid in self.couplings.laws:
+                raise MotionError(f"{self.couplings.describe(jid)} and cannot be set; set an independent joint: "
+                                  f"{sorted(independent)}")
             if jid not in independent:
                 raise MotionError(f"{jid} is not a movable joint; movable joints: {sorted(independent)}")
-        return {j.id: float(settings.get(j.id, j.nominal)) for j in self.movable}
+        values = {j.id: float(settings.get(j.id, j.nominal)) for j in self.independent}
+        try:
+            derived = self.couplings.derive(values)
+        except coupling.CouplingError as error:
+            raise MotionError(str(error)) from None
+        return {j.id: derived[j.id] for j in self.movable}
 
     def limit_findings(self, values: Mapping[str, float]) -> list[dict[str, Any]]:
+        """A joint_limit finding per joint outside [min, max]; a derived value may pass a limit by
+        coupling.LIMIT_EPS, its rounding."""
         findings = []
         for joint in self.movable:
             value = values[joint.id]
-            if not joint.min <= value <= joint.max:
+            derived = joint.id in self.couplings.laws
+            slack = coupling.LIMIT_EPS if derived else 0.0
+            if not joint.min - slack <= value <= joint.max + slack:
+                via = f" (derived: {self.couplings.describe(joint.id)})" if derived else ""
                 findings.append({
                     "check": "joint_limit", "joint": joint.id, "value": value,
                     "min": joint.min, "max": joint.max, "unit": joint.unit,
-                    "message": f"{joint.id} value {value} {joint.unit} is outside [{joint.min}, {joint.max}]",
+                    "message": f"{joint.id} value {value} {joint.unit} is outside [{joint.min}, {joint.max}]{via}",
                 })
         return findings
 
@@ -547,13 +589,21 @@ class Chain:
 
 
 def build_chain(joints: Iterable[Joint], occurrences: Iterable[Any] = (),
-                rests: Mapping[str, Rigid] | None = None) -> Chain:
+                rests: Mapping[str, Rigid] | None = None, couplings: Any = coupling.NONE) -> Chain:
     """Order the joints into a tree over the joint endpoints plus `occurrences`.
 
     An occurrence is an assembly_data.Occurrence or a PN, which stands for its implicit singleton;
     so is a joint endpoint that is not among `occurrences`. `rests` overrides record placements.
+    `couplings` (coupling.parse of the same record) must couple movable joints of `joints` only.
     """
     joints = list(joints)
+    movable = {j.id for j in joints if j.movable}
+    strays = sorted({n for jid, law in couplings.laws.items() for n in (jid, law.driver)} - movable)
+    if strays:
+        raise MotionError(f"couplings name joints that are not movable joints of this chain: {strays}")
+    unbound = sorted(j.id for j in joints if j.movable and j.nominal is None and j.id not in couplings.laws)
+    if unbound:
+        raise MotionError(f"coupled joints {unbound} need the record's couplings (pass Assembly.couplings)")
     records: dict[str, Any] = {}
     for item in occurrences:
         record = singleton(item) if isinstance(item, str) else item
@@ -573,7 +623,7 @@ def build_chain(joints: Iterable[Joint], occurrences: Iterable[Any] = (),
         raise MotionError(str(error)) from None
     placed = {n: rests[n] if rests is not None and n in rests else Rigid.from_placement(records[n].placement)
               for n in order}
-    return Chain(root, tuple(joints[i] for i in indices), inventory, placed)
+    return Chain(root, tuple(joints[i] for i in indices), inventory, placed, couplings)
 
 
 def parse_values(specs: Iterable[str]) -> dict[str, float]:
@@ -903,7 +953,7 @@ def assembly_chain(assembly: Assembly, definitions: Mapping[str, Part], extra_jo
                               f"not at its rest placement {record.rows()}")
         else:
             rests[occurrence.id] = record if occurrence.explicit else located[occurrence.id]
-    return build_chain(joints, nodes, rests)
+    return build_chain(joints, nodes, rests, assembly.couplings)
 
 
 def require_geometry(chain: Chain, definitions: Mapping[str, Part]) -> None:
@@ -1088,7 +1138,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Pose an assembly and write the posed STEP AP242")
     add_geometry_arguments(parser)
     parser.add_argument("--set", action="append", default=[], metavar="J-###=VALUE",
-                        help="joint value in deg (revolute) or mm (prismatic); repeatable")
+                        help="independent joint value in deg (revolute) or mm (prismatic); repeatable")
     parser.add_argument("--out", type=Path, required=True, help="posed STEP AP242 path")
     args = parser.parse_args(argv)
     try:
@@ -1098,6 +1148,8 @@ def main(argv: list[str] | None = None) -> int:
         result: dict[str, Any] = {
             "status": "fail" if findings else "pass",
             "values": values,
+            "independent": [j.id for j in chain.independent],
+            "derived": {j.id: chain.couplings.describe(j.id) for j in chain.dependent},
             "units": {j.id: j.unit for j in chain.movable},
             "findings": findings,
             "no_geometry": [pn for pn in assembly.definitions if pn not in definitions],

@@ -2,8 +2,9 @@
 # requires-python = ">=3.11,<3.15"
 # dependencies = ["cadquery-ocp-novtk==8.0.1.1.0", "pyyaml>=6.0"]
 # ///
-"""Print every component of an assembly STEP as JSON: PN, occurrence id, name, and the bounding box
-of its definition placed at its component location, read through pose.py's canonical reader.
+"""Print every component of an assembly STEP as JSON: PN, occurrence id, name, the 3x4 location rows,
+and the bounding box of its definition placed at its component location, read through pose.py's
+canonical reader.
 
 Usage: uv run --script probe_step.py ASSEMBLY.step
 """
@@ -36,6 +37,6 @@ def bbox(shape) -> list[list[float]]:
 step = pose.read_assembly_step(Path(sys.argv[1]))
 print(json.dumps({
     "definitions": sorted(step.definitions),
-    "components": [{"pn": c.pn, "occurrence": c.occurrence, "name": c.name,
+    "components": [{"pn": c.pn, "occurrence": c.occurrence, "name": c.name, "location": c.location.rows(9),
                     "bbox": bbox(pose.placed(step.definitions[c.pn].shape, c.location))} for c in step.components],
 }))

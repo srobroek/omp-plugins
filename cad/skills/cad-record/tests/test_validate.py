@@ -240,6 +240,9 @@ class ValidateProject(unittest.TestCase):
         shutil.copy2(VALIDATOR, validator_copy)
         shutil.copy2(VALIDATOR.with_name("assembly_data.py"), validator_copy.with_name("assembly_data.py"))
         shutil.copytree(SKILL / "schemas", self.project / "skill" / "schemas")
+        coupling_copy = self.project / "cad-motion" / "scripts" / "coupling.py"  # the sibling skill's module
+        coupling_copy.parent.mkdir(parents=True)
+        shutil.copy2(SKILL.parent / "cad-motion" / "scripts" / "coupling.py", coupling_copy)
         result, report = self.validate(validator_copy)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertTrue(any(item["severity"] == "info" and "skipped handoff schema validation" in item["message"] for item in report["findings"]))
@@ -301,6 +304,58 @@ class ValidateProject(unittest.TestCase):
         text = path.read_text(encoding="utf-8").replace("pair: [LMP-0004, LMP-0010]", 'pair: [LMP-0004, "@ring-hub"]')
         path.write_text(text, encoding="utf-8")
         self.assertTrue(any("@ring-hub names no occurrence" in m for m in self.messages()))
+
+    HEAD = "    min: -45\n    max: 45\n    nominal: 0\n"  # J-003, the head joint
+    ELBOW = "    min: -120\n    max: 0\n    nominal: -30\n"  # J-002, the elbow joint
+
+    def couple_head(self, coupling: str) -> None:
+        self.edit_assembly(self.HEAD, f"    min: -45\n    max: 45\n    coupling: {coupling}\n")
+
+    def test_a_coupled_joint_validates_without_a_nominal(self) -> None:
+        self.couple_head("{type: linear, driver: J-002, ratio: 0.25}")
+        result, report = self.validate()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(report["findings"], [])
+
+    def test_a_self_coupling_is_rejected(self) -> None:
+        self.couple_head("{type: linear, driver: J-003, ratio: 1}")
+        self.assertIn("J-003 coupling: J-003 is coupled to itself", self.messages())
+
+    def test_a_coupling_cycle_is_rejected_by_name(self) -> None:
+        self.couple_head("{type: linear, driver: J-002, ratio: 1}")
+        self.edit_assembly(self.ELBOW, "    min: -120\n    max: 0\n    coupling: {type: linear, driver: J-003, ratio: 1}\n")
+        self.assertTrue(any(m.startswith("coupling cycle: J-00") and "(each joint drives the next)" in m
+                            for m in self.messages()))
+
+    def test_a_missing_driver_or_profile_is_rejected(self) -> None:
+        self.couple_head("{type: linear, driver: J-099, ratio: 1}")
+        self.assertIn("J-003 coupling: driver J-099 is not a joint of this assembly", self.messages())
+        self.couple_head_again("{type: periodic_table, driver: J-002, profile: tilt}")
+        self.assertIn("J-003 coupling: profile 'tilt' is not in `profiles`", self.messages())
+
+    def couple_head_again(self, coupling: str) -> None:
+        path = self.hw / "assembly.yaml"
+        lines = path.read_text(encoding="utf-8").splitlines()
+        index = next(i for i, line in enumerate(lines) if line.startswith("    coupling: "))
+        lines[index] = f"    coupling: {coupling}"
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    def test_a_derived_coordinate_beyond_its_limits_is_rejected(self) -> None:
+        self.couple_head("{type: linear, driver: J-002, ratio: 1}")  # J-003 would follow J-002 down to -120
+        self.assertIn("J-003 follows J-002 (linear ratio 1 offset 0) reaches -120 deg at J-002 = -120 deg, "
+                      "outside its limits [-45, 45]", self.messages())
+
+    def test_a_coupled_joint_cannot_also_author_a_nominal(self) -> None:
+        self.edit_assembly(self.HEAD, self.HEAD + "    coupling: {type: linear, driver: J-002, ratio: 0.25}\n")
+        self.assertTrue(any(m.startswith("joints/2: ") and "is valid under each of" in m for m in self.messages()))
+
+    def test_a_fixed_joint_cannot_be_coupled(self) -> None:
+        assembly = yaml.safe_load((self.hw / "assembly.yaml").read_text(encoding="utf-8"))
+        fixed = next(joint for joint in assembly["joints"] if joint["type"] == "fixed")
+        del fixed["nominal"]
+        fixed["coupling"] = {"type": "linear", "driver": "J-001", "ratio": 1}
+        (self.hw / "assembly.yaml").write_text(yaml.safe_dump(assembly, sort_keys=False), encoding="utf-8")
+        self.assertTrue(any(f"joints/3: 'nominal' is a required property" == m for m in self.messages()))
 
 
 if __name__ == "__main__":
