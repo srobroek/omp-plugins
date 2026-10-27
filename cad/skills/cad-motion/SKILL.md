@@ -55,7 +55,7 @@ violation or residual), 2 usage/infrastructure error or a sweep stopped by `--ti
   state `steps_per_joint` and `grid_per_joint` beside every sweep result. Refine with more steps or
   pose the suspect configuration with `pose.py`.
 - Per-joint sweeps hold the other joints at nominal; only the grid combines joints.
-- Joint-connected pairs are excluded from interference checks unless `--include-pair` names them.
+- Interference checks cover every occurrence pair except joint-connected parent/child pairs; `--include-pair` adds such a pair back.
   Two occurrences of one PN are checked like any other pair. An overlap declared in
   `interfaces.yaml` (interference press fit, heat-set insert) on exactly that occurrence pair is
   not a collision (`pair_policy.py`, shared with cad-model `check`).
