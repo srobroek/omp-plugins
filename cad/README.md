@@ -48,6 +48,18 @@ Copy the files again after you update the checkout. The workflow instructions us
 
 Install a Beads workspace for the workflow formulas and approval gates. Plugin installation takes effect in a new session.
 
+## Preflight
+
+Run the environment check before starting a CAD project:
+
+```sh
+uv run --script cad/skills/cad-flow/scripts/preflight.py
+```
+
+It reports every check with a pass, fail, or warning, including a fix hint, and exits non-zero when any required runtime check fails. Use `--json` for machine-readable results or `--harness omp|claude|opencode|kiro` to inspect one harness. FreeCAD 1.1.4 and its TechDraw templates, separately resolvable CadQuery 2.8 and build123d 0.13 environments, Playwright Chromium, the SRI-checked three.js cache, and ocp_viewer are required. Beads and harness installation detection are warnings. This plugin ships no MCP server, so preflight performs no MCP check.
+
+The `cad-flow` GROUND step runs the same check and must stop on required failures. For platform-specific FreeCAD installation instructions, see `cad/skills/cad-drawings/SKILL.md`.
+
 ## Flow
 
 `cad-flow` leads GROUND → INTENT → SPECIFY → L0 CONCEPT → VARIANT gate → L1 LAYOUT → LAYOUT freeze → L2 PARTS → L3 DETAIL → BOM → L4 ANALYSIS → parallel CRITIQUE → RECONCILE → DESIGN freeze → RELEASE → RELEASE gate. On each L1 to L4 commit batch, run `cad-model run`, then `cad-model check`; a blocking failure stops it. Then run `cad-render` for that version and show images at the gate. Before L2, `form_check` must pass at F2 or higher. Before L3, it must pass at F3. The layout threshold, user “commit”, or hardware git pre-commit hook starts the broader changed-parts/dependents recheck.
