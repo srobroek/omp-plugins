@@ -224,18 +224,28 @@ def _font_size(value: str | None) -> float | None:
     return float(match.group(1)) if match else None
 
 
+# Annotation group classes. Marks of a CLEAR class (dimension lines and arrows, feature control
+# frames, datum letter boxes) must stay off view geometry and off other annotations' text; marks of an
+# OVERLAY class are drawn on the views on purpose (extension, leader and centre lines, hatching,
+# cutting planes, detail boundaries) and are not checked. Text is checked in every class.
+CLEAR_CLASSES = frozenset({"dimension", "fcf", "datum-label"})
+OVERLAY_CLASSES = frozenset({"extension", "leader", "leader-line", "centerline", "hatch", "section-line",
+                             "detail-boundary", "datum-target"})
+
+
 @dataclass(frozen=True)
 class TextItem:
     content: str
     box: Box
     kind: str  # "annotation" (dimensions, callouts), "title" (added title-block text), "field" or "template"
+    group: str = ""
 
 
 @dataclass
 class _Scene:
     views: dict[str, Box]
     texts: list[TextItem]
-    dimension_marks: list[Box]
+    dimension_marks: list[tuple[str, Box]]
     symbols: list[Box | None]
 
 
@@ -260,19 +270,25 @@ def _text_box(element, matrix: Matrix, font_size: float, anchor: str, content: s
     return Box.around(_apply(matrix, px, py) for px, py in local.corners())
 
 
-def _walk(element, matrix: Matrix, font_size: float, anchor: str, context: str, scene: _Scene) -> None:
+def _walk(element, matrix: Matrix, font_size: float, anchor: str, context: str, scene: _Scene,
+          group: str = "") -> None:
     matrix = _multiply(matrix, parse_transform(element.get("transform")))
     font_size = _font_size(_style_value(element, "font-size")) or font_size
     anchor = _style_value(element, "text-anchor") or anchor
     element_id = element.get("id", "")
     tag = element.tag.rsplit("}", 1)[-1]
+    classes = set((element.get("class") or "").split())
     if tag == "g" and element_id.startswith("view-"):
         context = element_id
     elif tag == "g" and element_id == "projection-symbol":
         context = "symbol"
         scene.symbols.append(None)
-    elif tag == "g" and element.get("class") == "dimension" and context == "annotations":
-        context = "dimension"
+    elif tag == "g" and context in ("annotations", "dimension", "overlay") and classes & CLEAR_CLASSES:
+        context, group = "dimension", group or element_id
+    elif tag == "g" and context in ("annotations", "dimension", "overlay") and classes & OVERLAY_CLASSES:
+        context, group = "overlay", group or element_id
+    elif tag == "g" and context == "annotations":
+        group = group or element_id
     elif tag == "g" and element_id == "cad-annotations":
         context = "annotations"
     elif tag == "g" and element_id == "cad-title-block":
@@ -283,7 +299,7 @@ def _walk(element, matrix: Matrix, font_size: float, anchor: str, context: str, 
             child_size = next((_font_size(_style_value(child, "font-size")) for child in element
                                if _font_size(_style_value(child, "font-size"))), None)
             size = child_size or font_size
-            if context in ("annotations", "dimension"):
+            if context in ("annotations", "dimension", "overlay"):
                 kind = "annotation"
             elif context == "title":
                 kind = "title"
@@ -291,7 +307,7 @@ def _walk(element, matrix: Matrix, font_size: float, anchor: str, context: str, 
                 kind = "field"  # a template editable field filled from the record
             else:
                 kind = "template"
-            scene.texts.append(TextItem(content, _text_box(element, matrix, size, anchor, content), kind))
+            scene.texts.append(TextItem(content, _text_box(element, matrix, size, anchor, content), kind, group))
         return
     if tag in ("metadata", "defs", "title", "desc"):
         return
@@ -303,9 +319,9 @@ def _walk(element, matrix: Matrix, font_size: float, anchor: str, context: str, 
         elif context == "symbol":
             scene.symbols[-1] = box.union(scene.symbols[-1])
         elif context == "dimension":
-            scene.dimension_marks.append(box)
+            scene.dimension_marks.append((group, box))
     for child in element:
-        _walk(child, matrix, font_size, anchor, context, scene)
+        _walk(child, matrix, font_size, anchor, context, scene, group)
 
 
 def _scene(svg_text: str) -> _Scene:
@@ -354,10 +370,13 @@ def check_layout(svg_text: str, regions: SheetRegions, placeholders: Iterable[st
             continue  # the stock template's own lettering is not ours to re-layout
         if first.box.intersects(second.box):
             problems.append(f"{first.kind} text {first.content!r} overlaps {second.kind} text {second.content!r}")
-    for mark in scene.dimension_marks:
+    for mark_group, mark in scene.dimension_marks:
         for name, box in scene.views.items():
             if mark.intersects(box):
-                problems.append(f"a dimension line at ({mark.x0:.1f}, {mark.y0:.1f}) crosses {name} geometry")
+                problems.append(f"a dimension line or frame at ({mark.x0:.1f}, {mark.y0:.1f}) crosses {name} geometry")
+        for item in scene.texts:
+            if item.kind == "annotation" and item.group != mark_group and item.box.intersects(mark):
+                problems.append(f"annotation text {item.content!r} overlaps the dimension line or frame of {mark_group}")
     if len(scene.symbols) != 1:
         problems.append(f"expected exactly one projection symbol, found {len(scene.symbols)}")
     for symbol in scene.symbols:

@@ -8,3 +8,44 @@ mass_target: 138
 make_buy: make
 supplier: null
 decisions: [DR-002, DR-003, DR-004]
+drawing:
+  type: detail
+  tolerance_policy: machining
+  datum_features:
+    A: {feature: tongue_seating_face, role: plane}
+    B: {feature: elbow_bore, role: axis}
+    C: {feature: tip_bore, role: axis}
+  coordinate_frame:
+    origin: {intersection: [A, B]}
+    y: {normal_to: A}
+    x: {toward: C}
+  views:
+    - {id: side, kind: orthographic, along_axis: B, toward: tongue_seating_face}
+    - {id: plan, kind: orthographic, along_axis: lightening_pocket}
+    - {id: section_bores, kind: section, through: [B, C]}
+    - {id: section_pocket, kind: section, through: lightening_pocket, scale: "1:1"}
+    - {id: underside, kind: orthographic, opposite: plan}
+  features:
+    tongue_seating_face: {size: general}
+    tongue_far_face: {size: general}
+    elbow_bore: {size: interface}
+    tip_bore: {size: interface}
+    bore_entry_chamfers: {size: general}
+    head_clevis: {size: general}
+    head_cheek_face: {size: general}
+    far_cheek_face: {size: general}
+    lightening_pocket: {size: general}
+    cable_channel: {profile: controlled_model}
+    outer_contour: {profile: controlled_model}
+    flare_rounds: {size: general}
+    sag_blends: {size: general}
+    silhouette_rounds: {size: general}
+  geometric_tolerances:
+    - {id: elbow_bore_perpendicularity, characteristic: perpendicularity, features: [elbow_bore], zone_mm: 0.1, diameter_zone: true, datum_frame: [A]}
+    - {id: tip_bore_position, characteristic: position, features: [tip_bore], zone_mm: 0.1, diameter_zone: true, datum_frame: [A, B]}
+    - {id: contour_profile, characteristic: profile_surface, features: [outer_contour, cable_channel], zone_mm: 1.0, datum_frame: [A, B, C]}
+  notes:
+    - {kind: process, text: "CNC machined from 6061-T6; ream the tip bore through both cheeks in one setup."}
+    - {kind: finish, text: "As machined, no coating; the 5 H8 and 5 H7 bores are final as machined."}
+    - {kind: edge, text: "Undefined edges burr-free; ISO 13715 edge values to be confirmed (DR-004)."}
+  sheet: {sizes: [A3, A2], scale: auto}

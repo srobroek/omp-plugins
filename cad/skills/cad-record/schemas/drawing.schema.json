@@ -129,7 +129,31 @@
         "profile_tolerance_mm": {"type": "number", "exclusiveMinimum": 0},
         "presentation": {"type": "string", "enum": ["auto", "visible", "section", "detail"]},
         "axial_location_from": {"$ref": "#/$defs/reference"},
-        "tolerance_policy": {"$ref": "#/$defs/policy_name"}
+        "tolerance_policy": {"$ref": "#/$defs/policy_name"},
+        "thread": {"$ref": "#/$defs/thread"}
+      }
+    },
+    "thread": {
+      "description": "A thread on a bore or shaft feature, drawn conventionally (ISO 6410-1, ASME Y14.6); the full-thread depth is the measured distance from the feature's entry to its locator anchor",
+      "type": "object", "additionalProperties": false, "required": ["designation", "standard", "operation"],
+      "properties": {
+        "designation": {"type": "string", "pattern": "^M[0-9]+(\\.[0-9]+)?x[0-9]+(\\.[0-9]+)?-[0-9][a-hA-H]([0-9][a-hA-H])?$"},
+        "standard": {"type": "string", "minLength": 1},
+        "operation": {"type": "string", "enum": ["tap", "thread_form", "roll", "cut", "vendor"]},
+        "full_depth_anchor": {"$ref": "#/$defs/semantic_id"}
+      }
+    },
+    "geometric_tolerance": {
+      "description": "A geometrical tolerance of ISO 1101 or ASME Y14.5 on resolved features; the zone is design intent, never a measured value",
+      "type": "object", "additionalProperties": false, "required": ["id", "characteristic", "features", "zone_mm"],
+      "properties": {
+        "id": {"$ref": "#/$defs/semantic_id"},
+        "characteristic": {"type": "string", "enum": ["position", "coaxiality", "perpendicularity", "parallelism", "flatness",
+                                                      "cylindricity", "circular_runout", "total_runout", "profile_surface"]},
+        "features": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/semantic_id"}},
+        "zone_mm": {"type": "number", "exclusiveMinimum": 0},
+        "diameter_zone": {"type": "boolean"},
+        "datum_frame": {"type": "array", "minItems": 1, "maxItems": 3, "uniqueItems": true, "items": {"$ref": "#/$defs/datum_label"}}
       }
     },
     "dimension_request": {
@@ -187,6 +211,7 @@
           "additionalProperties": {"$ref": "#/$defs/feature_intent"}
         },
         "dimensions": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/dimension_request"}},
+        "geometric_tolerances": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/geometric_tolerance"}},
         "notes": {
           "type": "array", "minItems": 1,
           "items": {
@@ -220,13 +245,25 @@
         "supplier_part_number": {"type": "string", "minLength": 1},
         "designation": {"type": "string", "minLength": 1},
         "specification": {
-          "type": "object", "additionalProperties": false, "required": ["reference", "revision", "artifact", "sha256"],
+          "description": "the datasheet or standard that defines the item, identified by its sha256; with only a url the frozen copy is a sourcing input kept outside the record",
+          "type": "object", "additionalProperties": false, "required": ["reference", "revision", "sha256"],
+          "anyOf": [{"required": ["artifact"]}, {"required": ["url"]}],
           "properties": {
             "reference": {"type": "string", "minLength": 1},
             "revision": {"type": "string", "minLength": 1},
             "artifact": {"description": "frozen copy of the specification, relative to hw/",
                          "type": "string", "pattern": "^(?!/)(?!.*(^|/)\\.\\.(/|$)).+$"},
+            "url": {"description": "where the publisher serves the specification", "type": "string", "pattern": "^https://\\S+$"},
             "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+          }
+        },
+        "open": {
+          "description": "orderable identity fields deliberately left open, each with the reason; every one blocks release",
+          "type": "object", "additionalProperties": false, "minProperties": 1,
+          "properties": {
+            "manufacturer": {"type": "string", "minLength": 1},
+            "manufacturer_part_number": {"type": "string", "minLength": 1},
+            "supplier_part_number": {"type": "string", "minLength": 1}
           }
         },
         "approved_sources": {
@@ -277,7 +314,8 @@
         "depth_min": {"type": "number", "exclusiveMinimum": 0},
         "insert": {"type": "string", "minLength": 1},
         "source": {"type": "string", "pattern": "^https?://\\S+$"},
-        "note": {"type": "string", "minLength": 1}
+        "note": {"type": "string", "minLength": 1},
+        "feature": {"description": "the host part's bore feature that takes the insert", "$ref": "#/$defs/semantic_id"}
       }
     }
   }

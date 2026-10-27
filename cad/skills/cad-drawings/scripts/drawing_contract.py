@@ -86,9 +86,14 @@ class DrawingContext:
             return {**common, "assembly_step": self._relative(self.assembly_step),
                     "assembly_step_sha256": self.assembly_step_sha256,
                     "part_records_sha256": {pn: p.record_sha256 for pn, p in sorted(self.parts.items())}}
+        spec = (part.record.get("procurement") or {}).get("specification") or {}
+        # a specification known only by url and hash: the package rests on a copy the record does not hold
+        sourcing = [{"input": "specification", **{k: spec[k] for k in ("reference", "revision", "url", "sha256")},
+                     "frozen_copy": "outside the record"}] if spec and "artifact" not in spec else []
         return {**common, "part_record_sha256": part.record_sha256, "model_sha256": part.model_sha256,
                 "step": self._relative(part.step), "step_sha256": part.step_sha256,
-                "drawing_features_sha256": self.features_sha256 if part.features is not None else None}
+                "drawing_features_sha256": self.features_sha256 if part.features is not None else None,
+                "sourcing_inputs": sourcing}
 
     def _relative(self, path: Path) -> str:
         return str(path.relative_to(self.hw))

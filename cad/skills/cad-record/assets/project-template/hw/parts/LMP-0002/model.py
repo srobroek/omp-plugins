@@ -13,12 +13,20 @@ underneath.
 
 Zero pose, assembly coordinates: hub bore on (0, 0, 40) along Z; elbow bore on
 (160, 0, 40) along Y; the arm lies along +X.
+
+`drawing_features` names every final face by its role for the detail drawing.
 """
 
 import math
 
 import cadquery as cq
 from cadmodel.safe import safe_cut, safe_fuse, safe_intersect
+from OCP.BRep import BRep_Tool
+from OCP.BRepAdaptor import BRepAdaptor_Surface
+from OCP.BRepClass import BRepClass_FaceClassifier
+from OCP.GeomAPI import GeomAPI_ProjectPointOnSurf
+from OCP.ShapeAnalysis import ShapeAnalysis_Surface
+from OCP.TopAbs import TopAbs_IN
 
 KERNEL = "cadquery"
 PARAMS = {
@@ -162,3 +170,76 @@ def build(params: dict) -> cq.Shape:
 
     entries = _circle_edges(body, bore_r, [((hx, hy, hz), (0, 0, 1)), ((ex, 0.0, ez), (0, 1, 0))])
     return body.chamfer(p["bore_chamfer"], None, entries)
+
+
+SUPPORT = {"PLANE": "plane", "CYLINDER": "cylinder", "CONE": "cone", "SPHERE": "sphere", "TORUS": "torus",
+           "BEZIER": "bezier", "BSPLINE": "bspline", "REVOLUTION": "revolution", "EXTRUSION": "extrusion",
+           "OFFSET": "offset"}
+KINDS = {"hub_seat": "plane_face", "hub_top": "plane_face", "hub": "shaft", "hub_bore": "bore",
+         "elbow_bore": "bore", "bore_entry_chamfers": "chamfer", "clevis": "slot", "head_cheek_face": "plane_face",
+         "far_cheek_face": "plane_face", "lightening_pocket": "slot", "cable_channel": "surface",
+         "outer_contour": "surface", "outline_blends": "round", "silhouette_rounds": "round"}
+
+
+def _witness(face: cq.Face) -> dict:
+    """A final-surface witness: the centre of the largest mesh triangle whose projection lies inside the face.
+
+    A chord triangle across a tight round has its centre inside the tube, where the nearest surface point can lie
+    outside the face's trim; the next triangle is tried then.
+    """
+    vertices, triangles = face.tessellate(0.01, 0.2)
+    surface = BRep_Tool.Surface_s(face.wrapped)
+    uv = ShapeAnalysis_Surface(surface)
+
+    def area(t):
+        return (vertices[t[1]] - vertices[t[0]]).cross(vertices[t[2]] - vertices[t[0]]).Length
+
+    for i, j, k in sorted(triangles, key=area, reverse=True):
+        centre = (vertices[i] + vertices[j] + vertices[k]) * (1.0 / 3.0)
+        near = GeomAPI_ProjectPointOnSurf(centre.toPnt(), surface).NearestPoint()
+        if BRepClass_FaceClassifier(face.wrapped, uv.ValueOfUV(near, 1e-7), 1e-7).State() == TopAbs_IN:
+            point = cq.Vector(near.X(), near.Y(), near.Z())
+            return {"support_type": SUPPORT.get(face.geomType(), "other"), "point_mm": list(point.toTuple()),
+                    "normal": list(face.normalAt(point).normalized().toTuple())}
+    raise ValueError(f"no witness point inside a {face.geomType()} face")
+
+
+def _role(p: dict, face: cq.Face, patch: dict) -> str | None:
+    _, y, z = patch["point_mm"]
+    normal = cq.Vector(*patch["normal"])
+    kind, hz, half_h = patch["support_type"], p["hub_origin"][2], p["hub_h"] / 2.0
+    _, _, pocket_w, floor = p["pocket"]
+    channel_r = p["cable_channel"][2]
+    if kind == "plane" and abs(abs(normal.z) - 1.0) < 1e-6:
+        levels = ((hz - half_h, "hub_seat"), (hz + half_h, "hub_top"), (floor, "lightening_pocket"))
+        return next((name for level, name in levels if abs(z - level) < 1e-6), None)
+    if kind == "plane" and abs(abs(normal.y) - 1.0) < 1e-6:
+        sides = ((p["slot_w"] / 2.0, "clevis"), (pocket_w / 2.0, "lightening_pocket"), (channel_r, "cable_channel"),
+                 (p["fork_half_w"], "head_cheek_face" if y > 0 else "far_cheek_face"))
+        return next((name for half, name in sides if abs(abs(y) - half) < 1e-6), None)
+    if kind in ("plane", "bspline"):  # tapering plan sides, sagging top and bottom, blends of curved edges
+        return "outer_contour"
+    if kind == "cylinder":
+        radius = BRepAdaptor_Surface(face.wrapped).Cylinder().Radius()
+        axis = BRepAdaptor_Surface(face.wrapped).Cylinder().Axis().Direction()
+        radii = ((p["pin_bore_d"] / 2.0, "hub_bore" if abs(axis.Z()) > 0.5 else "elbow_bore"),
+                 (p["edge_fillet"], "silhouette_rounds"), (p["outline_blend"], "outline_blends"), (p["hub_r"], "hub"),
+                 (p["elbow_r"], "outer_contour"), (p["slot_w"] / 2.0, "clevis"), (pocket_w / 2.0, "lightening_pocket"),
+                 (channel_r, "cable_channel"))
+        return next((name for r, name in radii if abs(radius - r) < 1e-6), None)
+    return {"cone": "bore_entry_chamfers", "torus": "silhouette_rounds", "sphere": "cable_channel"}.get(kind)
+
+
+def drawing_features(params: dict, shape: cq.Shape) -> dict:
+    """Every final face by its role: datum faces, bores, clevis, pocket, channel, contour and rounds."""
+    p = {**PARAMS, **params}
+    features: dict[str, list] = {}
+    for face in shape.Faces():
+        patch = _witness(face)
+        name = _role(p, face, patch)
+        if name == "elbow_bore":  # the +Y cheek grips the pin's press band, the -Y cheek supports its journal
+            patch["region"] = "head_side_cheek" if patch["point_mm"][1] > 0 else "far_cheek"
+        if name is not None:
+            features.setdefault(name, []).append(patch)
+    return {name: {"kind": KINDS[name], "frame": "assembly_zero", "patches": patches}
+            for name, patches in features.items()}

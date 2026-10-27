@@ -9,7 +9,8 @@ Usage:
         [--joint-tol 0.05] [--cnc-tool-radius 1.0] [--fdm-min-radius 1.0]
 
 Parts: one STEP per part in DIR, named `<PN>.step` (cad-motion `--parts-dir`
-rules). Process comes from hw/parts/<PN>/part.yaml (`fdm`, `cnc`, `purchased`).
+rules). Process comes from hw/parts/<PN>/part.yaml (`fdm`, `cnc`, `purchased`); a bought part
+(`make_buy: buy`, such as a pin made to drawing) is checked in its bought form, as `purchased`.
 Joints: hw/assembly.yaml. When DIR holds build_reference.py's `build.json`, its
 in-memory facts per part feed the two kernel checks below.
 
@@ -248,7 +249,8 @@ def processes(hw: Path) -> dict[str, str]:
     for record in sorted((hw / "parts").glob("*/part.yaml")):
         data = yaml.safe_load(record.read_text(encoding="utf-8"))
         if isinstance(data, dict) and isinstance(data.get("process"), str):
-            found[record.parent.name] = data["process"]
+            bought = data.get("make_buy") == "buy"   # made to drawing or catalogue: checked in its bought form
+            found[record.parent.name] = "purchased" if bought else data["process"]
     return found
 
 

@@ -8,9 +8,17 @@ upper limit so both ends lie flush.
 
 Zero pose, assembly coordinates: on the J-001 axis (0, 0, 40) from the boss top at z 29.5
 down to the access-pocket ceiling at z 21.5; the LMP-0011 ring bears on its lower end.
+
+`drawing_features` names every envelope face for the vendor specification sheet.
 """
 
 import cadquery as cq
+from OCP.BRep import BRep_Tool
+from OCP.BRepAdaptor import BRepAdaptor_Surface
+from OCP.BRepClass import BRepClass_FaceClassifier
+from OCP.GeomAPI import GeomAPI_ProjectPointOnSurf
+from OCP.ShapeAnalysis import ShapeAnalysis_Surface
+from OCP.TopAbs import TopAbs_IN
 
 KERNEL = "cadquery"
 PARAMS = {
@@ -38,3 +46,59 @@ def build(params: dict) -> cq.Shape:
     local = cq.Plane((0, 0, 0), (1, 0, 0), (0, -1, 0))
     sleeve = cq.Workplane(local).polyline(section).close().revolve(360.0, (0, 0, 0), (0, 1, 0)).val()
     return sleeve.transformShape(_plane(p).rG)
+
+
+SUPPORT = {"PLANE": "plane", "CYLINDER": "cylinder", "CONE": "cone", "SPHERE": "sphere", "TORUS": "torus",
+           "BEZIER": "bezier", "BSPLINE": "bspline", "REVOLUTION": "revolution", "EXTRUSION": "extrusion",
+           "OFFSET": "offset"}
+KINDS = {"installed_end": "plane_face", "far_end": "plane_face", "bore": "bore", "knurl": "shaft"}
+
+
+def _witness(face: cq.Face) -> dict:
+    """A final-surface witness: the centre of the largest mesh triangle whose projection lies inside the face.
+
+    A chord triangle across a tight round has its centre inside the tube, where the nearest surface point can lie
+    outside the face's trim; the next triangle is tried then.
+    """
+    vertices, triangles = face.tessellate(0.01, 0.2)
+    surface = BRep_Tool.Surface_s(face.wrapped)
+    uv = ShapeAnalysis_Surface(surface)
+
+    def area(t):
+        return (vertices[t[1]] - vertices[t[0]]).cross(vertices[t[2]] - vertices[t[0]]).Length
+
+    for i, j, k in sorted(triangles, key=area, reverse=True):
+        centre = (vertices[i] + vertices[j] + vertices[k]) * (1.0 / 3.0)
+        near = GeomAPI_ProjectPointOnSurf(centre.toPnt(), surface).NearestPoint()
+        if BRepClass_FaceClassifier(face.wrapped, uv.ValueOfUV(near, 1e-7), 1e-7).State() == TopAbs_IN:
+            point = cq.Vector(near.X(), near.Y(), near.Z())
+            return {"support_type": SUPPORT.get(face.geomType(), "other"), "point_mm": list(point.toTuple()),
+                    "normal": list(face.normalAt(point).normalized().toTuple())}
+    raise ValueError(f"no witness point inside a {face.geomType()} face")
+
+
+def _locate(shape: cq.Shape, plane: cq.Plane, radii: dict, ends: tuple) -> dict:
+    """Cylinders by radius and end faces by their distance along the axis from the installed end."""
+    features: dict[str, list] = {}
+    for face in shape.Faces():
+        patch = _witness(face)
+        along = (cq.Vector(*patch["point_mm"]) - plane.origin).dot(plane.zDir)
+        name = None
+        if patch["support_type"] == "cylinder":
+            radius = BRepAdaptor_Surface(face.wrapped).Cylinder().Radius()
+            name = next((n for n, r in radii.items() if abs(radius - r) < 1e-6), None)
+        elif patch["support_type"] == "plane":
+            name = next((n for at, n in ends if abs(along - at) < 1e-6), None)
+        if name is not None:
+            features.setdefault(name, []).append(patch)
+    return {name: {"kind": KINDS[name], "frame": "assembly_zero", "patches": patches}
+            for name, patches in features.items()}
+
+
+def drawing_features(params: dict, shape: cq.Shape) -> dict:
+    """Every envelope face by its role: both end faces, the bore and the knurl."""
+    p = {**PARAMS, **params}
+    plane = _plane(p)
+    radii = {"bore": p["bore_d"] / 2.0, "knurl": p["knurl_d"] / 2.0}
+    ends = ((0.0, "installed_end"), (p["length"], "far_end"))
+    return _locate(shape, plane, radii, ends)

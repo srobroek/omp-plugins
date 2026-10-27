@@ -14,12 +14,20 @@ singular points, and this kernel's cut left an unorientable face there.
 
 Zero pose, assembly coordinates: bushing seat on (360, 0, 40) along Y; the shade axis is
 vertical through (430, 0) and opens downward; the insert hole opens down from z 50.
+
+`drawing_features` names every final face by its role for the detail drawing.
 """
 
 import math
 
 import cadquery as cq
 from cadmodel.safe import safe_cut, safe_fuse
+from OCP.BRep import BRep_Tool
+from OCP.BRepAdaptor import BRepAdaptor_Surface
+from OCP.BRepClass import BRepClass_FaceClassifier
+from OCP.GeomAPI import GeomAPI_ProjectPointOnSurf
+from OCP.ShapeAnalysis import ShapeAnalysis_Surface
+from OCP.TopAbs import TopAbs_IN
 
 KERNEL = "cadquery"
 PARAMS = {
@@ -181,3 +189,91 @@ def build(params: dict) -> cq.Shape:
                and ((abs(e.radius() - seat_r) < 1e-6 and abs(e.arcCenter().y + half_t) < 1e-3)
                     or (abs(e.radius() - cbore_r) < 1e-6 and abs(e.arcCenter().y - half_t) < 1e-3))]
     return body.chamfer(p["bore_chamfer"], None, entries)
+
+
+SUPPORT = {"PLANE": "plane", "CYLINDER": "cylinder", "CONE": "cone", "SPHERE": "sphere", "TORUS": "torus",
+           "BEZIER": "bezier", "BSPLINE": "bspline", "REVOLUTION": "revolution", "EXTRUSION": "extrusion",
+           "OFFSET": "offset"}
+KINDS = {"knuckle_seating_face": "plane_face", "knuckle_far_face": "plane_face", "knuckle_upper_flat": "plane_face",
+         "knuckle_lower_flat": "plane_face", "knuckle_round": "shaft", "knuckle_rounds": "round", "seat": "bore",
+         "seat_counterbore": "bore", "counterbore_floor": "plane_face", "bore_entry_chamfers": "chamfer",
+         "neck_transition": "surface", "neck": "shaft", "neck_end": "plane_face", "cable_run": "bore",
+         "cable_entry": "bore", "cable_entry_floor": "plane_face", "cap": "shaft", "cap_roll": "round",
+         "cap_top": "plane_face", "cap_inner_wall": "bore", "cap_ceiling": "plane_face", "socket_boss": "shaft",
+         "boss_face": "plane_face", "insert_hole": "bore", "grip_flutes": "bore", "flute_lower_ends": "plane_face",
+         "flute_upper_ends": "plane_face", "shade_profile": "surface", "rim_round": "round"}
+
+
+def _witness(face: cq.Face) -> dict:
+    """A final-surface witness: the centre of the largest mesh triangle whose projection lies inside the face.
+
+    A chord triangle across a tight round has its centre inside the tube, where the nearest surface point can lie
+    outside the face's trim; the next triangle is tried then.
+    """
+    vertices, triangles = face.tessellate(0.01, 0.2)
+    surface = BRep_Tool.Surface_s(face.wrapped)
+    uv = ShapeAnalysis_Surface(surface)
+
+    def area(t):
+        return (vertices[t[1]] - vertices[t[0]]).cross(vertices[t[2]] - vertices[t[0]]).Length
+
+    for i, j, k in sorted(triangles, key=area, reverse=True):
+        centre = (vertices[i] + vertices[j] + vertices[k]) * (1.0 / 3.0)
+        near = GeomAPI_ProjectPointOnSurf(centre.toPnt(), surface).NearestPoint()
+        if BRepClass_FaceClassifier(face.wrapped, uv.ValueOfUV(near, 1e-7), 1e-7).State() == TopAbs_IN:
+            point = cq.Vector(near.X(), near.Y(), near.Z())
+            return {"support_type": SUPPORT.get(face.geomType(), "other"), "point_mm": list(point.toTuple()),
+                    "normal": list(face.normalAt(point).normalized().toTuple())}
+    raise ValueError(f"no witness point inside a {face.geomType()} face")
+
+
+def _role(p: dict, face: cq.Face, patch: dict) -> str | None:
+    x, y, z = patch["point_mm"]
+    normal = cq.Vector(*patch["normal"])
+    kind = patch["support_type"]
+    px, _, pz = p["pivot_origin"]
+    half_t = p["knuckle_t"] / 2.0
+    if kind == "plane" and abs(abs(normal.z) - 1.0) < 1e-6:
+        levels = ((pz - p["knuckle_r"], "knuckle_lower_flat"), (pz + p["knuckle_r"], "knuckle_upper_flat"),
+                  (pz, "cable_entry_floor"), (p["socket_boss_z"], "boss_face"), (p["grip_z"][0], "flute_lower_ends"),
+                  (p["grip_z"][1], "flute_upper_ends"), (p["cap_top_z"] - p["cap_fillet"], "cap_ceiling"),
+                  (p["socket_boss_z"] + p["insert_hole_depth"], "insert_hole"), (p["cap_top_z"], "cap_top"))
+        level = next((name for level, name in levels if abs(z - level) < 1e-6), None)
+        inside_shade = z < p["cap_bottom_z"] and abs(x - p["shade_axis_x"]) < p["cap_r"]  # the cap-wall foot
+        return level or ("shade_profile" if inside_shade else None)
+    if kind == "plane" and abs(abs(normal.y) - 1.0) < 1e-6:
+        levels = ((half_t, "knuckle_seating_face"), (-half_t, "knuckle_far_face"),
+                  (half_t - p["seat_cbore_depth"], "counterbore_floor"))
+        return next((name for level, name in levels if abs(y - level) < 1e-6), None)
+    if kind == "plane" and abs(abs(normal.x) - 1.0) < 1e-6:
+        levels = ((p["cable_entry_x"], "cable_run"), (p["shade_axis_x"], "neck_end"))
+        return next((name for level, name in levels if abs(x - level) < 1e-6), None)
+    if kind == "cylinder":
+        radius = BRepAdaptor_Surface(face.wrapped).Cylinder().Radius()
+        radii = ((p["seat_d"] / 2.0, "seat"), (p["seat_cbore_d"] / 2.0, "seat_counterbore"),
+                 (p["knuckle_r"], "knuckle_round"), (p["edge_fillet"], "knuckle_rounds"), (p["neck_r"], "neck"),
+                 (p["cable_d"] / 2.0, "cable_run"), (p["cable_entry_d"] / 2.0, "cable_entry"), (p["cap_r"], "cap"),
+                 (p["cap_r"] - p["cap_wall"], "cap_inner_wall"), (p["socket_boss_r"], "socket_boss"),
+                 (p["insert_hole_d"] / 2.0, "insert_hole"), (p["grip_r"], "grip_flutes"))
+        return next((name for r, name in radii if abs(radius - r) < 1e-6), None)
+    if kind == "torus":
+        minor = BRepAdaptor_Surface(face.wrapped).Torus().MinorRadius()
+        minors = ((p["edge_fillet"], "knuckle_rounds"), (p["cap_fillet"], "cap_roll"),
+                  (p["shade_wall"] / 2.0, "rim_round"))
+        return next((name for r, name in minors if abs(minor - r) < 1e-6), None)
+    if kind == "cone":  # seat and counterbore entry chamfers at the pivot; the split-line groove on the cap
+        return "bore_entry_chamfers" if abs(x - px) < p["knuckle_r"] else "shade_profile"
+    return {"bspline": "neck_transition", "revolution": "shade_profile"}.get(kind)
+
+
+def drawing_features(params: dict, shape: cq.Shape) -> dict:
+    """Every final face by its role: knuckle, bushing seat, neck, cable path, cap, insert hole, flutes and shade."""
+    p = {**PARAMS, **params}
+    features: dict[str, list] = {}
+    for face in shape.Faces():
+        patch = _witness(face)
+        name = _role(p, face, patch)
+        if name is not None:
+            features.setdefault(name, []).append(patch)
+    return {name: {"kind": KINDS[name], "frame": "assembly_zero", "patches": patches}
+            for name, patches in features.items()}

@@ -4,7 +4,8 @@ Stainless pin made to drawing (DR-003, DR-004) for the elbow (J-002, axis Y): a 
 socket head (dk 8.5, k 3, 3 mm hex socket, 0.4 mm top chamfer), a 5 p6 press band at
 its mid-limit that grips the lower link's +Y cheek (5 H7/p6), a 5 f7 journal at its
 mid-limit on which the upper-link tongue turns, a DIN 471 retaining-ring groove for
-the LMP-0012 ring just outside the lower link's -Y cheek, and a 0.4 mm lead chamfer.
+the LMP-0011 ring (occurrence @ring-elbow) just outside the lower link's -Y cheek, and a
+0.4 mm lead chamfer.
 
 Zero pose, assembly coordinates: shank axis on (160, 0, 40) pointing -Y from the head;
 the head underside sits 0.3 mm off the +Y cheek face.

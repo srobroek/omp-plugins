@@ -211,6 +211,13 @@ def check_part_drawing(part: dict[str, Any], path: str, product_drawing: dict[st
         if lower >= upper:
             findings.append(finding(path, f"drawing/dimensions/{index}/tolerance/deviation_mm: lower {lower} "
                                           f"must be below upper {upper}"))
+    tolerances = drawing.get("geometric_tolerances", [])
+    tolerance_ids = [tolerance["id"] for tolerance in tolerances]
+    for duplicate in sorted({t for t in tolerance_ids if tolerance_ids.count(t) > 1}):
+        findings.append(finding(path, f"drawing/geometric_tolerances: id {duplicate} is used more than once"))
+    for index, tolerance in enumerate(tolerances):
+        for ref in tolerance.get("datum_frame", []):
+            datum(f"geometric_tolerances/{index}/datum_frame", ref)
 
     defined = (product_drawing or {}).get("tolerance_policies", {})
     for where, name in policies:
@@ -234,9 +241,11 @@ def check_procurement(part: dict[str, Any], path: str, hw: Path, findings: list[
         findings.append(finding(path, f"procurement/mode {mode} contradicts drawing/type {drawing_type}: a made-to-drawing "
                                       "part needs a detail drawing, a catalogue item a vendor_specification or "
                                       "source_control sheet"))
+    for field in sorted(set(procurement.get("open", {})) & set(procurement)):
+        findings.append(finding(path, f"procurement/open/{field}: {field} is both set and declared open"))
     specification = procurement.get("specification")
-    if specification is None:
-        return
+    if specification is None or "artifact" not in specification:
+        return  # a url-only specification is a sourcing input: its frozen copy is kept outside hw/
     root = hw.resolve()
     artifact = root / specification["artifact"]
     try:
@@ -292,7 +301,7 @@ def check_interfaces(interfaces: dict[str, Any], path: str, part_records: dict[s
             if interface[side].startswith("@"):
                 resolve(interface[side], f"interfaces/{index}/{side}")
         limits = interface.get("limits", {})
-        for kind in ("press_fit", "running_fit"):
+        for kind in ("press_fit", "running_fit", "locating_fit"):
             fit = limits.get(kind)
             if not isinstance(fit, dict):
                 continue

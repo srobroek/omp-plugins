@@ -1,161 +1,146 @@
-"""FreeCAD-side TechDraw job for drawing.py; freecadcmd runs this file headless.
+"""FreeCAD-side job for drawing.py; freecadcmd runs this file headless.
 
-The CAD_DRAWING_JOB environment variable names a JSON job file. The job loads the STEP part, builds a
-TechDraw page with the regime template and a projection group (Front, Top, Right) in the requested
-projection type, and tries the candidate scales in order. TechDraw places the views (AutoDistribute
-with spacingX/spacingY); the job keeps the first scale whose view envelope plus the reserved
-annotation margins fits the drawing area, centres that envelope in the area, and writes the view
-geometry, TechDraw extent measurements and metrics bore matches as JSON for sheet composition.
+The CAD_DRAWING_JOB environment variable names a JSON job file. Every mode reads one part STEP:
 
-Coordinates in the result are sheet millimetres with Y pointing down, like the SVG template.
-View-local geometry (fragments, boxes, circles) is relative to the view centre and already scaled.
+- ``bind``: every face's plain geometry (``feature_geometry.extract_faces``) and the faces each
+  drawing_features patch binds (``feature_geometry.bind_patches``).
+- ``views``: a TechDraw page of the sheet's size with the requested part, section and detail views
+  at their scales and sheet positions. Each view is serialised with ``freecad_views.serialize_view``
+  together with the affine map from model millimetres to sheet millimetres (``project_anchor`` of
+  the origin and the unit axes), so the compositor can place annotations on projected geometry.
+  A section view also reports, per face, the points where the cutting plane meets that face, and
+  each face of the cut itself (``section_hatch.CutRegion``): its area and its own loops, outer first.
+
+The result is plain JSON; no FreeCAD object leaves this process. Coordinates on the sheet are
+millimetres with Y down.
 """
 
 import json
 import os
+import sys
 import traceback
 
 import FreeCAD as App
 import Part
-import TechDraw
 
-VIEW_NAMES = ("Front", "Top", "Right")
+with open(os.environ["CAD_DRAWING_JOB"], encoding="utf-8") as handle:
+    JOB = json.load(handle)
+sys.path.insert(0, JOB["scripts"])
+import feature_geometry  # noqa: E402
+import freecad_views  # noqa: E402
 
-
-def _union(boxes):
-    return [min(b[0] for b in boxes), min(b[1] for b in boxes), max(b[2] for b in boxes), max(b[3] for b in boxes)]
-
-
-def _local_box(view):
-    edges = view.getVisibleEdges()
-    if not edges:
-        raise RuntimeError(f"empty_drawing: the {view.Type} view has no visible edges")
-    return _union([[e.BoundBox.XMin, e.BoundBox.YMin, e.BoundBox.XMax, e.BoundBox.YMax] for e in edges])
+CUT_DEFLECTION_MM = 0.01
 
 
-def _offset(view):
-    """View centre relative to the group anchor in sheet orientation (page Y is up, sheet Y is down)."""
-    return view.X.Value, -view.Y.Value
+def _vec(values):
+    return App.Vector(*(float(v) for v in values))
 
 
-def _envelope(views, margins):
-    boxes = []
-    for view in views.values():
-        dx, dy = _offset(view)
-        box = _local_box(view)
-        boxes.append([dx + box[0], dy + box[1], dx + box[2], dy + box[3]])
-    env = _union(boxes)
-    return [env[0] - margins["left"], env[1] - margins["top"], env[2] + margins["right"], env[3] + margins["bottom"]]
+def _affine(view):
+    """Rows of the affine map model mm -> sheet mm: sheet = [A | b] @ [x, y, z, 1]."""
+    origin = freecad_views.project_anchor(view, (0.0, 0.0, 0.0))
+    columns = [freecad_views.project_anchor(view, axis) for axis in ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))]
+    return [[c[k] - origin[k] for c in columns] + [origin[k]] for k in (0, 1)]
 
 
-def _circles(view):
+def _points(shape):
     found = []
-    for edge in view.getVisibleEdges():
-        curve = edge.Curve
-        if hasattr(curve, "Radius") and edge.isClosed():
-            found.append([curve.Center.x, curve.Center.y, curve.Radius])
+    for edge in shape.Edges:
+        found.extend([[p.x, p.y, p.z] for p in edge.discretize(Deflection=CUT_DEFLECTION_MM)])
     return found
 
 
-def _bore_matches(views, holes):
-    """Match each metrics bore to the circle it projects onto in the view looking along its axis."""
-    matches = []
-    for hole in holes:
-        axis = App.Vector(*hole["axis"])
-        axis.normalize()
-        record = {"id": hole["id"], "diameter_mm": hole["diameter_mm"], "view": None, "matched": False}
-        for name, view in views.items():
-            direction = App.Vector(view.Direction)
-            direction.normalize()
-            if abs(axis.dot(direction)) < 0.999:
-                continue
-            scale = view.getScale()
-            centre = view.projectPoint(view.getGeometricCenter())
-            point = view.projectPoint(App.Vector(*hole["position"]))
-            # projectPoint is unscaled and Y-up; view geometry is scaled, centred and Y-down.
-            x, y = (point.x - centre.x) * scale, -(point.y - centre.y) * scale
-            radius = hole["diameter_mm"] * scale / 2
-            tolerance = max(0.02, 0.02 * radius)
-            record.update({"view": name.lower(), "expected": [x, y, radius]})
-            for cx, cy, r in _circles(view):
-                if abs(cx - x) <= tolerance and abs(cy - y) <= tolerance and abs(r - radius) <= tolerance:
-                    record.update({"matched": True, "circle": [cx, cy, r]})
-                    break
-            break
-        matches.append(record)
-    return matches
+def _loop(wire):
+    return [[p.x, p.y, p.z] for p in wire.discretize(Deflection=CUT_DEFLECTION_MM)]
 
 
-def project(job):
+def _cut(shape, section):
+    """Per-face cutting-plane intersections, and the faces of the cut with their own loops."""
+    origin, normal = _vec(section["origin"]), _vec(section["normal"]).normalize()
+    size = shape.BoundBox.DiagonalLength * 2 + 10.0
+    plane = Part.makePlane(size, size, origin, normal)
+    plane.translate(-(plane.CenterOfMass - origin))
+    per_face = {}
+    for index, face in enumerate(shape.Faces):
+        common = face.section(plane)
+        if common.Edges:
+            per_face[str(index)] = _points(common)
+    # the cut faces themselves, each with its own wires: a slice can double the seam lines of cylinders
+    # the plane contains, and one even-odd fill over every face's loops lets overlapping faces cancel
+    regions = []
+    for cut_face in shape.common(plane).Faces:
+        outer = cut_face.OuterWire
+        loops = [_loop(outer)] + [_loop(wire) for wire in cut_face.Wires if not wire.isSame(outer)]
+        regions.append({"area_mm2": cut_face.Area, "loops": loops})
+    return per_face, regions
+
+
+def bind(job):
     shape = Part.read(job["step"])
     if shape.isNull() or not shape.Faces:
-        raise RuntimeError("STEP has no faces to project")
+        raise RuntimeError("STEP has no faces")
+    return {"status": "pass", "faces": feature_geometry.extract_faces(shape),
+            "bound": feature_geometry.bind_patches(shape, job["locators"]),
+            "volume_mm3": shape.Volume}
+
+
+def views(job):
+    shape = Part.read(job["step"])
     doc = App.newDocument("drawing")
     feature = doc.addObject("Part::Feature", "Part")
     feature.Shape = shape
     page = doc.addObject("TechDraw::DrawPage", "Page")
     template = doc.addObject("TechDraw::DrawSVGTemplate", "Template")
-    template.Template = job["template"]
+    template.Template = job["page_template"]
     page.Template = template
-    sheet_height = template.Height.Value
-    group = doc.addObject("TechDraw::DrawProjGroup", "Views")
-    page.addView(group)
-    group.Source = [feature]
-    group.ProjectionType = job["projection_type"]
-    group.ScaleType = "Custom"
-    group.AutoDistribute = True
-    group.spacingX = job["spacing"]
-    group.spacingY = job["spacing"]
-    for name in VIEW_NAMES:
-        group.addProjection(name)
-    x0, y0, x1, y1 = job["area"]
-    tried = []
-    for scale in job["scales"]:
-        group.Scale = scale
-        doc.recompute()
-        views = {view.Type: view for view in group.Views}
-        env = _envelope(views, job["margins"])
-        tried.append([scale, env[2] - env[0], env[3] - env[1]])
-        if env[2] - env[0] <= x1 - x0 and env[3] - env[1] <= y1 - y0:
-            break
-    else:
-        raise RuntimeError(f"no_fit: no candidate scale fits the drawing area {x1 - x0:.1f} x {y1 - y0:.1f} mm: {tried}")
-    anchor_x = (x0 + x1) / 2 - (env[0] + env[2]) / 2
-    anchor_y = (y0 + y1) / 2 - (env[1] + env[3]) / 2
-    group.X = anchor_x
-    group.Y = sheet_height - anchor_y
+    height = job["sheet_height_mm"]
+    created = {}
+    for spec in job["views"]:
+        name = "V_" + spec["id"].replace("-", "_")
+        if spec["kind"] == "section":
+            view = doc.addObject("TechDraw::DrawViewSection", name)
+            page.addView(view)
+            view.BaseView = created[spec["base"]]
+            view.SectionNormal = _vec(spec["section"]["normal"])
+            view.SectionOrigin = _vec(spec["section"]["origin"])
+            view.SectionSymbol = spec.get("label", "")
+        elif spec["kind"] == "detail":
+            view = doc.addObject("TechDraw::DrawViewDetail", name)
+            page.addView(view)
+            base = created[spec["base"]]
+            view.BaseView = base
+            view.AnchorPoint = _vec(spec["detail"]["anchor_view"])
+            view.Radius = spec["detail"]["radius_mm"]
+            view.Reference = spec.get("label", "")
+        else:
+            view = doc.addObject("TechDraw::DrawViewPart", name)
+            page.addView(view)
+        view.Source = [feature]
+        view.Direction = _vec(spec["direction"])
+        view.XDirection = _vec(spec["x_direction"])
+        view.ScaleType = "Custom"
+        view.Scale = spec["scale"]
+        view.HardHidden = False
+        view.X, view.Y = spec["centre_mm"][0], height - spec["centre_mm"][1]
+        created[spec["id"]] = view
     doc.recompute()
-    views = {view.Type: view for view in group.Views}
-    front = views["Front"]
-    width_dim = TechDraw.makeExtentDim(front, [], 0)
-    height_dim = TechDraw.makeExtentDim(front, [], 1)
-    doc.recompute()
-    result_views = {}
-    for name, view in views.items():
-        dx, dy = _offset(view)
-        result_views[name.lower()] = {
-            "center": [anchor_x + dx, anchor_y + dy],
-            "box": _local_box(view),
-            "svg": TechDraw.viewPartAsSvg(view),
-        }
-    return {
-        "status": "pass",
-        "scale": group.Scale,
-        "views": result_views,
-        "extent_mm": {"width": width_dim.getRawValue(), "height": height_dim.getRawValue()},
-        "bores": _bore_matches(views, job["holes"]),
-        "face_count": len(shape.Faces),
-    }
+    result = {"status": "pass", "views": {}}
+    for spec in job["views"]:
+        view = created[spec["id"]]
+        entry = {"geometry": freecad_views.serialize_view(view, view_id=spec["id"], role=spec["role"]).to_dict(),
+                 "affine": _affine(view)}
+        if spec["kind"] == "section":
+            entry["cut_faces"], entry["cut_regions"] = _cut(shape, spec["section"])
+        result["views"][spec["id"]] = entry
+    return result
 
 
 def main():
-    with open(os.environ["CAD_DRAWING_JOB"], encoding="utf-8") as handle:
-        job = json.load(handle)
     try:
-        result = project(job)
-    except Exception as exc:
+        result = {"bind": bind, "views": views}[JOB["mode"]](JOB)
+    except Exception as exc:  # noqa: BLE001 - every failure is reported in the result
         result = {"status": "error", "error": str(exc), "traceback": traceback.format_exc()}
-    with open(job["result"], "w", encoding="utf-8") as handle:
+    with open(JOB["result"], "w", encoding="utf-8") as handle:
         json.dump(result, handle)
 
 

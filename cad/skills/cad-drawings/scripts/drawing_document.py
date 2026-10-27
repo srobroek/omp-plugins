@@ -286,6 +286,7 @@ class PackageReport:
     sheets: tuple[Mapping[str, Any], ...]
     coverage: Mapping[str, Any]
     findings: tuple[Mapping[str, Any], ...] = ()
+    release: tuple[Mapping[str, Any], ...] = ()    # release-readiness blockers; empty means releasable
 
     @property
     def exit_code(self) -> int:
@@ -294,7 +295,8 @@ class PackageReport:
     def to_dict(self) -> dict[str, Any]:
         return {"status": self.status, "run_id": self.run_id, "output_dir": str(self.output_dir),
                 "provenance": dict(self.provenance), "sheets": [dict(s) for s in self.sheets],
-                "coverage": dict(self.coverage), "findings": [dict(f) for f in self.findings]}
+                "coverage": dict(self.coverage), "findings": [dict(f) for f in self.findings],
+                "release": {"ready": not self.release, "blockers": [dict(r) for r in self.release]}}
 
 
 def _title_cells(block: Box) -> dict[str, Box]:
@@ -642,14 +644,17 @@ def _replace_package(staging: Path, output_dir: Path, run_id: str) -> None:
 
 
 def publish_package(context: DrawingContext, sheets: Sequence[ComposedSheet], report: CoverageReport,
-                    output_dir: Path, freecadcmd: Path, timeout: float) -> PackageReport:
+                    output_dir: Path, freecadcmd: Path, timeout: float,
+                    release: Sequence[Mapping[str, Any]] = ()) -> PackageReport:
     """Check, export and publish the sheets of one drawing as ``output_dir``; return what happened.
 
     Order: the coverage verdict, ``check_layout`` on every sheet, then the PDF and PNG export of
     every sheet with its identity text required in the PDF. On success ``output_dir`` holds
     ``sheet-N.svg``/``.pdf``/``.png``, ``coverage.json`` and, written last, ``package.json``. On
-    failure it holds ``sheet-N.rejected.svg`` previews and ``rejected.json``. Either way the
-    previous package is gone, so no earlier ``package.json`` survives a failed run.
+    failure it holds ``sheet-N.rejected.svg`` previews (and ``sheet-N.rejected.png`` when the layout
+    passed and only the coverage failed) and ``rejected.json``, never a PDF. Either way the previous
+    package is gone, so no earlier ``package.json`` survives a failed run. ``release`` lists the
+    release-readiness blockers (§8.1 stage 10); they never turn a passing content check into a failure.
     """
     _check_identity(sheets)
     if timeout <= 0:
@@ -663,14 +668,16 @@ def publish_package(context: DrawingContext, sheets: Sequence[ComposedSheet], re
     staging.mkdir()
     try:
         findings: list[dict[str, Any]] = [dict(f) for f in report.findings]
+        layout_ok = True
         for sheet in sheets:
             number = sheet.metadata.sheet_number
             (staging / f"sheet-{number}.svg").write_text(sheet.svg, encoding="utf-8")
             violations = check_layout(sheet.svg, sheet.regions, sheet.placeholders)
             if violations:
+                layout_ok = False
                 findings.append({"code": "layout_check_failed", "sheet": number, "message": "; ".join(violations)})
         records: list[dict[str, Any]] = []
-        if not findings:
+        if layout_ok:
             for sheet in sheets:
                 number = sheet.metadata.sheet_number
                 paths = {kind: staging / f"sheet-{number}.{kind}" for kind in ("svg", "pdf", "png")}
@@ -684,16 +691,17 @@ def publish_package(context: DrawingContext, sheets: Sequence[ComposedSheet], re
                                 "sha256": {k: sha256(p) for k, p in paths.items()}, "export": exported})
         status = "pass" if not findings else ("error" if any(f["code"] == "export_failed" for f in findings) else "fail")
         result = PackageReport(status=status, run_id=run_id, output_dir=output_dir, provenance=provenance,
-                               sheets=tuple(records), coverage=report.to_dict(), findings=tuple(findings))
+                               sheets=tuple(records), coverage=report.to_dict(), findings=tuple(findings),
+                               release=tuple(dict(r) for r in release))
         if status == "pass":
             (staging / "coverage.json").write_text(json.dumps(report.to_dict(), indent=2) + "\n", encoding="utf-8")
             (staging / "package.json").write_text(json.dumps(result.to_dict(), indent=2) + "\n", encoding="utf-8")
         else:
-            for path in staging.iterdir():
+            for path in list(staging.iterdir()):
                 if path.suffix == ".pdf":
                     path.unlink()
-                elif path.suffix == ".svg":
-                    path.rename(path.with_suffix(".rejected.svg"))
+                elif path.suffix in (".svg", ".png"):
+                    path.rename(path.with_suffix(".rejected" + path.suffix))
             (staging / "rejected.json").write_text(json.dumps(result.to_dict(), indent=2) + "\n", encoding="utf-8")
         _replace_package(staging, output_dir, run_id)
         return result
