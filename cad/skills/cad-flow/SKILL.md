@@ -12,7 +12,19 @@ TRIGGER
 
 ## Workflow
 
-1. Before GROUND, run the required runtime preflight: `uv run --script skill://cad-flow/scripts/preflight.py`. On any required failure, stop and apply its fix. Rerun preflight before continuing. Harness installation and Beads checks are warnings only.
+1. At GROUND, start the runtime warm-up in the background. Continue with GROUND, INTENT, SPECIFY and L0 CONCEPT while it runs. The warm-up runs every preflight check and first-loads each kernel, viewer and render environment. It also installs Playwright Chromium and fills the three.js cache. Run the command for the harness:
+   - OMP: `uv run --script skill://cad-flow/scripts/preflight.py --warm --background`
+   - Claude Code, with the base directory shown when this skill loaded: `uv run --script "<base directory>/scripts/preflight.py" --warm --background`
+   - OpenCode, from the project root: `uv run --script .opencode/skills/cad-flow/scripts/preflight.py --warm --background`
+   - Kiro, from the workspace root: `uv run --script cad/skills/cad-flow/scripts/preflight.py --warm --background`
+
+   Before the first L1 LAYOUT build, run the same script with `--status --wait 90` and act on its exit code:
+   - 0: continue.
+   - 3: the warm-up is still running. Run the status command again.
+   - 1: a required check failed. Stop, apply its fix, and run the script with `--warm` in the foreground until it exits 0.
+   - 2: no warm-up ran, or it stopped. Run the script with `--warm` in the foreground.
+
+   Harness installation and Beads checks are warnings only.
 2. Establish the project’s `hw/` design record and approved scope using the design-record requirements in `references/flow.md`. `cad-record` owns record validation; load `references/flow.md` for stage outputs, exact skill commands, formula rules, and gates.
 3. Lead the stages in order: GROUND, INTENT, SPECIFY, L0 CONCEPT, VARIANT gate, L1 LAYOUT, LAYOUT freeze, L2 PARTS, L3 DETAIL, BOM, L4 ANALYSIS, CRITIQUE, RECONCILE, DESIGN freeze, RELEASE, RELEASE gate. Use the stage-enum spellings in `references/flow.md`; do not skip a gate or freeze.
 4. At each stage, draft and preview without checks. Collect feedback before the commit. For each L1 to L4 commit batch, run `uv run --script skill://cad-model/scripts/cad_model.py run hw --label vN --kernel {{kernel}}`, then `uv run --script skill://cad-model/scripts/cad_model.py check vN --hw hw [--out FILE]`. Press fits declared in `hw/interfaces.yaml` are automatically allowed; a blocking check failure stops the batch. After success, run `uv run --script skill://cad-render/scripts/render.py hw --version vN` and show renders at the gate.
