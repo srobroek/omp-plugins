@@ -234,7 +234,8 @@ def _vendor_check(environ: Mapping[str, str]) -> Check:
         import serve as concept_serve
 
         integrity = concept_serve.vendor_integrity(RENDERER / "index.html")
-        cache_home = Path(environ.get("XDG_CACHE_HOME") or (Path.home() / ".cache"))
+        cache_home = Path(environ.get("XDG_CACHE_HOME") or
+                          (Path(environ.get("HOME", str(Path.home()))) / ".cache"))
         cache = cache_home / "cad-concept" / "vendor"
         missing = []
         invalid = []
@@ -282,8 +283,9 @@ def _plugin_named(value: Any) -> bool:
         matches = any(isinstance(name, str) and (name == "cad" or name.startswith("cad@")
                                                   or name.endswith("/cad")) for name in names)
         install_path = value.get("installPath") or value.get("path")
-        return (matches and (install_path is None or Path(str(install_path)).exists())) or any(
-            _plugin_named(child) for child in value.values())
+        if matches and install_path is not None:
+            return Path(str(install_path)).exists()
+        return matches or any(_plugin_named(child) for child in value.values())
     if isinstance(value, list):
         return any(_plugin_named(child) for child in value)
     return False
@@ -305,8 +307,9 @@ def _harness_check(harness: str, cwd: Path, home: Path, environ: Mapping[str, st
         detail = f"Found {len(agents)} cad reviewer agent(s) in .kiro/agents; cad link {'is' if linked else 'is not'} present."
         fix = "Link the plugin to workspace cad/ and copy harness/kiro/agents/*.json to .kiro/agents/ as in cad/README.md."
     elif harness == "claude":
+        claude_home = Path(environ.get("CLAUDE_CONFIG_DIR") or (home / ".claude"))
         settings = (cwd / ".claude" / "settings.json", cwd / ".claude" / "settings.local.json",
-                    home / ".claude" / "settings.json")
+                    claude_home / "settings.json", claude_home / "settings.local.json")
         enabled = False
         for path in settings:
             try:
@@ -316,7 +319,7 @@ def _harness_check(harness: str, cwd: Path, home: Path, environ: Mapping[str, st
             enabled_plugins = data.get("enabledPlugins", {}) if isinstance(data, dict) else {}
             enabled |= isinstance(enabled_plugins, dict) and any(
                 str(key).startswith("cad@") and value is True for key, value in enabled_plugins.items())
-        cache = home / ".claude" / "plugins" / "cache"
+        cache = claude_home / "plugins" / "cache"
         cached = any((path / "plugin.json").is_file() for path in cache.glob("**/cad/**")) if cache.exists() else False
         present = enabled or cached
         detail = "Claude Code cad plugin is enabled or cached." if present else "Claude Code cad plugin enablement/cache was not detected."

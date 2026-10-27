@@ -12,7 +12,7 @@ TRIGGER
 
 ## Workflow
 
-1. Start GROUND by running the required runtime preflight before establishing the project's `hw/` record: `uv run --script skill://cad-flow/scripts/preflight.py`. If any required check fails, stop GROUND, apply its fix, and rerun the command. Harness installation and Beads checks are warnings only.
+1. Before GROUND, run the required runtime preflight: `uv run --script skill://cad-flow/scripts/preflight.py`. On any required failure, stop and apply its fix. Rerun preflight before continuing. Harness installation and Beads checks are warnings only.
 2. Establish the project’s `hw/` design record and approved scope using the design-record requirements in `references/flow.md`. `cad-record` owns record validation; load `references/flow.md` for stage outputs, exact skill commands, formula rules, and gates.
 3. Lead the stages in order: GROUND, INTENT, SPECIFY, L0 CONCEPT, VARIANT gate, L1 LAYOUT, LAYOUT freeze, L2 PARTS, L3 DETAIL, BOM, L4 ANALYSIS, CRITIQUE, RECONCILE, DESIGN freeze, RELEASE, RELEASE gate. Use the stage-enum spellings in `references/flow.md`; do not skip a gate or freeze.
 4. At each stage, draft and preview without checks. Collect feedback before the commit. For each L1 to L4 commit batch, run `uv run --script skill://cad-model/scripts/cad_model.py run hw --label vN --kernel {{kernel}}`, then `uv run --script skill://cad-model/scripts/cad_model.py check vN --hw hw [--out FILE]`. Press fits declared in `hw/interfaces.yaml` are automatically allowed; a blocking check failure stops the batch. After success, run `uv run --script skill://cad-render/scripts/render.py hw --version vN` and show renders at the gate.
