@@ -50,7 +50,7 @@ def load(name: str, path: Path):
 
 
 viewer = load("cad_viewer_cli", SCRIPTS / "viewer.py")
-PNS = ("LMP-0001", "LMP-0002", "LMP-0003", "LMP-0004", "LMP-0005", "LMP-0006", "LMP-0007")
+PNS = tuple(f"LMP-{n:04d}" for n in range(1, 14))
 PORTS = {"a": 1001, "b": 1002, "presenter_a": 2001, "presenter_b": 2002}
 # Stands in for `python -m ocp_viewer`: records its PID and process group, never opens its port.
 FAKE_VIEWER = """
@@ -345,13 +345,13 @@ class PartMapLoading(Fixture):
         self.assertEqual([g.id for g in version.groups], ["base_sub", "arm_sub"])
         lower = version.part("LMP-0002")
         self.assertEqual(lower.path, "/lamp-arm/arm_sub/LMP-0002 Lower link")
-        # Colours are cad-render's rule for material AND finish: the clear anodize, not bare aluminium.
+        # Colours are cad-render's rule for material AND finish: machined, not anodised, aluminium.
         rules = json.loads((SKILL.parent / "cad-render" / "assets" / "materials.json").read_text(encoding="utf-8"))
         colour = {r["id"]: r["pbr"]["color"] for r in rules["rules"]}
-        self.assertEqual(lower.colour, colour["aluminium-anodised-clear"])
+        self.assertEqual(lower.colour, colour["aluminium-machined"])
         self.assertEqual(version.part("LMP-0001").colour, colour["petg"])
         self.assertEqual(record.colour_for("Unobtainium", ""), rules["default"]["pbr"]["color"])
-        self.assertEqual(version.targets("base_sub"), ("LMP-0001",))
+        self.assertEqual(version.targets("base_sub"), ("LMP-0001", "LMP-0008"))
         with self.assertRaises(ViewerError):
             version.targets("LMP-9999")
 
@@ -462,7 +462,8 @@ class AnimateLimits(Fixture):
 
     def test_tracks_move_only_the_parts_beyond_the_joint(self) -> None:
         plan = motion.plan_animation(self.chain, self.shown, "J-002", -120.0, 0.0, steps=5)
-        self.assertEqual(sorted(t.pn for t in plan.tracks), ["LMP-0003", "LMP-0004", "LMP-0007"])
+        self.assertEqual(sorted(t.pn for t in plan.tracks),
+                         ["LMP-0003", "LMP-0004", "LMP-0007", "LMP-0009", "LMP-0010", "LMP-0013"])
         self.assertEqual(plan.values, (-120.0, -90.0, -60.0, -30.0, 0.0))
         upper = next(t for t in plan.tracks if t.pn == "LMP-0003")
         x, y, z, w = upper.quaternions[3]  # -30 deg is the nominal pose: no motion from the shown pose

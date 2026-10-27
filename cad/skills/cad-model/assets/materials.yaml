@@ -31,6 +31,9 @@ densities_g_cm3:
   Steel 8.8: 7.85            # property-class 8.8 fasteners, medium-carbon steel
   Steel S235: 7.85
   Steel C45: 7.85
+  Spring steel C60S: 7.85    # EN 10132-4 strip, DIN 471 rings up to 27 mm; carbon-steel value as C45
   # Copper alloys
   Brass CW614N: 8.47
+  Brass C36000: 8.50         # UNS C36000 free-cutting brass, ASTM B16 (0.307 lb/in3)
+  Brass: 8.47                # alloy not published by the vendor; free-cutting brass CW614N value
   Copper Cu-ETP: 8.93

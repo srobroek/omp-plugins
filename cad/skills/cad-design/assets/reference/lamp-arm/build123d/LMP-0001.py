@@ -2,13 +2,15 @@
 
 FDM PETG puck printed boss-up. One revolved profile carries the axisymmetric form: the
 6 mm top roll-over fillet, the 1 mm bed-edge chamfer (no fillet on the bed face), the boss
-with its 3 mm root fillet and 0.8 mm top chamfer, the J-001 pin bore with a 0.5 mm entry
-chamfer, the circlip access pocket, and a ballast cavity whose roof is self-supporting
+with its 3 mm root fillet and 0.8 mm top chamfer, the J-001 bushing seat (SPIROL CL8000
+M4 recommended hole, DR-004) with a 0.5 mm entry chamfer, the retaining-ring access pocket,
+and a ballast cavity whose roof is self-supporting
 (45-degree flanks, 20 mm flat bridge). Then two counterbored M6 slots (ISO 4762 head
 dk 10, k 6), four rubber-foot recesses, and engraved text.
 
-Zero pose, assembly coordinates: J-001 axis Z through (0, 0, 40); the pin LMP-0005
-seats from the hub top down and its circlip bears on the access pocket ceiling.
+Zero pose, assembly coordinates: J-001 axis Z through (0, 0, 40); the LMP-0008 bushing is
+heat-set from the boss top flush to the pocket ceiling, the LMP-0005 journal turns in it,
+and the LMP-0011 ring bears on the bushing's lower end.
 """
 
 import math
@@ -26,7 +28,7 @@ PARAMS = {
     "boss_top": 29.5,
     "boss_fillet": 3.0,
     "boss_chamfer": 0.8,
-    "pin_bore_d": 5.2,  # 5 H11 hole + 0.2 mm FDM hole allowance (cad-fits: 5 H11 max 5.075)
+    "seat_d": 7.77,  # SPIROL CL8000 M4 recommended hole 7.73/7.81, mid-limit; drilled after printing
     "bore_chamfer": 0.5,
     "clip_pocket_d": 14.0,
     "clip_seat_z": 21.5,
@@ -57,7 +59,7 @@ def _arc_mid(center, radius, a0, a1):
 
 def _profile(p):
     """Closed (r, z) boundary of the revolved section: ("line", end) or ("arc", mid, end)."""
-    bore_r = p["pin_bore_d"] / 2.0
+    bore_r = p["seat_d"] / 2.0
     c = p["bore_chamfer"]
     rb, zt, bf, bc = p["boss_radius"], p["boss_top"], p["boss_fillet"], p["boss_chamfer"]
     big_r, h, tf, ch = p["radius"], p["height"], p["top_fillet"], p["bed_chamfer"]
