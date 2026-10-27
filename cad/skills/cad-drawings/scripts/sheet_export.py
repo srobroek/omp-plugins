@@ -70,26 +70,33 @@ def _first_number(value: str | None) -> float | None:
     return float(match.group()) if match else None
 
 
-def _chunks(text: ET.Element, properties: dict[str, str]) -> Iterator[tuple[float, float, dict[str, str], str]]:
+@dataclass
+class _Chunk:
+    x: float
+    y: float
+    style: dict[str, str] | None = None
+    content: str = ""
+
+
+def _chunks(text: ET.Element, properties: dict[str, str]) -> Iterator[_Chunk]:
     """The text chunks of one text element: a new chunk starts at each x or y; one style per chunk.
 
     A chunk takes the properties of the node that supplies its first characters, and its content
     collapses whitespace as SVG does by default.
     """
-    chunks: list[list[Any]] = []
+    chunks: list[_Chunk] = []
 
     def add(content: str | None, style: dict[str, str]) -> None:
         if content and content.strip():
-            chunk = chunks[-1]
-            chunk[2] = chunk[2] or style
-            chunk[3] += content
+            chunks[-1].style = chunks[-1].style or style
+            chunks[-1].content += content
 
     def visit(node: ET.Element, inherited: dict[str, str]) -> None:
         style = _properties(node, inherited)
         x, y = _first_number(node.get("x")), _first_number(node.get("y"))
         if node is text or x is not None or y is not None:
-            previous = chunks[-1] if chunks else (0.0, 0.0)
-            chunks.append([previous[0] if x is None else x, previous[1] if y is None else y, None, ""])
+            previous = chunks[-1] if chunks else _Chunk(0.0, 0.0)
+            chunks.append(_Chunk(previous.x if x is None else x, previous.y if y is None else y))
         add(node.text, style)
         for child in node:
             if child.tag == TSPAN:
@@ -97,9 +104,9 @@ def _chunks(text: ET.Element, properties: dict[str, str]) -> Iterator[tuple[floa
             add(child.tail, style)
 
     visit(text, properties)
-    for x, y, style, content in chunks:
-        if style is not None:
-            yield x, y, style, " ".join(content.split())
+    for chunk in chunks:
+        if chunk.style is not None:
+            yield _Chunk(chunk.x, chunk.y, chunk.style, " ".join(chunk.content.split()))
 
 
 def split_text(root: ET.Element) -> list[dict[str, Any]]:
@@ -119,15 +126,16 @@ def split_text(root: ET.Element) -> list[dict[str, Any]]:
                 continue
             element.remove(child)
             matrix = parse_transform(f"{transform} {child.get('transform') or ''}")
-            for x, y, style, content in _chunks(child, properties):
+            for chunk in _chunks(child, properties):
+                style = chunk.style or {}
                 if style.get("fill", "#000000") == "none":
                     continue
                 size = _first_number(style.get("font-size"))
                 if size is None:
-                    raise ExportError("export_failed", f"SVG text {content!r} has no font size")
+                    raise ExportError("export_failed", f"SVG text {chunk.content!r} has no font size")
                 weight = style.get("font-weight", "normal")
-                runs.append({"text": content, "x": x, "y": y, "anchor": style.get("text-anchor", "start"), "size": size,
-                             "family": style.get("font-family", "sans-serif").split(",")[0].strip().strip("'\""),
+                runs.append({"text": chunk.content, "x": chunk.x, "y": chunk.y, "anchor": style.get("text-anchor", "start"),
+                             "size": size, "family": style.get("font-family", "sans-serif").split(",")[0].strip().strip("'\""),
                              "bold": weight == "bold" or (weight.isdigit() and int(weight) >= 600),
                              "fill": style.get("fill", "#000000"), "matrix": list(matrix)})
 
@@ -201,6 +209,8 @@ def read_pdf(path: Path) -> PdfContent:
         font_block = re.search(rb"/Font\s*<<(.*?)>>", resources, re.S)
         maps: dict[bytes, dict[int, str]] = {}
         for name, number in re.findall(rb"/(\w+)\s+(\d+)\s+0\s+R", font_block.group(1) if font_block else b""):
+            if int(number) not in objects:
+                raise ValueError(f"PDF font /{name.decode()} has no object {number.decode()}")
             font, _ = objects[int(number)]
             base = re.search(rb"/BaseFont\s*/(\S+)", font)
             fonts.append(base.group(1).decode() if base else name.decode())

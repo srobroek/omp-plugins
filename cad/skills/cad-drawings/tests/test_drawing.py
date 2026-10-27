@@ -215,7 +215,8 @@ class DrawingContracts(unittest.TestCase):
         child_pid=self.root/"child.pid"
         fake.write_text(f'#!/bin/sh\nsleep 30 &\necho $! > "{child_pid}"\nwait\n',encoding="utf-8")
         fake.chmod(0o755)
-        result,message=freecad_runtime.run_job(fake,drawing.TECHDRAW_JOB,{"step":str(self.root/"part.step")},self.root,2.0)
+        # 5 s: on a loaded host the fake took up to 1.6 s to start its child; the child sleeps 30 s.
+        result,message=freecad_runtime.run_job(fake,drawing.TECHDRAW_JOB,{"step":str(self.root/"part.step")},self.root,5.0)
         self.assertIsNone(result)
         self.assertIn("exceeded",message)
         self.assertEqual(list(self.root.glob("techdraw_job_*")), [])
