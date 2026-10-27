@@ -4,6 +4,7 @@
 
 ### Features
 
+- Scope cad-viewer hosts by project and harness or named session; add idle shutdown and per-session stop instructions.
 - Add runtime preflight for CAD tools, kernel environments, drawing templates, and harness installation.
 - Add `cad-record` for design records, `cad-concept` for three.js concept exploration, `cad-model` for CadQuery/build123d builds and checks, and `cad-design` for the F0–F3 fidelity ladder and form checks.
 - Add `cad-motion` for kinematic poses/sweeps, `cad-render` for automated PBR images, and `cad-viewer` for interactive OCP inspection and Studio look-dev.

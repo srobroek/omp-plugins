@@ -192,11 +192,15 @@ def port_name(slot: str, audience: str) -> str:
 
 class Host:
     def __init__(self, session_file: Path, panel_port: int, ports: dict[str, int],
-                 viewport: tuple[int, int] = (1440, 900)) -> None:
+                 viewport: tuple[int, int] = (1440, 900), idle_timeout_min: int = 30) -> None:
         """`ports` maps every port_name() of slots a and b to its viewer port."""
         self.session_file = session_file
         self.panel_port = panel_port
         self.viewport = viewport
+        self.idle_timeout_min = idle_timeout_min
+        self._activity_lock = threading.Lock()
+        self._last_command_at = time.monotonic()
+        self._commands_active = 0
         self.slots = {name: Slot(name, {aud: Viewer(ports[port_name(name, aud)]) for aud in AUDIENCES})
                       for name in ("a", "b")}
         self.versions: dict[str, Loaded] = {}
@@ -210,11 +214,26 @@ class Host:
         self.halt = threading.Event()
         self.server: ThreadingHTTPServer | None = None
         self.presenter: Presenter | None = None
-        # Set while a capture moves the presenter's slot a camera to measure it: the sync thread must
-        # not copy a half-reported camera to b. The capture copies a -> b itself when it is done.
         self.sync_hold = threading.Event()
         self.guard = CaptureGuard()
-        self.gallery = gallery.Gallery()  # the project /gallery shows: the last hw named by show, compare, gallery
+        self.gallery = gallery.Gallery()
+
+    def command_started(self) -> None:
+        with self._activity_lock:
+            self._commands_active += 1
+
+    def command_finished(self) -> None:
+        with self._activity_lock:
+            self._commands_active -= 1
+            self._last_command_at = time.monotonic()
+
+    def idle(self, now: float | None = None) -> bool:
+        if self.idle_timeout_min == 0:
+            return False
+        with self._activity_lock:
+            return (self._commands_active == 0
+                    and (time.monotonic() if now is None else now) - self._last_command_at
+                    >= self.idle_timeout_min * 60)
 
     def _viewers(self) -> list[tuple[str, str, Viewer]]:
         return [(slot.name, aud, viewer) for slot in self.slots.values() for aud, viewer in slot.viewers.items()]
@@ -234,7 +253,6 @@ class Host:
             while not port_open(viewer.port):
                 if viewer.process.poll() is not None or time.monotonic() > deadline:
                     raise ViewerError(f"ocp_viewer {port_name(name, aud)} did not start on port {viewer.port}")
-                time.sleep(0.5)
 
     def stop_viewers(self) -> None:
         """Terminate every running viewer at once, then kill those still up after VIEWER_STOP_S."""
@@ -255,7 +273,8 @@ class Host:
                 "viewer_urls": {n: f"http://{HOST}:{p}/" for n, p in user.items()},
                 "ports": {"panel": self.panel_port, **{port_name(n, a): v.port for n, a, v in self._viewers()}},
                 "viewer_pids": {port_name(n, a): v.process.pid if v.process else None for n, a, v in self._viewers()},
-                "log": str(self.session_file.with_name("host.log")), "session": str(self.session_file)}
+                "log": str(self.session_file.with_name("host.log")), "session": str(self.session_file),
+                "idle_timeout_minutes": self.idle_timeout_min}
 
     # ------------------------------------------------------------------ viewer calls (hold the lock)
 
@@ -700,9 +719,13 @@ class Host:
             self.presenter = Presenter(self, f"http://{HOST}:{self.panel_port}/?audience=presenter", *self.viewport)
             self.presenter.start()
             self.presenter.result(self.presenter.submit(lambda page: None), 60.0, "presenter start")
+            with self._activity_lock:
+                self._last_command_at = time.monotonic()
             self.session_file.write_text(json.dumps(self.session(), indent=2), encoding="utf-8")
-            while not self.halt.wait(0.5):  # timed, so a SIGTERM handler runs promptly
-                pass
+            while not self.halt.wait(0.5):
+                if self.idle():
+                    self.halt.set()
+                    break
         finally:
             signal.signal(signal.SIGTERM, signal.SIG_IGN)
             self.halt.set()
@@ -713,7 +736,7 @@ class Host:
             if self.server is not None:
                 self.server.server_close()
             self.stop_viewers()
-
+            self.session_file.unlink(missing_ok=True)
 
 def _exit_on_sigterm(signum: int, _frame: Any) -> None:
     raise SystemExit(128 + signum)
@@ -782,7 +805,19 @@ def make_server(host: Host) -> ThreadingHTTPServer:
                 body = json.loads(self.rfile.read(length) or b"{}") if length else {}
                 if not isinstance(body, dict):
                     raise ViewerError("request body must be a JSON object")
-                result = handler(parse_qs(url.query), body)
+                # `/api/state` is polled by both the user panel and headless presenter. Their
+                # panel-page URLs differ by `audience=presenter`, so only user polls count as use.
+                user_panel = (url.path not in ("/api/state", "/api/connected")
+                              or body.get("audience") == "user"
+                              or "audience=presenter" not in (self.headers.get("Referer") or ""))
+                if user_panel:
+                    host.command_started()
+                    try:
+                        result = handler(parse_qs(url.query), body)
+                    finally:
+                        host.command_finished()
+                else:
+                    result = handler(parse_qs(url.query), body)
                 if isinstance(result, Raw):
                     self._send(HTTPStatus.OK, result.body, result.kind)
                 else:
@@ -857,6 +892,7 @@ def _number(body: dict[str, Any], key: str) -> float:
     return float(value)
 
 
-def run(session_file: Path, panel_port: int, ports: dict[str, int], width: int, height: int) -> int:
-    Host(session_file, panel_port, ports, (width, height)).serve()  # serve() stops its viewers itself
+def run(session_file: Path, panel_port: int, ports: dict[str, int], width: int, height: int,
+        idle_timeout_min: int = 30) -> int:
+    Host(session_file, panel_port, ports, (width, height), idle_timeout_min).serve()
     return 0
