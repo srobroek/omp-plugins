@@ -1,0 +1,283 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://srobroek.com/cad/schemas/drawing.schema.json",
+  "title": "CAD drawing intent definitions shared by the product, part and interface records",
+  "$defs": {
+    "pn": {"type": "string", "pattern": "^[A-Z]{2,5}-[0-9]{4}$"},
+    "semantic_id": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+    "datum_label": {"type": "string", "pattern": "^[A-HJ-NPR-Z]{1,2}$"},
+    "reference": {
+      "description": "A datum label declared in datum_features, or a semantic feature, anchor or view id",
+      "type": "string", "pattern": "^([A-HJ-NPR-Z]{1,2}|[a-z][a-z0-9_]*)$"
+    },
+    "references": {
+      "oneOf": [
+        {"$ref": "#/$defs/reference"},
+        {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/reference"}}
+      ]
+    },
+    "policy_name": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+    "process": {"type": "string", "enum": ["fdm", "cnc", "purchased"]},
+    "sheet_size": {"type": "string", "enum": ["A4", "A3", "A2", "A1", "A0", "ANSI A", "ANSI B", "ANSI C", "ANSI D", "ANSI E"]},
+    "scale": {
+      "oneOf": [
+        {"const": "auto"},
+        {"type": "string", "pattern": "^[1-9][0-9]*:[1-9][0-9]*$"}
+      ]
+    },
+    "sheet": {
+      "type": "object", "additionalProperties": false, "minProperties": 1,
+      "properties": {
+        "sizes": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/sheet_size"}},
+        "orientation": {"type": "string", "enum": ["landscape", "portrait"]},
+        "scale": {"$ref": "#/$defs/scale"},
+        "multi_sheet": {"type": "boolean"}
+      }
+    },
+    "direction": {
+      "description": "An axis built from resolved datums or features: normal_to or parallel_to fixes the line, toward or toward_axis its sense",
+      "type": "object", "additionalProperties": false, "minProperties": 1,
+      "properties": {
+        "normal_to": {"$ref": "#/$defs/reference"},
+        "parallel_to": {"$ref": "#/$defs/reference"},
+        "toward": {"$ref": "#/$defs/reference"},
+        "toward_axis": {"$ref": "#/$defs/reference"}
+      },
+      "not": {"anyOf": [{"required": ["normal_to", "parallel_to"]}, {"required": ["toward", "toward_axis"]}]}
+    },
+    "tolerance": {
+      "oneOf": [
+        {"type": "object", "additionalProperties": false, "required": ["policy"],
+         "properties": {"policy": {"$ref": "#/$defs/policy_name"}}},
+        {"type": "object", "additionalProperties": false, "required": ["deviation_mm"],
+         "properties": {"deviation_mm": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "number"}}}}
+      ]
+    },
+    "tolerance_policy": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind", "standard", "class", "applies_to"],
+          "properties": {
+            "kind": {"const": "standard"},
+            "standard": {"const": "ISO 2768-1:1989"},
+            "class": {"type": "string", "enum": ["f", "m", "c", "v"]},
+            "applies_to": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/process"}}
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind", "linear_mm", "applies_to", "reference"],
+          "properties": {
+            "kind": {"const": "limits"},
+            "linear_mm": {"type": "number", "exclusiveMinimum": 0},
+            "angular_deg": {"type": "number", "exclusiveMinimum": 0},
+            "applies_to": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/process"}},
+            "reference": {"type": "string", "minLength": 1}
+          }
+        }
+      ]
+    },
+    "product_drawing": {
+      "type": "object", "additionalProperties": false,
+      "required": ["definition", "projection", "standards", "default_sheet", "tolerance_policies", "general_tolerance_policy"],
+      "properties": {
+        "definition": {"const": "model_and_drawing"},
+        "projection": {"type": "string", "enum": ["first_angle", "third_angle"]},
+        "standards": {
+          "type": "object", "required": ["dimensioning"],
+          "additionalProperties": {"type": "string", "minLength": 1}
+        },
+        "default_sheet": {"allOf": [{"$ref": "#/$defs/sheet"}, {"required": ["sizes"]}]},
+        "tolerance_policies": {
+          "type": "object", "minProperties": 1,
+          "propertyNames": {"$ref": "#/$defs/policy_name"},
+          "additionalProperties": {"$ref": "#/$defs/tolerance_policy"}
+        },
+        "general_tolerance_policy": {"$ref": "#/$defs/policy_name"}
+      }
+    },
+    "view": {
+      "type": "object", "additionalProperties": false, "required": ["id", "kind"],
+      "properties": {
+        "id": {"$ref": "#/$defs/semantic_id"},
+        "kind": {"type": "string", "enum": ["orthographic", "auxiliary", "section", "detail"]},
+        "normal_to": {"$ref": "#/$defs/reference"},
+        "along_axis": {"$ref": "#/$defs/reference"},
+        "parallel_to": {"$ref": "#/$defs/reference"},
+        "perpendicular_to": {"$ref": "#/$defs/reference"},
+        "opposite": {"$ref": "#/$defs/semantic_id"},
+        "through": {"$ref": "#/$defs/references"},
+        "toward": {"$ref": "#/$defs/reference"},
+        "feature": {"$ref": "#/$defs/semantic_id"},
+        "scale": {"$ref": "#/$defs/scale"}
+      },
+      "allOf": [
+        {"if": {"properties": {"kind": {"const": "section"}}}, "then": {"required": ["through"]}},
+        {"if": {"properties": {"kind": {"const": "detail"}}}, "then": {"required": ["feature"]}},
+        {"if": {"properties": {"kind": {"enum": ["orthographic", "auxiliary"]}}},
+         "then": {"anyOf": [{"required": ["normal_to"]}, {"required": ["along_axis"]}, {"required": ["parallel_to"]},
+                            {"required": ["perpendicular_to"]}, {"required": ["opposite"]}]}}
+      ]
+    },
+    "feature_intent": {
+      "type": "object", "additionalProperties": false, "minProperties": 1,
+      "properties": {
+        "size": {"type": "string", "enum": ["general", "interface"]},
+        "location": {"const": "datum_coordinates"},
+        "profile": {"const": "controlled_model"},
+        "profile_tolerance_mm": {"type": "number", "exclusiveMinimum": 0},
+        "presentation": {"type": "string", "enum": ["auto", "visible", "section", "detail"]},
+        "axial_location_from": {"$ref": "#/$defs/reference"},
+        "tolerance_policy": {"$ref": "#/$defs/policy_name"}
+      }
+    },
+    "dimension_request": {
+      "description": "An additional measured dimension; its value always comes from the model, so there is no value field",
+      "type": "object", "additionalProperties": false, "required": ["id", "operation", "features"],
+      "properties": {
+        "id": {"$ref": "#/$defs/semantic_id"},
+        "operation": {"type": "string", "enum": ["diameter", "radius", "distance", "plane_separation", "axis_distance",
+                                                 "axis_location", "angle", "depth", "width", "length", "thickness", "chamfer"]},
+        "features": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/semantic_id"}},
+        "datum_frame": {"type": "array", "minItems": 1, "maxItems": 3, "uniqueItems": true, "items": {"$ref": "#/$defs/datum_label"}},
+        "tolerance": {"$ref": "#/$defs/tolerance"},
+        "presentation": {"type": "string", "enum": ["auto", "visible", "section", "detail"]},
+        "reference": {"type": "boolean"}
+      }
+    },
+    "part_drawing": {
+      "type": "object", "additionalProperties": false, "required": ["type"],
+      "properties": {
+        "type": {"type": "string", "enum": ["detail", "vendor_specification", "source_control"]},
+        "tolerance_policy": {"$ref": "#/$defs/policy_name"},
+        "datum_features": {
+          "type": "object", "minProperties": 1,
+          "propertyNames": {"$ref": "#/$defs/datum_label"},
+          "additionalProperties": {
+            "type": "object", "additionalProperties": false, "required": ["feature", "role"],
+            "properties": {
+              "feature": {"$ref": "#/$defs/semantic_id"},
+              "role": {"type": "string", "enum": ["plane", "axis", "point", "center_plane", "clocking_feature"]}
+            }
+          }
+        },
+        "coordinate_frame": {
+          "type": "object", "additionalProperties": false, "required": ["origin"],
+          "properties": {
+            "origin": {
+              "oneOf": [
+                {"type": "object", "additionalProperties": false, "required": ["intersection"],
+                 "properties": {"intersection": {"type": "array", "minItems": 2, "maxItems": 3, "uniqueItems": true,
+                                                 "items": {"$ref": "#/$defs/reference"}}}},
+                {"type": "object", "additionalProperties": false, "required": ["at"],
+                 "properties": {"at": {"$ref": "#/$defs/reference"}}}
+              ]
+            },
+            "x": {"$ref": "#/$defs/direction"},
+            "y": {"$ref": "#/$defs/direction"},
+            "z": {"$ref": "#/$defs/direction"}
+          },
+          "anyOf": [{"required": ["x"]}, {"required": ["y"]}, {"required": ["z"]}]
+        },
+        "views": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/view"}},
+        "features": {
+          "type": "object", "minProperties": 1,
+          "propertyNames": {"$ref": "#/$defs/semantic_id"},
+          "additionalProperties": {"$ref": "#/$defs/feature_intent"}
+        },
+        "dimensions": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/dimension_request"}},
+        "notes": {
+          "type": "array", "minItems": 1,
+          "items": {
+            "type": "object", "additionalProperties": false, "required": ["kind", "text"],
+            "properties": {
+              "kind": {"type": "string", "enum": ["process", "edge", "finish", "material", "inspection", "general"]},
+              "text": {"type": "string", "minLength": 1},
+              "reference": {"type": "string", "minLength": 1}
+            }
+          }
+        },
+        "manufacturing": {
+          "type": "object", "additionalProperties": false, "minProperties": 1,
+          "properties": {
+            "build_direction": {"$ref": "#/$defs/direction"},
+            "interface_condition": {"type": "string", "enum": ["as_printed", "post_processed", "finish_machined"]},
+            "dimensions_apply": {"type": "string", "enum": ["before_finish", "after_finish"]},
+            "post_processing": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+            "inspection_stage": {"type": "string", "minLength": 1}
+          }
+        },
+        "sheet": {"$ref": "#/$defs/sheet"}
+      }
+    },
+    "procurement": {
+      "type": "object", "additionalProperties": false, "required": ["mode"],
+      "properties": {
+        "mode": {"type": "string", "enum": ["catalog", "made_to_drawing"]},
+        "manufacturer": {"type": "string", "minLength": 1},
+        "manufacturer_part_number": {"type": "string", "minLength": 1},
+        "supplier_part_number": {"type": "string", "minLength": 1},
+        "designation": {"type": "string", "minLength": 1},
+        "specification": {
+          "type": "object", "additionalProperties": false, "required": ["reference", "revision", "artifact", "sha256"],
+          "properties": {
+            "reference": {"type": "string", "minLength": 1},
+            "revision": {"type": "string", "minLength": 1},
+            "artifact": {"description": "frozen copy of the specification, relative to hw/",
+                         "type": "string", "pattern": "^(?!/)(?!.*(^|/)\\.\\.(/|$)).+$"},
+            "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+          }
+        },
+        "approved_sources": {
+          "type": "array", "minItems": 1,
+          "items": {
+            "type": "object", "additionalProperties": false, "required": ["name"],
+            "properties": {
+              "name": {"type": "string", "minLength": 1},
+              "part_number": {"type": "string", "minLength": 1}
+            }
+          }
+        },
+        "qualification_evidence": {"type": "string", "minLength": 1},
+        "certificates": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1}}
+      }
+    },
+    "fit_endpoint": {
+      "type": "object", "additionalProperties": false, "required": ["PN", "feature"],
+      "properties": {
+        "PN": {"$ref": "#/$defs/pn"},
+        "feature": {"$ref": "#/$defs/semantic_id"},
+        "region": {"$ref": "#/$defs/semantic_id"}
+      }
+    },
+    "fit": {
+      "description": "An ISO 286 fit between two parts: a part pair, or a hole and a shaft feature endpoint",
+      "type": "object", "additionalProperties": false, "required": ["fit"],
+      "properties": {
+        "fit": {"type": "string", "minLength": 1},
+        "pair": {"type": "array", "minItems": 2, "maxItems": 2, "uniqueItems": true, "items": {"$ref": "#/$defs/pn"}},
+        "hole": {"$ref": "#/$defs/fit_endpoint"},
+        "shaft": {"$ref": "#/$defs/fit_endpoint"},
+        "note": {"type": "string", "minLength": 1}
+      },
+      "oneOf": [
+        {"required": ["pair"], "not": {"anyOf": [{"required": ["hole"]}, {"required": ["shaft"]}]}},
+        {"required": ["hole", "shaft"], "not": {"required": ["pair"]}}
+      ]
+    },
+    "heat_set": {
+      "description": "A heat-set insert installed in its host part's bore; the pair is [host PN, insert PN]",
+      "type": "object", "additionalProperties": false, "required": ["pair", "hole_d", "insert", "source"],
+      "properties": {
+        "pair": {"type": "array", "minItems": 2, "maxItems": 2, "uniqueItems": true, "items": {"$ref": "#/$defs/pn"}},
+        "hole_d": {"type": "number", "exclusiveMinimum": 0},
+        "hole_tol": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "number"}},
+        "depth_min": {"type": "number", "exclusiveMinimum": 0},
+        "insert": {"type": "string", "minLength": 1},
+        "source": {"type": "string", "pattern": "^https?://\\S+$"},
+        "note": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}
