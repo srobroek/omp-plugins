@@ -230,6 +230,25 @@ def _chromium_check(uv: str, install: bool = False) -> Check:
                   f"Playwright {expected} launches Chromium {found['chromium']} ({found['path']}).", "")
 
 
+def install_chromium_system_deps(environ: Mapping[str, str] | None = None) -> None:
+    """Install Playwright's Chromium OS libraries; caller must explicitly own system consent."""
+    env = os.environ if environ is None else environ
+    uv = shutil.which("uv", path=env.get("PATH"))
+    if not uv:
+        raise RuntimeError("uv is required before installing Playwright Chromium dependencies")
+    if not shutil.which("sudo", path=env.get("PATH")):
+        raise RuntimeError("sudo was not found; install Chromium's Playwright system dependencies manually")
+    prefix, _ = _environment(uv, CHROMIUM)
+    code = ("from playwright._impl._driver import compute_driver_executable\n"
+            "import subprocess\n"
+            "node, cli = compute_driver_executable()\n"
+            "subprocess.run(['sudo', node, cli, 'install-deps', 'chromium'], check=True)\n")
+    try:
+        subprocess.run([*prefix, "-c", code], check=True, timeout=SYNC_TIMEOUT, env=dict(env))
+    except (OSError, subprocess.SubprocessError) as error:
+        raise RuntimeError(f"Could not install Playwright Chromium system dependencies: {error}") from error
+
+
 def _timed_freecad_checks(environ: Mapping[str, str]) -> list[Check]:
     checks: list[Check] = []
     started = time.monotonic()
@@ -329,11 +348,17 @@ def _vendor_check(environ: Mapping[str, str], fill: bool = False) -> Check:
                   "Run `preflight.py --warm` with network access to fill the pinned cache, then retry.")
 
 
-def _beads_check(cwd: Path, environ: Mapping[str, str]) -> Check:
-    bd = shutil.which("bd", path=environ.get("PATH"))
+def beads_workspace(cwd: Path, environ: Mapping[str, str]) -> Path | None:
+    """Find the Beads workspace used by the preflight and setup commands."""
     workspace = Path(environ["BEADS_DIR"]) if environ.get("BEADS_DIR") else next(
         (parent / ".beads" for parent in (cwd, *cwd.parents) if (parent / ".beads").is_dir()), None)
-    has_workspace = workspace is not None and workspace.is_dir()
+    return workspace if workspace is not None and workspace.is_dir() else None
+
+
+def _beads_check(cwd: Path, environ: Mapping[str, str]) -> Check:
+    bd = shutil.which("bd", path=environ.get("PATH"))
+    workspace = beads_workspace(cwd, environ)
+    has_workspace = workspace is not None
     if bd and has_workspace:
         return _check("beads", "Beads", "pass", f"bd at {bd}; workspace at {workspace}.", "", required=False)
     absent = []
