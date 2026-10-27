@@ -44,7 +44,7 @@ type = "task"
 needs = ["round-fanout"]
 waits_for = "all-children"
 labels = ["cad", "phase:concept"]
-description = "Merge the drafted variants into `hw/concept/<product-id>.scene.json`, retiring replaced variants with a reason. Check each edit with `uv run --script skill://cad-concept/scripts/concept.py check <scene>`. Serve the preview with `uv run --script skill://cad-concept/scripts/serve.py --scene-dir hw/concept --port 8765`. After feedback, refine, merge, or drop as directed. On commit, check and save one screenshot per live variant. Before LAYOUT freeze, concept commit batches defer the broader recheck. Record the design entry and bead note."
+description = "Merge the drafted variants into `hw/concept/<product-id>.scene.json`, retiring replaced variants with a reason. Check each edit with `uv run --script skill://cad-concept/scripts/concept.py check <scene>`. Serve the preview as a background job with `uv run --script skill://cad-concept/scripts/serve.py --scene-dir hw/concept`, send the user the `url` from its first stdout line, and stop it as skill://cad-concept describes once the user is done. After feedback, refine, merge, or drop as directed. On commit, check and save one screenshot per live variant. Before LAYOUT freeze, concept commit batches defer the broader recheck. Record the design entry and bead note."
 
 [steps.metadata]
 skill_hints = "cad-concept, cad-flow, cad-record"
