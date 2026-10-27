@@ -10,6 +10,7 @@
 - Add `cad-recheck` for batch-boundary/dependent rechecks, `cad-fits` for fits and stack-ups, and `cad-bom` for EBOM roll-up.
 - Add `cad-review-mech` and `cad-review-dfm` skills and their read-only critique agents.
 - Add `cad-flow` for the staged prototype-to-release workflow; `cad-analysis` for static FEA; and `cad-drawings` for technical drawings.
+- `cad-drawings` part drawings bind `drawing_features` locators to the final STEP, measure every required characteristic in the datum frame, take fit limits from cad-fits, and fail a completeness gate with the drawing architecture's codes; the lamp template's base plate and three pins carry drawing intent.
 - Add seven Beads formulas: the `cad-touch`, `cad-part`, and `cad-product` workflow roots and the `mol-cad-part`, `mol-cad-concept`, `mol-cad-iterate`, and `mol-cad-release` bondable sub-workflows.
 - Generate Claude Code, Kiro, and OpenCode reviewer-agent files from the canonical CAD reviewer agents.
 - Add the eval harness for cross-harness/model trials, geometry and record graders, smoke tests, and pairwise judging.

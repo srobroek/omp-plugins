@@ -11,12 +11,17 @@ dk 10, k 6), four rubber-foot recesses, and engraved text.
 Zero pose, assembly coordinates: J-001 axis Z through (0, 0, 40); the LMP-0008 bushing is
 heat-set from the boss top flush to the pocket ceiling, the LMP-0005 journal turns in it,
 and the LMP-0011 ring bears on the bushing's lower end.
+
+`drawing_features` names every final face by its role for the detail drawing.
 """
 
 import math
 
 import cadquery as cq
 from cadmodel.safe import safe_cut
+from OCP.BRep import BRep_Tool
+from OCP.BRepAdaptor import BRepAdaptor_Surface
+from OCP.GeomAPI import GeomAPI_ProjectPointOnSurf
 
 KERNEL = "cadquery"
 PARAMS = {
@@ -129,3 +134,72 @@ def build(params: dict) -> cq.Shape:
         )
         body = safe_cut(body, text)
     return body.val()
+
+
+SUPPORT = {"PLANE": "plane", "CYLINDER": "cylinder", "CONE": "cone", "SPHERE": "sphere", "TORUS": "torus",
+           "BEZIER": "bezier", "BSPLINE": "bspline", "REVOLUTION": "revolution", "EXTRUSION": "extrusion",
+           "OFFSET": "offset"}
+KINDS = {"bed_face": "plane_face", "seat": "bore", "seat_chamfer": "chamfer", "boss_top": "plane_face",
+         "boss_chamfer": "chamfer", "boss": "shaft", "boss_root_round": "round", "top_face": "plane_face",
+         "top_round": "round", "rim": "shaft", "bed_chamfer": "chamfer", "cavity_outer_wall": "bore",
+         "cavity_flanks": "taper", "cavity_roof": "plane_face", "cavity_inner_wall": "shaft", "clip_pocket": "bore",
+         "mount_slots": "slot", "mount_counterbores": "slot", "foot_recesses": "bore", "engraving": "engraving"}
+
+
+def _witness(face: cq.Face) -> dict:
+    """A final-surface witness: the centre of the face's largest mesh triangle, projected onto the face."""
+    vertices, triangles = face.tessellate(0.01, 0.2)
+    a, b, c = max(((vertices[i], vertices[j], vertices[k]) for i, j, k in triangles),
+                  key=lambda t: (t[1] - t[0]).cross(t[2] - t[0]).Length)
+    centre = (a + b + c) * (1.0 / 3.0)
+    near = GeomAPI_ProjectPointOnSurf(centre.toPnt(), BRep_Tool.Surface_s(face.wrapped)).NearestPoint()
+    point = cq.Vector(near.X(), near.Y(), near.Z())
+    return {"support_type": SUPPORT.get(face.geomType(), "other"), "point_mm": list(point.toTuple()),
+            "normal": list(face.normalAt(point).normalized().toTuple())}
+
+
+def _role(p: dict, face: cq.Face, patch: dict) -> str | None:
+    x, y, z = patch["point_mm"]
+    normal = cq.Vector(*patch["normal"])
+    kind, h = patch["support_type"], p["height"]
+    tx, ty = p["text_at"]
+    if h - p["text_depth"] - 1e-6 <= z < h - 1e-6 and abs(x - tx) < 3 * p["text_size"] and abs(y - ty) < p["text_size"]:
+        return "engraving"
+    if kind == "plane" and abs(abs(normal.z) - 1.0) < 1e-6:
+        levels = ((0.0, "bed_face"), (h, "top_face"), (p["boss_top"], "boss_top"), (p["clip_seat_z"], "clip_pocket"),
+                  (p["cavity_roof_z"], "cavity_roof"), (p["foot_depth"], "foot_recesses"),
+                  (h - p["cbore_depth"], "mount_counterbores"), (h - p["text_depth"], "engraving"))
+        return next((name for level, name in levels if abs(z - level) < 1e-6), None)
+    if kind == "plane":
+        return "mount_counterbores" if z > h - p["cbore_depth"] else "mount_slots"
+    if kind == "cylinder":
+        radius = BRepAdaptor_Surface(face.wrapped).Cylinder().Radius()
+        radii = ((p["seat_d"] / 2.0, "seat"), (p["clip_pocket_d"] / 2.0, "clip_pocket"), (p["boss_radius"], "boss"),
+                 (p["radius"], "rim"), (p["cavity_r_out"], "cavity_outer_wall"), (p["cavity_r_in"], "cavity_inner_wall"),
+                 (p["foot_d"] / 2.0, "foot_recesses"), (p["mount_clear_d"] / 2.0, "mount_slots"),
+                 (p["cbore_d"] / 2.0, "mount_counterbores"))
+        return next((name for r, name in radii if abs(radius - r) < 1e-6), None)
+    if kind == "cone":
+        if z > p["boss_top"] - 2.0:
+            return "seat_chamfer" if math.hypot(x, y) < p["clip_pocket_d"] else "boss_chamfer"
+        return "bed_chamfer" if z < p["bed_chamfer"] + 1e-6 else "cavity_flanks"
+    if kind == "torus":
+        minor = BRepAdaptor_Surface(face.wrapped).Torus().MinorRadius()
+        return "top_round" if abs(minor - p["top_fillet"]) < 1e-6 else "boss_root_round"
+    return None
+
+
+def drawing_features(params: dict, shape: cq.Shape) -> dict:
+    """Every final face by its role: datum faces, seat, boss, rounds, cavity, slots, feet and engraving."""
+    p = {**PARAMS, **params}
+    features: dict[str, list] = {}
+    for face in shape.Faces():
+        patch = _witness(face)
+        name = _role(p, face, patch)
+        if name is not None:
+            features.setdefault(name, []).append(patch)
+    located = {name: {"kind": KINDS[name], "frame": "assembly_zero", "patches": patches}
+               for name, patches in features.items()}
+    if "engraving" in located and "top_face" in located:
+        located["engraving"]["relations"] = {"on": ["top_face"]}
+    return located

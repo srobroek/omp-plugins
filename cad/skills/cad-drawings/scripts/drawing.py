@@ -1,162 +1,523 @@
 #!/usr/bin/env -S uv run --script
 # /// script
-# dependencies = ["defusedxml>=0.7.1", "pyyaml>=6.0"]
+# requires-python = ">=3.11"
+# dependencies = ["defusedxml>=0.7.1", "pyyaml>=6.0", "jsonschema>=4.23"]
 # ///
-"""Generate checked projected SVG and PDF drawings from STEP geometry."""
+"""Generate checked, producer-ready part drawings from a built cad-model version.
+
+Usage: drawing.py HW [--version vN] --part PN [--part PN ...] --output-dir DIR [--timeout S]
+
+For each part: verify the record and the version (``drawing_contract``), bind the model's
+``drawing_features`` locators to the part STEP in FreeCAD, measure every required characteristic
+in the datum frame (``drawing_intent``), plan and project the views (``part_views``,
+``techdraw_job.py``), place dimensions and callouts (``sheet``), run the completeness gate
+(``completeness``) and publish ``DIR/<PN>/`` through ``drawing_document.publish_package``.
+
+A catalogue part with a ``vendor_specification`` or ``source_control`` drawing gets a specification
+sheet: its procurement identity, the critical interface dimensions measured from the vendor
+envelope, and a note that the remaining geometry is illustrative. A catalogue part without drawing
+intent needs no drawing; its procurement record is still checked.
+
+stdout: JSON summary per part. Exit 0 every drawing passed, 1 a content check failed, 2 invalid input
+or an infrastructure failure.
+"""
 
 from __future__ import annotations
 
 import argparse
 import json
-import math
+import shutil
+import sys
 import uuid
+from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-import yaml
-from defusedxml import ElementTree as SafeET
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import drawing_document
-import freecad_runtime
-import layout_check
-import sheet
-import sheet_export
+import completeness  # noqa: E402
+import drawing_contract  # noqa: E402
+import drawing_document  # noqa: E402
+import drawing_intent  # noqa: E402
+import feature_geometry as fg  # noqa: E402
+import freecad_runtime  # noqa: E402
+import part_views  # noqa: E402
+import sheet  # noqa: E402
+from drawing_document import CompositionError, CoverageReport, SheetMetadata, SvgNote, SvgTable  # noqa: E402
+from freecad_views import ViewGeometry  # noqa: E402
+from layout_check import Box  # noqa: E402
 
-FREECADCMD = freecad_runtime.find_freecadcmd()
 TECHDRAW_JOB = Path(__file__).resolve().parent / "techdraw_job.py"
+SCRIPTS = Path(__file__).resolve().parent
+MAX_AUTO_SCALE = 10.0
+MIN_AUTO_SCALE = 1 / 10
+READABLE_EXTENT_MM = 60.0     # the largest view should span at least this on paper unless the part is tiny
+VIEW_GAP = 12.0               # between the footprints of neighbouring views
+DOCUMENT_TYPES = {"detail": "Detail drawing", "vendor_specification": "Vendor item specification",
+                  "source_control": "Source control drawing"}
 
 
-def fail(code: str, message: str) -> dict[str, Any]:
-    return {"status": "error", "error": {"code": code, "message": message}}
+class DrawingError(Exception):
+    def __init__(self, code: str, message: str, exit_code: int = 1) -> None:
+        super().__init__(message)
+        self.code = code
+        self.exit_code = exit_code
 
 
-def load_mapping(path: Path, label: str) -> dict[str, Any]:
-    try:
-        value = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except (OSError, yaml.YAMLError) as exc:
-        raise ValueError(f"cannot read {label} YAML: {exc}") from exc
-    if not isinstance(value, dict):
-        raise ValueError(f"{label} YAML must contain a mapping")
-    return value
+def fail(code: str, message: str, **extra: Any) -> dict[str, Any]:
+    return {"status": "error" if code in ("freecad_unavailable", "projection_failed", "io_error") else "fail",
+            "error": {"code": code, "message": message}, **extra}
 
 
-def read_inputs(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, Any], Path, list[dict[str, Any]]]:
-    step = args.step.resolve()
-    if not step.is_file():
-        raise ValueError(f"STEP file does not exist: {step}")
-    part = load_mapping(args.part.resolve(), "part")
-    product = load_mapping(args.product.resolve(), "product")
-    for field in ("PN", "rev", "title", "material"):
-        if not isinstance(part.get(field), (str, int, float)) or not str(part[field]).strip():
-            raise ValueError(f"part.{field} must be a non-empty string or number")
-    if product.get("regime") not in sheet.SPECS:
-        raise ValueError("product.regime must be 'iso' or 'asme'")
-    tolerance = product.get("general_tolerance")
-    if not isinstance(tolerance, (str, int, float)) or isinstance(tolerance, bool) or not str(tolerance).strip():
-        raise ValueError("product.general_tolerance must be a non-empty string or number")
-    if not math.isfinite(args.scale) or args.scale <= 0:
-        raise ValueError("scale must be positive and finite")
-    metrics = load_mapping(args.metrics.resolve(), "metrics")
-    pn = str(part["PN"])
-    parts = metrics.get("parts")
-    if not isinstance(parts, dict) or not isinstance(parts.get(pn), dict):
-        raise ValueError(f"metrics.parts must contain the part {pn}")
-    holes = parts[pn].get("holes")
-    if not isinstance(holes, list):
-        raise ValueError(f"metrics.parts.{pn}.holes must be a list")
-    for index, hole in enumerate(holes):
-        if not isinstance(hole, dict):
-            raise ValueError(f"metrics.parts.{pn}.holes[{index}] must be a mapping")
-        hole_id, diameter, axis, position = hole.get("id"), hole.get("diameter_mm"), hole.get("axis"), hole.get("position")
-        if not isinstance(hole_id, str) or not hole_id.strip():
-            raise ValueError(f"metrics.parts.{pn}.holes[{index}].id must be a non-empty string")
-        if (not isinstance(diameter, (int, float)) or isinstance(diameter, bool)
-                or not math.isfinite(diameter) or diameter <= 0):
-            raise ValueError(f"metrics.parts.{pn}.holes[{index}].diameter_mm must be positive and finite")
-        for field, vector in (("axis", axis), ("position", position)):
-            if (not isinstance(vector, list) or len(vector) != 3
-                    or any(not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value)
-                           for value in vector)):
-                raise ValueError(f"metrics.parts.{pn}.holes[{index}].{field} must be a 3-number vector")
-        if not any(axis):
-            raise ValueError(f"metrics.parts.{pn}.holes[{index}].axis must be non-zero")
-    return part, product, step, holes
+# --- FreeCAD jobs ---------------------------------------------------------------------------------
 
-
-def techdraw_job(step: Path, spec: sheet.SheetSpec, scale: float, holes: list[dict[str, Any]]) -> dict[str, Any]:
-    """Job for techdraw_job.py: projection arrangement, fit area, annotation margins and bores."""
-    area = spec.view_area()
-    return {"step": str(step), "template": str(spec.template), "projection_type": spec.projection_type,
-            "spacing": sheet.VIEW_SPACING, "area": [area.x0, area.y0, area.x1, area.y1], "margins": spec.margins(),
-            "scales": drawing_document.candidate_scales(scale), "holes": holes}
-
-
-def verify_svg_content(svg: Path, part: dict[str,Any]) -> tuple[bool,str,int]:
-    try: root=SafeET.parse(str(svg),forbid_dtd=True).getroot()
-    except Exception as exc: return False,f"invalid or unsafe SVG output: {exc}",0
-    ns={"svg":"http://www.w3.org/2000/svg"}
-    path_count=len(root.findall(".//svg:path",ns))
-    texts=["".join(node.itertext()) for node in root.findall(".//svg:text",ns)]
-    required=(str(part["PN"]),str(part["rev"]),str(part["title"]),str(part["material"]))
-    missing=[value for value in required if not any(value in text for text in texts)]
-    if path_count<12 or missing: return False,f"empty_drawing: paths={path_count}, missing fields={missing}",path_count
-    return True,"",path_count
-
-
-def run(args: argparse.Namespace) -> tuple[dict[str,Any],int]:
-    part,product,step,holes=read_inputs(args)
-    output=args.output_dir.resolve(); output.mkdir(parents=True,exist_ok=True)
-    spec=sheet.SPECS[product["regime"]]
-    templates={name: candidate.template.is_file() for name,candidate in sheet.SPECS.items()}
-    if not templates[spec.regime]: return fail("template_missing",f"no {spec.regime} template at {spec.template}"),2
-    data,message=freecad_runtime.run_job(FREECADCMD,TECHDRAW_JOB,techdraw_job(step,spec,args.scale,holes),output,args.timeout)
+def run_job(freecadcmd: Path, job: dict[str, Any], workdir: Path, timeout: float) -> dict[str, Any]:
+    data, message = freecad_runtime.run_job(freecadcmd, TECHDRAW_JOB, {**job, "scripts": str(SCRIPTS)}, workdir, timeout)
     if data is None:
-        return fail("empty_drawing" if str(message).startswith("empty_drawing") else "projection_failed",message),1
-    try: drawing=sheet.compose(data,part,product,spec)
-    except ValueError as exc:
-        return fail("metrics_mismatch" if str(exc).startswith("metrics_mismatch") else "empty_drawing",str(exc)),1
-    run_id=uuid.uuid4().hex
-    violations=layout_check.check_layout(drawing.svg,spec.regions,drawing.placeholders)
-    if violations:
-        rejected=output/f"drawing_{run_id}.rejected.svg"
-        rejected.write_text(drawing.svg,encoding="utf-8")
-        return fail("layout_check_failed",f"{rejected}: "+"; ".join(violations)),1
-    svg=output/"drawing.svg"; pdf=output/"drawing.pdf"; png=output/f"drawing_{run_id}.png"
-    marker=output/f"drawing_{run_id}.complete.json"
-    svg.write_text(drawing.svg,encoding="utf-8")
-    valid,message,path_count=verify_svg_content(svg,part)
-    if not valid: return fail("empty_drawing",message),1
-    required=[str(part[k]) for k in ("PN","rev","title","material")]+[str(product["general_tolerance"])]
-    try: exported=sheet_export.export_sheet(FREECADCMD,svg,pdf,png,required,args.timeout)
-    except sheet_export.ExportError as exc: return fail(exc.code,str(exc)),1 if exc.code=="empty_drawing" else 2
-    report={"status":"pass","run_id":run_id,"pdf":str(pdf),"svg":str(svg),"rendered_png":str(png),"export":exported,
-            "template":str(spec.template),"templates_found":templates,"projection":"FreeCAD TechDraw DrawProjGroup",
-            "projection_method":"first-angle" if spec.first_angle else "third-angle",
-            "scale":data["scale"],"layout_check":"pass","visible_paths":path_count,"face_count":data["face_count"],
-            "hole_diameters_mm":[h["diameter_mm"] for h in holes],"warnings":list(drawing.warnings)}
-    marker.write_text(json.dumps(report,indent=2)+"\n",encoding="utf-8")
-    return report,0
+        raise DrawingError("projection_failed", message, 2)
+    return data
 
 
-def main(argv: list[str]|None=None) -> int:
-    parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("step",type=Path)
-    parser.add_argument("--part",required=True,type=Path)
-    parser.add_argument("--product",required=True,type=Path)
-    parser.add_argument("--metrics",required=True,type=Path,help="metrics.json from the same model version as the STEP")
-    parser.add_argument("--output-dir",required=True,type=Path)
-    parser.add_argument("--scale",type=float,default=1.0,help="largest drawing scale; smaller standard scales are tried when the views do not fit")
-    parser.add_argument("--timeout",type=float,default=120.0)
-    args=parser.parse_args(argv)
-    if args.timeout<=0: parser.error("--timeout must be positive")
-    if FREECADCMD is None:
-        print(json.dumps(fail("freecad_unavailable","freecadcmd not found; set FREECADCMD or put freecadcmd on PATH"))); return 2
-    if not FREECADCMD.is_file():
-        print(json.dumps(fail("freecad_unavailable",f"FreeCAD is not installed at {FREECADCMD}"))); return 2
-    try: result,status=run(args)
-    except ValueError as exc: result,status=fail("invalid_input",str(exc)),2
-    except OSError as exc: result,status=fail("io_error",str(exc)),2
-    print(json.dumps(result,indent=2)); return status
+def view_jobs(plans: Sequence[part_views.ViewPlan], scales: Mapping[str, float], centres: Mapping[str, tuple[float, float]],
+              details: Mapping[str, Mapping[str, Any]]) -> list[dict[str, Any]]:
+    jobs = []
+    for plan in plans:
+        if plan.kind == "detail" and plan.id not in details:
+            continue
+        job = {"id": plan.id, "kind": plan.kind, "role": plan.role, "direction": list(plan.direction),
+               "x_direction": list(plan.x_direction), "scale": scales[plan.id], "centre_mm": list(centres[plan.id]),
+               "label": plan.label or ""}
+        if plan.kind == "section":
+            job.update(base=plan.base, section={"origin": list(plan.section["origin"]), "normal": list(plan.section["normal"])})
+        if plan.kind == "detail":
+            job.update(base=plan.base, detail=details[plan.id])
+        jobs.append(job)
+    return jobs
 
 
-if __name__=="__main__": raise SystemExit(main())
+def view_data(result: Mapping[str, Any], plans: Sequence[part_views.ViewPlan],
+              clip: Mapping[str, float] | None = None) -> dict[str, sheet.ViewData]:
+    found = {}
+    for plan in plans:
+        entry = result["views"].get(plan.id)
+        if entry is None:
+            continue
+        found[plan.id] = sheet.ViewData(
+            plan=plan, geometry=ViewGeometry.from_dict(entry["geometry"]), affine=entry["affine"],
+            cut_faces={int(k): v for k, v in entry.get("cut_faces", {}).items()},
+            cut_outlines=entry.get("cut_outlines", []), clip_radius=(clip or {}).get(plan.id))
+    return found
+
+
+# --- planning ---------------------------------------------------------------------------------------
+
+def scale_candidates(intent_scale: str | None, product_scale: str | None) -> list[float]:
+    fixed = part_views.parse_scale(intent_scale or product_scale or "auto")
+    if fixed is not None:
+        return [fixed]
+    return [s for s in drawing_document.STANDARD_SCALES if MIN_AUTO_SCALE - 1e-9 <= s <= MAX_AUTO_SCALE + 1e-9]
+
+
+def detail_setup(plan: part_views.ViewPlan, base: sheet.ViewData, measured: drawing_intent.Measured,
+                 binding: fg.Binding, faces: Mapping[int, fg.Face]) -> dict[str, Any]:
+    """Detail centre (an outline point of the feature in the base view) and its model radius."""
+    feature = binding.features[plan.detail["feature"]]
+    points = sheet.visible_points([faces[i] for i in feature.faces], base)
+    if not points:
+        raise DrawingError("feature_not_presentable", f"detail {plan.id}: {feature.id} has no visible outline in "
+                           f"{plan.base}")
+    box = base.bounds()
+    model, at = min(points, key=lambda mp: min(mp[1][1] - box.y0, box.y1 - mp[1][1], mp[1][0] - box.x0, box.x1 - mp[1][0]))
+    sizes = [c.value for c in measured.characteristics if c.feature == feature.id and c.value > 0
+             and c.operation in ("width", "diameter", "radius", "chamfer", "depth", "across_flats")]
+    radius = max(0.8, 1.6 * min(sizes)) if sizes else 3.0
+    return {"centre": model, "radius_model": radius, "pivot": at}
+
+
+def plan_layout(plans: Sequence[part_views.ViewPlan], probe: Mapping[str, sheet.ViewData],
+                details: Mapping[str, Mapping[str, Any]], presentation_for: Any, spec: drawing_document.SheetSpec,
+                scale: float, text: float, regime: str, notes: Sequence[SvgNote], tables: Sequence[SvgTable],
+                ) -> tuple[dict[str, tuple[float, float]], dict[str, float]] | None:
+    """View centres on ``spec`` at ``scale`` when every view, its annotations and the furniture fit."""
+    scales, placed = {}, {}
+    for plan in plans:
+        if plan.kind == "detail":
+            setup = details[plan.id]
+            base = probe[plan.base]
+            detail_scale = part_views.parse_scale(plan.scale) or _detail_scale(scale, setup["radius_model"])
+            scales[plan.id] = detail_scale
+            placed[plan.id] = base.placed(detail_scale, (0.0, 0.0), pivot=setup["pivot"], plan=plan,
+                                          clip_radius=setup["radius_model"] * detail_scale)
+        else:
+            view_scale = part_views.parse_scale(plan.scale) or scale
+            scales[plan.id] = view_scale
+            placed[plan.id] = probe[plan.id].placed(view_scale, (0.0, 0.0))
+    presentation = presentation_for(placed)
+    footprints = {view_id: sheet.layout_view(view, presentation, text, regime,
+                                             [p for p in plans if p.base == view_id]).footprint
+                  for view_id, view in placed.items()}
+    try:
+        layout = drawing_document.page_layout(spec, tables, notes)
+    except CompositionError:
+        return None
+    region = Box(layout.drawing_area.x0, layout.drawing_area.y0, layout.drawing_area.x1,
+                 min(o.y0 for o in layout.obstacles) - VIEW_GAP / 2)
+    centres = arrange(plans, footprints, spec.projection, region)
+    if centres is None:
+        return None
+    return centres, scales
+
+
+def _detail_scale(scale: float, radius_model: float) -> float:
+    """The largest standard scale, at least twice the sheet scale, that keeps the detail circle within ~22 mm radius."""
+    target = 22.0 / radius_model
+    options = [s for s in drawing_document.STANDARD_SCALES if 2 * scale - 1e-9 <= s <= target + 1e-9]
+    if options:
+        return max(options)
+    return min((s for s in drawing_document.STANDARD_SCALES if s >= 2 * scale - 1e-9), default=2 * scale)
+
+
+def arrange(plans: Sequence[part_views.ViewPlan], footprints: Mapping[str, Box], projection: str,
+            region: Box) -> dict[str, tuple[float, float]] | None:
+    """Projection-aligned grid placement: adjacent views share the principal's rows and columns."""
+    cells: dict[str, tuple[int, int]] = {}
+    used: set[tuple[int, int]] = set()
+    for plan in plans:
+        cell = part_views.grid_cell(plan.relation, projection)
+        if cell is not None and cell not in used:
+            cells[plan.id] = cell
+            used.add(cell)
+    free = [(1, 1), (-1, 1), (2, 1), (1, -1), (-1, -1), (2, 0), (2, -1), (0, 2), (1, 2), (-1, 2), (2, 2), (3, 0), (3, 1)]
+    for plan in plans:
+        if plan.id in cells:
+            continue
+        for cell in free:
+            if cell not in used:
+                cells[plan.id] = cell
+                used.add(cell)
+                break
+        else:
+            return None
+    columns = sorted({c for c, _ in cells.values()})
+    rows = sorted({r for _, r in cells.values()})
+    left = {c: max(-footprints[v].x0 for v, (cc, _) in cells.items() if cc == c) for c in columns}
+    right = {c: max(footprints[v].x1 for v, (cc, _) in cells.items() if cc == c) for c in columns}
+    top = {r: max(-footprints[v].y0 for v, (_, rr) in cells.items() if rr == r) for r in rows}
+    bottom = {r: max(footprints[v].y1 for v, (_, rr) in cells.items() if rr == r) for r in rows}
+    width = sum(left[c] + right[c] for c in columns) + VIEW_GAP * (len(columns) - 1)
+    height = sum(top[r] + bottom[r] for r in rows) + VIEW_GAP * (len(rows) - 1)
+    if width > region.x1 - region.x0 or height > region.y1 - region.y0:
+        return None
+    x = region.x0 + (region.x1 - region.x0 - width) / 2
+    column_x = {}
+    for c in columns:
+        column_x[c] = x + left[c]
+        x += left[c] + right[c] + VIEW_GAP
+    y = region.y0 + (region.y1 - region.y0 - height) / 2
+    row_y = {}
+    for r in rows:
+        row_y[r] = y + top[r]
+        y += top[r] + bottom[r] + VIEW_GAP
+    return {view: (column_x[c], row_y[r]) for view, (c, r) in cells.items()}
+
+
+def text_size(spec: drawing_document.SheetSpec) -> float:
+    """ISO 3098 / ASME Y14.2 lettering: 2.5 mm on A4 and ANSI A, 3.5 mm on larger sheets."""
+    return 2.5 if spec.size in ("A4", "ANSI A") else 3.5
+
+
+# --- notes and identity -------------------------------------------------------------------------------
+
+def sheet_notes(context: drawing_contract.DrawingContext, part: drawing_contract.PartContext,
+                measured: drawing_intent.Measured, regime: str) -> list[SvgNote]:
+    record = part.record
+    drawing = record.get("drawing") or {}
+    product_drawing = context.product.get("drawing") or {}
+    standards = product_drawing.get("standards") or {}
+    asme = regime == "asme"
+    notes = []
+    policy = measured_policy(context, record)
+    if policy is not None:
+        if asme:
+            notes.append(SvgNote("general-tolerance", f"UNLESS OTHERWISE SPECIFIED: DIMENSIONS IN MILLIMETERS; "
+                                 f"TOLERANCES {policy.label.upper()}; INTERPRET PER {standards.get('dimensioning', 'ASME Y14.5')}.",
+                                 {"policy": policy.name}))
+        else:
+            gps = standards.get("gps_fundamentals", "ISO 8015")
+            notes.append(SvgNote("general-tolerance", f"General tolerances {policy.label}"
+                                 f"{' (' + policy.reference + ')' if policy.kind == 'limits' and policy.reference else ''}; "
+                                 f"tolerancing {gps}. Dimensions in mm.", {"policy": policy.name}))
+    if any(c.tolerance is not None and c.tolerance.kind == "fit" for c in measured.characteristics):
+        notes.append(SvgNote("fits", ("FITS PER ASME B4.2 / " if asme else "Fits and limits per ") +
+                             standards.get("fits", "ISO 286-1") + "."))
+    profiles = [c for c in measured.characteristics if c.operation == "profile"]
+    if profiles:
+        notes.append(SvgNote("model", (f"SURFACES WITHOUT DIMENSIONS ARE DEFINED BY STEP {part.step.name} "
+                                       f"SHA256 {part.step_sha256[:16]}." if asme else
+                                       f"Surfaces without dimensions are defined by STEP {part.step.name} "
+                                       f"(sha256 {part.step_sha256[:16]}) within their profile tolerance."),
+                             {"step_sha256": part.step_sha256}))
+    manufacturing = drawing.get("manufacturing") or {}
+    if manufacturing.get("dimensions_apply"):
+        notes.append(SvgNote("finish-stage", "Dimensions apply " + manufacturing["dimensions_apply"].replace("_", " ") + "."))
+    for step in manufacturing.get("post_processing", []):
+        notes.append(SvgNote(f"post-{len(notes)}", step))
+    for index, note in enumerate(drawing.get("notes", [])):
+        text = note["text"].upper() if asme else note["text"]
+        notes.append(SvgNote(f"note-{index + 1}", text, {"kind": note["kind"]}))
+    return notes
+
+
+def measured_policy(context: drawing_contract.DrawingContext, record: Mapping[str, Any]) -> drawing_intent.Policy | None:
+    defined = drawing_intent.policies(context.product)
+    name = (record.get("drawing") or {}).get("tolerance_policy") or \
+        (context.product.get("drawing") or {}).get("general_tolerance_policy")
+    return defined.get(name) if name else None
+
+
+def metadata(context: drawing_contract.DrawingContext, part: drawing_contract.PartContext, scale: float,
+             number: int, count: int) -> SheetMetadata:
+    record = part.record
+    drawing = record.get("drawing") or {}
+    policy = measured_policy(context, record)
+    standards = tuple((context.product.get("drawing") or {}).get("standards", {}).values())
+    return SheetMetadata(drawing_number=part.pn, revision=str(record["rev"]), title=str(record["title"]),
+                         document_type=DOCUMENT_TYPES[drawing.get("type", "detail")], sheet_number=number,
+                         sheet_count=count, scale=scale, material=str(record["material"]),
+                         general_tolerance=policy.label if policy else str(context.product["general_tolerance"]),
+                         standards=standards[:4])
+
+
+def procurement_findings(record: Mapping[str, Any]) -> list[dict[str, Any]]:
+    procurement = record.get("procurement") or {}
+    found = []
+    if procurement.get("mode") == "catalog":
+        if not procurement.get("designation"):
+            found.append(drawing_intent.finding("procurement_incomplete", "a catalogue item needs a designation"))
+        if not procurement.get("manufacturer") or not procurement.get("manufacturer_part_number"):
+            found.append(drawing_intent.finding("procurement_incomplete", "a catalogue item needs its manufacturer and "
+                                                "manufacturer part number"))
+        if not procurement.get("specification"):
+            found.append(drawing_intent.finding("procurement_incomplete", "a catalogue item needs a frozen datasheet or "
+                                                "specification (reference, revision, artifact under hw/, sha256)"))
+        if (record.get("drawing") or {}).get("type") == "source_control":
+            if not procurement.get("approved_sources") or not procurement.get("qualification_evidence"):
+                found.append(drawing_intent.finding("procurement_incomplete", "a source control drawing needs approved "
+                                                    "sources and qualification evidence"))
+    return found
+
+
+def procurement_table(record: Mapping[str, Any]) -> SvgTable:
+    procurement = record.get("procurement") or {}
+    spec = procurement.get("specification") or {}
+    rows = [("Designation", procurement.get("designation", "—")),
+            ("Manufacturer", procurement.get("manufacturer", "—")),
+            ("Manufacturer PN", procurement.get("manufacturer_part_number", "—")),
+            ("Supplier PN", procurement.get("supplier_part_number", "—")),
+            ("Specification", f"{spec.get('reference', '—')} rev {spec.get('revision', '—')}"),
+            ("Spec. sha256", spec.get("sha256", "—")[:16])]
+    for source in procurement.get("approved_sources", []):
+        rows.append(("Approved source", f"{source['name']} {source.get('part_number', '')}".strip()))
+    return SvgTable("procurement", ("Procurement", "Value"), tuple(rows))
+
+
+# --- one part -------------------------------------------------------------------------------------------
+
+def run_part(context: drawing_contract.DrawingContext, pn: str, output_dir: Path, freecadcmd: Path,
+             timeout: float) -> tuple[dict[str, Any], int]:
+    part = context.part(pn)
+    record = part.record
+    drawing = record.get("drawing")
+    regime = context.product["regime"]
+    procurement = procurement_findings(record)
+    if not drawing:
+        if (record.get("procurement") or {}).get("mode") == "catalog":
+            status = "fail" if procurement else "not_required"
+            return {"pn": pn, "status": status, "findings": procurement}, 1 if procurement else 0
+        return fail("drawing_intent_missing", f"{pn} has no part.yaml drawing intent", pn=pn), 1
+    if part.features is None:
+        return fail("drawing_intent_missing", f"{pn}'s model.py defines no drawing_features hook", pn=pn), 1
+    vendor = drawing["type"] in ("vendor_specification", "source_control")
+    work = output_dir.parent / f".{output_dir.name}.work-{uuid.uuid4().hex}"
+    work.mkdir(parents=True)
+    try:
+        bound = run_job(freecadcmd, {"mode": "bind", "step": str(part.step), "locators": part.features}, work, timeout)
+        faces = [fg.Face.from_dict(f) for f in bound["faces"]]
+        face_map = {f.index: f for f in faces}
+        binding = fg.resolve(part.features, bound["bound"], faces)
+        if vendor:
+            binding = fg.Binding(binding.features, binding.owner,
+                                 tuple(f for f in binding.findings if f["code"] != "geometry_unaccounted"))
+        measured = drawing_intent.measure(pn, record, context.product, context.interfaces, binding, faces)
+        if vendor:
+            measured.characteristics = [c for c in measured.characteristics
+                                        if (drawing.get("features") or {}).get(c.feature, {}).get("size") == "interface"
+                                        or c.requested]
+        if measured.frame is None:
+            report = completeness.evaluate(pn, record, context.interfaces, binding, measured, None, part.step_sha256)
+            return {"pn": pn, "status": "fail", "coverage": report.to_dict()}, 1
+        plans = part_views.plan_views(drawing, measured.frame, binding.features, face_map)
+        return compose_and_publish(context, part, drawing, regime, binding, face_map, measured, plans, procurement,
+                                   vendor, output_dir, freecadcmd, timeout, work)
+    except drawing_intent.IntentError as exc:
+        return fail(exc.code, str(exc), pn=pn), 1
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def compose_and_publish(context: drawing_contract.DrawingContext, part: drawing_contract.PartContext,
+                        drawing: Mapping[str, Any], regime: str, binding: fg.Binding, faces: Mapping[int, fg.Face],
+                        measured: drawing_intent.Measured, plans: list[part_views.ViewPlan],
+                        procurement: list[dict[str, Any]], vendor: bool, output_dir: Path, freecadcmd: Path,
+                        timeout: float, work: Path) -> tuple[dict[str, Any], int]:
+    record = part.record
+    sizes = (drawing.get("sheet") or {}).get("sizes") or \
+        ((context.product.get("drawing") or {}).get("default_sheet") or {}).get("sizes") or \
+        list(drawing_document.REGIME_SIZES[regime][:3])
+    specs = drawing_document.sheet_specs(context.product, sizes)
+    probe_spec = drawing_document.sheet_specs({**context.product, "drawing": {
+        **(context.product.get("drawing") or {}), "default_sheet": {"orientation": "landscape"}}},
+        ["A0"])[0] if regime == "iso" else drawing_document.sheet_specs(context.product, ["ANSI E"])[0]
+    template = work / "probe-page.svg"
+    template.write_text(probe_spec.page_template_svg(), encoding="utf-8")
+    centre = (probe_spec.width_mm / 2, probe_spec.height_mm / 2)
+    probe_plans = [p for p in plans if p.kind != "detail"]
+    probe_result = run_job(freecadcmd, {"mode": "views", "step": str(part.step), "page_template": str(template),
+                                        "sheet_height_mm": probe_spec.height_mm,
+                                        "views": view_jobs(probe_plans, {p.id: 1.0 for p in probe_plans},
+                                                           {p.id: centre for p in probe_plans}, {})}, work, timeout)
+    probe = view_data(probe_result, plans)
+    details = {}
+    for index, plan in enumerate(plans):
+        if plan.kind == "detail":
+            setup = detail_setup(plan, probe[plan.base], measured, binding, faces)
+            details[plan.id] = setup
+            plans[index] = replace(plan, detail={**plan.detail, "centre": setup["centre"],
+                                                 "radius_model": setup["radius_model"]})
+    plans_by_id = {p.id: p for p in plans}
+    intents = drawing.get("features") or {}
+    notes = sheet_notes(context, part, measured, regime)
+    tables = [procurement_table(record)] if vendor else []
+    if vendor:
+        notes.append(SvgNote("vendor", ("ILLUSTRATIVE ENVELOPE; ONLY DIMENSIONED INTERFACES ARE CONTROLLED. "
+                                        "DO NOT MANUFACTURE TO THIS SHEET." if regime == "asme" else
+                                        "Envelope geometry is illustrative; only the dimensioned interfaces are "
+                                        "controlled requirements. Do not manufacture to this sheet.")))
+
+    def presentation_for(views: Mapping[str, sheet.ViewData]) -> sheet.Presentation:
+        return sheet.build_presentation(measured.characteristics, measured.frame, binding.features, faces, views,
+                                        regime, measured.geometric, intents)
+
+    chosen = None
+    product_scale = ((context.product.get("drawing") or {}).get("default_sheet") or {}).get("scale")
+    candidates = scale_candidates((drawing.get("sheet") or {}).get("scale"), product_scale)
+    fallback = None
+    for spec in specs:
+        text = text_size(spec)
+        for scale in candidates:
+            planned = plan_layout(plans, probe, details, presentation_for, spec, scale, text, regime, notes, tables)
+            if planned is None:
+                continue
+            extent = max(max(b.x1 - b.x0, b.y1 - b.y0) for b in (probe[p.id].bounds() for p in probe_plans)) * scale
+            fallback = fallback or (spec, scale, planned)
+            if extent >= READABLE_EXTENT_MM or scale >= MAX_AUTO_SCALE - 1e-9 or len(candidates) == 1:
+                chosen = (spec, scale, planned)
+            break
+        if chosen is not None:
+            break
+    chosen = chosen or fallback
+    if chosen is None:
+        coverage = completeness.evaluate(part.pn, record, context.interfaces, binding, measured, None, part.step_sha256)
+        return {"pn": part.pn, "status": "fail", "error": {"code": "sheet_no_fit", "message":
+                f"no allowed sheet {sizes} and scale fits the views and annotations"},
+                "coverage": coverage.to_dict()}, 1
+    spec, scale, (centres, scales) = chosen
+    page = work / "page.svg"
+    page.write_text(spec.page_template_svg(), encoding="utf-8")
+    final_details = {}
+    for view_id, setup in details.items():
+        base = probe[plans_by_id[view_id].base]
+        cx, cy = base.geometry.centre_mm
+        px, py = setup["pivot"]
+        final_details[view_id] = {"anchor_view": [(px - cx) / base.geometry.scale, -(py - cy) / base.geometry.scale, 0.0],
+                                  "radius_mm": setup["radius_model"]}
+    final = run_job(freecadcmd, {"mode": "views", "step": str(part.step), "page_template": str(page),
+                                 "sheet_height_mm": spec.height_mm,
+                                 "views": view_jobs(plans, scales, centres, final_details)}, work, timeout)
+    views = view_data(final, plans, {v: details[v]["radius_model"] * scales[v] for v in details})
+    text = text_size(spec)
+    presentation = presentation_for(views)
+    annotations = []
+    for view in views.values():
+        children = [p for p in plans if p.base == view.plan.id and p.id in views]
+        annotations.extend(sheet.layout_view(view, presentation, text, regime, children).annotations)
+        lines = sheet.centre_lines(view, binding.features, faces)
+        if lines is not None:
+            annotations.append(lines)
+    report = completeness.evaluate(part.pn, record, context.interfaces, binding, measured, presentation, part.step_sha256)
+    if procurement:
+        report = CoverageReport("fail", report.rows, (*report.findings, *procurement))
+    try:
+        composed = drawing_document.compose_page(spec, metadata(context, part, scale, 1, 1),
+                                                 [v.geometry for v in views.values()], annotations, tables, notes)
+    except (CompositionError, ValueError) as exc:
+        return fail(getattr(exc, "code", "layout_check_failed"), str(exc), pn=part.pn), 1
+    package = drawing_document.publish_package(context, [composed], report, output_dir, freecadcmd, timeout,
+                                               completeness.release_blockers(record))
+    summary = {"pn": part.pn, "status": package.status, "type": drawing["type"], "sheet": spec.size,
+               "scale": drawing_document.scale_text(regime, scale), "output_dir": str(output_dir),
+               "views": [p.id for p in plans], "characteristics": len(measured.characteristics),
+               "findings": [dict(f) for f in package.findings],
+               "release": {"ready": not package.release, "blockers": [dict(r) for r in package.release]},
+               "previews": sorted(str(p) for p in output_dir.glob("*.png"))}
+    return summary, package.exit_code
+
+
+def latest_label(hw: Path) -> str:
+    latest = json.loads((hw / "versions" / "latest.json").read_text(encoding="utf-8"))
+    return latest["label"]
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("hw", type=Path, help="the hardware project's hw/ folder")
+    parser.add_argument("--version", help="built version label (default: versions/latest.json)")
+    parser.add_argument("--part", action="append", required=True, help="part number; repeat for several parts")
+    parser.add_argument("--output-dir", required=True, type=Path, help="packages go to OUTPUT_DIR/<PN>/")
+    parser.add_argument("--timeout", type=float, default=300.0, help="seconds per FreeCAD job")
+    args = parser.parse_args(argv)
+    if args.timeout <= 0:
+        parser.error("--timeout must be positive")
+    freecadcmd = freecad_runtime.find_freecadcmd()
+    if freecadcmd is None or not freecadcmd.is_file():
+        print(json.dumps(fail("freecad_unavailable", "freecadcmd not found; set FREECADCMD or put freecadcmd on PATH")))
+        return 2
+    hw = args.hw.resolve()
+    try:
+        label = args.version or latest_label(hw)
+        context = drawing_contract.load_context(hw, hw / "versions" / label)
+    except drawing_contract.ContractError as exc:
+        print(json.dumps(fail(exc.code, str(exc), findings=[dict(f) for f in exc.findings]), indent=2))
+        return 1 if exc.code == "invalid_drawing_intent" else 2
+    except (OSError, KeyError, ValueError) as exc:
+        print(json.dumps(fail("invalid_input", str(exc)), indent=2))
+        return 2
+    results, status = [], 0
+    for pn in args.part:
+        try:
+            result, code = run_part(context, pn, args.output_dir.resolve() / pn, freecadcmd, args.timeout)
+        except drawing_contract.ContractError as exc:
+            result, code = fail(exc.code, str(exc), pn=pn), 2
+        except DrawingError as exc:
+            result, code = fail(exc.code, str(exc), pn=pn), exc.exit_code
+        except OSError as exc:
+            result, code = fail("io_error", str(exc), pn=pn), 2
+        results.append(result)
+        status = max(status, code)
+    print(json.dumps({"version": label, "parts": results}, indent=2, default=str))
+    return status
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

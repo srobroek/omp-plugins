@@ -22,6 +22,7 @@
             "properties": {
               "press_fit": {"$ref": "drawing.schema.json#/$defs/fit"},
               "running_fit": {"$ref": "drawing.schema.json#/$defs/fit"},
+              "locating_fit": {"$ref": "drawing.schema.json#/$defs/fit"},
               "heat_set": {"type": "array", "minItems": 1, "items": {"$ref": "drawing.schema.json#/$defs/heat_set"}}
             }
           }

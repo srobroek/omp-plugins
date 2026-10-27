@@ -191,6 +191,13 @@ def check_part_drawing(part: dict[str, Any], path: str, product_drawing: dict[st
         if lower >= upper:
             findings.append(finding(path, f"drawing/dimensions/{index}/tolerance/deviation_mm: lower {lower} "
                                           f"must be below upper {upper}"))
+    tolerances = drawing.get("geometric_tolerances", [])
+    tolerance_ids = [tolerance["id"] for tolerance in tolerances]
+    for duplicate in sorted({t for t in tolerance_ids if tolerance_ids.count(t) > 1}):
+        findings.append(finding(path, f"drawing/geometric_tolerances: id {duplicate} is used more than once"))
+    for index, tolerance in enumerate(tolerances):
+        for ref in tolerance.get("datum_frame", []):
+            datum(f"geometric_tolerances/{index}/datum_frame", ref)
 
     defined = (product_drawing or {}).get("tolerance_policies", {})
     for where, name in policies:
@@ -234,7 +241,7 @@ def check_interfaces(interfaces: dict[str, Any], path: str, part_records: dict[s
     """Fit endpoints and heat-set pairs must name existing parts."""
     for index, interface in enumerate(interfaces["interfaces"]):
         limits = interface.get("limits", {})
-        for kind in ("press_fit", "running_fit"):
+        for kind in ("press_fit", "running_fit", "locating_fit"):
             fit = limits.get(kind)
             if not isinstance(fit, dict):
                 continue

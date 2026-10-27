@@ -1,398 +1,1000 @@
-"""Sheet composition: regime templates, title-block fields, and annotations around TechDraw views.
+"""Part sheet composition: dimensions, callouts, datums and section marks on projected part views.
 
-TechDraw (techdraw_job.py) projects and places the views; this module fills the template's
-``freecad:editable`` fields the way TechDraw's DrawSVGTemplate does, completes the title block,
-places the projection symbol in its cell, and draws dimensions and bore callouts on the sides of
-the front view that the projection arrangement leaves free.
+``drawing.py`` measures a part (``drawing_intent``), plans its views (``part_views``) and runs
+``techdraw_job.py``; this module turns the measured characteristics into annotations on those views
+and lays them out around each view:
+
+- a location (plane or axis coordinate in the datum frame) is a linear dimension from the datum it
+  is measured from, stacked in parallel rows above the view (sheet x) or to its right (sheet y);
+- every other characteristic joins its feature's callout: a leader from a text block in a column
+  left or right of the view to a point of the feature's projected outline, with feature control
+  frames under the text and a datum feature symbol for a datum feature;
+- centre lines for cylinder axes, cutting-plane lines with view letters, detail circles and section
+  hatching complete the views.
+
+Each annotation's leader or extension line ends on a point of the feature's own faces that projects
+onto the view's visible geometry; ``Presentation.unplaced`` lists characteristics with no such
+point in any allowed view (``feature_not_presentable``). Values are the measured ones, formatted;
+fit and heat-set sizes print their nominal, class and limits, never the modelled midpoint.
 """
 
 from __future__ import annotations
 
 import math
-from collections.abc import Callable
-from dataclasses import dataclass
-from pathlib import Path
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field, replace
+from decimal import Decimal
 from typing import Any
-from xml.etree import ElementTree as ET
+from xml.sax.saxutils import escape
 
-from defusedxml import ElementTree as SafeET
+import feature_geometry as fg
+from drawing_document import SvgAnnotation, text_width
+from drawing_intent import Characteristic, DatumFrame, Tolerance, cylinder_instances
+from feature_geometry import Face, ResolvedFeature
+from freecad_views import ViewGeometry
+from layout_check import TEXT_ASCENT, TEXT_DESCENT, Box, path_points
+from part_views import ViewPlan
 
-import freecad_runtime
-from drawing_document import scale_text
-from layout_check import SVG_NS, TEXT_ADVANCE, TEXT_ASCENT, TEXT_DESCENT, Box, SheetRegions, geometry_box
-
-FREECAD_NS = "https://www.freecad.org/wiki/index.php?title=Svg_Namespace"
-TEMPLATES = freecad_runtime.templates_dir(freecad_runtime.find_freecadcmd())
-# Sample values the review found leaking from stock templates; never acceptable on a sheet.
-STOCK_PLACEHOLDERS = frozenset({"A. Nemesis", "B. Hecate", "YYYY-MM-DD", "X / Y"})
-
-VIEW_SPACING = 12.0       # TechDraw spacingX/spacingY: clear gap between neighbouring views
-FRAME_CLEARANCE = 1.0     # between the drawing frame or title block and the view-plus-annotation envelope
-OUTLINE_WIDTH = 0.5       # ISO 128 line group 0.5: visible outlines
-THIN_WIDTH = 0.25         # dimension, extension and leader lines
-TEXT_SIZE = 3.5           # dimension and callout font size (ISO 3098 lettering height 2.5)
-TEXT_HEIGHT = (TEXT_ASCENT + TEXT_DESCENT) * TEXT_SIZE
-EXT_GAP = 1.0             # extension line gap from the outline
-EXT_OVERSHOOT = 1.5       # extension line run past the dimension line
-TEXT_GAP = 1.0            # dimension text baseline to dimension line
-LINE_CLEAR = 0.3          # text kept clear of line ends
+THIN = 0.25
 ARROW_LENGTH, ARROW_HALF_WIDTH = 2.5, 0.45
-CALLOUT_CLEARANCE = 1.5   # bore callout text from the outline
-CALLOUT_OFFSET = 3.0      # bore callout text start from the bore centre
-LEADER_GAP = 0.8          # leader end to callout text
-# Callout text sits between the outline and the dimension line on the same side.
-DIM_OFFSET = CALLOUT_CLEARANCE + TEXT_HEIGHT + 0.8
-MAX_DIM_CHARS = 7         # widest overall dimension text reserved for unidirectional ASME text
-CAPTION_SIZE, LABEL_SIZE, VALUE_SIZE = 1.8, 2.0, 3.0
+EXT_GAP, EXT_OVERSHOOT = 1.0, 1.5
+ROW_PITCH = 8.0            # between parallel dimension lines
+FIRST_ROW = 10.0           # view outline to the first dimension line
+COLUMN_GAP = 8.0           # view outline (or the last dimension row) to a callout column
+LINE_PITCH_FACTOR = 1.45   # callout line pitch / text height
+BLOCK_GAP = 2.0
+LANDING = 3.0
+VISIBLE_TOLERANCE = 0.25   # sheet mm between a projected anchor and the view's visible geometry
+LABEL_GAP = 4.0
+CHAIN_DASH = "6 1.5 1 1.5"  # ISO 128-2 long dashed dotted line (centre lines, cutting planes), 0.25 mm
 
 
-@dataclass(frozen=True)
-class SheetSpec:
-    """One regime's template, projection arrangement, regions and title-block content."""
+# --- formatting -----------------------------------------------------------------------------------
 
-    regime: str
-    template: Path
-    projection_type: str
-    regions: SheetRegions
-    symbol_ids: tuple[str, ...]
-    relabels: tuple[tuple[str, str], ...]
-    fields: Callable[[dict[str, Any], dict[str, Any], str], dict[str, str]]
-    decorate_title_block: Callable[[dict[str, Any], dict[str, Any]], list[ET.Element]]
-    scale_text: Callable[[float], str]
-
-    @property
-    def first_angle(self) -> bool:
-        return self.projection_type == "First angle"
-
-    def view_area(self) -> Box:
-        """Region the views and their annotations may occupy: inside the frame, above the title block."""
-        frame, block = self.regions.frame, self.regions.title_block
-        return Box(frame.x0 + FRAME_CLEARANCE, frame.y0 + FRAME_CLEARANCE, frame.x1 - FRAME_CLEARANCE,
-                   block.y0 - FRAME_CLEARANCE)
-
-    def margins(self) -> dict[str, float]:
-        """Annotation space reserved on the free sides of the front view, sized for the worst placement."""
-        outside = DIM_OFFSET + EXT_OVERSHOOT + LINE_CLEAR
-        across = outside + TEXT_HEIGHT
-        if self.first_angle:  # top view below, right view left: dimension above and right of the front view
-            return {"top": across, "right": across, "bottom": 0.0, "left": 0.0}
-        return {"top": 0.0, "right": 0.0, "bottom": across,
-                "left": outside + MAX_DIM_CHARS * TEXT_ADVANCE * TEXT_SIZE}
+def number(value: float | Decimal, places: int = 3) -> str:
+    text = f"{float(value):.{places}f}".rstrip("0").rstrip(".")
+    return "0" if text in ("-0", "") else text
 
 
-def _element(tag: str, attributes: dict[str, Any] | None = None, text: str | None = None) -> ET.Element:
-    element = ET.Element(f"{{{SVG_NS}}}{tag}", {k: (f"{v:.3f}" if isinstance(v, float) else str(v))
-                                                 for k, v in (attributes or {}).items()})
-    element.text = text
-    return element
+def signed(value: Decimal) -> str:
+    """A limit deviation with three decimals (micrometre steps), as ISO 286 tables print them."""
+    if value == 0:
+        return "0"
+    return ("+" if value > 0 else "−") + f"{abs(value):.3f}"
 
 
-def _text(content: str, x: float, y: float, size: float, anchor: str = "start", **extra: Any) -> ET.Element:
-    attributes = {"x": x, "y": y, "font-size": size, "font-family": "sans-serif", "fill": "#111", "stroke": "none"}
-    if anchor != "start":
-        attributes["text-anchor"] = anchor
-    return _element("text", {**attributes, **extra}, content)
+def tolerance_text(tol: Tolerance | None, measured: float, regime: str) -> tuple[str, str]:
+    """(nominal text, tolerance suffix) of a size: fits print class and limits, never the modelled value."""
+    if tol is None or tol.kind == "general":
+        return number(measured), ""
+    if tol.kind == "basic":
+        return number(measured), ""
+    nominal = tol.nominal if tol.nominal is not None else Decimal(number(measured))
+    if tol.kind == "fit":
+        low, high = nominal + tol.lower, nominal + tol.upper
+        if regime == "asme":
+            return f"{number(high)}/{number(low)}", f" ({number(nominal)} {tol.designation})"
+        return f"{number(nominal)} {tol.designation}", f" ({signed(tol.upper)}/{signed(tol.lower)})"
+    if tol.lower == -tol.upper:
+        return number(nominal), f" ±{number(tol.upper)}"
+    return number(nominal), f" {signed(tol.upper)}/{signed(tol.lower)}"
 
 
-def _line(x1: float, y1: float, x2: float, y2: float, width: float = THIN_WIDTH) -> ET.Element:
-    return _element("line", {"x1": x1, "y1": y1, "x2": x2, "y2": y2, "stroke": "#111", "stroke-width": width})
+def size_text(char: Characteristic, regime: str, symbol: str = "") -> str:
+    nominal, suffix = tolerance_text(char.tolerance, char.value, regime)
+    count = f"{char.quantity}× " if char.quantity > 1 else ""
+    return f"{count}{symbol}{nominal}{suffix}"
 
 
-def _arrow(tip: tuple[float, float], toward: tuple[float, float]) -> ET.Element:
-    """Closed filled arrowhead with its tip at ``tip``, its base toward ``toward``."""
+GDT_SYMBOLS = {"position": "⌖", "coaxiality": "◎", "perpendicularity": "⟂", "parallelism": "∥", "flatness": "⏥",
+               "cylindricity": "⌭", "circular_runout": "↗", "total_runout": "⌰", "profile_surface": "⌓"}
+
+
+# --- view data --------------------------------------------------------------------------------------
+
+@dataclass
+class ViewData:
+    """One serialised view with its model-to-sheet map and a lookup of its visible outline.
+
+    ``placed`` returns the same view at another scale and sheet position without FreeCAD: TechDraw
+    geometry scales about the view origin, so planning reuses one probe run per view.
+    """
+
+    plan: ViewPlan
+    geometry: ViewGeometry
+    affine: Sequence[Sequence[float]]
+    cut_faces: Mapping[int, Sequence[Sequence[float]]] = field(default_factory=dict)
+    cut_outlines: Sequence[Sequence[Sequence[float]]] = ()
+    clip_radius: float | None = None         # detail views: sheet radius of the boundary circle
+    source: tuple[Any, float, tuple[float, float], tuple[float, float]] | None = None  # (view, zoom, pivot, centre)
+    _cells: dict[tuple[int, int], list[tuple[float, float, float, float]]] | None = None
+
+    def project(self, point: Sequence[float]) -> tuple[float, float]:
+        a = self.affine
+        return (a[0][0] * point[0] + a[0][1] * point[1] + a[0][2] * point[2] + a[0][3],
+                a[1][0] * point[0] + a[1][1] * point[1] + a[1][2] * point[2] + a[1][3])
+
+    def bounds(self) -> Box:
+        if self.clip_radius is not None:
+            cx, cy = self.geometry.centre_mm
+            return Box(cx - self.clip_radius, cy - self.clip_radius, cx + self.clip_radius, cy + self.clip_radius)
+        return Box(*self.geometry.sheet_bounds())
+
+    def placed(self, scale: float, centre: tuple[float, float], pivot: tuple[float, float] | None = None,
+               plan: ViewPlan | None = None, clip_radius: float | None = None) -> ViewData:
+        """This view at ``scale`` with sheet point ``pivot`` (default: its origin) moved to ``centre``."""
+        zoom = scale / self.geometry.scale
+        pivot = pivot or self.geometry.centre_mm
+        cx, cy = self.geometry.centre_mm
+        bounds = tuple(v * zoom for v in self.geometry.bounds)
+        shift = (centre[0] + (cx - pivot[0]) * zoom, centre[1] + (cy - pivot[1]) * zoom)
+        geometry = replace(self.geometry, centre_mm=centre if clip_radius is not None else shift, scale=scale,
+                           bounds=bounds)
+        affine = [[zoom * row[0], zoom * row[1], zoom * row[2], zoom * (row[3] - pivot[k]) + centre[k]]
+                  for k, row in enumerate(self.affine)]
+        return ViewData(plan or self.plan, geometry, affine, self.cut_faces, self.cut_outlines, clip_radius,
+                        (self, zoom, pivot, centre))
+
+    def _segments(self) -> dict[tuple[int, int], list[tuple[float, float, float, float]]]:
+        if self._cells is None:
+            cx, cy = self.geometry.centre_mm
+            cells: dict[tuple[int, int], list[tuple[float, float, float, float]]] = {}
+            for path in self.geometry.visible:
+                points = [(cx + x, cy + y) for x, y in path_points(path)]
+                for (x1, y1), (x2, y2) in zip(points, points[1:]):
+                    for i in range(int(math.floor(min(x1, x2))) - 1, int(math.floor(max(x1, x2))) + 2):
+                        for j in range(int(math.floor(min(y1, y2))) - 1, int(math.floor(max(y1, y2))) + 2):
+                            cells.setdefault((i, j), []).append((x1, y1, x2, y2))
+            self._cells = cells
+        return self._cells
+
+    def on_visible(self, point: tuple[float, float], tolerance: float = VISIBLE_TOLERANCE) -> bool:
+        if self.clip_radius is not None:
+            cx, cy = self.geometry.centre_mm
+            if math.hypot(point[0] - cx, point[1] - cy) > self.clip_radius:
+                return False
+        if self.source is not None:
+            view, zoom, pivot, centre = self.source
+            return view.on_visible((pivot[0] + (point[0] - centre[0]) / zoom, pivot[1] + (point[1] - centre[1]) / zoom),
+                                   tolerance / zoom)
+        x, y = point
+        for x1, y1, x2, y2 in self._segments().get((int(math.floor(x)), int(math.floor(y))), ()):
+            dx, dy = x2 - x1, y2 - y1
+            length2 = dx * dx + dy * dy
+            t = 0.0 if length2 == 0 else max(0.0, min(1.0, ((x - x1) * dx + (y - y1) * dy) / length2))
+            if math.hypot(x - (x1 + t * dx), y - (y1 + t * dy)) <= tolerance:
+                return True
+        return False
+
+
+def candidate_points(face: Face, view: ViewData) -> list[Sequence[float]]:
+    """Model points of a face that can lie on its projected outline in ``view``."""
+    points: list[Sequence[float]] = list(face.boundary_points())
+    direction = view.plan.direction
+    if face.support_type in ("cylinder", "cone", "torus") and face.axis_dir is not None \
+            and fg.perpendicular(face.axis_dir, direction):
+        axis = fg.unit(face.axis_dir)
+        across = fg.unit(fg.cross(axis, direction))
+        if face.support_type == "cylinder" and face.axial:
+            for k in range(9):
+                t = face.axial[0] + (face.axial[1] - face.axial[0]) * k / 8
+                for sign in (1, -1):
+                    points.append(fg.add(fg.add(face.axis_point, fg.scale(axis, t)), fg.scale(across, sign * face.radius)))
+        elif face.support_type == "torus":
+            for k in range(13):
+                theta = 2 * math.pi * k / 12
+                for sign in (1, -1):
+                    tube = fg.add(face.axis_point, fg.scale(across, sign * face.major_radius))
+                    radial = fg.add(fg.scale(across, sign * math.cos(theta)), fg.scale(axis, math.sin(theta)))
+                    points.append(fg.add(tube, fg.scale(radial, face.radius)))
+    points.extend(view.cut_faces.get(face.index, ()))
+    return points
+
+
+def visible_points(faces: Sequence[Face], view: ViewData) -> list[tuple[Sequence[float], tuple[float, float]]]:
+    """(model point, sheet point) pairs of the faces that land on the view's visible geometry."""
+    found = []
+    for face in faces:
+        for point in candidate_points(face, view):
+            projected = view.project(point)
+            if view.on_visible(projected):
+                found.append((point, projected))
+    return found
+
+
+def visible_anchors(faces: Sequence[Face], view: ViewData) -> list[tuple[float, float]]:
+    return [sheet for _, sheet in visible_points(faces, view)]
+
+
+# --- annotation items ---------------------------------------------------------------------------------
+
+@dataclass
+class Callout:
+    id: str
+    view: str
+    anchor: tuple[float, float]
+    lines: list[str]
+    frames: list[list[str]] = field(default_factory=list)   # feature control frames, cells left to right
+    datum: str | None = None                                # a datum feature symbol instead of a leader arrow
+    datum_tag: str | None = None                            # an axis datum attached to this size callout
+    characteristics: list[str] = field(default_factory=list)
+    side: int = -1                                          # -1 left column, +1 right column
+    candidates: list[tuple[float, float]] = field(default_factory=list)  # visible outline points of the feature
+
+
+@dataclass
+class Linear:
+    id: str
+    view: str
+    origin: tuple[float, float]          # extension-line foot on the datum side
+    target: tuple[float, float]          # extension-line foot on the feature
+    horizontal: bool                     # measured along sheet x
+    text: str
+    boxed: bool = False                  # a basic (theoretically exact) dimension
+    reference: bool = False
+    characteristics: list[str] = field(default_factory=list)
+
+
+@dataclass
+class Presentation:
+    callouts: list[Callout] = field(default_factory=list)
+    linears: list[Linear] = field(default_factory=list)
+    placed: dict[str, dict[str, Any]] = field(default_factory=dict)    # characteristic id -> annotation and view
+    unplaced: list[dict[str, Any]] = field(default_factory=list)
+
+
+def _preferred(char: Characteristic, plans: Sequence[ViewPlan]) -> list[ViewPlan]:
+    if char.operation in ("location", "axis_location", "floor_location"):
+        # a dimension from a datum needs both ends on the sheet: projected views, then sections
+        return sorted((p for p in plans if p.kind != "detail"), key=lambda p: ("part", "section").index(p.kind))
+    wanted = {"section": ("section",), "detail": ("detail",), "visible": ("part",)}.get(char.presentation)
+    ordered = [p for p in plans if wanted is None or p.kind in wanted]
+    if wanted is None:  # auto: projected views first, then sections, then details
+        ordered.sort(key=lambda p: ("part", "section", "detail").index(p.kind))
+    return ordered
+
+
+MIN_VISIBLE_FRACTION = 0.2  # share of a feature's outline points that must be visible for a view to present it
+
+
+def _best_view(own: Sequence[Face], plans: Sequence[ViewPlan], views: Mapping[str, ViewData],
+               holding: set[str]) -> tuple[str, list[tuple[Sequence[float], tuple[float, float]]]] | None:
+    """The view that shows most of a feature's outline; one already holding its callout, then plan order, win ties."""
+    best, best_score = None, -math.inf
+    for rank, plan in enumerate(plans):
+        view = views[plan.id]
+        total = sum(len(candidate_points(face, view)) for face in own)
+        points = visible_points(own, view)
+        if not points or total == 0:
+            continue
+        fraction = len(points) / total
+        score = fraction + (0.3 if plan.id in holding else 0.0) - 0.01 * rank
+        if fraction < MIN_VISIBLE_FRACTION:
+            score -= 1.0
+        if score > best_score:
+            best, best_score = (plan.id, points), score
+    return best
+
+
+def _anchor(points: Sequence[tuple[Sequence[float], tuple[float, float]]], view: ViewData) -> tuple[float, float]:
+    """Of the visible outline points, one near the view's edge and near the middle of the feature."""
+    box = view.bounds()
+
+    def edge(p: tuple[float, float]) -> float:
+        return min(p[0] - box.x0, box.x1 - p[0], p[1] - box.y0, box.y1 - p[1])
+
+    sheet_points = [s for _, s in points]
+    nearest = min(edge(p) for p in sheet_points)
+    outer = [p for p in sheet_points if edge(p) <= nearest + 0.6]
+    mx = sum(p[0] for p in sheet_points) / len(sheet_points)
+    my = sum(p[1] for p in sheet_points) / len(sheet_points)
+    return min(outer, key=lambda p: (round(math.hypot(p[0] - mx, p[1] - my), 3), round(p[1], 3), round(p[0], 3)))
+
+
+def _datum_reference(axis: str, frame: DatumFrame, binding: Mapping[str, ResolvedFeature],
+                     faces: Mapping[int, Face], view: ViewData) -> tuple[float, float] | None:
+    """A visible sheet point of the datum feature the frame's ``axis`` coordinates are measured from."""
+    vector = frame.vector(axis)
+    for datum in sorted(frame.datums.values(), key=lambda d: d.label):
+        if datum.role == "plane" and datum.direction is not None and fg.parallel(datum.direction, vector):
+            anchors = visible_anchors([faces[i] for i in binding[datum.feature].faces], view)
+            if anchors:
+                return anchors[0]
+    for datum in sorted(frame.datums.values(), key=lambda d: d.label):
+        if datum.role in ("axis", "center_plane") and datum.direction is not None and fg.perpendicular(datum.direction, vector):
+            return view.project(datum.point)
+    return view.project(frame.origin) if any(fg.parallel(vector, d.direction) for d in frame.datums.values()
+                                            if d.direction is not None) else None
+
+
+def build_presentation(chars: Sequence[Characteristic], frame: DatumFrame, binding: Mapping[str, ResolvedFeature],
+                       faces: Mapping[int, Face], views: Mapping[str, ViewData], regime: str,
+                       geometric: Sequence[Mapping[str, Any]], intents: Mapping[str, Mapping[str, Any]]) -> Presentation:
+    """Assign every characteristic to a view and an anchor; group per-feature text into callouts."""
+    result = Presentation()
+    plans = [v.plan for v in views.values()]
+    callouts: dict[tuple[str, str], Callout] = {}
+
+    def callout_for(feature: str, view_id: str, points: Sequence[tuple[Sequence[float], tuple[float, float]]]) -> Callout:
+        key = (feature, view_id)
+        if key not in callouts:
+            callouts[key] = Callout(id=f"callout-{feature}-{view_id}".replace("_", "-"), view=view_id,
+                                    anchor=_anchor(points, views[view_id]), lines=[],
+                                    candidates=[sheet for _, sheet in points])
+        return callouts[key]
+
+    for char in chars:
+        own = [faces[i] for i in char.faces]
+        placed = False
+        if char.operation in ("location", "axis_location", "floor_location"):
+            for plan in _preferred(char, plans):
+                item = _linear(char, frame, binding, faces, views[plan.id], regime)
+                if item is not None:
+                    result.linears.append(item)
+                    result.placed[char.id] = {"annotation": item.id, "view": plan.id, "anchor": list(item.target)}
+                    placed = True
+                    break
+        else:
+            text = _callout_text(char, regime)
+            choice = None if text is None else _best_view(own, _preferred(char, plans), views,
+                                                          {v for (f, v) in callouts if f == char.feature})
+            if choice is not None:
+                plan_id, points = choice
+                existing = callouts.get((char.feature, plan_id)) or callout_for(char.feature, plan_id, points)
+                for line in text.split("\n"):
+                    prefix = f"{char.quantity}× "
+                    if existing.lines and char.quantity > 1 and line.startswith(prefix) \
+                            and existing.lines[0].startswith(prefix):
+                        line = line[len(prefix):]
+                    existing.lines.append(line)
+                existing.characteristics.append(char.id)
+                result.placed[char.id] = {"annotation": existing.id, "view": plan_id, "anchor": list(existing.anchor)}
+                placed = True
+        if not placed and char.operation != "profile":
+            result.unplaced.append({"characteristic": char.id, "feature": char.feature, "operation": char.operation,
+                                    "presentation": char.presentation})
+    # feature control frames join their feature's callout, or start one
+    for tolerance in geometric:
+        cells = [GDT_SYMBOLS[tolerance["characteristic"]],
+                 ("⌀" if tolerance.get("diameter_zone") else "") + number(tolerance["zone_mm"]),
+                 *tolerance.get("datum_frame", [])]
+        _attach_frame(result, callouts, tolerance["features"][0], f"geometric.{tolerance['id']}", cells,
+                      binding, faces, views, callout_for)
+    for char in chars:
+        if char.operation == "profile":
+            cells = [GDT_SYMBOLS["profile_surface"], number(char.value), *char.details.get("datum_frame", [])]
+            _attach_frame(result, callouts, char.feature, char.id, cells, binding, faces, views, callout_for)
+    # datum features: an axis datum tags its feature's size callout, a plane datum gets its own symbol
+    for datum in sorted(frame.datums.values(), key=lambda d: d.label):
+        key = f"datum.{datum.label}"
+        sized = next((c for (f, _), c in callouts.items() if f == datum.feature and c.lines), None)
+        if datum.role != "plane" and sized is not None:
+            sized.datum_tag = datum.label
+            sized.characteristics.append(key)
+            result.placed[key] = {"annotation": sized.id, "view": sized.view, "anchor": list(sized.anchor)}
+            continue
+        own_faces = [faces[i] for i in binding[datum.feature].faces]
+        edge_on = [plan for plan in plans if plan.kind != "detail" and datum.direction is not None
+                   and fg.perpendicular(datum.direction, plan.direction)]
+        choice = _best_view(own_faces, edge_on, views, set())
+        if choice is None:
+            result.unplaced.append({"characteristic": key, "feature": datum.feature, "operation": "datum",
+                                    "presentation": "edge-on"})
+            continue
+        plan_id, points = choice
+        datum_callout = Callout(id=f"datum-{datum.label.lower()}", view=plan_id, anchor=_anchor(points, views[plan_id]),
+                                lines=[], datum=datum.label, characteristics=[key],
+                                candidates=[sheet for _, sheet in points])
+        result.callouts.append(datum_callout)
+        result.placed[key] = {"annotation": datum_callout.id, "view": plan_id, "anchor": list(datum_callout.anchor)}
+    result.callouts.extend(c for c in callouts.values() if c.lines or c.frames)
+    return result
+
+
+def _attach_frame(result: Presentation, callouts: Mapping[tuple[str, str], Callout], feature: str, key: str,
+                  cells: list[str], binding: Mapping[str, ResolvedFeature], faces: Mapping[int, Face],
+                  views: Mapping[str, ViewData], factory: Any) -> None:
+    target = next((c for (f, _), c in callouts.items() if f == feature), None)
+    if target is None:
+        target = _new_callout(feature, binding, faces, views, factory)
+    if target is None:
+        result.unplaced.append({"characteristic": key, "feature": feature, "operation": cells[0], "presentation": "auto"})
+        return
+    target.frames.append(cells)
+    target.characteristics.append(key)
+    result.placed[key] = {"annotation": target.id, "view": target.view, "anchor": list(target.anchor)}
+
+
+def _new_callout(feature: str, binding: Mapping[str, ResolvedFeature], faces: Mapping[int, Face],
+                 views: Mapping[str, ViewData], factory: Any) -> Callout | None:
+    for view_id, view in views.items():
+        points = visible_points([faces[i] for i in binding[feature].faces], view)
+        if points:
+            return factory(feature, view_id, points)
+    return None
+
+
+def _callout_text(char: Characteristic, regime: str) -> str | None:
+    asme = regime == "asme"
+    op = char.operation
+    if op == "diameter":
+        text = size_text(char, regime, "⌀")
+        if char.details.get("groove_root"):
+            text = ("GROOVE " if asme else "groove ") + text
+        return text
+    if op == "radius":
+        return size_text(char, regime, "R")
+    if op == "chamfer":
+        nominal, suffix = tolerance_text(char.tolerance, char.value, regime)
+        count = f"{char.quantity}× " if char.quantity > 1 else ""
+        return f"{count}{nominal}{suffix} × {number(char.details.get('angle_deg', 45.0), 1)}°"
+    if op == "depth":
+        nominal, suffix = tolerance_text(char.tolerance, char.value, regime)
+        return f"↧{nominal}{suffix}" if asme else f"depth {nominal}{suffix}"
+    if op in ("width", "length"):
+        nominal, suffix = tolerance_text(char.tolerance, char.value, regime)
+        count = f"{char.quantity}× " if char.quantity > 1 else ""
+        word = op.upper() if asme else op
+        return f"{count}{word} {nominal}{suffix}"
+    if op == "across_flats":
+        sides = char.details.get("sides", 6)
+        name = {6: "hexagon socket", 4: "square socket"}.get(sides, f"{sides}-sided socket")
+        nominal, suffix = tolerance_text(char.tolerance, char.value, regime)
+        return f"{name.upper()} {nominal}{suffix} A/F" if asme else f"{name} s {nominal}{suffix}"
+    if op == "angle":
+        nominal, suffix = tolerance_text(char.tolerance, char.value, regime)
+        count = f"{char.quantity}× " if char.quantity > 1 else ""
+        return f"{count}{nominal}°{suffix.replace(' ±', ' ±') + ('°' if suffix else '')}"
+    if op == "pattern":
+        details = char.details
+        angles = details["angles_deg"]
+        reference = details.get("reference") or details["from_axis"]
+        if details.get("equal_spacing"):
+            step = 360.0 / len(angles)
+            spacing = (f"{'EQSP' if asme else 'EQS'}, first {number(angles[0], 2)}° from {reference}"
+                       + (f", {number(step, 2)}° apart" if len(angles) > 2 else ""))
+        else:
+            spacing = "at " + ", ".join(f"{number(a, 2)}°" for a in angles) + f" from {reference}"
+        return f"{char.quantity}× on ⌀{number(char.value)} {'BC' if asme else 'PCD'}\n{spacing}"
+    if op == "thread":
+        details = char.details
+        depth = details.get("full_depth")
+        text = details["designation"]
+        if depth is not None:
+            text += f" ↧{number(depth)}" if asme else f", full thread depth {number(depth)}"
+        return text
+    if op == "profile":
+        return None   # the profile tolerance prints as a feature control frame
+    if op == "extent":
+        size = char.details["size"]
+        return f"engraving {number(size[0])} × {number(size[1])}"
+    return None
+
+
+def _linear(char: Characteristic, frame: DatumFrame, binding: Mapping[str, ResolvedFeature],
+            faces: Mapping[int, Face], view: ViewData, regime: str) -> Linear | None:
+    """A baseline dimension from the datum to a plane or axis, when this view shows both edge-on."""
+    if char.axis is None:
+        return None
+    vector = frame.vector(char.axis)
+    plan = view.plan
+    if not fg.perpendicular(vector, plan.direction):
+        return None
+    horizontal = fg.parallel(vector, plan.x_direction)
+    if not horizontal and not fg.parallel(vector, plan.up):
+        return None
+    origin = _datum_reference(char.axis, frame, binding, faces, view)
+    if origin is None:
+        return None
+    if char.operation == "axis_location":
+        point = char.details.get("axis_point")
+        if point is None:
+            return None
+        target = view.project(point)
+        own = [faces[i] for i in char.faces]
+        if not visible_anchors(own, view):
+            return None
+    else:
+        anchors = visible_anchors([faces[i] for i in char.faces], view)
+        if not anchors:
+            return None
+        target = min(anchors, key=lambda p: (p[1], p[0])) if horizontal else max(anchors, key=lambda p: (p[0], -p[1]))
+    nominal, suffix = tolerance_text(char.tolerance, abs(char.value), regime)
+    boxed = char.tolerance is not None and char.tolerance.kind == "basic"
+    text = f"({nominal})" if char.reference else nominal + suffix
+    return Linear(id=f"dim-{char.id}".replace(".", "-").replace("_", "-"), view=plan.id, origin=origin, target=target,
+                  horizontal=horizontal, text=text, boxed=boxed, reference=char.reference,
+                  characteristics=[char.id])
+
+
+# --- layout ------------------------------------------------------------------------------------------
+
+@dataclass
+class ViewLayout:
+    footprint: Box                  # view plus everything placed around it
+    annotations: list[SvgAnnotation]
+    notes: list[str] = field(default_factory=list)
+
+
+def _text(content: str, x: float, y: float, size: float, anchor: str = "start", rotate: float | None = None) -> str:
+    transform = f' transform="rotate({rotate:.3f} {x:.3f} {y:.3f})"' if rotate is not None else ""
+    anchor_attr = f' text-anchor="{anchor}"' if anchor != "start" else ""
+    return (f'<text x="{x:.3f}" y="{y:.3f}" font-size="{size:g}" font-family="sans-serif" fill="#000" '
+            f'stroke="none"{anchor_attr}{transform}>{escape(content)}</text>')
+
+
+def _line(x1: float, y1: float, x2: float, y2: float, width: float = THIN, dash: str | None = None) -> str:
+    dash_attr = f' stroke-dasharray="{dash}"' if dash else ""
+    return (f'<line x1="{x1:.3f}" y1="{y1:.3f}" x2="{x2:.3f}" y2="{y2:.3f}" stroke="#000" '
+            f'stroke-width="{width:g}"{dash_attr}/>')
+
+
+def _arrow(tip: tuple[float, float], toward: tuple[float, float]) -> str:
     dx, dy = toward[0] - tip[0], toward[1] - tip[1]
     length = math.hypot(dx, dy) or 1.0
     ux, uy = dx / length, dy / length
     bx, by = tip[0] + ux * ARROW_LENGTH, tip[1] + uy * ARROW_LENGTH
     points = [tip, (bx - uy * ARROW_HALF_WIDTH, by + ux * ARROW_HALF_WIDTH), (bx + uy * ARROW_HALF_WIDTH, by - ux * ARROW_HALF_WIDTH)]
-    return _element("polygon", {"points": " ".join(f"{x:.3f},{y:.3f}" for x, y in points), "fill": "#111", "stroke": "none"})
+    return f'<polygon points="{" ".join(f"{x:.3f},{y:.3f}" for x, y in points)}" fill="#000" stroke="none"/>'
 
 
-def _text_width(content: str) -> float:
-    return len(content) * TEXT_ADVANCE * TEXT_SIZE
+def _rect(x0: float, y0: float, x1: float, y1: float, width: float = THIN) -> str:
+    return (f'<rect x="{x0:.3f}" y="{y0:.3f}" width="{x1 - x0:.3f}" height="{y1 - y0:.3f}" fill="none" stroke="#000" '
+            f'stroke-width="{width:g}"/>')
 
 
-def horizontal_dimension(name: str, x0: float, x1: float, edge: float, side: int, value: float, aligned: bool) -> ET.Element:
-    """Overall dimension between x0 and x1 beyond the outline edge; side -1 places it above, +1 below.
+def _frame_width(cells: Sequence[str], size: float) -> float:
+    return sum(text_width(cell, size) + 2.0 for cell in cells)
 
-    Aligned (ISO) text sits above the line; unidirectional (ASME) text sits in a break of the line.
-    Text that does not fit between the extension lines moves beyond their ends.
+
+def _block_size(callout: Callout, size: float) -> tuple[float, float]:
+    pitch = size * LINE_PITCH_FACTOR
+    if callout.datum:
+        return size + 2.4, size + 2.4
+    if callout.datum_tag:
+        width, height = _block_size(replace(callout, datum_tag=None), size)
+        return max(width, size + 2.4), height + size + 4.0
+    width = max([text_width(line, size) for line in callout.lines] + [_frame_width(f, size) for f in callout.frames] + [0])
+    return width, pitch * len(callout.lines) + (size + 2.0) * len(callout.frames)
+
+
+def layout_view(view: ViewData, presentation: Presentation, size: float, regime: str,
+                 children: Sequence[ViewPlan] = ()) -> ViewLayout:
+    """Place this view's dimensions, callouts and child-view marks around it; return the markup and occupied box.
+
+    ``children`` are the section and detail views based on this view: their cutting-plane lines and
+    detail circles are drawn here, and callout columns keep clear of their letters.
     """
-    group = _element("g", {"id": name, "class": "dimension"})
-    y = edge + side * DIM_OFFSET
-    content = f"{value:.2f}"
-    width, mid = _text_width(content), (x0 + x1) / 2
-    for x in (x0, x1):
-        group.append(_line(x, edge + side * EXT_GAP, x, y + side * EXT_OVERSHOOT))
-    outside_baseline = (y - EXT_OVERSHOOT - LINE_CLEAR - TEXT_DESCENT * TEXT_SIZE if side < 0
-                        else y + EXT_OVERSHOOT + LINE_CLEAR + TEXT_ASCENT * TEXT_SIZE)
-    if aligned:
-        baseline = y - TEXT_GAP if width + 2 * LINE_CLEAR <= x1 - x0 else outside_baseline
-        group.append(_line(x0, y, x1, y))
-    elif width + 2 * (ARROW_LENGTH + LEADER_GAP) <= x1 - x0:
-        baseline = y + (TEXT_ASCENT - TEXT_DESCENT) * TEXT_SIZE / 2
-        group.append(_line(x0, y, mid - width / 2 - LEADER_GAP, y))
-        group.append(_line(mid + width / 2 + LEADER_GAP, y, x1, y))
+    box = view.bounds()
+    annotations: list[SvgAnnotation] = []
+    footprint = box
+    pitch = size * LINE_PITCH_FACTOR
+    # parallel dimensions: horizontal ones stack above the view, vertical ones to its right
+    rows = sorted((d for d in presentation.linears if d.view == view.plan.id and d.horizontal),
+                  key=lambda d: abs(d.target[0] - d.origin[0]))
+    columns = sorted((d for d in presentation.linears if d.view == view.plan.id and not d.horizontal),
+                     key=lambda d: abs(d.target[1] - d.origin[1]))
+    for number_, dim in enumerate(rows):
+        y = box.y0 - FIRST_ROW - number_ * ROW_PITCH
+        annotations.append(_dimension_markup(dim, y, size, regime))
+        footprint = footprint.union(Box(min(dim.origin[0], dim.target[0]) - text_width(dim.text, size),
+                                        y - size - 1.5, max(dim.origin[0], dim.target[0]) + text_width(dim.text, size), y))
+    right_edge = box.x1
+    for number_, dim in enumerate(columns):
+        x = box.x1 + FIRST_ROW + number_ * ROW_PITCH
+        annotations.append(_dimension_markup(dim, x, size, regime))
+        right_edge = x + size + 1.5
+        footprint = footprint.union(Box(x - 1.0, min(dim.origin[1], dim.target[1]) - text_width(dim.text, size),
+                                        right_edge, max(dim.origin[1], dim.target[1]) + text_width(dim.text, size)))
+    marks: list[Box] = []
+    for child in children:
+        markup, boxes = (section_marks(view, child, size, regime) if child.kind == "section"
+                         else detail_marks(view, child, size))
+        annotations.append(markup)
+        marks.extend(boxes)
+        for mark in boxes:
+            footprint = footprint.union(mark)
+    # callout columns, left and right of the view
+    mine = [c for c in presentation.callouts if c.view == view.plan.id]
+    middle = (box.x0 + box.x1) / 2
+    for side in (-1, 1):
+        column = [c for c in mine if (c.anchor[0] > middle + 0.5) == (side > 0)]
+        if not column:
+            continue
+        edge = (box.x0 - COLUMN_GAP) if side < 0 else (right_edge + COLUMN_GAP)
+        reserved = [(m.y0, m.y1) for m in marks if (m.x1 < box.x0 + 1.0) == (side < 0) and
+                    (m.x1 < box.x0 + 1.0 or m.x0 > box.x1 - 1.0)]
+        for callout in column:
+            callout.side = side
+            callout.anchor = _side_anchor(callout, side, box)
+        column.sort(key=lambda c: (round(c.anchor[1], 3), side * c.anchor[0]))
+        tops = _stack(column, size, box, reserved)
+        for _ in range(len(column) * len(column)):
+            swapped = False
+            for i in range(len(column) - 1):
+                if _leaders_cross(column[i], tops[i], column[i + 1], tops[i + 1], edge, side, pitch):
+                    column[i], column[i + 1] = column[i + 1], column[i]
+                    tops = _stack(column, size, box, reserved)
+                    swapped = True
+            if not swapped:
+                break
+        for callout, (top, bottom) in zip(column, tops):
+            w, _ = _block_size(callout, size)
+            annotations.append(_callout_markup(callout, edge, top, w, size, pitch))
+            x0, x1 = (edge - w - LANDING, edge) if side < 0 else (edge, edge + w + LANDING)
+            footprint = footprint.union(Box(min(x0, edge - 2 * LANDING), top - 0.5, max(x1, edge + 2 * LANDING),
+                                            bottom + 0.5))
+    annotations.extend(_view_furniture(view, size, regime))
+    label = _view_label(view, size, regime)
+    if label is not None:
+        annotations.append(label[0])
+        footprint = footprint.union(label[1])
+    return ViewLayout(footprint, annotations)
+
+
+def _side_anchor(callout: Callout, side: int, box: Box) -> tuple[float, float]:
+    """The feature's visible point nearest the callout's column, so the leader enters the view from its side."""
+    candidates = [p for p in callout.candidates if (p[0] > (box.x0 + box.x1) / 2 + 0.5) == (side > 0)] \
+        or list(callout.candidates) or [callout.anchor]
+    reach = (lambda p: p[0] - box.x0) if side < 0 else (lambda p: box.x1 - p[0])
+    nearest = min(reach(p) for p in candidates)
+    close = [p for p in candidates if reach(p) <= nearest + 0.6]
+    return min(close, key=lambda p: (round(abs(p[1] - callout.anchor[1]), 3), round(p[1], 3)))
+
+
+def _stack(column: Sequence[Callout], size: float, box: Box,
+           reserved: Sequence[tuple[float, float]] = ()) -> list[tuple[float, float]]:
+    """Block tops and bottoms in column order: each as near its anchor's height as the blocks above allow,
+    and clear of the reserved heights (cutting-plane and detail letters on that side)."""
+    sizes = [_block_size(c, size)[1] for c in column]
+    total = sum(sizes) + BLOCK_GAP * (len(column) - 1)
+
+    def clear(top: float, height: float) -> float:
+        moved = True
+        while moved:
+            moved = False
+            for low, high in reserved:
+                if top < high + BLOCK_GAP and top + height > low - BLOCK_GAP:
+                    top, moved = high + BLOCK_GAP, True
+        return top
+
+    tops: list[tuple[float, float]] = []
+    for callout, height in zip(column, sizes):
+        wanted = callout.anchor[1] - height / 2
+        top = wanted if not tops else max(tops[-1][1] + BLOCK_GAP, wanted)
+        tops.append((top, top + height))
+    overflow = tops[-1][1] - max(box.y1, (box.y0 + box.y1) / 2 + total / 2)
+    if overflow > 0:  # pull a column that runs far below the view back up
+        tops = [(a - overflow, b - overflow) for a, b in tops]
+    if reserved:
+        placed: list[tuple[float, float]] = []
+        for (top, bottom) in tops:
+            height = bottom - top
+            top = clear(top if not placed else max(top, placed[-1][1] + BLOCK_GAP), height)
+            placed.append((top, top + height))
+        tops = placed
+    return tops
+
+
+def _leaders_cross(a: Callout, a_top: tuple[float, float], b: Callout, b_top: tuple[float, float], edge: float,
+                   side: int, pitch: float) -> bool:
+    ax = edge + LANDING if side < 0 else edge - LANDING
+    p1, p2 = (ax, a_top[0] + pitch / 2), a.anchor
+    q1, q2 = (ax, b_top[0] + pitch / 2), b.anchor
+
+    def orient(p: tuple[float, float], q: tuple[float, float], r: tuple[float, float]) -> float:
+        return (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0])
+
+    d1, d2 = orient(q1, q2, p1), orient(q1, q2, p2)
+    d3, d4 = orient(p1, p2, q1), orient(p1, p2, q2)
+    return d1 * d2 < 0 and d3 * d4 < 0
+
+
+def _dimension_markup(dim: Linear, at: float, size: float, regime: str) -> SvgAnnotation:
+    parts = []
+    (ox, oy), (tx, ty) = dim.origin, dim.target
+    extension = []
+    if dim.horizontal:
+        for x, y in ((ox, oy), (tx, ty)):
+            extension.append(_line(x, y - EXT_GAP if y > at else y + EXT_GAP, x, at - EXT_OVERSHOOT))
+        x0, x1 = sorted((ox, tx))
+        parts.append(_line(x0, at, x1, at))
+        parts.append(_arrow((ox, at), (tx, at)))
+        parts.append(_arrow((tx, at), (ox, at)))
+        width = text_width(dim.text, size)
+        mid = (ox + tx) / 2
+        if width + 2 * ARROW_LENGTH > abs(tx - ox):
+            mid = x1 + 1.5 + width / 2 if tx >= ox else x0 - 1.5 - width / 2
+            parts.append(_line(x1, at, x1 + 1.5 + width, at) if tx >= ox else _line(x0 - 1.5 - width, at, x0, at))
+        baseline = at - 1.0
+        parts.append(_text(dim.text, mid, baseline, size, "middle"))
+        if dim.boxed:
+            parts.append(_rect(mid - width / 2 - 0.8, baseline - TEXT_ASCENT * size - 0.6, mid + width / 2 + 0.8,
+                               baseline + TEXT_DESCENT * size + 0.4))
     else:
-        baseline = outside_baseline
-        group.append(_line(x0, y, x1, y))
-    group.append(_arrow((x0, y), (x1, y)))
-    group.append(_arrow((x1, y), (x0, y)))
-    group.append(_text(content, mid, baseline, TEXT_SIZE, "middle"))
-    return group
-
-
-def vertical_dimension(name: str, y0: float, y1: float, edge: float, side: int, value: float, aligned: bool) -> ET.Element:
-    """Overall dimension between y0 and y1 beyond the outline edge; side +1 places it right, -1 left.
-
-    Aligned (ISO) text reads from the right, between the outline and the line when it fits.
-    Unidirectional (ASME) text stays horizontal beyond the extension line ends.
-    """
-    group = _element("g", {"id": name, "class": "dimension"})
-    x = edge + side * DIM_OFFSET
-    content = f"{value:.2f}"
-    width, mid = _text_width(content), (y0 + y1) / 2
-    for y in (y0, y1):
-        group.append(_line(edge + side * EXT_GAP, y, x + side * EXT_OVERSHOOT, y))
-    group.append(_line(x, y0, x, y1))
-    group.append(_arrow((x, y0), (x, y1)))
-    group.append(_arrow((x, y1), (x, y0)))
-    clear = EXT_OVERSHOOT + LINE_CLEAR
-    if aligned:
-        if width + 2 * LINE_CLEAR <= y1 - y0:
-            baseline = x - TEXT_GAP
+        for x, y in ((ox, oy), (tx, ty)):
+            extension.append(_line(x + EXT_GAP if x < at else x - EXT_GAP, y, at + EXT_OVERSHOOT, y))
+        y0, y1 = sorted((oy, ty))
+        parts.append(_line(at, y0, at, y1))
+        parts.append(_arrow((at, oy), (at, ty)))
+        parts.append(_arrow((at, ty), (at, oy)))
+        width = text_width(dim.text, size)
+        mid = (oy + ty) / 2
+        if width + 2 * ARROW_LENGTH > abs(ty - oy):
+            mid = y0 - 1.5 - width / 2
+            parts.append(_line(at, y0 - 1.5 - width, at, y0))
+        if regime == "iso":
+            parts.append(_text(dim.text, at - 1.0, mid, size, "middle", rotate=-90.0))
+            if dim.boxed:
+                h = TEXT_ASCENT * size
+                parts.append(_rect(at - 1.0 - h - 0.6, mid - width / 2 - 0.8, at - 1.0 + TEXT_DESCENT * size + 0.4,
+                                   mid + width / 2 + 0.8))
         else:
-            baseline = x + clear + TEXT_ASCENT * TEXT_SIZE if side > 0 else x - clear - TEXT_DESCENT * TEXT_SIZE
-        group.append(_text(content, baseline, mid, TEXT_SIZE, "middle", transform=f"rotate(-90 {baseline:.3f} {mid:.3f})"))
+            parts.append(_text(dim.text, at + 1.0, mid + (TEXT_ASCENT - TEXT_DESCENT) * size / 2, size))
+            if dim.boxed:
+                parts.append(_rect(at + 0.4, mid - TEXT_ASCENT * size / 2 - 1.0, at + 1.6 + width,
+                                   mid + TEXT_ASCENT * size / 2 + 1.0))
+    markup = "".join(parts) + f'<g class="extension">{"".join(extension)}</g>'
+    return SvgAnnotation(id=dim.id, kind="dimension", markup=markup,
+                         provenance={"characteristics": ",".join(dim.characteristics)})
+
+
+def _callout_markup(callout: Callout, edge: float, top: float, width: float, size: float, pitch: float) -> SvgAnnotation:
+    side = callout.side
+    parts, leader = [], []
+    ax, ay = callout.anchor
+    if callout.datum:
+        box_size = size + 2.4
+        x0 = edge - box_size if side < 0 else edge
+        parts.append(_rect(x0, top, x0 + box_size, top + box_size, 0.35))
+        parts.append(_text(callout.datum, x0 + box_size / 2, top + box_size / 2 + (TEXT_ASCENT - TEXT_DESCENT) * size / 2,
+                           size, "middle"))
+        foot = (edge if side < 0 else edge, top + box_size / 2)
+        leader.append(_line(foot[0], foot[1], ax, ay))
+        dx, dy = foot[0] - ax, foot[1] - ay
+        length = math.hypot(dx, dy) or 1.0
+        ux, uy = dx / length, dy / length
+        tri = [(ax - uy * 1.6, ay + ux * 1.6), (ax + uy * 1.6, ay - ux * 1.6), (ax + ux * 2.8, ay + uy * 2.8)]
+        leader.append(f'<polygon points="{" ".join(f"{x:.3f},{y:.3f}" for x, y in tri)}" fill="#000" stroke="none"/>')
+        markup = f'<g class="datum-label">{"".join(parts)}</g><g class="leader-line">{"".join(leader)}</g>'
+        return SvgAnnotation(id=callout.id, kind="datum", markup=markup,
+                             provenance={"characteristics": ",".join(callout.characteristics)})
+    x_text = edge if side < 0 else edge
+    anchor = "end" if side < 0 else "start"
+    y = top
+    for line in callout.lines:
+        y += pitch
+        parts.append(_text(line, x_text, y - (pitch - size * TEXT_ASCENT) / 2 - 0.2, size, anchor))
+    frames = []
+    for cells in callout.frames:
+        height = size + 2.0
+        total = _frame_width(cells, size)
+        x0 = edge - total if side < 0 else edge
+        x = x0
+        for cell in cells:
+            w = text_width(cell, size) + 2.0
+            frames.append(_rect(x, y + 0.5, x + w, y + 0.5 + height))
+            frames.append(_text(cell, x + w / 2, y + 0.5 + height / 2 + (TEXT_ASCENT - TEXT_DESCENT) * size / 2, size,
+                                "middle"))
+            x += w
+        y += height
+    first_line_y = top + pitch / 2 if callout.lines else top + (size + 2.0) / 2
+    landing_end = edge + LANDING if side < 0 else edge - LANDING
+    landing_x = edge + 0.8 if side < 0 else edge - 0.8
+    leader.append(_line(landing_x, first_line_y, landing_end, first_line_y))
+    leader.append(_line(landing_end, first_line_y, ax, ay))
+    leader.append(_arrow((ax, ay), (landing_end, first_line_y)))
+    datum = []
+    if callout.datum_tag:
+        # ISO 5459 / ASME Y14.5 datum feature symbol on the size callout's leader: triangle, line, letter box
+        box_size = size + 2.4
+        apex_y = first_line_y + 2.8
+        datum.append(f'<polygon points="{landing_end - 1.6:.3f},{first_line_y:.3f} {landing_end + 1.6:.3f},'
+                     f'{first_line_y:.3f} {landing_end:.3f},{apex_y:.3f}" fill="#000" stroke="none"/>')
+        box_top = max(y + 1.0, apex_y + 1.0)
+        datum.append(_line(landing_end, apex_y, landing_end, box_top))
+        datum.append(_rect(landing_end - box_size / 2, box_top, landing_end + box_size / 2, box_top + box_size, 0.35))
+        datum.append(_text(callout.datum_tag, landing_end, box_top + box_size / 2 + (TEXT_ASCENT - TEXT_DESCENT) * size / 2,
+                           size, "middle"))
+    markup = "".join(parts)
+    if frames:
+        markup += f'<g class="fcf">{"".join(frames)}</g>'
+    if datum:
+        markup += f'<g class="datum-label">{"".join(datum)}</g>'
+    markup += f'<g class="leader-line">{"".join(leader)}</g>'
+    return SvgAnnotation(id=callout.id, kind="leader", markup=markup,
+                         provenance={"characteristics": ",".join(callout.characteristics)})
+
+
+def _view_label(view: ViewData, size: float, regime: str) -> tuple[SvgAnnotation, Box] | None:
+    plan = view.plan
+    if plan.label is None:
+        return None
+    if plan.kind == "section":
+        text = f"{plan.label}-{plan.label}" if regime == "iso" else f"SECTION {plan.label}-{plan.label}"
+    elif plan.kind == "detail":
+        scale = view.geometry.scale
+        ratio = f"{number(scale, 4)}:1" if scale >= 1 else f"1:{number(1 / scale, 4)}"
+        text = f"{plan.label} ({ratio})" if regime == "iso" else f"DETAIL {plan.label} SCALE {ratio}"
     else:
-        text_y = mid + (TEXT_ASCENT - TEXT_DESCENT) * TEXT_SIZE / 2
-        group.append(_text(content, x + side * clear, text_y, TEXT_SIZE, "start" if side > 0 else "end"))
-    return group
+        text = f"{plan.label}" if regime == "iso" else f"VIEW {plan.label}"
+    box = view.bounds()
+    x = (box.x0 + box.x1) / 2
+    y = box.y0 - LABEL_GAP
+    markup = _text(text, x, y, size + 1.5 if size < 5 else size, "middle")
+    width = text_width(text, size + 1.5)
+    return (SvgAnnotation(id=f"label-{plan.id}".replace("_", "-"), kind="label", markup=markup),
+            Box(x - width / 2, y - (size + 1.5) * TEXT_ASCENT, x + width / 2, y + 1.0))
 
 
-def bore_callout(hole_id: str, centre: tuple[float, float], radius: float, view: Box, side: int,
-                 diameter: float) -> ET.Element:
-    """Diameter callout beyond the outline edge on ``side``; its leader ends with an arrow on the bore."""
-    group = _element("g", {"id": f"hole-diameter-{hole_id}", "class": "leader"})
-    content = f"⌀{diameter:.2f}"
-    cx, cy = centre
-    baseline = (view.y0 - CALLOUT_CLEARANCE - TEXT_DESCENT * TEXT_SIZE if side < 0
-                else view.y1 + CALLOUT_CLEARANCE + TEXT_ASCENT * TEXT_SIZE)
-    inward = 1 if cx <= (view.x0 + view.x1) / 2 else -1
-    text_x = cx + inward * CALLOUT_OFFSET
-    landing = (text_x - inward * LEADER_GAP, baseline - (TEXT_ASCENT - TEXT_DESCENT) * TEXT_SIZE / 2)
-    dx, dy = landing[0] - cx, landing[1] - cy
-    length = math.hypot(dx, dy)
-    tip = (cx + radius * dx / length, cy + radius * dy / length)
-    group.append(_line(landing[0], landing[1], tip[0], tip[1]))
-    group.append(_arrow(tip, landing))
-    group.append(_text(content, text_x, baseline, TEXT_SIZE, "start" if inward > 0 else "end"))
-    return group
+def _view_furniture(view: ViewData, size: float, regime: str) -> list[SvgAnnotation]:
+    """Section hatching and the detail boundary circle of the view itself."""
+    items = []
+    plan = view.plan
+    if plan.kind == "section" and view.cut_outlines:
+        polygons = [[view.project(p) for p in outline] for outline in view.cut_outlines]
+        lines = _hatch(polygons, spacing=2.5 if size < 3 else 3.0)
+        if lines:
+            markup = "".join(_line(x1, y1, x2, y2, 0.18) for x1, y1, x2, y2 in lines)
+            items.append(SvgAnnotation(id=f"hatch-{plan.id}".replace("_", "-"), kind="hatch", markup=markup))
+    if plan.kind == "detail" and view.clip_radius:
+        cx, cy = view.geometry.centre_mm
+        items.append(SvgAnnotation(id=f"detail-boundary-{plan.id}".replace("_", "-"), kind="detail-boundary",
+                                   markup=f'<circle cx="{cx:.3f}" cy="{cy:.3f}" r="{view.clip_radius:.3f}" fill="none" '
+                                          f'stroke="#000" stroke-width="{THIN}"/>'))
+    return items
 
 
-def _iso_fields(part: dict[str, Any], product: dict[str, Any], scale: str) -> dict[str, str]:
-    return {
-        "drawing_number": str(part["PN"]), "revision_index": str(part["rev"]), "title": str(part["title"]),
-        "part_material": str(part["material"]), "general_tolerances": str(product["general_tolerance"]),
-        "scale": scale, "sheet_number": "1 / 1", "document_type": "Part drawing", "language_code": "EN",
-        # The record carries no author, approver, issue date or legal owner: leave those fields blank.
-        "creator": "", "approval_person": "", "date_of_issue": "",
-        "legal_owner_1": "", "legal_owner_2": "", "legal_owner_3": "", "legal_owner_4": "",
-    }
+def _hatch(polygons: Sequence[Sequence[tuple[float, float]]], spacing: float) -> list[tuple[float, float, float, float]]:
+    """45° hatch lines clipped to the even-odd interior of the cut outlines (ISO 128-50 general hatching)."""
+    lines: list[tuple[float, float, float, float]] = []
+    # rotate by -45° so the hatch lines are horizontal scanlines
+    c = math.sqrt(0.5)
+
+    def rot(p: tuple[float, float]) -> tuple[float, float]:
+        return (c * p[0] + c * p[1], -c * p[0] + c * p[1])
+
+    def back(u: float, v: float) -> tuple[float, float]:
+        return (c * u - c * v, c * u + c * v)
+
+    rotated = [[rot(p) for p in polygon] for polygon in polygons if len(polygon) > 2]
+    if not rotated:
+        return lines
+    v_min = min(p[1] for poly in rotated for p in poly)
+    v_max = max(p[1] for poly in rotated for p in poly)
+    v = math.floor(v_min / spacing) * spacing + spacing / 2
+    while v < v_max:
+        crossings = []
+        for poly in rotated:
+            for (u1, v1), (u2, v2) in zip(poly, poly[1:] + poly[:1]):
+                if (v1 <= v < v2) or (v2 <= v < v1):
+                    crossings.append(u1 + (v - v1) * (u2 - u1) / (v2 - v1))
+        crossings.sort()
+        for a, b in zip(crossings[0::2], crossings[1::2]):
+            (x1, y1), (x2, y2) = back(a, v), back(b, v)
+            lines.append((x1, y1, x2, y2))
+        v += spacing
+    return lines
 
 
-def _iso_title_block(part: dict[str, Any], product: dict[str, Any]) -> list[ET.Element]:
-    """Box the template's material, tolerance and scale row and give the projection symbol a cell.
-
-    The stock ISO 5457 block has 12 mm rows from y=164; the unboxed row above it becomes y=152..164.
-    """
-    row = [_element("rect", {"x": 107.0, "y": 152.0, "width": 180.0, "height": 12.0, "fill": "none",
-                             "stroke": "#000", "stroke-width": 0.7})]
-    row.extend(_line(x, 152.0, x, 164.0, 0.35) for x in (187.0, 227.0, 247.0))
-    return row
-
-
-def _asme_fields(part: dict[str, Any], product: dict[str, Any], scale: str) -> dict[str, str]:
-    return {
-        "DrawingTitle1": str(part["title"]), "drawing_number": str(part["PN"]), "revision_index": str(part["rev"]),
-        "scale": f"Scale {scale}", "Weight": "Weight:", "Sheet": "Sheet 1 of 1",
-        # The record carries no company, CAGE code, signatures or second title lines: leave them blank.
-        "DrawingTitle2": "", "DrawingTitle3": "", "CompanyName": "", "CompanyAddress": "", "Code": "",
-        "DrawnBy": "", "CheckedBy": "", "Approved1": "", "Approved2": "",
-    }
-
-
-def _labelled_cell(label: str, value: str, cell: Box) -> list[ET.Element]:
-    return [_text(label, cell.x0 + 1.2, cell.y0 + 0.2 + TEXT_ASCENT * LABEL_SIZE, LABEL_SIZE),
-            _text(value, cell.x0 + 1.2, cell.y1 - 0.3 - TEXT_DESCENT * VALUE_SIZE, VALUE_SIZE)]
-
-
-def _asme_title_block(part: dict[str, Any], product: dict[str, Any]) -> list[ET.Element]:
-    """Caption the unlabelled ANSI A cells and fill the upper-left block from the record."""
-    elements = [_line(112.63, 162.24, 159.85, 162.24, 0.35)]
-    elements += _labelled_cell("Material:", str(part["material"]), Box(112.63, 153.5, 159.85, 162.24))
-    elements += _labelled_cell("General tolerance:", str(product["general_tolerance"]), Box(112.63, 162.24, 159.85, 170.98))
-    elements += _labelled_cell("Units:", "mm", Box(112.63, 170.98, 145.36, 180.33))
-    captions = (("Company:", 161.2, 155.0), ("Size:", 160.4, 188.3), ("Code:", 169.7, 188.3),
-                ("Drawing no.:", 195.8, 188.3), ("Rev:", 251.9, 188.3))
-    elements += [_text(text, x, y, CAPTION_SIZE) for text, x, y in captions]
-    return elements
-
-
-SPECS = {
-    "iso": SheetSpec(
-        regime="iso", template=TEMPLATES / "ISO/A4_Landscape_ISO5457_minimal.svg", projection_type="First angle",
-        regions=SheetRegions(frame=Box(20.0, 10.0, 287.0, 200.0), title_block=Box(107.0, 152.0, 287.0, 200.0),
-                             symbol_cell=Box(247.0, 152.0, 287.0, 164.0)),
-        symbol_ids=("extras_outlines", "extras_centre_lines"), relabels=(),
-        fields=_iso_fields, decorate_title_block=_iso_title_block, scale_text=lambda s: scale_text("iso", s),
-    ),
-    "asme": SheetSpec(
-        regime="asme", template=TEMPLATES / "ASME/ANSIA_Landscape.svg", projection_type="Third angle",
-        regions=SheetRegions(frame=Box(20.107, 14.473, 259.627, 201.673), title_block=Box(112.63, 153.42, 259.42, 201.673),
-                             symbol_cell=Box(145.36, 170.98, 159.85, 180.33)),
-        symbol_ids=("line5117", "line5119", "polygon5123", "circle5125", "circle5127"),
-        relabels=(("text3380", "Released:"),),  # the stock template labels two rows "Approved:"
-        fields=_asme_fields, decorate_title_block=_asme_title_block, scale_text=lambda s: scale_text("asme", s),
-    ),
-}
-
-
-@dataclass(frozen=True)
-class Sheet:
-    svg: str
-    placeholders: frozenset[str]
-    warnings: tuple[str, ...]
-
-
-def _register_namespaces(template: Path) -> None:
-    """Keep the template's namespace prefixes on output, with SVG as the default namespace."""
-    for _, (prefix, uri) in SafeET.iterparse(str(template), events=("start-ns",), forbid_dtd=True):
-        if uri != SVG_NS:
-            ET.register_namespace(prefix, uri)
-    ET.register_namespace("", SVG_NS)
-
-
-def _fill_editable_fields(root: ET.Element, values: dict[str, str]) -> dict[str, str]:
-    """Replace each freecad:editable text like DrawSVGTemplate; return the template defaults."""
-    defaults: dict[str, str] = {}
-    for text in root.iter(f"{{{SVG_NS}}}text"):
-        name = text.get(f"{{{FREECAD_NS}}}editable")
-        if name is None:
+def centre_lines(view: ViewData, binding: Mapping[str, ResolvedFeature], faces: Mapping[int, Face]) -> SvgAnnotation | None:
+    """One centre line per cylinder axis seen side-on and a centre mark per axis seen end-on."""
+    parts = []
+    marks: dict[tuple[float, float], float] = {}
+    lines: list[list[Any]] = []   # [model point, unit direction, t min, t max]
+    direction = view.plan.direction
+    for feature in binding.values():
+        if feature.kind not in ("bore", "shaft", "groove", "slot"):
             continue
-        defaults[name] = "".join(text.itertext()).strip()
-        spans = text.findall(f"{{{SVG_NS}}}tspan")
-        if not spans:
-            spans = [ET.SubElement(text, f"{{{SVG_NS}}}tspan")]
-        for span in spans:
-            span.text = None
-            for child in list(span):
-                span.remove(child)
-        spans[0].text = values.get(name, "")
-    missing, unknown = sorted(set(defaults) - set(values)), sorted(set(values) - set(defaults))
-    if missing or unknown:
-        raise ValueError(f"template editable fields mismatch: unassigned {missing}, unknown {unknown}")
-    return defaults
-
-
-def _hoist_span_font_sizes(root: ET.Element) -> None:
-    """Move a tspan's font-size onto its text element; the AppKit renderer ignores it on tspans."""
-    for text in root.iter(f"{{{SVG_NS}}}text"):
-        if text.get("font-size") or "font-size" in text.get("style", ""):
+        for inst in cylinder_instances([faces[i] for i in feature.faces]):
+            if (faces[inst.faces[0]].span_deg or 360.0) < 179.0:
+                continue
+            if fg.parallel(inst.axis_dir, direction):
+                cx, cy = view.project(inst.axis_point)
+                key = (round(cx, 2), round(cy, 2))
+                marks[key] = max(marks.get(key, 0.0), inst.radius * view.geometry.scale + 2.0)
+            elif fg.perpendicular(inst.axis_dir, direction):
+                for line in lines:
+                    if fg.parallel(line[1], inst.axis_dir) and fg.axis_distance(inst.axis_point, line[0], line[1]) < 1e-4:
+                        shift = fg.dot(fg.sub(inst.axis_point, line[0]), line[1])
+                        sense = 1.0 if fg.dot(inst.axis_dir, line[1]) > 0 else -1.0
+                        ends = sorted((shift + sense * inst.t0, shift + sense * inst.t1))
+                        line[2], line[3] = min(line[2], ends[0]), max(line[3], ends[1])
+                        break
+                else:
+                    lines.append([inst.axis_point, inst.axis_dir, inst.t0, inst.t1])
+    for (cx, cy), r in marks.items():
+        for a, b in (((cx - r, cy), (cx + r, cy)), ((cx, cy - r), (cx, cy + r))):
+            clipped = _clip(view, a, b)
+            if clipped:
+                parts.append(_line(*clipped[0], *clipped[1], THIN, CHAIN_DASH))
+    for point, axis, t0, t1 in lines:
+        a = view.project(fg.add(point, fg.scale(axis, t0)))
+        b = view.project(fg.add(point, fg.scale(axis, t1)))
+        length = math.hypot(b[0] - a[0], b[1] - a[1])
+        if length < 1e-6:
             continue
-        sized = next((span.get("font-size") for span in text.findall(f"{{{SVG_NS}}}tspan") if span.get("font-size")), None)
-        if sized:
-            text.set("font-size", sized)
+        ux, uy = (b[0] - a[0]) / length, (b[1] - a[1]) / length
+        clipped = _clip(view, (a[0] - 2.0 * ux, a[1] - 2.0 * uy), (b[0] + 2.0 * ux, b[1] + 2.0 * uy))
+        if clipped:
+            parts.append(_line(*clipped[0], *clipped[1], THIN, CHAIN_DASH))
+    if not parts:
+        return None
+    return SvgAnnotation(id=f"centerlines-{view.plan.id}".replace("_", "-"), kind="centerline", markup="".join(parts))
 
 
-def _place_symbol(root: ET.Element, ids: tuple[str, ...], cell: Box) -> None:
-    """Gather the template's projection symbol into one group scaled and centred in its cell."""
-    parents = {child: parent for parent in root.iter() for child in parent}
-    elements = [element for element in root.iter() if element.get("id") in ids]
-    if len(elements) != len(ids):
-        raise ValueError(f"drawing template lacks projection symbol elements {ids}")
-    source = None
-    for element in elements:
-        box = geometry_box(element)
-        source = box if source is None else source.union(box)
-    pad = 1.0
-    factor = min(1.0, (cell.x1 - cell.x0 - 2 * pad) / (source.x1 - source.x0), (cell.y1 - cell.y0 - 2 * pad) / (source.y1 - source.y0))
-    sx, sy = (source.x0 + source.x1) / 2, (source.y0 + source.y1) / 2
-    cx, cy = (cell.x0 + cell.x1) / 2, (cell.y0 + cell.y1) / 2
-    group = _element("g", {"id": "projection-symbol",
-                           "transform": f"translate({cx:.3f} {cy:.3f}) scale({factor:.4f}) translate({-sx:.3f} {-sy:.3f})"})
-    first_parent = parents[elements[0]]
-    first_parent.insert(list(first_parent).index(elements[0]), group)
-    for element in elements:
-        parents[element].remove(element)
-        group.append(element)
+def _clip(view: ViewData, a: tuple[float, float], b: tuple[float, float]
+          ) -> tuple[tuple[float, float], tuple[float, float]] | None:
+    """The part of segment a-b inside a detail view's boundary circle; the whole segment elsewhere."""
+    if view.clip_radius is None:
+        return a, b
+    cx, cy = view.geometry.centre_mm
+    dx, dy = b[0] - a[0], b[1] - a[1]
+    fx, fy = a[0] - cx, a[1] - cy
+    qa, qb, qc = dx * dx + dy * dy, 2 * (fx * dx + fy * dy), fx * fx + fy * fy - view.clip_radius ** 2
+    disc = qb * qb - 4 * qa * qc
+    if qa == 0 or disc <= 0:
+        return None
+    t0, t1 = (-qb - math.sqrt(disc)) / (2 * qa), (-qb + math.sqrt(disc)) / (2 * qa)
+    t0, t1 = max(t0, 0.0), min(t1, 1.0)
+    if t0 >= t1:
+        return None
+    return (a[0] + t0 * dx, a[1] + t0 * dy), (a[0] + t1 * dx, a[1] + t1 * dy)
 
 
-def _view_group(name: str, view: dict[str, Any]) -> ET.Element:
-    fragment = SafeET.fromstring(f'<g xmlns="{SVG_NS}">{view["svg"]}</g>', forbid_dtd=True)
-    for element in fragment.iter():
-        element.attrib.pop("id", None)
-        if element.get("stroke-width"):
-            element.set("stroke-width", f"{OUTLINE_WIDTH:g}")
-    fragment.set("id", f"view-{name}")
-    fragment.set("transform", f"translate({view['center'][0]:.4f} {view['center'][1]:.4f})")
-    return fragment
+def section_marks(base: ViewData, plan: ViewPlan, size: float, regime: str) -> tuple[SvgAnnotation, list[Box]]:
+    """The cutting-plane line on the base view, arrows in the viewing direction, letters; and the letters' boxes."""
+    origin, normal = plan.section["origin"], plan.section["normal"]
+    along = fg.unit(fg.cross(base.plan.direction, normal))
+    box = base.bounds()
+    centre = base.project(origin)
+    a = base.project(fg.add(origin, along))
+    ux, uy = a[0] - centre[0], a[1] - centre[1]
+    length = math.hypot(ux, uy) or 1.0
+    ux, uy = ux / length, uy / length
+    reach = math.hypot(box.x1 - box.x0, box.y1 - box.y0) / 2 + 4.0
+
+    def clip(p: tuple[float, float]) -> tuple[float, float]:  # just outside the view box
+        return (min(max(p[0], box.x0 - 4.0), box.x1 + 4.0), min(max(p[1], box.y0 - 4.0), box.y1 + 4.0))
+
+    p1 = clip((centre[0] - ux * reach, centre[1] - uy * reach))
+    p2 = clip((centre[0] + ux * reach, centre[1] + uy * reach))
+    look = base.project(fg.add(origin, fg.scale(normal, -1.0)))
+    lx, ly = look[0] - centre[0], look[1] - centre[1]
+    norm_ = math.hypot(lx, ly) or 1.0
+    lx, ly = lx / norm_, ly / norm_
+    parts = [_line(p1[0], p1[1], p2[0], p2[1], THIN, CHAIN_DASH)]
+    letters, boxes = [], []
+    letter_size = size + 1.5
+    for end, inward in ((p1, 1.0), (p2, -1.0)):
+        parts.append(_line(end[0], end[1], end[0] + inward * ux * 5.0, end[1] + inward * uy * 5.0, 0.7))
+        tail = (end[0] - lx * 6.0, end[1] - ly * 6.0)
+        parts.append(_line(tail[0], tail[1], end[0], end[1], THIN))
+        parts.append(_arrow(end, tail))
+        tx, ty = tail[0] - lx * 2.0 - inward * ux * 1.0, tail[1] - ly * 2.0 - inward * uy * 1.0
+        baseline = ty + (TEXT_ASCENT - TEXT_DESCENT) * letter_size / 2
+        letters.append(_text(plan.label, tx, baseline, letter_size, "middle"))
+        half = text_width(plan.label, letter_size) / 2
+        boxes.append(Box(min(tx - half, end[0], tail[0]) - 0.5, min(baseline - TEXT_ASCENT * letter_size, end[1], tail[1]) - 0.5,
+                         max(tx + half, end[0], tail[0]) + 0.5, max(baseline + TEXT_DESCENT * letter_size, end[1], tail[1]) + 0.5))
+    markup = f'<g class="section-line">{"".join(parts)}</g>{"".join(letters)}'
+    return SvgAnnotation(id=f"section-line-{plan.id}".replace("_", "-"), kind="section-line", markup=markup), boxes
 
 
-def _sheet_box(view: dict[str, Any]) -> Box:
-    (cx, cy), (x0, y0, x1, y1) = view["center"], view["box"]
-    return Box(cx + x0, cy + y0, cx + x1, cy + y1)
-
-
-def _annotations(projection: dict[str, Any], spec: SheetSpec) -> tuple[ET.Element, list[str]]:
-    front = projection["views"]["front"]
-    box = _sheet_box(front)
-    aligned = spec.regime == "iso"
-    horizontal_side = -1 if spec.first_angle else 1
-    vertical_side = 1 if spec.first_angle else -1
-    group = _element("g", {"id": "cad-annotations"})
-    extent = projection["extent_mm"]
-    group.append(horizontal_dimension("overall-front-width", box.x0, box.x1,
-                                      box.y0 if horizontal_side < 0 else box.y1, horizontal_side, extent["width"], aligned))
-    group.append(vertical_dimension("overall-front-height", box.y0, box.y1,
-                                    box.x1 if vertical_side > 0 else box.x0, vertical_side, extent["height"], aligned))
-    warnings = []
-    for bore in projection["bores"]:
-        if bore["view"] != "front":
-            warnings.append(f"bore {bore['id']} is not seen along its axis in the front view; no callout drawn")
-            continue
-        if not bore["matched"]:
-            raise ValueError(f"metrics_mismatch: bore {bore['id']} has no matching circle in the front view")
-        cx, cy, radius = bore["circle"]
-        group.append(bore_callout(bore["id"], (front["center"][0] + cx, front["center"][1] + cy), radius, box,
-                                  horizontal_side, bore["diameter_mm"]))
-    return group, warnings
-
-
-def compose(projection: dict[str, Any], part: dict[str, Any], product: dict[str, Any], spec: SheetSpec) -> Sheet:
-    """Build the drawing SVG from a TechDraw projection result and the record."""
-    _register_namespaces(spec.template)
-    root = SafeET.parse(str(spec.template), forbid_dtd=True).getroot()
-    values = spec.fields(part, product, spec.scale_text(projection["scale"]))
-    defaults = _fill_editable_fields(root, values)
-    _hoist_span_font_sizes(root)
-    for element_id, label in spec.relabels:
-        target = next((t for t in root.iter(f"{{{SVG_NS}}}text") if t.get("id") == element_id), None)
-        if target is None:
-            raise ValueError(f"drawing template lacks label {element_id}")
-        spans = target.findall(f"{{{SVG_NS}}}tspan") or [target]
-        spans[0].text = label
-    _place_symbol(root, spec.symbol_ids, spec.regions.symbol_cell)
-    title_block = _element("g", {"id": "cad-title-block"})
-    title_block.extend(spec.decorate_title_block(part, product))
-    root.append(title_block)
-    width, height = (root.get("viewBox") or "").split()[2:4]
-    root.insert(0, _element("rect", {"id": "paper-background", "x": 0, "y": 0, "width": width, "height": height, "fill": "#fff"}))
-    content = _element("g", {"id": "cad-drawing-content"})
-    for name in ("front", "top", "right"):
-        content.append(_view_group(name, projection["views"][name]))
-    annotations, warnings = _annotations(projection, spec)
-    content.append(annotations)
-    root.append(content)
-    placeholders = (frozenset(defaults.values()) - frozenset(values.values())) | STOCK_PLACEHOLDERS
-    return Sheet(ET.tostring(root, encoding="unicode") + "\n", frozenset(p for p in placeholders if p), tuple(warnings))
+def detail_marks(base: ViewData, plan: ViewPlan, size: float) -> tuple[SvgAnnotation, list[Box]]:
+    """The detail circle on the base view with its letter; and the letter's box."""
+    centre = base.project(plan.detail["centre"])
+    radius = plan.detail["radius_model"] * base.geometry.scale
+    parts = [f'<circle cx="{centre[0]:.3f}" cy="{centre[1]:.3f}" r="{radius:.3f}" fill="none" stroke="#000" '
+             f'stroke-width="{THIN}"/>']
+    box = base.bounds()
+    right = centre[0] >= (box.x0 + box.x1) / 2
+    lx = (box.x1 + 6.0) if right else (box.x0 - 6.0)
+    ly = box.y0 - 6.0
+    edge = (centre[0] + (radius if right else -radius) * math.sqrt(0.5), centre[1] - radius * math.sqrt(0.5))
+    parts.append(_line(edge[0], edge[1], lx, ly + 1.0))
+    letter_size = size + 1.5
+    half = text_width(plan.label, letter_size) / 2
+    markup = f'<g class="detail-boundary">{"".join(parts)}</g>' + _text(plan.label, lx, ly, letter_size, "middle")
+    return (SvgAnnotation(id=f"detail-mark-{plan.id}".replace("_", "-"), kind="detail-boundary", markup=markup),
+            [Box(lx - half - 0.5, ly - TEXT_ASCENT * letter_size - 0.5, lx + half + 0.5, ly + TEXT_DESCENT * letter_size + 0.5)])
