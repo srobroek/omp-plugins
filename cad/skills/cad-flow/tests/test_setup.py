@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import importlib.util
 import io
+import os
 import sys
 import tempfile
 import unittest
@@ -107,12 +108,151 @@ class ConsentTests(unittest.TestCase):
             status = setup.main(["--yes"])
         self.assertEqual(status, 1)
         install_uv.assert_not_called()
-
     def test_system_flag_requires_yes(self) -> None:
         with self.assertRaises(SystemExit) as raised:
             setup.main(["--system"])
         self.assertEqual(raised.exception.code, 2)
 
+
+class FreeCADInstallTests(unittest.TestCase):
+    def test_appimage_copy_preserves_internal_symlinks_for_app_run(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            extracted = root / "squashfs-root"
+            usr = extracted / "usr"
+            executable = usr / "bin" / "freecadcmd"
+            executable.parent.mkdir(parents=True)
+            executable.write_text("#!/bin/sh\n", encoding="utf-8")
+            target = usr / "x86_64-conda-linux-gnu" / "bin" / "ld"
+            target.parent.mkdir(parents=True)
+            target.write_text("link target\n", encoding="utf-8")
+            (usr / "compiler_compat").mkdir()
+            (usr / "compiler_compat" / "ld").symlink_to(target)
+            copied = root / "copy"
+            setup.shutil.copytree(extracted, copied, symlinks=True)
+            copied_link = copied / "usr" / "compiler_compat" / "ld"
+            self.assertTrue(copied_link.is_symlink())
+            self.assertEqual(os.readlink(copied_link), os.readlink(extracted / "usr" / "compiler_compat" / "ld"))
+            self.assertTrue((copied / "usr" / "bin" / "freecadcmd").is_file())
+
+
+
+class TransactionalFreeCADTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.home = Path(self.temporary.name)
+        self.prefix = self.home / "opt" / "freecad-1.1.4"
+        self.command = self.home / ".local" / "bin" / "freecadcmd"
+        self.prefix.mkdir(parents=True)
+        old_command = self.prefix / "squashfs-root" / "usr" / "bin" / "freecadcmd"
+        old_command.parent.mkdir(parents=True)
+        old_command.write_text("old valid command\n", encoding="utf-8")
+        self.command.parent.mkdir(parents=True)
+        self.command.symlink_to(old_command)
+        self.archive = self.home / "FreeCAD.AppImage"
+        self.archive.write_text("verified archive\n", encoding="utf-8")
+        self.env = {"HOME": str(self.home)}
+        self.keep = setup.platform.system, setup.platform.machine
+        setup.platform.system = lambda: "Linux"
+        setup.platform.machine = lambda: "x86_64"
+        self.addCleanup(setattr, setup.platform, "system", self.keep[0])
+        self.addCleanup(setattr, setup.platform, "machine", self.keep[1])
+        self.run = patch.object(setup, "_run")
+        self.run.start()
+        self.addCleanup(self.run.stop)
+        self.download = patch.object(setup, "_download")
+        self.download.start()
+        self.addCleanup(self.download.stop)
+        self.digest = patch.object(setup, "_sha256", return_value=setup.FREECAD_ASSETS[("Linux", "x86_64")][1])
+        self.digest.start()
+        self.addCleanup(self.digest.stop)
+
+    def prepare(self, archive: Path, staging: Path) -> Path:
+        command = staging / "squashfs-root" / "usr" / "bin" / "freecadcmd"
+        command.parent.mkdir(parents=True)
+        command.write_text("#!/bin/sh\necho 'FreeCAD 1.1.4 test'\n", encoding="utf-8")
+        command.chmod(0o755)
+        target = staging / "squashfs-root" / "usr" / "x86_64-conda-linux-gnu" / "bin" / "ld"
+        target.parent.mkdir(parents=True)
+        target.write_text("ld\n", encoding="utf-8")
+        (staging / "squashfs-root" / "usr" / "compiler_compat").mkdir()
+        (staging / "squashfs-root" / "usr" / "compiler_compat" / "ld").symlink_to(
+            "../x86_64-conda-linux-gnu/bin/ld")
+        return command
+
+    def assert_old_install(self) -> None:
+        self.assertEqual((self.prefix / "squashfs-root" / "usr" / "bin" / "freecadcmd").read_text(),
+                         "old valid command\n")
+        self.assertEqual(os.readlink(self.command), str(self.prefix / "squashfs-root" / "usr" / "bin" / "freecadcmd"))
+
+    def test_staged_verification_failure_keeps_old_bundle_and_link(self) -> None:
+        with patch.object(setup, "_stage_freecad_appimage", side_effect=self.prepare), \
+                patch.object(setup, "_verify_freecadcmd", side_effect=RuntimeError("staged version failed")):
+            with self.assertRaisesRegex(RuntimeError, "staged version failed"):
+                setup._install_freecad(self.env)
+        self.assert_old_install()
+
+    def test_swap_failure_rolls_back_old_bundle_and_link(self) -> None:
+        replace = setup._replace_path
+        calls = 0
+
+        def fail_new_swap(source: Path, destination: Path) -> None:
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise OSError("injected staging swap failure")
+            replace(source, destination)
+
+        with patch.object(setup, "_stage_freecad_appimage", side_effect=self.prepare), \
+                patch.object(setup, "_verify_freecadcmd"), \
+                patch.object(setup, "_replace_path", side_effect=fail_new_swap):
+            with self.assertRaisesRegex(OSError, "staging swap failure"):
+                setup._install_freecad(self.env)
+        self.assert_old_install()
+
+    def test_link_verification_failure_rolls_back_old_bundle_and_link(self) -> None:
+        def verify(command: Path, environ: Mapping[str, str]) -> None:
+            if command == self.command:
+                raise RuntimeError("installed link verification failed")
+
+        with patch.object(setup, "_stage_freecad_appimage", side_effect=self.prepare), \
+                patch.object(setup, "_verify_freecadcmd", side_effect=verify):
+            with self.assertRaisesRegex(RuntimeError, "installed link verification failed"):
+                setup._install_freecad(self.env)
+        self.assert_old_install()
+
+    def test_corrupt_staged_binary_does_not_replace_previous_bundle(self) -> None:
+        def corrupt(archive: Path, staging: Path) -> Path:
+            command = self.prepare(archive, staging)
+            command.write_text("not an executable\n", encoding="utf-8")
+            return command
+
+        with patch.object(setup, "_stage_freecad_appimage", side_effect=corrupt):
+            with self.assertRaises(RuntimeError):
+                setup._install_freecad(self.env)
+        self.assert_old_install()
+
+    def test_success_installs_and_verifies_link_before_removing_backup(self) -> None:
+        events = []
+        verify = setup._verify_freecadcmd
+
+        def record_verification(command: Path, environ: Mapping[str, str]) -> None:
+            events.append(("verify", command))
+            verify(command, environ)
+
+        def record_remove(path: Path, **kwargs) -> None:
+            if Path(path).name.startswith(".freecad-1.1.4.previous"):
+                events.append(("remove-backup", Path(path)))
+
+        with patch.object(setup, "_stage_freecad_appimage", side_effect=self.prepare), \
+                patch.object(setup, "_verify_freecadcmd", side_effect=record_verification), \
+                patch.object(setup.shutil, "rmtree", side_effect=record_remove):
+            setup._install_freecad(self.env)
+        self.assertTrue(events[0][0] == "verify" and events[0][1].name == "freecadcmd")
+        self.assertEqual(events[1], ("verify", self.command))
+        self.assertEqual((self.prefix / "squashfs-root" / "usr" / "bin" / "freecadcmd").read_text(),
+                         "#!/bin/sh\necho 'FreeCAD 1.1.4 test'\n")
 
 if __name__ == "__main__":
     unittest.main()

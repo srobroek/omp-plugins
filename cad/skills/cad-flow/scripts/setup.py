@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import importlib.util
+import json
 import os
 import platform
 import shutil
@@ -22,6 +23,7 @@ import subprocess
 import sys
 import tempfile
 import urllib.request
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Sequence
@@ -88,6 +90,8 @@ def _freecad_item() -> PlanItem:
     else:
         command = f"No official FreeCAD {FREECAD_VERSION} release for {platform.system()} {platform.machine()}"
     return PlanItem("freecad", f"Install FreeCAD {FREECAD_VERSION}", command, system=True)
+
+
 def _formulas_need_copy(cwd: Path, environ: Mapping[str, str]) -> bool:
     workspace = preflight.beads_workspace(cwd, environ)
     if workspace is None:
@@ -194,6 +198,98 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _stage_freecad_appimage(archive: Path, staging: Path) -> Path:
+    """Extract in place so AppImage symlink targets remain relative to the final bundle."""
+    archive.chmod(archive.stat().st_mode | 0o111)
+    _run([str(archive), "--appimage-extract"], cwd=staging)
+    command = staging / "squashfs-root" / "usr" / "bin" / "freecadcmd"
+    if not command.is_file():
+        raise RuntimeError("FreeCAD AppImage extraction has no squashfs-root/usr/bin/freecadcmd")
+    return command
+
+
+def _verify_freecadcmd(command: Path, environ: Mapping[str, str]) -> None:
+    try:
+        result = subprocess.run([str(command), "--version"], capture_output=True, text=True,
+                                timeout=90, check=False, env=dict(environ))
+    except (OSError, subprocess.SubprocessError) as error:
+        raise RuntimeError(f"Could not verify FreeCAD command {command}: {error}") from error
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip() or f"freecadcmd exited {result.returncode}"
+        raise RuntimeError(f"Could not verify FreeCAD command {command}: {detail}")
+    if f"FreeCAD {FREECAD_VERSION}" not in result.stdout + result.stderr:
+        raise RuntimeError(f"Expected FreeCAD {FREECAD_VERSION} from {command}, got: {(result.stdout + result.stderr).strip()}")
+
+
+def _replace_path(source: Path, destination: Path) -> None:
+    source.rename(destination)
+
+
+def _replace_link(link: Path, target: str | None) -> None:
+    """Atomically point the command link at target, or remove it when restoring absence."""
+    if target is None:
+        link.unlink(missing_ok=True)
+        return
+    temporary = link.with_name(f".{link.name}.new-{uuid.uuid4().hex}")
+    try:
+        temporary.symlink_to(target)
+        os.replace(temporary, link)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _install_linux_freecad(archive: Path, environ: Mapping[str, str]) -> None:
+    home = Path(environ.get("HOME", str(Path.home())))
+    prefix = home / "opt" / f"freecad-{FREECAD_VERSION}"
+    prefix.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(prefix=f".{prefix.name}.new-", dir=prefix.parent))
+    backup = prefix.with_name(f".{prefix.name}.previous-{os.getpid()}-{uuid.uuid4().hex}")
+    bin_dir = home / ".local" / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    link = bin_dir / "freecadcmd"
+    original_link: str | None = None
+    if link.is_symlink():
+        original_link = os.readlink(link)
+        expected_old_target = prefix / "squashfs-root" / "usr" / "bin" / "freecadcmd"
+        if Path(original_link) != expected_old_target:
+            raise RuntimeError(f"Refusing to replace the existing command path {link}")
+    elif link.exists():
+        raise RuntimeError(f"Refusing to replace non-symlink command path {link}")
+
+    previous_moved = False
+    new_moved = False
+    try:
+        staged_command = _stage_freecad_appimage(archive, staging)
+        _verify_freecadcmd(staged_command, environ)
+
+        if prefix.exists():
+            _replace_path(prefix, backup)
+            previous_moved = True
+        _replace_path(staging, prefix)
+        new_moved = True
+        target = prefix / "squashfs-root" / "usr" / "bin" / "freecadcmd"
+        _replace_link(link, str(target))
+        _verify_freecadcmd(link, environ)
+    except BaseException as error:
+        rollback_errors = []
+        try:
+            if new_moved and prefix.exists():
+                _replace_path(prefix, staging)
+            if previous_moved and backup.exists():
+                _replace_path(backup, prefix)
+            _replace_link(link, original_link)
+        except BaseException as rollback_error:
+            rollback_errors.append(str(rollback_error))
+        if rollback_errors:
+            raise RuntimeError(f"FreeCAD setup failed: {error}; rollback failed: {'; '.join(rollback_errors)}") from error
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+    else:
+        if previous_moved:
+            shutil.rmtree(backup)
+        print(f"FreeCAD installed under {prefix}; add {bin_dir} to PATH or set FREECADCMD={link}.")
+
+
 def _install_freecad(environ: Mapping[str, str]) -> None:
     asset, expected = FREECAD_ASSETS[(platform.system(), platform.machine())]
     with tempfile.TemporaryDirectory(prefix="cad-freecad-setup-") as temporary:
@@ -228,38 +324,7 @@ def _install_freecad(environ: Mapping[str, str]) -> None:
             finally:
                 _run(["hdiutil", "detach", str(mount)])
             return
-        archive.chmod(archive.stat().st_mode | 0o111)
-        _run([str(archive), "--appimage-extract"], cwd=work)
-        extracted = work / "squashfs-root" / "usr"
-        if not (extracted / "bin" / "freecadcmd").is_file():
-            raise RuntimeError("FreeCAD AppImage extraction has no usr/bin/freecadcmd")
-        home = Path(environ.get("HOME", str(Path.home())))
-        prefix = home / "opt" / "freecad-1.1.4"
-        prefix.parent.mkdir(parents=True, exist_ok=True)
-        staged = prefix.with_name(f".{prefix.name}.new-{os.getpid()}")
-        shutil.rmtree(staged, ignore_errors=True)
-        shutil.copytree(work / "squashfs-root", staged, symlinks=True)
-        bin_dir = home / ".local" / "bin"
-        bin_dir.mkdir(parents=True, exist_ok=True)
-        link = bin_dir / "freecadcmd"
-        target = prefix / "squashfs-root" / "usr" / "bin" / "freecadcmd"
-        if link.exists() and (not link.is_symlink() or link.resolve() != target.resolve()):
-            raise RuntimeError(f"Refusing to replace the existing command path {link}")
-        backup = prefix.with_name(f".{prefix.name}.previous-{os.getpid()}")
-        try:
-            if prefix.exists():
-                prefix.rename(backup)
-            staged.rename(prefix)
-            if not link.is_symlink():
-                link.symlink_to(target)
-        except OSError:
-            if prefix.exists() and backup.exists():
-                shutil.rmtree(prefix)
-                backup.rename(prefix)
-            raise
-        else:
-            shutil.rmtree(backup, ignore_errors=True)
-        print(f"FreeCAD installed under {prefix}; add {bin_dir} to PATH or set FREECADCMD={link}.")
+        _install_linux_freecad(archive, environ)
 
 
 def _install_uv(home: Path, environ: Mapping[str, str]) -> dict[str, str]:
