@@ -15,6 +15,8 @@
     "mass_target": {"type": ["number", "null"], "exclusiveMinimum": 0},
     "make_buy": {"type": "string", "enum": ["make", "buy"]},
     "supplier": {"type": ["string", "null"], "minLength": 1},
-    "decisions": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^DR-[0-9]{3}$"}}
+    "decisions": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^DR-[0-9]{3}$"}},
+    "procurement": {"$ref": "drawing.schema.json#/$defs/procurement"},
+    "drawing": {"$ref": "drawing.schema.json#/$defs/part_drawing"}
   }
 }

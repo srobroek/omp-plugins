@@ -1,0 +1,10 @@
+PN: LMP-0008
+rev: X1
+title: Bushing SPIROL CMPL 4 X 8 EK CL8000
+material: Brass C36000
+process: purchased
+finish: Plain
+mass_target: 2.0
+make_buy: buy
+supplier: null
+decisions: [DR-004]

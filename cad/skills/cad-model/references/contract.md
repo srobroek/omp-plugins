@@ -7,6 +7,7 @@
 | `KERNEL` | yes | top-level string literal, `"cadquery"` or `"build123d"`; read with `ast`, never by import |
 | `PARAMS` | yes | dict of JSON-serialisable defaults; lengths in mm, angles in degrees |
 | `build(params)` | yes | returns one part: a solid, or a compound when the part is several solids |
+| `drawing_features(params, shape)` | no | returns semantic feature locators for drawings; see below |
 
 - `build` receives a private copy of `PARAMS`; the manifest records the values it received.
 - Accepted return values: CadQuery `Shape` or `Workplane` (every stack object; several become one
@@ -19,6 +20,31 @@
   and is not in the CadQuery environment.
 - `print` output and OCCT console messages are runner console output; the runner returns its result
   in a file the orchestrator names, so console output never corrupts it.
+
+## Drawing feature locators
+
+`drawing_features(params, shape)` gets its own copy of `PARAMS` and the value `build` returned,
+after every cut, fillet and chamfer. It returns a dict of semantic ID → locator, made of JSON
+primitives only (a kernel object fails the part with a `ContractError`):
+
+```python
+{"hub_bore": {"kind": "bore", "frame": "assembly_zero",
+              "patches": [{"support_type": "cylinder", "point_mm": [12.0, 0.0, 4.0],
+                           "normal": [-1.0, 0.0, 0.0], "region": "head_side_cheek"}],
+              "anchors": {"entry": {"point_mm": [9.0, 0.0, 8.0], "direction": [0.0, 0.0, -1.0]}},
+              "relations": {"coaxial_with": ["press_band"]}}}
+```
+
+- Semantic IDs, `kind`, `region`, anchor and relation names are lower_snake_case; relations name
+  other IDs of the same result. `frame` is always `assembly_zero`, the coordinates `build` returns.
+- `support_type` is one of `plane`, `cylinder`, `cone`, `sphere`, `torus`, `bezier`, `bspline`,
+  `revolution`, `extrusion`, `offset`, `other`. `normal` and `direction` are unit vectors.
+- Each patch is a witness point on a final surface with its normal, taken from the kernel's own
+  selectors, such as CadQuery `faces("%CYLINDER")` with `normalAt(u, v)` or build123d
+  `filter_by(GeomType.CYLINDER)` with `position_at`/`normal_at`. A feature holds one patch per
+  surface span, such as both cheek spans of a clevis bore. Witnesses identify geometry; drawings
+  measure every value from the STEP, so never put dimensions here.
+- Without the hook the model still builds; producer-ready drawings need it.
 
 ## Kernel environments
 

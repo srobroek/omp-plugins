@@ -16,6 +16,7 @@ from typing import Any
 import yaml
 from defusedxml import ElementTree as SafeET
 
+import drawing_document
 import freecad_runtime
 import layout_check
 import sheet
@@ -87,7 +88,7 @@ def techdraw_job(step: Path, spec: sheet.SheetSpec, scale: float, holes: list[di
     area = spec.view_area()
     return {"step": str(step), "template": str(spec.template), "projection_type": spec.projection_type,
             "spacing": sheet.VIEW_SPACING, "area": [area.x0, area.y0, area.x1, area.y1], "margins": spec.margins(),
-            "scales": sheet.candidate_scales(scale), "holes": holes}
+            "scales": drawing_document.candidate_scales(scale), "holes": holes}
 
 
 def verify_svg_content(svg: Path, part: dict[str,Any]) -> tuple[bool,str,int]:

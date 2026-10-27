@@ -13,7 +13,8 @@ newest built version.
 | `assembly.glb` | binary glTF 2.0 of `assembly.step`: metres, +Y up, node and mesh names = product names, one mesh per part |
 | `part-map.json` | `parts.<PN>`: `product`, `nodes`, `node_indices`, `meshes` in the GLB |
 | `metrics.json` | `parts.<PN>`: `volume_mm3`, `area_mm2`, `bbox_mm` {min, max, size}, `centre_of_volume_mm`, `solids`, `shells`, `faces`, `holes`, `material`, `density_g_cm3`, `mass_g`, `mass_target_g`; `totals` |
-| `manifest.json` | `parts.<PN>`: `kernel`, `model`, `source_sha256`, `params`, `kernel_volume_mm3`, `kernel_solids`, `kernel_valid`, `kernel_errors`; `tools` per environment with `import_s`; `pose` (values, transforms); `joint_pairs` (`pair`, `joint` id, `type`: revolute, prismatic, or fixed; `--attach` joints are fixed, id `attach:<PN>`); `ground`; `glb` tessellation; `files` sha256 |
+| `drawing-features.json` | only when a model defines `drawing_features`: `label`, `frame: assembly_zero`, `units`, and `parts.<PN>` = that model's locators (semantic ID → locator, `references/contract.md`); parts without the hook are absent |
+| `manifest.json` | `parts.<PN>`: `kernel`, `model`, `source_sha256`, `params`, `kernel_volume_mm3`, `kernel_solids`, `kernel_valid`, `kernel_errors`; `tools` per environment with `import_s`; `pose` (values, transforms); `joint_pairs` (`pair`, `joint` id, `type`: revolute, prismatic, or fixed; `--attach` joints are fixed, id `attach:<PN>`); `ground`; `glb` tessellation; `drawing_features` (the sidecar's file name, present with the sidecar); `files` sha256, the sidecar included |
 
 Metrics and bboxes are in assembly coordinates at the zero pose, read back from the per-part STEP.
 Every volume is BRepGProp's adaptive integration to 1e-9 relative (cad-motion `pose.VOLUME_EPS`,
@@ -65,6 +66,8 @@ Mass is solid-material mass: `volume_mm3 * density / 1000`, density from `assets
  "part_map": "versions/v3/part-map.json", "manifest": "versions/v3/manifest.json"}
 ```
 
+With a `drawing-features.json` it also has `"drawing_features": "versions/v3/drawing-features.json"`.
+
 Graders, renderers, and viewers resolve the current files through it. A GLB node belongs to a
 part when its name starts with the PN.
 
@@ -87,7 +90,7 @@ Top level: `status` pass|fail, `label`, `pose: nominal`, `baseline` (previous la
 | `step_readback` | yes | a STEP schema is not AP242; a product name differs from `"<PN> <title>"` in the part or assembly STEP; the top product is missing; a read-back volume differs from the kernel volume by more than 1e-6 relative; the read-back solid count differs from the kernel's |
 | `brep_validity` | yes | BRepCheck rejects the kernel's in-memory shape or the STEP read-back |
 | `solid_structure` | yes | a part has no solid, or its solid count differs from `--expect-solids` or else from the previous version; `--expect-solids` naming a PN outside the version fails (`unknown_parts`) |
-| `interference` | yes | two parts share more than 1e-3 mm^3 at the nominal pose, unless the pair is declared as an ISO interference fit in `hw/interfaces.yaml` or `--allow-interference` names an undeclared intentional overlap; a declared interference fit that measures no interference is reported in `declared_fit_findings` and fails; a pair whose measurement failed (`error`, `interference_mm3` null) fails even when allowed; `--pair` or `--allow-interference` naming a PN outside the version fails (`unknown_pairs`, `unknown_allowed`); `declared_pairs` lists the fit, classification, source interface, and YAML path for each declared press fit; joint-connected pairs are listed under `joint_pairs`, others under `pairs`; `min_clearance` names the closest pair |
+| `interference` | yes | two parts share more than 1e-3 mm^3 at the nominal pose, unless the pair is a declared interference fit or heat-set insert (below) or `--allow-interference` names an undeclared intentional overlap; a declared interference fit that measures no interference is reported in `declared_fit_findings` and fails; a pair whose measurement failed (`error`, `interference_mm3` null) fails even when allowed; `--pair` or `--allow-interference` naming a PN outside the version fails (`unknown_pairs`, `unknown_allowed`); joint-connected pairs are listed under `joint_pairs`, others under `pairs`; `min_clearance` names the closest pair |
 | `connection` | yes | the two parts of a fixed joint or `--attach` are more than 0.01 mm apart (`fixed_joints`: `joint`, `pair`, `distance_mm`, `ok`); or a part is `disconnected` (nearest part > 2.0 mm away), or `floating` (0.01 to 2.0 mm) without a movable joint (revolute, prismatic) linking its rigid body to the nearest part's; `touching` is <= 0.01 mm. Fixed joints weld their parts into one rigid body, so a float to a part of the same body is never a joint clearance. Each `parts` row has `nearest`, `distance_mm`, `joint` (the movable joint between the two bodies, else null), `joint_connected` |
 | `mesh_watertight` | yes | a part's GLB triangles, welded by position, are not a closed 2-manifold (trimesh); triangles whose corners weld to fewer than three vertices (BRepMesh emits one at a sphere pole on a face boundary) are dropped first and counted in `collapsed_triangles` |
 | `slivers_tolerances` | no (warn) | a face is smaller than 1e-3 mm^2, or a vertex/edge/face tolerance exceeds 0.01 mm |
@@ -96,6 +99,13 @@ Top level: `status` pass|fail, `label`, `pose: nominal`, `baseline` (previous la
 Clearance and shared volume come from cad-motion's `pose.interference`, the rule `sweep.py` applies
 at every pose: BRepExtrema minimum distance, and within 1e-6 mm the non-destructive Boolean common
 (fuzzy 1e-7 mm) measured with the adaptive volume rule.
+
+Declared fits and inserts come from `hw/interfaces.yaml`. `declared_pairs` lists each press fit with
+its `fit`, `classification`, `interface` and YAML `source`. A fit that names feature endpoints
+instead of a `pair` also carries `endpoints`: `hole` and `shaft`, each with `PN`, `feature` and an
+optional `region`. `declared_heat_sets` lists each `limits.heat_set` entry with its sorted `pair`,
+`host` PN, `insert` designation, `hole_d`, `interface` and `source`. A heat-set pair passes with or
+without measured overlap, because a model can draw the insert at its bore size.
 
 A tolerant B-rep fails `step_readback` on purpose: when filleted edges carry tolerances of
 0.01 to 0.1 mm, a STEP round trip rebuilds their face boundaries and moves the volume by about

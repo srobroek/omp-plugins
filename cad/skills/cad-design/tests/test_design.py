@@ -99,7 +99,7 @@ class ReferenceModelTests(unittest.TestCase):
     def test_joint_bores_sit_on_template_origins(self) -> None:
         for kernel in KERNELS:
             joints = self.checks[kernel][1]["joints"]
-            self.assertEqual(sorted(joints), ["J-001", "J-002", "J-003", "J-004", "J-005", "J-006"])
+            self.assertEqual(sorted(joints), [f"J-{n:03d}" for n in range(1, 13)])
             for jid, row in joints.items():
                 for pn, found in row["parts"].items():
                     with self.subTest(kernel=kernel, joint=jid, part=pn):

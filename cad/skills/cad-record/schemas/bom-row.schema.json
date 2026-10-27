@@ -15,6 +15,13 @@
     "process": {"type": ["string", "null"], "enum": ["fdm", "cnc", "purchased", null]},
     "make_buy": {"type": ["string", "null"], "enum": ["make", "buy", null]},
     "supplier": {"type": ["string", "null"]},
-    "mass": {"type": ["number", "null"], "exclusiveMinimum": 0}
+    "mass": {"type": ["number", "null"], "exclusiveMinimum": 0},
+    "unit": {"description": "what qty counts; the BOM counts STEP instances", "enum": ["pcs"]},
+    "designation": {"type": ["string", "null"]},
+    "manufacturer": {"type": ["string", "null"]},
+    "manufacturer_part_number": {"type": ["string", "null"]},
+    "supplier_part_number": {"type": ["string", "null"]},
+    "specification_ref": {"type": ["string", "null"]},
+    "specification_rev": {"type": ["string", "null"]}
   }
 }

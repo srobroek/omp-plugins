@@ -18,7 +18,8 @@
         "stage": {"$ref": "#/$defs/stage"},
         "recheck_from": {"$ref": "#/$defs/stage"}
       }
-    }
+    },
+    "drawing": {"$ref": "drawing.schema.json#/$defs/product_drawing"}
   },
   "$defs": {
     "stage": {"type": "string", "enum": ["ground", "intent", "specify", "concept", "layout", "parts", "detail", "bom", "analysis", "critique", "reconcile", "design_freeze", "release"]}

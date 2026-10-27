@@ -51,6 +51,18 @@ In OMP, use the `cad-flow` skill. In Kiro, use the linked `cad/` workspace skill
 
 Install a Beads workspace for the workflow formulas and approval gates. Plugin installation takes effect in a new session.
 
+## Preflight
+
+Run the environment check before starting a CAD project:
+
+```sh
+uv run --script cad/skills/cad-flow/scripts/preflight.py
+```
+
+The preflight reports each check as pass, fail, or warning, with a fix hint and elapsed time. It exits non-zero when any required runtime check fails. Use `--json` for machine-readable results or `--harness omp|claude|opencode|kiro` to check one harness. Kernel, viewer, and browser checks sync the same uv runner environments used by the CAD pipeline, then import through each environment's Python interpreter. Each check is time-bounded and prints progress with its elapsed time.
+FreeCAD 1.1.4 and TechDraw templates, CadQuery 2.8, build123d 0.13, Playwright Chromium, the SRI-checked three.js cache, and ocp_viewer are required. Beads and detected harness installation are warnings. This plugin ships no MCP server, so there is no MCP check.
+The `cad-flow` GROUND step runs preflight and stops on required failures. See `cad/skills/cad-drawings/SKILL.md` for FreeCAD installation steps.
+
 ## Flow
 
 `cad-flow` leads GROUND → INTENT → SPECIFY → L0 CONCEPT → VARIANT gate → L1 LAYOUT → LAYOUT freeze → L2 PARTS → L3 DETAIL → BOM → L4 ANALYSIS → parallel CRITIQUE → RECONCILE → DESIGN freeze → RELEASE → RELEASE gate. On each L1 to L4 commit batch, run `cad-model run`, then `cad-model check`; a blocking failure stops it. Then run `cad-render` for that version and show images at the gate. Before L2, `form_check` must pass at F2 or higher. Before L3, it must pass at F3. The layout threshold, user “commit”, or hardware git pre-commit hook starts the broader changed-parts/dependents recheck.

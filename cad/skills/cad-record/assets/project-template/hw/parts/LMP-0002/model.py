@@ -1,6 +1,6 @@
 """LMP-0002 Lower link: cad-design reference model, CadQuery 2.8, fidelity F2.
 
-CNC 6061-T6 link that turns in the base boss on the pin pressed into its hub (J-001,
+CNC 6061-T6 link that turns in the base bushing on the pin pressed into its hub (J-001,
 axis Z) and carries the elbow clevis (J-002, axis Y). Form: the intersection of a plan
 outline (hub round, waisted taper, square fork end) and a side outline (flat hub,
 sagging top and bottom, round elbow end), with 1.5 mm fillets on every silhouette edge.

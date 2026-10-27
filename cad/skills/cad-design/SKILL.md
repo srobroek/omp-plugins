@@ -24,7 +24,7 @@ TRIGGER
    during L2 PARTS, F3 during L3 DETAIL. Follow the model.py contract: one `KERNEL`, a JSON
    `PARAMS` dict in mm and degrees, `build(params)` returning one part in place at the zero pose.
 3. Start from the matching reference model in `assets/reference/lamp-arm/`. Its filename pairs the kernel and PN, such as `cadquery-LMP-0001.py`. The reference uses CadQuery 2.8 or build123d 0.13 with matching PARAMS keys.
-   The files model a base puck, tapered clevis links, a revolved head, or stepped shoulder pins bought to their drawing.
+   The files model a base puck, tapered clevis links, a revolved head, stepped shoulder pins bought to their drawing, and catalogue envelopes of the brass bushings, the heat-set insert, and the DIN 471 rings.
 4. On "commit batch" from L1 onward, review the batch with realistic renders through the
    `cad-render` step (later; until it exists, report it as missing, not done). For the
    reference arm, `uv run --script scripts/review_render.py --out DIR` writes an iso view and
@@ -54,6 +54,6 @@ NOT Treat a render as a check result; it is review material for the user.
 ```text
 L1 DESIGN {stage}: {PN count} parts at {lowest level}, form_check PASS|FAIL
    Findings -- {check, part, and value per form_check finding, only if any}
-   Renders -- {PNG paths and one line each on what they show}
+   Renders -- {absolute PNG paths and one line each on what they show}
 ```
 CAP 80w clean · 160w with findings

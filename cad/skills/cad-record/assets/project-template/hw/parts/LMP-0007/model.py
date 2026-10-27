@@ -1,10 +1,10 @@
 """LMP-0007 M5 x 20 shoulder pin: cad-design reference model, CadQuery 2.8, fidelity F3.
 
-Purchased stainless pin for the head tilt (J-003, axis Y), modelled as bought: a low
+Stainless pin made to drawing (DR-003, DR-004) for the head tilt (J-003, axis Y): a low
 socket head (dk 8.5, k 3, 3 mm hex socket, 0.4 mm top chamfer), a 5 p6 press band at
 its mid-limit that grips the upper link's +Y cheek (5 H7/p6), a 5 f7 journal at its
-mid-limit on which the head knuckle turns, a DIN 471 retaining-ring groove just
-outside the upper link's -Y cheek, and a 0.4 mm lead chamfer.
+mid-limit on which the head's LMP-0009 bushing turns, a DIN 471 retaining-ring groove for
+the LMP-0013 ring just outside the upper link's -Y cheek, and a 0.4 mm lead chamfer.
 
 Zero pose, assembly coordinates: shank axis on (360, 0, 40) pointing -Y from the head;
 the head underside sits 0.3 mm off the +Y cheek face.

@@ -68,7 +68,7 @@ class ValidateProject(unittest.TestCase):
     def test_template_validates_fixed_pin_joints(self) -> None:
         assembly = yaml.safe_load((self.hw / "assembly.yaml").read_text(encoding="utf-8"))
         fixed = [joint for joint in assembly["joints"] if joint["type"] == "fixed"]
-        self.assertEqual(len(fixed), 3)
+        self.assertEqual(len(fixed), 9)  # three pressed pins, two bushings, the insert, three rings
         self.assertTrue(all(joint["min"] == joint["max"] == joint["nominal"] == 0 for joint in fixed))
         result, report = self.validate()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -206,7 +206,7 @@ class ValidateProject(unittest.TestCase):
 
     def test_rejects_part_with_missing_decision_reference(self) -> None:
         path = self.hw / "parts" / "LMP-0001" / "part.yaml"
-        text = path.read_text(encoding="utf-8").replace("decisions: [DR-002]", "decisions: [DR-999]")
+        text = path.read_text(encoding="utf-8").replace("decisions: [DR-002, DR-004]", "decisions: [DR-999]")
         path.write_text(text, encoding="utf-8")
         result, report = self.validate()
         self.assertEqual(result.returncode, 1)

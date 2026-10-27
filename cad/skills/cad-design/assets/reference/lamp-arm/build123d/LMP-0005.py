@@ -1,10 +1,10 @@
 """LMP-0005 M5 x 30 shoulder pin: cad-design reference model, build123d 0.13, fidelity F3.
 
-Purchased stainless pin for the base pivot (J-001, axis Z), modelled as bought: a
+Stainless pin made to drawing (DR-003, DR-004) for the base pivot (J-001, axis Z): a
 low socket head (dk 8.5, k 3, 3 mm hex socket, 0.4 mm top chamfer), a 5 p6 press band
 at its mid-limit that grips the lower-link hub (5 H7/p6), a 5 f7 journal at its
-mid-limit that turns in the base boss, a DIN 471 retaining-ring groove that seats the
-circlip on the base's access-pocket ceiling, and a 0.4 mm lead chamfer.
+mid-limit that turns in the LMP-0008 bushing, a DIN 471 retaining-ring groove that seats
+the LMP-0011 ring under the bushing's lower end, and a 0.4 mm lead chamfer.
 
 Zero pose, assembly coordinates: shank axis on (0, 0, 40) pointing -Z from the head;
 the head underside sits 0.3 mm above the lower-link hub: the press band locates the pin.

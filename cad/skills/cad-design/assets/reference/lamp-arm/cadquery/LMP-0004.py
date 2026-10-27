@@ -1,17 +1,19 @@
 """LMP-0004 Lamp head housing: cad-design reference model, CadQuery 2.8, fidelity F3.
 
 FDM PETG head that tilts on J-003 (axis Y). A 7 mm knuckle (1.5 mm edge fillets) turns
-inside the upper link's clevis; a loft carries its rounded section into a round neck,
+inside the upper link's clevis on the LMP-0009 bushing, heat-set into a through seat with
+a +Y counterbore for its head (SPIROL CL8100 M4, DR-004); a loft carries its rounded section into a round neck,
 which joins a revolved cap and shade. The revolved profile holds the 4 mm cap roll-over,
 a cosmetic split-line groove, the 2.4 mm shade wall (six 0.4 mm perimeters) with a
-full-round rim, the E14 lampholder seat and its M10x1 nipple boss. F3 adds a fluted grip
+full-round rim, and the socket boss whose blind hole takes the LMP-0010 M10x1 heat-set
+insert for the lampholder nipple (6 mm wall around the insert, DR-004). F3 adds a fluted grip
 band on the cap and the cable path from the arm into the socket: a 6 mm run along the
 neck that starts on the axis of a 7 mm entry from below. Unequal radii keep the
 T-junction regular: with equal radii the two bores' intersection curves cross at two
 singular points, and this kernel's cut left an unorientable face there.
 
-Zero pose, assembly coordinates: pivot bore on (360, 0, 40) along Y; the shade axis is
-vertical through (430, 0) and opens downward.
+Zero pose, assembly coordinates: bushing seat on (360, 0, 40) along Y; the shade axis is
+vertical through (430, 0) and opens downward; the insert hole opens down from z 50.
 """
 
 import math
@@ -28,7 +30,9 @@ PARAMS = {
     "neck_x": 404.0,
     "neck_r": 8.0,
     "edge_fillet": 1.5,
-    "pin_bore_d": 5.2,  # 5 H11 hole + 0.2 mm FDM hole allowance (cad-fits: 5 H11 max 5.075)
+    "seat_d": 7.77,  # SPIROL CL8100 M4 recommended hole 7.73/7.81, mid-limit; drilled after printing
+    "seat_cbore_d": 10.0,  # CL8100 head 9.35/9.60 plus FDM hole tolerance
+    "seat_cbore_depth": 1.0,  # CL8100 head T ref
     "bore_chamfer": 0.4,
     "shade_axis_x": 430.0,
     "cap_r": 17.0,
@@ -41,9 +45,10 @@ PARAMS = {
     "shade_mid": [35.2, 21.4],  # (r, z) of the dome's mid point
     "rim": [46.0, 2.0],  # (r, z) of the outer rim edge
     "shade_wall": 2.4,
-    "socket_boss_r": 7.0,
-    "socket_boss_z": 54.0,
-    "nipple_bore_d": 9.0,  # M10x1 thread-forming in PETG
+    "socket_boss_r": 12.5,  # In-saiL 6.0 minimum wall around the 12.6 insert
+    "socket_boss_z": 50.0,
+    "insert_hole_d": 11.95,  # In-saiL QT M10 x 12.7 hole 11.9/12.0, mid-limit
+    "insert_hole_depth": 13.7,  # insert L 12.7 + 1 mm (CNC Kitchen heat-set guidance)
     "grip_flutes": 20,
     "grip_r": 0.8,
     "grip_z": [53.0, 60.0],
@@ -83,7 +88,7 @@ def _shade_profile(p):
     s, sd = p["split_z"], p["split_depth"]
     boss_r, boss_z = p["socket_boss_r"], p["socket_boss_z"]
     ceiling = top - f
-    nipple = p["nipple_bore_d"] / 2.0
+    hole_r, hole_top = p["insert_hole_d"] / 2.0, boss_z + p["insert_hole_depth"]
     a = math.radians(45.0)
     return (0.0, top), [
         ("line", (rc - f, top)),
@@ -99,9 +104,9 @@ def _shade_profile(p):
         ("line", (ri, ceiling)),
         ("line", (boss_r, ceiling)),
         ("line", (boss_r, boss_z)),
-        ("line", (nipple, boss_z)),
-        ("line", (nipple, top - 2.0)),
-        ("line", (0.0, top - 2.0)),
+        ("line", (hole_r, boss_z)),
+        ("line", (hole_r, hole_top)),
+        ("line", (0.0, hole_top)),
         ("line", (0.0, top)),
     ]
 
@@ -163,11 +168,16 @@ def build(params: dict) -> cq.Shape:
     entry = cq.Workplane("XY").workplane(offset=pz - 2 * p["neck_r"]).center(p["cable_entry_x"], 0).circle(entry_r).extrude(
         2 * p["neck_r"]
     )
-    bore = cq.Workplane("XZ").center(px, pz).circle(p["pin_bore_d"] / 2.0).extrude(2 * half_t, both=True)
+    seat_r, cbore_r, cbore_y = p["seat_d"] / 2.0, p["seat_cbore_d"] / 2.0, half_t - p["seat_cbore_depth"]
+    seat = cq.Workplane("XZ").center(px, pz).circle(seat_r).extrude(2 * half_t, both=True)
+    # The counterbore runs 1 mm past the +Y face, so its rim is the knuckle face's own edge.
+    cbore = cq.Solid.makeCylinder(cbore_r, half_t + 1.0 - cbore_y, cq.Vector(px, cbore_y, pz), cq.Vector(0, 1, 0))
     body = safe_cut(body, run)
     body = safe_cut(body, entry)
-    body = safe_cut(body, bore).val()
-    bore_r = p["pin_bore_d"] / 2.0
-    entries = [e for e in body.Edges() if e.geomType() == "CIRCLE" and abs(e.radius() - bore_r) < 1e-6
-               and abs(e.arcCenter().x - px) < 1e-3 and abs(e.arcCenter().z - pz) < 1e-3]
+    body = safe_cut(body, seat, cbore).val()
+    # Chamfer the seat entry on the -Y face and the counterbore rim on the +Y face.
+    entries = [e for e in body.Edges() if e.geomType() == "CIRCLE"
+               and abs(e.arcCenter().x - px) < 1e-3 and abs(e.arcCenter().z - pz) < 1e-3
+               and ((abs(e.radius() - seat_r) < 1e-6 and abs(e.arcCenter().y + half_t) < 1e-3)
+                    or (abs(e.radius() - cbore_r) < 1e-6 and abs(e.arcCenter().y - half_t) < 1e-3))]
     return body.chamfer(p["bore_chamfer"], None, entries)

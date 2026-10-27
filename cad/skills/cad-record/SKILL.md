@@ -23,7 +23,7 @@ MUST Use revisions `X1`, `X2`, and so on for prototypes. Use released letters `A
 MUST Set `mass_target` and BOM `mass` in grams; `mass_target` may be null when unknown or not applicable.
 MUST Include a `verification` method (`I` inspection, `A` analysis, `D` demonstration, `T` test) and acceptance criteria for every requirement.
 MUST Define every joint's `parent` and `child` as part PNs included in assembly subassembly `parts`, and include axis, origin in mm, and minimum, nominal, and maximum travel values in its unit (degrees for rotary joints, mm for linear joints).
-MUST Keep BOM columns in this order: `level,PN,rev,qty,title,material,process,make_buy,supplier,mass`; `level` starts at 0 for a numbered top assembly or 1 for an unnumbered top assembly, then increases by one per child depth; numbered assemblies with BOM children do not require a `part.yaml`. `qty` is instances per parent, and `mass` copies `mass_target`.
+MUST Keep BOM columns in this order: `level,PN,rev,qty,title,material,process,make_buy,supplier,mass`, optionally followed by all of `unit,designation,manufacturer,manufacturer_part_number,supplier_part_number,specification_ref,specification_rev`. `level` starts at 0 for a numbered top assembly or 1 for an unnumbered top assembly, then increases by one per child depth; numbered assemblies with BOM children do not need a `part.yaml`. `qty` is instances per parent and `unit` is `pcs`. `mass` copies `mass_target`, and the procurement columns copy part.yaml `procurement`.
 
 ### Rigor levels
 
@@ -38,10 +38,15 @@ MUST Keep BOM columns in this order: `level,PN,rev,qty,title,material,process,ma
 ## Record files
 
 - `product.yaml`: product identity, rigor, units, drawing regime, general tolerance, and workflow state.
+  - Optional `drawing`: the production drawing policy with `definition: model_and_drawing`, an explicit `projection` (`first_angle` or `third_angle`), `standards`, `default_sheet` (`sizes`, `orientation`, `scale`), named `tolerance_policies`, and `general_tolerance_policy`.
+  - A tolerance policy is `kind: standard` (ISO 2768-1:1989 with a class) or `kind: limits` (`linear_mm` with its source `reference`). Each names the processes it `applies_to`.
+  - `general_tolerance` must state the general policy exactly: `ISO 2768-m`, or the `linear_mm` number. `standards.dimensioning` must belong to the regime.
 - `requirements.yaml`: `REQ-###` statements with rationale, source, priority, method, and verification criteria.
-- `interfaces.yaml`: mating, motion, clearance, electrical, or thermal contracts.
+- `interfaces.yaml`: mating, motion, clearance, electrical, or thermal contracts. `limits.press_fit` and `limits.running_fit` hold a `fit` designation and either a part `pair` or feature endpoints `hole` and `shaft` (`PN`, `feature`, optional `region`); `limits.heat_set` lists inserts as `{pair: [host PN, insert PN], hole_d, insert, source}` with optional `hole_tol`, `depth_min` and `note`. Every PN must name a part record.
 - `assembly.yaml`: subassemblies, part references, and joints with travel limits.
-- `parts/<PN>/part.yaml`: part number and revision, material, process, finish, mass target in grams, make/buy, optional supplier, and optional `decisions: [DR-###, ...]` references validated against `hw/decisions/`; `model.py` is the parametric CAD source. In the lamp-arm template, F3 reference-mass targets are provisional and documented in `decisions/DR-002.md`.
+- `parts/<PN>/part.yaml`: part number and revision, material, process, finish, mass target in grams, make/buy, optional supplier, and optional `decisions: [DR-###, ...]` references validated against `hw/decisions/`; `model.py` is the parametric CAD source. In the lamp-arm template, F3 reference-mass targets are provisional and documented in `decisions/DR-002.md`; `decisions/DR-004.md` records the catalogue parts, their heat-set seats, and the tolerances proposed for review.
+  - Optional `procurement`: `mode` (`catalog` needs `make_buy: buy`; `made_to_drawing`), manufacturer and supplier part numbers, `designation`, `specification` (`reference`, `revision`, an `artifact` file under `hw/` and its `sha256`, which must match), `approved_sources`, `qualification_evidence`, `certificates`.
+  - Optional `drawing`: `type` (`detail` for a made-to-drawing part; `vendor_specification` or `source_control` for a catalog item), `tolerance_policy`, `datum_features`, `coordinate_frame`, `views`, `features`, `dimensions` (requests without values, because every value comes from the model), structured `notes`, `manufacturing`, and `sheet`. `validate.py` checks that `datum_features` declares every datum label in use, that view and dimension ids are unique, and that each named tolerance policy exists in product.yaml and applies to the part's process.
 - `bom.csv`: hierarchical EBOM; values and fields are checked against part records.
 - `verification.csv`: requirement verification status and evidence; every requirement needs a row before release.
 - `decisions/DR-###.md`: dated rationale and consequences for design decisions.

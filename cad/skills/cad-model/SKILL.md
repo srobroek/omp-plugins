@@ -20,13 +20,15 @@ TRIGGER
 
 1. Write each `hw/parts/<PN>/model.py`: one kernel per file, `KERNEL`, `PARAMS`, `build(params)`,
    modelled in place at the zero pose; Booleans through `cadmodel.safe` (`safe_cut`, `safe_fuse`,
-   `safe_intersect`). LOAD references/contract.md when writing or reviewing a model.py.
+   `safe_intersect`). Add `drawing_features(params, shape)` for a part that needs a production
+   drawing. LOAD references/contract.md when writing or reviewing a model.py.
 2. Build: `uv run --script skill://cad-model/scripts/cad_model.py run hw --label vN [--kernel auto]`
    → `hw/versions/vN/` and `hw/versions/latest.json`; JSON summary on stdout. `auto` runs each
    part in its declared kernel's own uv environment; `cadquery` or `build123d` additionally
    requires every part to declare that kernel.
 3. Check: `uv run --script skill://cad-model/scripts/cad_model.py check vN --hw hw [--out FILE]`
-   → check result JSON; press-fit pairs declared in `hw/interfaces.yaml` are allowed automatically.
+   → check result JSON; press fits and heat-set inserts declared in `hw/interfaces.yaml` are allowed
+   to interfere automatically.
    `blocking_failures` names every failed blocking check.
 4. Diff: `uv run --script skill://cad-model/scripts/cad_model.py diff vA vB --hw hw` → per-part
    volume and bbox deltas, added/removed parts, exact shared / A-only / B-only volumes.
@@ -43,9 +45,10 @@ MUST Pick the next label above the newest version; versions are immutable and `r
 MUST Treat `check` exit 1 as a failed stage gate; report `blocking_failures` and the numbers verbatim.
 MUST Resolve current files through `hw/versions/latest.json`, never by guessing a version path.
 MUST Add a missing material density to `assets/materials.yaml` with its source; `mass_g: null` means unknown.
-MUST Declare press fits and their part pairs in `hw/interfaces.yaml`; `check` classifies the fit and
-allows measured interference only for pairs classified as interference fits. A declared interference
-fit that measures clearance is a blocking finding.
+MUST Declare press fits, as a part `pair` or as `hole` and `shaft` feature endpoints, and heat-set
+inserts in `hw/interfaces.yaml`; `check` classifies each fit and allows measured interference only
+for pairs classified as interference fits and for heat-set pairs. A declared interference fit that
+measures clearance is a blocking finding.
 DEFAULT Use `--allow-interference PN:PN` only for an undeclared, intentional overlap.
 NOT Put a short timeout around `run`: a cold OCP import took 170 to 320 s per fresh environment.
 NOT Hand-edit files under `hw/versions/`; rebuild under a new label.
