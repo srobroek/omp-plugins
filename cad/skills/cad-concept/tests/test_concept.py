@@ -288,8 +288,9 @@ class ServerLive(unittest.TestCase):
             with exc:
                 return exc.code, exc.read()
 
-    def post(self, body: dict, origin: str | None = None, host: str | None = None) -> tuple[int, dict]:
-        req = urllib.request.Request(self.url + "api/screenshot", data=json.dumps(body).encode(), method="POST")
+    def post(self, body: dict, origin: str | None = None, host: str | None = None,
+             path: str = "api/screenshot") -> tuple[int, dict]:
+        req = urllib.request.Request(self.url + path, data=json.dumps(body).encode(), method="POST")
         req.add_header("Content-Type", "application/json")
         if origin:
             req.add_header("Origin", origin)
@@ -342,6 +343,12 @@ class ServerLive(unittest.TestCase):
         self.assertEqual(self.post(body, origin="http://evil.example")[0], 403)
         self.assertEqual(self.post({**body, "png": "data:image/png;base64,aGVsbG8="})[0], 400)
         self.assertEqual(self.post({**body, "scene": "../x.scene.json"})[0], 400)
+    def test_post_unknown_route_returns_404_without_saving(self) -> None:
+        body = {"scene": "lamp-arm.scene.json", "png": "data:image/png;base64," +
+                base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * 16).decode()}
+        status, response = self.post(body, path="api/other")
+        self.assertEqual(status, 404, response)
+        self.assertFalse((self.dir / "screenshots").exists())
 
     def test_a_rebound_host_name_is_refused(self) -> None:
         port = self.url.rstrip("/").rsplit(":", 1)[1]

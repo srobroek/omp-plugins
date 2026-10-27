@@ -306,6 +306,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         if not self._host_ok():
             return
+        if urlsplit(self.path).path != "/api/screenshot":
+            self._error(HTTPStatus.NOT_FOUND, "unknown endpoint")
+            return
         origin = self.headers.get("Origin")
         if origin is not None and origin != f"http://{self.headers.get('Host')}":
             self._error(HTTPStatus.FORBIDDEN, "cross-origin screenshot rejected")
