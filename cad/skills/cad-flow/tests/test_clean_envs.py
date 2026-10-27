@@ -51,7 +51,7 @@ class PlanTests(unittest.TestCase):
         self.hook = environment(self.root, "cad-recheck-stamp-3333333333333333", "cad-recheck-stamp.py", ("PyYAML-6.0.3",))
         # Not the plugin's: another tool's validate.py, an unshipped name, and a shared environment.
         environment(self.root, "validate-4444444444444444", "validate.py", ("requests-2.32.0",))
-        environment(self.root, "scratch-5555555555555555", "scratch.py", ())
+        environment(self.root, "unshipped-5555555555555555", "unshipped.py", ())
         (self.root / "a61125e538556c9c").mkdir()
         (self.root / "a61125e538556c9c" / "bd2d60a269142b67").symlink_to("../../archive-v0/XYZ")
         self.scripts = clean_envs.shipped_scripts()
