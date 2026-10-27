@@ -21,13 +21,23 @@ TRIGGER
 
 ## Workflow
 
-Run every command as `uv run --script scripts/viewer.py <command>`; each prints one JSON object.
+Run viewer commands through cad-flow's shared environment:
+`uv run --script skill://cad-flow/scripts/run.py cad-viewer/scripts/viewer.py <command> [args...]`.
 Once per machine, install the headless browser captures use:
 `uv run --with playwright==1.64.1 playwright install chromium`.
 
-1. `serve` -> starts or reuses the host: OCP viewers A and B, once for the user's tab and once
-   for a headless presenter page that captures read, plus the panel page. Prints `url` (send it
-   to the user), `pid`, `ports`, and the `stop` command.
+Session identity:
+- OMP and Claude Code expose session IDs. OpenCode and Kiro do not have a verified shell ID.
+  For them, set `CAD_VIEWER_SESSION_NAME` or pass `--session NAME`, using a session ID or worker name.
+- Reuse the name for each command. Different names in one project get separate hosts.
+- The project root contains `hw/`. Commands with `hw/` derive it from that path; other commands use cwd.
+- Run `serve` from the project root unless you name the session. `CAD_VIEWER_SESSION` still overrides
+  the session-file path.
+1. `serve [--session NAME] [--idle-timeout MIN]` starts or reuses this session's host.
+   The host runs the user and presenter OCP viewer pairs and the panel.
+   The timeout defaults to 30 minutes. Pass `0` to disable it.
+   Viewer commands and user-panel requests reset the clock. The Referer separates user and presenter polls.
+   Output shows the `url`, `pid`, `ports`, timeout, and stop command.
 2. After each cad-model `run` and `check --out FILE`: `show hw [--version vN] --check FILE`.
    The first push fits the camera; later pushes keep it. The panel lists parts and groups
    (Hide, Iso, Ghost rest), per-part findings from the check JSON, and metrics.json numbers.
@@ -51,9 +61,10 @@ Once per machine, install the headless browser captures use:
    (`http://127.0.0.1:<panel port>/gallery?version=vN`) and, under `files`, the absolute path of
    each listed file. `show` and `compare` also open their record and print a `gallery` URL per
    version. Give the user the URL and the absolute paths.
-8. `stop` -> stops the host, its viewers, and the presenter; reports `ports_free`. `status:
-   stale` means the recorded host no longer answers: nothing was signalled, the session file
-   is removed. `serve` replaces a host whose presenter browser died.
+8. `stop [--session NAME]` -> stops only this session's host, its viewers, and presenter; reports
+   `ports_free`. Run the exact `stop` command printed by `serve` when the viewer is no longer
+   needed at the end of the review/stage and before handoff. Tell the user the URL that is going
+   away. The 30-minute idle timeout is a fallback; an open tab does not keep the host alive.
 
 | command output | meaning |
 |---|---|
@@ -93,8 +104,10 @@ absolute path, a `..` step, a dot folder, or a symlink out of `hw/`, and 404 to 
 ## Rules
 
 MUST Read the PNG before any claim about a view; a pass status only says the canvas is not blank.
-MUST Run `stop` when the session ends and report its `ports_free`.
-DEFAULT One host per user (session file `$CAD_VIEWER_SESSION`, else `~/.local/state/cad-viewer/session.json`).
+MUST Run the exact `stop` command printed by `serve` when the user is done with the viewer (end of
+  review/stage, before handoff), and tell the user the URL that is going away.
+DEFAULT One host per project and session: session files under the state directory are keyed by a
+  harness session ID or `CAD_VIEWER_SESSION_NAME` / `--session NAME`, plus the project root.
 NOT Use ocp_viewer `save_screenshot`: headless it returns a black frame. Captures are browser screenshots.
 NOT Expose the host beyond loopback: it answers only `Host` 127.0.0.1 or localhost on its port,
   refuses another site's `Origin` (403) and a non-JSON POST (415), and writes a capture only as
