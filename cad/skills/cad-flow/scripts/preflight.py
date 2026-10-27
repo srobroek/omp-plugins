@@ -218,8 +218,10 @@ def _chromium_check(uv: str, install: bool = False) -> Check:
                   f"Playwright {expected} launches Chromium {found['chromium']} ({found['path']}).", "")
 
 
-def find_freecadcmd(environ: Mapping[str, str], home: Path | None = None) -> Path | None:
-    """Resolve FREECADCMD, PATH, the user link, then the setup-managed AppImage executable."""
+def find_freecadcmd(environ: Mapping[str, str], home: Path | None = None,
+                    platform_name: str | None = None,
+                    macos_command: Path = Path("/Applications/FreeCAD.app/Contents/Resources/bin/freecadcmd")) -> Path | None:
+    """Resolve FreeCAD like cad-drawings, then the setup-managed user installs."""
     configured = environ.get("FREECADCMD")
     if configured:
         return Path(configured)
@@ -227,6 +229,8 @@ def find_freecadcmd(environ: Mapping[str, str], home: Path | None = None) -> Pat
         found = shutil.which(name, path=environ.get("PATH"))
         if found:
             return Path(found)
+    if (platform_name or sys.platform) == "darwin" and macos_command.is_file():
+        return macos_command
     home_dir = home or Path(environ.get("HOME", str(Path.home())))
     user_link = home_dir / ".local" / "bin" / "freecadcmd"
     if user_link.is_file() and os.access(user_link, os.X_OK):
@@ -235,30 +239,6 @@ def find_freecadcmd(environ: Mapping[str, str], home: Path | None = None) -> Pat
     if managed.is_file() and os.access(managed, os.X_OK):
         return managed
     return None
-def install_chromium_system_deps(environ: Mapping[str, str] | None = None) -> None:
-    """Install Playwright Chromium dependencies only on apt-based distributions."""
-    env = os.environ if environ is None else environ
-    if not shutil.which("apt-get", path=env.get("PATH")):
-        raise RuntimeError("Playwright install-deps requires apt-get; install Chromium libraries manually")
-    if not shutil.which("sudo", path=env.get("PATH")):
-        raise RuntimeError("sudo was not found; install Chromium's Playwright system dependencies manually")
-    release = Path("/etc/os-release")
-    distro = next((line.partition("=")[2].strip().strip('"') for line in release.read_text().splitlines()
-                   if line.startswith("ID=")), "") if release.is_file() else ""
-    if distro not in {"ubuntu", "debian", "linuxmint", "pop"}:
-        raise RuntimeError(f"Playwright install-deps supports Debian/Ubuntu only; {distro or 'this OS'} is unsupported")
-    uv = shutil.which("uv", path=env.get("PATH"))
-    if not uv:
-        raise RuntimeError("uv is required before installing Playwright Chromium dependencies")
-    prefix, _ = _environment(uv, CHROMIUM)
-    code = ("from playwright._impl._driver import compute_driver_executable\n"
-            "import subprocess\n"
-            "node, cli = compute_driver_executable()\n"
-            "subprocess.run(['sudo', node, cli, 'install-deps', 'chromium'], check=True)\n")
-    try:
-        subprocess.run([*prefix, "-c", code], check=True, timeout=SYNC_TIMEOUT, env=dict(env))
-    except (OSError, subprocess.SubprocessError) as error:
-        raise RuntimeError(f"Could not install Playwright Chromium system dependencies: {error}") from error
 
 
 def _timed_freecad_checks(environ: Mapping[str, str], home: Path | None = None) -> list[Check]:

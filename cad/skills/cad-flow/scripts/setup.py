@@ -429,6 +429,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 if not warm_started:
                     print("Warming runtime environments, Chromium, and the pinned three.js cache...")
                     print(preflight.render_text(preflight.warm(environ, cwd, home, args.harness)))
+                    warm_started = True
             elif item.id == "formulas":
                 _copy_formulas(cwd, environ)
             elif item.id.startswith("harness-"):
