@@ -6,9 +6,9 @@
 """List stale per-path uv environments of the CAD plugin's scripts; delete them only with --delete.
 
 `uv run --script S` keeps one environment per script path, `<uv cache>/environments-v2/<stem>-<hash>`,
-so every plugin copy (a project's skill copy, an eval trial, a worktree) leaves its own. The kernel
-runners now run in environments shared by dependency set (`cadmodel.scriptenv`); uv keeps those
-under `environments-v2/<interpreter hash>/`, and this script never lists them.
+so each lightweight script copy can leave its own environment. Heavy scripts started with
+`cad-flow/scripts/run.py` use environments shared by dependency set (`cadmodel.scriptenv`); uv keeps
+those under `environments-v2/<interpreter hash>/`, and this script never lists them.
 
 A per-path environment belongs to a CAD script when its `pyvenv.cfg` prompt (the file name uv
 created it for) names a PEP 723 script this plugin ships and it holds every distribution that

@@ -22,15 +22,15 @@ TRIGGER
    modelled in place at the zero pose; Booleans through `cadmodel.safe` (`safe_cut`, `safe_fuse`,
    `safe_intersect`). Add `drawing_features(params, shape)` for a part that needs a production
    drawing. LOAD references/contract.md when writing or reviewing a model.py.
-2. Build: `uv run --script skill://cad-model/scripts/cad_model.py run hw --label vN [--kernel auto]`
+2. Build: `uv run --script skill://cad-flow/scripts/run.py cad-model/scripts/cad_model.py run hw --label vN [--kernel auto]`
    → `hw/versions/vN/` and `hw/versions/latest.json`; JSON summary on stdout. `auto` runs each
    part in its declared kernel's own uv environment; `cadquery` or `build123d` additionally
    requires every part to declare that kernel.
-3. Check: `uv run --script skill://cad-model/scripts/cad_model.py check vN --hw hw [--out FILE]`
+3. Check: `uv run --script skill://cad-flow/scripts/run.py cad-model/scripts/cad_model.py check vN --hw hw [--out FILE]`
    → check result JSON; press fits and heat-set inserts declared in `hw/interfaces.yaml` are allowed
    to interfere automatically.
    `blocking_failures` names every failed blocking check.
-4. Diff: `uv run --script skill://cad-model/scripts/cad_model.py diff vA vB --hw hw` → per-part
+4. Diff: `uv run --script skill://cad-flow/scripts/run.py cad-model/scripts/cad_model.py diff vA vB --hw hw` → per-part
    volume and bbox deltas, added/removed parts, exact shared / A-only / B-only volumes.
 5. Recheck: write the check JSON with `--out`, then pass it to `cad-recheck` `stamp.py --checks`,
    adding `--passed` only when `check` exited 0. A check with `status: warn` is advisory.

@@ -5,7 +5,7 @@
 """Fidelity self-check over per-part STEP files: B-rep validity, form metrics, joint bores.
 
 Usage:
-    uv run --script form_check.py --hw HW --parts-dir DIR [--fidelity F0|F1|F2|F3]
+    uv run --script skill://cad-flow/scripts/run.py cad-design/scripts/form_check.py --hw HW --parts-dir DIR [--fidelity F0|F1|F2|F3]
         [--joint-tol 0.05] [--cnc-tool-radius 1.0] [--fdm-min-radius 1.0]
 
 Parts: one STEP per part in DIR, named `<PN>.step` (cad-motion `--parts-dir`

@@ -23,16 +23,16 @@ You are a CAD analyst. The cad-flow lead assigned you one analysis case on one i
 1. Read the brief: unit id, case id, kind (`sweep`, `assembly`, `stackup`, or `fea`), the version label vN, the requirements the case verifies, and the case inputs (loads, fixed faces, material, pose, stack). A brief without a unit id, kind, or version is BLOCKED.
 2. Keep every input and output under `.cad-work/<unit>/`.
 3. Run the case against `hw/versions/<vN>`:
-   - sweep: `uv run --script skill://cad-motion/scripts/sweep.py --hw hw --version <vN> --worst-step .cad-work/<unit>/worst.step` with the options the brief names.
-   - assembly: `uv run --script skill://cad-motion/scripts/freecad_assembly.py --hw hw --version <vN> --job-dir .cad-work/<unit>/job`.
+   - sweep: `uv run --script skill://cad-flow/scripts/run.py cad-motion/scripts/sweep.py --hw hw --version <vN> --worst-step .cad-work/<unit>/worst.step` with the options the brief names.
+   - assembly: `uv run --script skill://cad-flow/scripts/run.py cad-motion/scripts/freecad_assembly.py --hw hw --version <vN> --job-dir .cad-work/<unit>/job`.
    - stackup: write the stack YAML, then `uv run --script skill://cad-fits/scripts/stackup.py <stack.yaml>`.
-   - fea: write the case YAML (see `skill://cad-analysis`), then `uv run --script skill://cad-analysis/scripts/fea_static.py <case.yaml>`.
+   - fea: write the case YAML (see `skill://cad-analysis`), then `uv run --script skill://cad-flow/scripts/run.py cad-analysis/scripts/fea_static.py <case.yaml>`. A case at the worst-case pose sets `evidence:` to the sweep's `worst.step.json` instead of copying the pose.
 4. Check the face selectors, units, material, constraints, and warnings against the case before you rely on a result.
 5. Return the report.
 
 On a harness other than OMP, resolve `skill://<name>/` to that skill's directory.
 
-Run each `uv run --script` command as its own shell call from the project root, with no pipes, redirects, `;` or `&&` chains, or other commands; read files with the read tool. A sweep or FEA case can take 15 minutes, so give that call a 20-minute timeout where the shell tool takes one.
+Run each command through its documented launcher as its own shell call from the project root, with no pipes, redirects, `;` or `&&` chains; read files with the read tool. A sweep or FEA case can take 15 minutes, so give that call a 20-minute timeout where the shell tool takes one.
 
 ## Rules
 

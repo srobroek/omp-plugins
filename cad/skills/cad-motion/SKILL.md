@@ -48,10 +48,10 @@ Only independent joints take `--set`; setting a coupled one exits 2 and names it
 FreeCAD Assembly simulation drives every joint independently, so `freecad_assembly.py` refuses a
 record with couplings (exit 2). Verify coupled motion with `pose.py` and `sweep.py`.
 
-1. Pose: `uv run --script skill://cad-motion/scripts/pose.py --hw hw --version vN --set J-002=-90 --out posed.step`
+1. Pose: `uv run --script skill://cad-flow/scripts/run.py cad-motion/scripts/pose.py --hw hw --version vN --set J-002=-90 --out posed.step`
    → posed STEP AP242 with product names kept. A value outside [min, max] exits 1 with a
    `joint_limit` finding and writes no STEP.
-2. Sweep: `uv run --script skill://cad-motion/scripts/sweep.py --hw hw --version vN --worst-step worst.step
+2. Sweep: `uv run --script skill://cad-flow/scripts/run.py cad-motion/scripts/sweep.py --hw hw --version vN --worst-step worst.step
    [--steps 19] [--grid 3] [--min-clearance MM] [--include-pair REF:REF] [--end-effector REF]`
    → JSON: `collisions` (sample, independent and complete pose, pair, volume), `min_clearance` per
    pair with its pose, `limit_findings`, `reach_envelope`, `worst_case` (written to `--worst-step`,
@@ -61,7 +61,7 @@ record with couplings (exit 2). Verify coupled motion with `pose.py` and `sweep.
    `minimum_clearance` (smallest clearance margin), or `maximum_interference` (largest undeclared
    overlap). One-driver engine over 720 degrees at 5 degree steps:
    `uv run --script skill://cad-flow/scripts/run.py cad-motion/scripts/sweep.py --hw hw --version vN --steps 145 --grid 0 --worst-criterion minimum_clearance --worst-step worst.step`
-3. FreeCAD: `uv run --script skill://cad-motion/scripts/freecad_assembly.py --hw hw --version vN [--report-part REF]`
+3. FreeCAD: `uv run --script skill://cad-flow/scripts/run.py cad-motion/scripts/freecad_assembly.py --hw hw --version vN [--report-part REF]`
    → JSON: `frames`, start/mid/end `placements`, per-joint `limit_check`, `violations`, `residuals`.
 4. Record each result as a `verification.csv` row: `requirement_id` from requirements.yaml,
    `result` pass|fail from the exit code, `evidence` = script, inputs, pose, and key numbers.

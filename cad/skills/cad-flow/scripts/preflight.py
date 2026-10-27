@@ -55,21 +55,16 @@ class Runtime:
     script: Path  # the PEP 723 script whose header defines the environment
     imports: tuple[str, ...]
     distribution: str  # its version must equal the header's pin
-    shared: bool  # launched through cadmodel.scriptenv (keyed by dependency set), else `uv run --script` (by path)
 
-
-# The kernel runners are launched through cadmodel.scriptenv by cad-model's build.run_kernels;
-# the other scripts still run with `uv run --script`, so their environment is the one of their path.
+# Every PEP 723 script environment is shared by dependency set through cadmodel.scriptenv.
 RUNTIMES = (
-    Runtime("cadquery", MODEL_SCRIPTS / "run_cadquery.py", ("cadquery",), "cadquery", shared=True),
-    Runtime("build123d", MODEL_SCRIPTS / "run_build123d.py", ("build123d",), "build123d", shared=True),
-    Runtime("cad-model", MODEL_SCRIPTS / "cad_model.py", ("OCP", "trimesh", "yaml"), "cadquery-ocp-novtk",
-            shared=False),
-    Runtime("ocp-viewer", SKILLS / "cad-viewer" / "scripts" / "viewer.py", ("ocp_viewer",), "ocp_viewer",
-            shared=False),
+    Runtime("cadquery", MODEL_SCRIPTS / "run_cadquery.py", ("cadquery",), "cadquery"),
+    Runtime("build123d", MODEL_SCRIPTS / "run_build123d.py", ("build123d",), "build123d"),
+    Runtime("cad-model", MODEL_SCRIPTS / "cad_model.py", ("OCP", "trimesh", "yaml"), "cadquery-ocp-novtk"),
+    Runtime("ocp-viewer", SKILLS / "cad-viewer" / "scripts" / "viewer.py", ("ocp_viewer",), "ocp_viewer"),
 )
 CHROMIUM = Runtime("playwright-chromium", SKILLS / "cad-render" / "scripts" / "render.py", ("playwright",),
-                   "playwright", shared=False)
+                   "playwright")
 
 
 @dataclass(frozen=True)
@@ -154,15 +149,8 @@ def _run(argv: list[str], timeout: int) -> subprocess.CompletedProcess[str]:
 
 
 def _environment(uv: str, runtime: Runtime) -> tuple[list[str], int]:
-    """argv prefix running Python in `runtime`'s environment, and the time budget for one call."""
-    script = runtime.script
-    if runtime.shared:  # one call resolves, installs, and runs; uv caches the shared environment
-        return scriptenv.python_command(script, uv=uv), SYNC_TIMEOUT + IMPORT_TIMEOUT
-    _run([uv, "sync", "--script", str(script)], SYNC_TIMEOUT)
-    python = _run([uv, "python", "find", "--script", str(script)], 30).stdout.strip()
-    if not python:
-        raise RuntimeError(f"uv python find --script {script.name} printed no interpreter")
-    return [python], IMPORT_TIMEOUT
+    """argv prefix running Python in the environment shared by the script's dependency set."""
+    return scriptenv.python_command(runtime.script, uv=uv), SYNC_TIMEOUT + IMPORT_TIMEOUT
 
 
 def _python(environment: tuple[list[str], int], code: str) -> Any:
@@ -176,11 +164,10 @@ def _python(environment: tuple[list[str], int], code: str) -> Any:
     return json.loads(marker)
 
 
-def _where(runtime: Runtime, module_file: str) -> str:
+def _where(module_file: str) -> str:
     site = next((parent for parent in Path(module_file).parents if parent.name == "site-packages"),
                 Path(module_file).parent)
-    kind = "shared by dependency set" if runtime.shared else f"of {runtime.script.name}'s path"
-    return f"{site} (environment {kind})"
+    return f"{site} (environment shared by dependency set)"
 
 
 def _runtime_check(uv: str, runtime: Runtime) -> Check:
@@ -201,7 +188,7 @@ def _runtime_check(uv: str, runtime: Runtime) -> Check:
         return _check(name, name, "fail", f"{runtime.distribution} {found['version']} imported; "
                       f"{runtime.script.name} pins {expected}.", guidance)
     return _check(name, name, "pass", f"{runtime.distribution} {expected} imports from "
-                  f"{_where(runtime, found['file'])}.", "")
+                  f"{_where(found['file'])}.", "")
 
 
 def _chromium_check(uv: str, install: bool = False) -> Check:

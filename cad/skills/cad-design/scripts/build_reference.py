@@ -46,6 +46,8 @@ from typing import Any
 HERE = Path(__file__).resolve().parent
 SKILL = HERE.parent
 CAD_MODEL_SCRIPTS = SKILL.parent / "cad-model" / "scripts"
+sys.path.insert(0, str(CAD_MODEL_SCRIPTS))
+from cadmodel import scriptenv  # noqa: E402 - standard library helper
 DEFAULT_HW = SKILL.parent / "cad-record" / "assets" / "project-template" / "hw"
 REFERENCE = SKILL / "assets" / "reference" / "lamp-arm"
 ENV_MARKER = "CAD_DESIGN_BUILD_ENV"
@@ -54,8 +56,7 @@ ENV_MARKER = "CAD_DESIGN_BUILD_ENV"
 def reexec_in_script_env(argv: list[str]) -> int:
     env = {**os.environ, ENV_MARKER: "1"}
     try:
-        return subprocess.run(["uv", "run", "--quiet", "--script", str(Path(__file__).resolve()), *argv],
-                              env=env).returncode
+        return subprocess.run(scriptenv.script_command(Path(__file__).resolve(), *argv), env=env).returncode
     except FileNotFoundError:
         print(json.dumps({"kernel": None, "parts": {}, "errors": ["uv is not on PATH"]}))
         return 2
