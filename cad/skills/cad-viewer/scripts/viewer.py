@@ -14,6 +14,7 @@ Usage:
     uv run --script viewer.py stop
     uv run --script viewer.py show HW [--version vN|latest] [--check CHECK.json]
     uv run --script viewer.py compare vA vB --hw HW [--check-a FILE] [--check-b FILE]
+    uv run --script viewer.py gallery HW [--version vN|latest]
     uv run --script viewer.py mode single|split [--active A|B]
     uv run --script viewer.py parts hide|iso|ghost|reset [PN|GROUP]
     uv run --script viewer.py animate --joint J-002 --from -120 --to 0 [--steps 13] [--seconds 4] [--at 0..1]
@@ -87,6 +88,10 @@ def build_parser() -> argparse.ArgumentParser:
     compare.add_argument("--check-a", type=Path)
     compare.add_argument("--check-b", type=Path)
 
+    gallery = sub.add_parser("gallery", help="open HW in the preview gallery; prints its URL and every file path")
+    gallery.add_argument("hw", type=Path, help="hardware record directory (hw/)")
+    gallery.add_argument("--version", default="latest", help="vN or latest (default)")
+
     mode = sub.add_parser("mode", help="switch A/B: one version, or side-by-side")
     mode.add_argument("mode", choices=("single", "split"))
     mode.add_argument("--active", choices=("A", "B"), default="A")
@@ -142,6 +147,8 @@ def request_body(args: argparse.Namespace) -> tuple[str, str, dict[str, Any]]:
     if args.command == "compare":
         return "POST", "/api/compare", {"hw": path(args.hw), "a": args.a, "b": args.b,
                                         "check_a": path(args.check_a), "check_b": path(args.check_b)}
+    if args.command == "gallery":
+        return "POST", "/api/gallery", {"hw": path(args.hw), "version": args.version}
     if args.command == "mode":
         return "POST", "/api/mode", {"mode": args.mode, "active": args.active}
     if args.command == "parts":
@@ -163,14 +170,15 @@ def request_body(args: argparse.Namespace) -> tuple[str, str, dict[str, Any]]:
     raise ViewerError(f"{args.command} is not a host request")
 
 
-def summarise(command: str, answer: dict[str, Any]) -> dict[str, Any]:
-    """Short stdout for state-returning commands: what each slot shows and the view state."""
-    if "versions" not in answer:
+def summarise(command: str, answer: dict[str, Any], base_url: str) -> dict[str, Any]:
+    """Short stdout for state-returning commands: what each slot shows, the view state, and the
+    preview gallery URL of each shown version."""
+    if "versions" not in answer or command == "gallery":
         return answer
+    versions = {k: {"label": v["label"], "parts": len(v["parts"]), "check": (v.get("check") or {}).get("status"),
+                    "gallery": f"{base_url}gallery?version={v['label']}"} for k, v in answer["versions"].items()}
     return {"status": "pass", "command": command, "mode": answer["mode"], "active": answer["active"],
-            "slots": answer["slots"], "view": answer["view"],
-            "versions": {k: {"label": v["label"], "parts": len(v["parts"]),
-                             "check": (v.get("check") or {}).get("status")} for k, v in answer["versions"].items()}}
+            "slots": answer["slots"], "view": answer["view"], "versions": versions}
 
 
 def run(args: argparse.Namespace) -> int:
@@ -191,7 +199,7 @@ def run(args: argparse.Namespace) -> int:
     method, route, body = request_body(args)
     if args.command == "capture":  # the host writes only into an existing folder
         args.out.resolve().parent.mkdir(parents=True, exist_ok=True)
-    answer = summarise(args.command, session.call(live, method, route, body))
+    answer = summarise(args.command, session.call(live, method, route, body), live["url"])
     answer.setdefault("status", "pass")
     emit(answer)
     return 0 if answer["status"] == "pass" else 1
