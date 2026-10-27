@@ -1,0 +1,227 @@
+/* cad-viewer preview gallery. Builds on panel.css (bar, badge, buttons, pills, headings); every
+ * colour, space, radius, and type value here resolves to a token in cad-concept's tokens.css. */
+
+html,
+body {
+  height: auto;
+}
+
+.field {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.field-label {
+  color: var(--color-fg-muted);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+
+.select {
+  min-height: var(--target-min);
+  padding: 0 var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-1);
+  background: var(--color-surface-raised);
+  color: var(--color-fg);
+  font: inherit;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  transition: border-color var(--duration-fast) var(--ease-standard);
+}
+
+.select:hover:not(:disabled) {
+  border-color: var(--color-border-strong);
+}
+
+.select:disabled {
+  cursor: progress;
+  color: var(--color-fg-muted);
+}
+
+.link-button {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+}
+
+.select:focus-visible,
+.tile-image:focus-visible,
+.tile-link:focus-visible,
+.materials summary:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.gallery {
+  display: grid;
+  gap: var(--space-6);
+  padding: var(--space-4);
+}
+
+.gallery[aria-busy="true"] .tiles {
+  opacity: 0.5;
+}
+
+.project {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin: 0;
+}
+
+.path {
+  min-width: 0;
+  color: var(--color-fg-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
+#sections {
+  display: grid;
+  gap: var(--space-6);
+}
+
+.gallery-section {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.gallery-section h2 {
+  margin: 0;
+}
+
+.section-source {
+  margin: 0;
+}
+
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--panel-width)), 1fr));
+  gap: var(--space-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tile {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-2);
+  background: var(--color-surface-raised);
+  transition: border-color var(--duration-fast) var(--ease-standard);
+}
+
+.tile:hover {
+  border-color: var(--color-border-strong);
+}
+
+.tile-image {
+  display: block;
+  aspect-ratio: 4 / 3;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-canvas);
+}
+
+.tile-image:focus-visible {
+  outline-offset: calc(-1 * var(--space-1));
+}
+
+.tile-image img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.tile-body {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  font-size: var(--text-sm);
+}
+
+.tile-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.tile-title {
+  font-weight: var(--weight-semibold);
+  overflow-wrap: anywhere;
+}
+
+.facts {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.fact {
+  overflow-wrap: anywhere;
+}
+
+.fact[data-tone="fail"] {
+  color: var(--color-danger);
+}
+
+.fact-key {
+  color: var(--color-fg-muted);
+}
+
+.fact[data-tone="warn"],
+.facts[data-tone="warn"],
+.materials[data-tone="warn"] summary,
+.materials[data-tone="warn"] li {
+  color: var(--color-accent-strong);
+}
+
+.materials summary {
+  min-height: var(--target-min);
+  display: flex;
+  align-items: center;
+  color: var(--color-fg-muted);
+  cursor: pointer;
+}
+
+.materials ul {
+  margin: 0;
+  padding-left: var(--space-4);
+}
+
+.tile-link {
+  display: inline-flex;
+  align-items: center;
+  justify-self: start;
+  min-height: var(--target-min);
+  color: var(--color-focus);
+  font-weight: var(--weight-medium);
+}
+
+.path-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
+.path-row .path {
+  flex: 1 1 auto;
+  padding-top: var(--space-1);
+}
+
+.path-row .button {
+  flex: none;
+  white-space: nowrap;
+}
