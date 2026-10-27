@@ -19,7 +19,6 @@ import sys
 import tempfile
 import threading
 import unittest
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 CAD = Path(__file__).resolve().parents[1]
@@ -27,7 +26,7 @@ REVIEWERS = ("cad-mech-reviewer", "cad-dfm-reviewer")
 
 sys.path.insert(0, str(CAD / "evals"))
 from adapters.claude import resolve_launcher  # noqa: E402
-from adapters.kiro import _APP_SUPPORT, copy_login, login_expiry  # noqa: E402
+from adapters.kiro import _APP_SUPPORT, _token, copy_login  # noqa: E402
 from adapters.opencode import resolve_bin  # noqa: E402
 
 
@@ -152,9 +151,8 @@ class KiroWorkspaceInstall(InstallTest):
         if kiro is None:
             self.skipTest("kiro-cli is not installed")
         user_db = Path.home().joinpath(*_APP_SUPPORT, "data.sqlite3")
-        expires = login_expiry(user_db)
-        if expires is None or expires < datetime.now(timezone.utc) + timedelta(minutes=2):
-            self.skipTest("no current Kiro login to copy; `kiro-cli agent list` requires one")
+        if _token(user_db) is None:
+            self.skipTest("no Kiro login to copy; `kiro-cli agent list` requires one")
         self.stage_workspace()
         env = isolated_env(self.root, str(self.root / "home" / ".local" / "bin"))
         store = self.root.joinpath("home", *_APP_SUPPORT)
