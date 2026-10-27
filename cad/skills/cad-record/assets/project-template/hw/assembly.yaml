@@ -1,10 +1,28 @@
+occurrences:
+  # One DIN 471 ring definition (LMP-0011, part_local), placed in the three pin grooves at the zero pose.
+  - id: ring-base
+    PN: LMP-0011
+    placement:
+      translation_mm: [0, 0, 21.495]
+      rotation: {axis: [1, 0, 0], angle_deg: 180}
+  - id: ring-elbow
+    PN: LMP-0011
+    placement:
+      translation_mm: [160, -11.005, 40]
+      rotation: {axis: [1, 0, 0], angle_deg: 90}
+  - id: ring-head
+    PN: LMP-0011
+    placement:
+      translation_mm: [360, -8.505, 40]
+      rotation: {axis: [1, 0, 0], angle_deg: 90}
 subassemblies:
   - id: base_sub
     title: Base subassembly (base plate and pivot boss, its bushing)
     parts: [LMP-0001, LMP-0008]
   - id: arm_sub
     title: Arm subassembly (lower link, upper link, and head, with pins, bushing, insert, and rings)
-    parts: [LMP-0002, LMP-0003, LMP-0004, LMP-0005, LMP-0006, LMP-0007, LMP-0009, LMP-0010, LMP-0011, LMP-0012, LMP-0013]
+    parts: [LMP-0002, LMP-0003, LMP-0004, LMP-0005, LMP-0006, LMP-0007, LMP-0009, LMP-0010]
+    occurrences: ["@ring-base", "@ring-elbow", "@ring-head"]
 joints:
   - id: J-001
     type: revolute
@@ -90,7 +108,7 @@ joints:
   - id: J-010
     type: fixed
     parent: LMP-0005
-    child: LMP-0011
+    child: "@ring-base"
     axis: [0, 0, 1]
     origin: [0, 0, 40]
     min: 0
@@ -99,7 +117,7 @@ joints:
   - id: J-011
     type: fixed
     parent: LMP-0006
-    child: LMP-0012
+    child: "@ring-elbow"
     axis: [0, 1, 0]
     origin: [160, 0, 40]
     min: 0
@@ -108,7 +126,7 @@ joints:
   - id: J-012
     type: fixed
     parent: LMP-0007
-    child: LMP-0013
+    child: "@ring-head"
     axis: [0, 1, 0]
     origin: [360, 0, 40]
     min: 0

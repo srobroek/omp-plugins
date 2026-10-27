@@ -28,6 +28,8 @@ KERNELS = ("cadquery", "build123d")
 RUNNERS = {kernel: SCRIPTS / f"run_{kernel}.py" for kernel in KERNELS}
 ORCHESTRATOR_DISTS = ("cadquery-ocp-novtk", "trimesh", "numpy", "pyyaml")
 FEATURES_FILE = "drawing-features.json"  # the drawing_features hook results of one version
+# part-map.json, metrics.json and manifest.json format: 2 adds occurrences; files without the key are version 1
+SCHEMA_VERSION = 2
 
 
 class UsageError(RuntimeError):
@@ -42,6 +44,7 @@ class PartSource:
     mass_target_g: float | None
     model: Path
     kernel: str | None  # declared KERNEL, None when missing or not a string literal
+    model_frame: str  # part.yaml model_frame: assembly_zero (default) or part_local
 
     @property
     def product(self) -> str:
@@ -102,7 +105,8 @@ def discover(hw: Path) -> tuple[list[PartSource], list[dict[str, Any]]]:
         target = record.get("mass_target")
         parts.append(PartSource(pn, record["title"], record.get("material"),
                                 float(target) if isinstance(target, (int, float)) else None,
-                                model.resolve(), declared_kernel(model)))
+                                model.resolve(), declared_kernel(model),
+                                str(record.get("model_frame", "assembly_zero"))))
     if not parts and not findings:
         raise UsageError(f"no hw/parts/<PN>/model.py under {hw}")
     return parts, findings
@@ -214,11 +218,13 @@ def orchestrator_tools() -> dict[str, str]:
 
 
 def part_metrics(shape: Any, source: PartSource, table: dict[str, float]) -> dict[str, Any]:
+    """Definition-level metrics of one PN, in its model frame."""
     vol, centre = occ.mass_properties(shape)
     low, high = occ.bbox(shape)
     density = density_for(source.material, table)
     return {
         "product": source.product,
+        "model_frame": source.model_frame,
         "material": source.material,
         "density_g_cm3": density,
         "volume_mm3": vol,
@@ -231,6 +237,23 @@ def part_metrics(shape: Any, source: PartSource, table: dict[str, float]) -> dic
         "shells": occ.count(shape, "SHELL"),
         "faces": occ.count(shape, "FACE"),
         "holes": holes.holes(shape),
+    }
+
+
+def occurrence_metrics(pn: str, shape: Any, rigid: Any, part: Mapping[str, Any]) -> dict[str, Any]:
+    """One occurrence at the built pose: its placement, the box of its placed geometry (not a rotated
+    definition box) and its centre and holes carried by the placement."""
+    pose = load_pose()
+    low, high = occ.bbox(pose.placed(shape, rigid))
+    turn = pose.Rigid(rigid.rot, (0.0, 0.0, 0.0))
+    return {
+        "PN": pn,
+        "transform": rigid.rows(9),
+        "centre_of_volume_mm": list(rigid.apply(tuple(part["centre_of_volume_mm"]))),
+        "bbox_mm": {"min": list(low), "max": list(high), "size": [high[i] - low[i] for i in range(3)]},
+        "holes": [{**hole, "axis": [round(c, 9) + 0.0 for c in turn.apply(tuple(hole["axis"]))],
+                   "position": [round(c, 6) + 0.0 for c in rigid.apply(tuple(hole["position"]))]}
+                  for hole in part["holes"]],
     }
 
 
@@ -256,7 +279,7 @@ def run(hw: Path, label: str, kernel: str, attach: Iterable[str]) -> tuple[int, 
     sources, findings = discover(hw)
     by_pn = {p.pn: p for p in sources}
     assembly = pose.load_assembly(hw)
-    joints = [*assembly.joints, *pose.attach_joints(attach)]
+    attached = pose.attach_joints(attach, assembly)
     groups, kernel_findings = select_kernels(sources, kernel)
     findings += kernel_findings
     if findings:
@@ -266,7 +289,7 @@ def run(hw: Path, label: str, kernel: str, attach: Iterable[str]) -> tuple[int, 
     shutil.rmtree(work, ignore_errors=True)
     (work / "parts").mkdir(parents=True)
     try:
-        results = run_kernels({k: [{"pn": p.pn, "name": p.product, "model": str(p.model),
+        results = run_kernels({k: [{"pn": p.pn, "name": p.product, "model_frame": p.model_frame, "model": str(p.model),
                                     "step": str(work / "parts" / f"{p.pn}.step")} for p in members]
                                for k, members in groups.items()})
         timings["kernels_s"] = round(time.perf_counter() - started, 3)
@@ -277,37 +300,51 @@ def run(hw: Path, label: str, kernel: str, attach: Iterable[str]) -> tuple[int, 
                        "runners": {k: {"import_s": r["import_s"], "wall_s": r["wall_s"]} for k, r in results.items()}}
 
         built = {pn: (k, res) for k, result in results.items() for pn, res in result["parts"].items()}
-        parts = pose.load_parts(hw, parts_dir=work / "parts")
-        chain = pose.build_chain(joints, parts)
+        parts = pose.load_definitions(hw, work / "parts")
+        chain = pose.assembly_chain(assembly, parts, attached)
         pose.require_geometry(chain, parts)
         values = chain.complete({})
-        transforms = chain.transforms(values)
+        transforms, motions = chain.transforms(values), chain.motions(values)
         top = f"{pose.product_id(hw)} {label}"
-        pose.write_step(work / "assembly.step", top, [(parts[pn], transforms[pn]) for pn in chain.parts])
+        pose.write_assembly_step(work / "assembly.step", top, parts, [chain.inventory.get(i) for i in chain.ids],
+                                 transforms)
         mark = time.perf_counter()
         glb_info = mesh.write_glb(work / "assembly.step", work / "assembly.glb")
-        mapping = mesh.part_map(work / "assembly.glb", {pn: by_pn[pn].product for pn in parts})
+        mapping = mesh.part_map(work / "assembly.glb", chain, {pn: by_pn[pn].product for pn in parts})
         timings["glb_s"] = round(time.perf_counter() - mark, 3)
-        write_json(work / "part-map.json", {"glb": "assembly.glb", "match": "node name starts with the PN",
-                                            "parts": mapping})
+        write_json(work / "part-map.json", {"schema_version": SCHEMA_VERSION, **mapping})
 
         table = load_densities()
         metrics = {pn: part_metrics(parts[pn].shape, by_pn[pn], table) for pn in sorted(parts)}
-        known = [m["mass_g"] for m in metrics.values() if m["mass_g"] is not None]
+        placed = {oid: occurrence_metrics(chain.pn(oid), parts[chain.pn(oid)].shape, transforms[oid],
+                                          metrics[chain.pn(oid)]) for oid in chain.ids}
+        quantity = {pn: sum(1 for oid in chain.ids if chain.pn(oid) == pn) for pn in parts}
         write_json(work / "metrics.json", {
-            "label": label, "frame": "assembly coordinates at the zero pose", "units": {"length": "mm", "mass": "g"},
+            "schema_version": SCHEMA_VERSION, "label": label,
+            "frame": ("parts: each PN's model_frame (assembly_zero: assembly coordinates at the zero pose); "
+                      "occurrences: assembly coordinates at the built (nominal) pose"),
+            "units": {"length": "mm", "mass": "g"},
             "density_table": str(MATERIALS.relative_to(SCRIPTS.parent)),
             "parts": metrics,
-            "totals": {"volume_mm3": sum(m["volume_mm3"] for m in metrics.values()), "mass_g": sum(known),
-                       "parts_without_density": sorted(pn for pn, m in metrics.items() if m["mass_g"] is None)},
+            "occurrences": placed,
+            "totals": {"volume_mm3": sum(metrics[o["PN"]]["volume_mm3"] for o in placed.values()),
+                       "mass_g": sum(metrics[o["PN"]]["mass_g"] for o in placed.values()
+                                     if metrics[o["PN"]]["mass_g"] is not None),
+                       "quantity": quantity,
+                       "parts_without_density": sorted(pn for pn, m in metrics.items() if m["mass_g"] is None),
+                       "occurrences_without_density": sorted(oid for oid, o in placed.items()
+                                                             if metrics[o["PN"]]["mass_g"] is None)},
         })
         features = {pn: built[pn][1]["drawing_features"] for pn in sorted(parts)
                     if built[pn][1]["drawing_features"] is not None}
         if features:
-            write_json(work / FEATURES_FILE, {"label": label, "frame": "assembly_zero", "units": {"length": "mm"},
+            write_json(work / FEATURES_FILE, {"label": label, "units": {"length": "mm"},
+                                              "frames": {pn: by_pn[pn].model_frame for pn in features},
                                               "parts": features})
 
+        group_of = {member: group.id for group in assembly.groups for member in group.members}
         manifest = {
+            "schema_version": SCHEMA_VERSION,
             "label": label,
             "number": number,
             "created_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -316,9 +353,16 @@ def run(hw: Path, label: str, kernel: str, attach: Iterable[str]) -> tuple[int, 
             "kernel_option": kernel,
             "assembly_yaml_sha256": sha256(hw / "assembly.yaml"),
             "attach": list(attach),
-            "pose": {"values": values, "transforms": {pn: transforms[pn].rows(9) for pn in chain.parts}},
-            "joint_pairs": sorted(({"pair": sorted([j.parent, j.child]), "joint": j.id, "type": j.type} for j in joints),
-                                  key=lambda entry: (entry["pair"], entry["joint"])),
+            "occurrences": {oid: {"PN": chain.pn(oid), "ref": chain.ref(oid),
+                                  "explicit": chain.inventory.get(oid).explicit, "group": group_of.get(oid),
+                                  "rest": chain.rests[oid].rows(9)} for oid in chain.ids},
+            "pose": {"values": values, "transforms": {oid: transforms[oid].rows(9) for oid in chain.ids},
+                     "motions": {oid: motions[oid].rows(9) for oid in chain.ids}},
+            "joints": [{"id": j.id, "type": j.type, "parent": j.parent, "child": j.child, "axis": list(j.axis),
+                        "origin": list(j.origin), "min": j.min, "max": j.max, "nominal": j.nominal}
+                       for j in chain.joints],
+            "joint_pairs": sorted(({"pair": sorted([j.parent, j.child]), "joint": j.id, "type": j.type}
+                                   for j in chain.joints), key=lambda entry: (entry["pair"], entry["joint"])),
             "ground": chain.root,
             "glb": glb_info,
             "tools": {"orchestrator": orchestrator_tools(),
@@ -326,9 +370,12 @@ def run(hw: Path, label: str, kernel: str, attach: Iterable[str]) -> tuple[int, 
             "parts": {pn: {
                 "title": by_pn[pn].title,
                 "product": by_pn[pn].product,
+                "model_frame": by_pn[pn].model_frame,
+                "occurrences": [oid for oid in chain.ids if chain.pn(oid) == pn],
                 "kernel": built[pn][0],
                 "model": str(by_pn[pn].model.relative_to(hw)),
                 "source_sha256": sha256(by_pn[pn].model),
+                "record_sha256": sha256(by_pn[pn].model.parent / "part.yaml"),
                 "params": built[pn][1]["params"],
                 "kernel_volume_mm3": built[pn][1]["kernel_volume_mm3"],
                 "kernel_solids": built[pn][1]["kernel_solids"],
@@ -357,7 +404,7 @@ def run(hw: Path, label: str, kernel: str, attach: Iterable[str]) -> tuple[int, 
     return 0, {
         "status": "pass", "label": label, "version_dir": str(final),
         "parts": {pn: {"kernel": built[pn][0], "volume_mm3": metrics[pn]["volume_mm3"], "solids": metrics[pn]["solids"],
-                       "mass_g": metrics[pn]["mass_g"]} for pn in sorted(parts)},
+                       "mass_g": metrics[pn]["mass_g"], "quantity": quantity[pn]} for pn in sorted(parts)},
         "latest": str(versions / "latest.json"),
         "timings_s": {**timings, **{f"{k}_import_s": r["import_s"] for k, r in results.items()},
                       **{f"{k}_runner_wall_s": r["wall_s"] for k, r in results.items()}},

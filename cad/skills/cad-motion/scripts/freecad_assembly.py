@@ -7,22 +7,26 @@ and check every frame against the joint limits.
 
 Usage:
     uv run --script freecad_assembly.py --hw HW (--step ASSEMBLY.step | --parts-dir DIR | --version vN|latest)
-        [--attach PN=PARENT_PN ...] [--report-part PN ...] [--time-step 0.01]
+        [--attach REF=PARENT_REF ...] [--report-part REF ...] [--time-step 0.01]
         [--freecad FREECADCMD] [--job-dir DIR] [--timeout 600]
 
-Inputs and kinematics are pose.py's (same options, same chain). The job:
-writes one STEP per part into the job directory, imports each into a FreeCAD
-Assembly, grounds the chain's ground part, creates one joint per record joint
+Inputs and kinematics are pose.py's (same options, same occurrence chain). The
+job: writes one STEP per part definition into the job directory, imports it
+once per occurrence into a FreeCAD Assembly at the occurrence's placement,
+grounds the chain's ground occurrence, creates one joint per record joint
 (revolute -> Revolute, prismatic -> Slider, fixed -> Fixed) with the joint
-frame (origin, Z along axis) as both connector placements and the limit
-properties enabled, and adds one simulation that drives every movable joint
-with `min + (max - min) * time` over time 0..1. FreeCAD generates the frames;
-the job records every part's placement per frame.
+frame J (origin, Z along axis) expressed in each object's own frame,
+P_parent^-1 J and P_child^-1 J (P the rest placement), as its connector
+placements and the limit properties enabled, and adds one simulation that
+drives every movable joint with `min + (max - min) * time` over time 0..1.
+FreeCAD generates the frames; the job records every occurrence's placement
+per frame.
 
 FreeCAD's solver does not enforce joint limits, so this script measures each
-joint's value per frame from the parent and child placements and checks it
-against [min, max]. It also reports the residual (how far a frame departs from
-the joint's freedom) as a solver-consistency check.
+joint's value per frame from the parent and child motions (placements with the
+rest placements stripped) and checks it against [min, max]. It also reports
+the residual (how far a frame departs from the joint's freedom) as a
+solver-consistency check.
 
 freecadcmd can exit 139 after finishing. The result counts only when the job
 printed this run's completion marker and wrote a fresh result file carrying
@@ -102,14 +106,20 @@ try:
     assembly = doc.addObject("Assembly::AssemblyObject", "Assembly")
     assembly.Type = "Assembly"
     objects = {}
+    rest_inverse = {}
+    shapes = {}
     for part in SPEC["parts"]:
-        obj = doc.addObject("Part::Feature", part["pn"].replace("-", "_"))
+        obj = doc.addObject("Part::Feature", "".join(c if c.isalnum() else "_" for c in part["id"]))
         obj.Label = part["name"]
-        obj.Shape = Part.read(part["path"])
+        if part["path"] not in shapes:
+            shapes[part["path"]] = Part.read(part["path"])
+        obj.Shape = shapes[part["path"]]
         base, quaternion = part["start_placement"]
         obj.Placement = App.Placement(App.Vector(*base), App.Rotation(*quaternion))
+        base, quaternion = part["rest_inverse"]
+        rest_inverse[part["id"]] = App.Placement(App.Vector(*base), App.Rotation(*quaternion))
         assembly.addObject(obj)
-        objects[part["pn"]] = obj
+        objects[part["id"]] = obj
     doc.recompute()
 
     group = assembly.newObject("Assembly::JointGroup", "Joints")
@@ -122,12 +132,14 @@ try:
         joint.Label = record["id"]
         joint.Reference1 = (objects[record["parent"]], [""])
         joint.Reference2 = (objects[record["child"]], [""])
+        # The joint frame J is in assembly coordinates at the zero pose; each connector is J in its
+        # object's own frame, P^-1 J, so a differently placed occurrence of one definition still meets it.
         frame = App.Placement(App.Vector(*record["origin"]),
                               App.Rotation(App.Vector(0, 0, 1), App.Vector(*record["axis"])))
         joint.Detach1 = True
         joint.Detach2 = True
-        joint.Placement1 = frame
-        joint.Placement2 = frame
+        joint.Placement1 = rest_inverse[record["parent"]].multiply(frame)
+        joint.Placement2 = rest_inverse[record["child"]].multiply(frame)
         if record["type"] == "revolute":
             joint.EnableAngleMin = joint.EnableAngleMax = True
             joint.AngleMin, joint.AngleMax = record["min"], record["max"]
@@ -152,7 +164,7 @@ try:
     frames = []
     for index in range(count):
         assembly.updateForFrame(index)
-        frames.append({pn: [list(obj.Placement.Base), list(obj.Placement.Rotation.Q)] for pn, obj in objects.items()})
+        frames.append({oid: [list(obj.Placement.Base), list(obj.Placement.Rotation.Q)] for oid, obj in objects.items()})
     finish({"version": list(App.Version()[:4]), "frames": frames})
 except Exception:
     finish({"error": traceback.format_exc()})
@@ -175,6 +187,7 @@ def motion_formula(joint: Any) -> str:
 
 def job_spec(chain: Any, part_paths: dict[str, Path], names: dict[str, str], run_id: str,
              result: Path, time_step: float) -> dict[str, Any]:
+    """The FreeCAD job: one object per occurrence id, `part_paths` and `names` per PN."""
     # Parts start at the motion's time-0 pose (every joint at min): solving from
     # the zero pose straight to a start angle far from it can land FreeCAD on
     # the joint's other branch, 180 degrees off.
@@ -186,9 +199,10 @@ def job_spec(chain: Any, part_paths: dict[str, Path], names: dict[str, str], run
         "time_step": time_step,
         "root": chain.root,
         "parts": [
-            {"pn": pn, "name": names[pn], "path": str(part_paths[pn]),
-             "start_placement": [list(start[pn].trans), list(start[pn].quaternion())]}
-            for pn in chain.parts
+            {"id": oid, "pn": chain.pn(oid), "name": names[chain.pn(oid)], "path": str(part_paths[chain.pn(oid)]),
+             "start_placement": [list(start[oid].trans), list(start[oid].quaternion())],
+             "rest_inverse": [list(chain.rests[oid].inverse().trans), list(chain.rests[oid].inverse().quaternion())]}
+            for oid in chain.ids
         ],
         "joints": [
             {"id": j.id, "name": "Joint_" + "".join(c if c.isalnum() else "_" for c in j.id), "type": j.type,
@@ -236,7 +250,11 @@ def run_job(freecad: Path, job_dir: Path, spec: dict[str, Any], timeout: float) 
 
 
 def check_frames(chain: Any, frames: list[dict[str, list[list[float]]]]) -> dict[str, Any]:
-    """Measure every joint in every frame; report limits, residuals, and violations."""
+    """Measure every joint in every frame; report limits, residuals, and violations.
+
+    A frame holds each occurrence's placement T = D P; the joint is measured on the motions
+    D = T P^-1, so a rest placement never reads as joint motion.
+    """
     joints: dict[str, dict[str, Any]] = {}
     violations: list[dict[str, Any]] = []
     residuals: list[dict[str, Any]] = []
@@ -246,9 +264,10 @@ def check_frames(chain: Any, frames: list[dict[str, list[list[float]]]]) -> dict
                             "observed_min": None, "observed_max": None, "violations": 0,
                             "max_residual_deg": 0.0, "max_residual_mm": 0.0}
     for index, frame in enumerate(frames):
-        placements = {pn: pose.Rigid.from_quaternion(q, base) for pn, (base, q) in frame.items()}
+        motions = {oid: pose.Rigid.from_quaternion(q, base) @ chain.rests[oid].inverse()
+                   for oid, (base, q) in frame.items()}
         for joint in chain.joints:
-            value, residual_deg, residual_mm = joint.measure(placements[joint.parent].inverse() @ placements[joint.child])
+            value, residual_deg, residual_mm = joint.measure(motions[joint.parent].inverse() @ motions[joint.child])
             entry = joints[joint.id]
             entry["max_residual_deg"] = max(entry["max_residual_deg"], residual_deg)
             entry["max_residual_mm"] = max(entry["max_residual_mm"], residual_mm)
@@ -279,22 +298,24 @@ def check_frames(chain: Any, frames: list[dict[str, list[list[float]]]]) -> dict
     return {"joints": joints, "violations": violations, "residuals": residuals, "range_findings": range_findings}
 
 
-def frame_placements(frames: list[dict[str, Any]], parts: list[str]) -> dict[str, dict[str, Any]]:
+def frame_placements(frames: list[dict[str, Any]], chain: Any, occurrences: list[str]) -> dict[str, dict[str, Any]]:
+    """Start, mid and end placements per reported occurrence, keyed by its reference."""
     picks = {"start": 0, "mid": len(frames) // 2, "end": len(frames) - 1}
     report: dict[str, dict[str, Any]] = {}
-    for pn in parts:
-        report[pn] = {}
+    for oid in occurrences:
+        report[chain.ref(oid)] = {}
         for label, index in picks.items():
-            base, q = frames[index][pn]
-            report[pn][label] = {"frame": index, "base": [round(v, 4) for v in base], "quaternion": [round(v, 6) for v in q]}
+            base, q = frames[index][oid]
+            report[chain.ref(oid)][label] = {"frame": index, "base": [round(v, 4) for v in base],
+                                             "quaternion": [round(v, 6) for v in q]}
     return report
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="FreeCAD Assembly simulation with limit checks")
     pose.add_geometry_arguments(parser)
-    parser.add_argument("--report-part", action="append", default=[], metavar="PN",
-                        help="part whose start/mid/end placements are reported (default: every joint child)")
+    parser.add_argument("--report-part", action="append", default=[], metavar="REF",
+                        help="occurrence whose start/mid/end placements are reported (default: every joint child)")
     parser.add_argument("--time-step", type=float, default=0.01, help="simulation output step over time 0..1")
     parser.add_argument("--freecad", type=Path, help="freecadcmd binary")
     parser.add_argument("--job-dir", type=Path, help="keep the generated job here (default: a temporary directory)")
@@ -310,23 +331,21 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     temporary = None
     try:
-        _, chain, parts = pose.load_inputs(args)
-        report_parts = args.report_part or [j.child for j in chain.movable]
-        unknown = [pn for pn in report_parts if pn not in chain.parts]
-        if unknown:
-            raise pose.MotionError(f"--report-part names parts outside the chain: {unknown}")
+        _, chain, definitions = pose.load_inputs(args)
+        report = ([chain.resolve(ref, "--report-part: ") for ref in args.report_part] if args.report_part
+                  else [j.child for j in chain.movable])
         if args.job_dir:
             job_dir = args.job_dir.resolve()
             job_dir.mkdir(parents=True, exist_ok=True)
         else:
             temporary = tempfile.TemporaryDirectory(prefix="cad-motion-")
             job_dir = Path(temporary.name)
-        paths = {}
-        for pn in chain.parts:
-            paths[pn] = job_dir / f"{pn}.step"
-            pose.write_step(paths[pn], None, [(parts[pn], pose.Rigid.identity())])
+        pns = sorted({chain.pn(oid) for oid in chain.ids})
+        paths = {pn: job_dir / f"{pn}.step" for pn in pns}
+        for pn in pns:
+            pose.write_part_step(paths[pn], definitions[pn])
         run_id = uuid.uuid4().hex
-        spec = job_spec(chain, paths, {pn: parts[pn].name for pn in chain.parts}, run_id,
+        spec = job_spec(chain, paths, {pn: definitions[pn].name for pn in pns}, run_id,
                         job_dir / f"result-{run_id}.json", args.time_step)
         job_started = time.monotonic()
         result, warnings, exit_code = run_job(freecad, job_dir, spec, args.timeout)
@@ -341,7 +360,7 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         if temporary is not None:
             temporary.cleanup()
-    moved = any(frames[0][pn] != frames[-1][pn] for pn in chain.parts)
+    moved = any(frames[0][oid] != frames[-1][oid] for oid in chain.ids)
     failed = bool(checks["violations"] or checks["residuals"] or checks["range_findings"])
     print(json.dumps({
         "status": "fail" if failed else "pass",
@@ -350,7 +369,7 @@ def main(argv: list[str] | None = None) -> int:
         "frames": len(frames),
         "placements_change": moved,
         "motions": spec["motions"],
-        "placements": frame_placements(frames, report_parts),
+        "placements": frame_placements(frames, chain, report),
         "limit_check": checks["joints"],
         "violations": checks["violations"][:MAX_LISTED],
         "range_findings": checks["range_findings"][:MAX_LISTED],

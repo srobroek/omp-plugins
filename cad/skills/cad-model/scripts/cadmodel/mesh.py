@@ -1,4 +1,4 @@
-"""Binary glTF from the assembly STEP, the PN -> mesh-node map, and mesh watertightness."""
+"""Binary glTF from the assembly STEP, the occurrence -> mesh-node map, and mesh watertightness."""
 
 from __future__ import annotations
 
@@ -6,14 +6,15 @@ import json
 import math
 import struct
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Mapping
 
 from cadmodel import occ
 from cadmodel.motion import load_pose
 
-PN_PREFIX = load_pose().PN_PREFIX  # a GLB node belongs to the part whose PN starts its name
 # Tessellation: chord deviation relative to the assembly diagonal, clamped; angular deflection in rad.
 LINEAR_RELATIVE, LINEAR_MIN_MM, LINEAR_MAX_MM, ANGULAR_RAD = 5e-4, 0.01, 0.2, 0.25
+MATCH = ("a node belongs to the occurrence whose instance name it carries: `<PN> <title>` for a part placed "
+         "once without an id, `<PN> <title> [@id]` for an explicit occurrence")
 
 
 def deflection(shape: Any) -> float:
@@ -21,8 +22,38 @@ def deflection(shape: Any) -> float:
     return min(LINEAR_MAX_MM, max(LINEAR_MIN_MM, LINEAR_RELATIVE * math.dist(low, high)))
 
 
+def _name_untagged_instances(tool: Any) -> None:
+    """Name each component that carries no `[@id]` after its product, so instance node names are
+    product names for a legacy singleton (the STEP reader names an unnamed component `=>[0:1:1:2]`)."""
+    from OCP.collections import Sequence_TDF_Label
+    from OCP.TCollection import TCollection_ExtendedString
+    from OCP.TDataStd import TDataStd_Name
+    from OCP.TDF import TDF_Label
+    from OCP.XCAFDoc import XCAFDoc_ShapeTool
+
+    def name(label: Any) -> str:
+        attribute = TDataStd_Name()
+        return attribute.Get().ToExtString() if label.FindAttribute(TDataStd_Name.GetID_s(), attribute) else ""
+
+    roots = Sequence_TDF_Label()
+    tool.GetFreeShapes(roots)
+    for index in range(1, roots.Length() + 1):
+        components = Sequence_TDF_Label()
+        XCAFDoc_ShapeTool.GetComponents_s(roots.Value(index), components, True)
+        for number in range(1, components.Length() + 1):
+            component = components.Value(number)
+            referred = TDF_Label()
+            if load_pose().OCCURRENCE_TAG.search(name(component)) or not XCAFDoc_ShapeTool.GetReferredShape_s(
+                    component, referred):
+                continue
+            TDataStd_Name.Set_s(component, TCollection_ExtendedString(name(referred)))
+
+
 def write_glb(step: Path, glb: Path) -> dict[str, Any]:
-    """Tessellate the assembly STEP and write it as binary glTF (metres, Y up, node names = products)."""
+    """Tessellate the assembly STEP and write it as binary glTF (metres, Y up).
+
+    Node names are instance names (`_name_untagged_instances`), mesh names product names; every
+    occurrence is its own node, each with its own mesh."""
     from OCP.BRepMesh import BRepMesh_IncrementalMesh
     from OCP.collections import IndexedDataMap_TCollection_AsciiString_TCollection_AsciiString as Metadata
     from OCP.collections import Sequence_TDF_Label
@@ -44,6 +75,7 @@ def write_glb(step: Path, glb: Path) -> dict[str, Any]:
     if reader.ReadFile(str(step)) != IFSelect_RetDone or not reader.Transfer(doc):
         raise occ.GeometryError(f"cannot read {step} for tessellation")
     tool = XCAFDoc_DocumentTool.ShapeTool_s(doc.Main())
+    _name_untagged_instances(tool)
     roots = Sequence_TDF_Label()
     tool.GetFreeShapes(roots)
     linear = 0.0
@@ -52,7 +84,7 @@ def write_glb(step: Path, glb: Path) -> dict[str, Any]:
         linear = deflection(shape)
         BRepMesh_IncrementalMesh(shape, linear, False, ANGULAR_RAD, True)
     writer = RWGltf_CafWriter(TCollection_AsciiString(str(glb)), True)
-    writer.SetNodeNameFormat(RWMesh_NameFormat.RWMesh_NameFormat_Product)
+    writer.SetNodeNameFormat(RWMesh_NameFormat.RWMesh_NameFormat_Instance)
     writer.SetMeshNameFormat(RWMesh_NameFormat.RWMesh_NameFormat_Product)
     writer.SetMergeFaces(True)
     converter = writer.ChangeCoordinateSystemConverter()
@@ -73,26 +105,46 @@ def gltf_json(glb: Path) -> dict[str, Any]:
     return json.loads(data[20:20 + chunk_length])
 
 
-def part_map(glb: Path, products: dict[str, str]) -> dict[str, Any]:
-    """PN -> glTF nodes and meshes, matched on the PN-first product names the GLB carries."""
+def instance_names(chain: Any, products: Mapping[str, str]) -> dict[str, str]:
+    """Occurrence id -> the GLB node name its instance carries."""
+    pose = load_pose()
+    return {oid: pose.component_name(pose.Part(chain.pn(oid), products[chain.pn(oid)], None),
+                                     chain.inventory.get(oid)) or products[chain.pn(oid)]
+            for oid in chain.ids}
+
+
+def part_map(glb: Path, chain: Any, products: Mapping[str, str]) -> dict[str, Any]:
+    """The part map (build adds its schema_version): glTF nodes and meshes per occurrence, matched on
+    exact instance names, plus their PN aggregate under `parts`."""
     gltf = gltf_json(glb)
     meshes = gltf.get("meshes", [])
-    parts: dict[str, Any] = {pn: {"product": name, "nodes": [], "node_indices": [], "meshes": []}
-                             for pn, name in sorted(products.items())}
+    names = instance_names(chain, products)
+    by_name: dict[str, str] = {name: oid for oid, name in names.items()}
+    occurrences: dict[str, Any] = {oid: {"PN": chain.pn(oid), "ref": chain.ref(oid), "nodes": [], "node_indices": [],
+                                         "meshes": []} for oid in chain.ids}
     for index, node in enumerate(gltf.get("nodes", [])):
-        match = PN_PREFIX.match(node.get("name", ""))
-        if not match or match.group(1) not in parts:
+        oid = by_name.get(node.get("name", ""))
+        if oid is None:
             continue
-        entry = parts[match.group(1)]
+        entry = occurrences[oid]
         entry["nodes"].append(node["name"])
         entry["node_indices"].append(index)
         if "mesh" in node:
             entry["meshes"].append(meshes[node["mesh"]].get("name", f"mesh{node['mesh']}"))
-    return parts
+    parts: dict[str, Any] = {}
+    for oid in sorted(chain.ids, key=lambda o: (chain.pn(o), o)):
+        entry = parts.setdefault(chain.pn(oid), {"product": products[chain.pn(oid)], "occurrences": [], "nodes": [],
+                                                 "node_indices": [], "meshes": []})
+        entry["occurrences"].append(oid)
+        for key in ("nodes", "node_indices", "meshes"):
+            entry[key] += occurrences[oid][key]
+    return {"glb": glb.name, "match": MATCH,
+            "parts": dict(sorted(parts.items())), "occurrences": occurrences}
 
 
-def watertight(glb: Path, pns: Iterable[str]) -> dict[str, dict[str, Any]]:
-    """Per PN: whether its triangles, welded by position, form a closed 2-manifold.
+def watertight(glb: Path, nodes: Mapping[str, str]) -> dict[str, dict[str, Any]]:
+    """Per occurrence (`nodes`: id -> GLB node name): whether its triangles, welded by position,
+    form a closed 2-manifold. Each occurrence is judged alone, never welded to another instance.
 
     A triangle whose corners weld to fewer than three vertices is dropped first: it has no area
     and bounds nothing. BRepMesh emits one wherever a face boundary meets a sphere pole (a ball-end
@@ -102,22 +154,29 @@ def watertight(glb: Path, pns: Iterable[str]) -> dict[str, dict[str, Any]]:
     import trimesh
 
     scene = trimesh.load(str(glb), force="scene", process=False)
-    pieces: dict[str, list[Any]] = {pn: [] for pn in pns}
+    owner = {name: oid for oid, name in nodes.items()}
+    pieces: dict[str, list[Any]] = {oid: [] for oid in nodes}
     for node_name in scene.graph.nodes_geometry:
-        match = PN_PREFIX.match(node_name)
-        if match and match.group(1) in pieces:
+        if node_name in owner:
             transform, geometry = scene.graph[node_name]
-            pieces[match.group(1)].append(scene.geometry[geometry].copy().apply_transform(transform))
+            pieces[owner[node_name]].append(scene.geometry[geometry].copy().apply_transform(transform))
     report: dict[str, dict[str, Any]] = {}
-    for pn, meshes in sorted(pieces.items()):
+    for oid, meshes in sorted(pieces.items()):
         if not meshes:
-            report[pn] = {"watertight": False, "triangles": 0, "reason": "no mesh node for this part in the GLB"}
+            report[oid] = {"watertight": False, "triangles": 0, "reason": "no mesh node for this occurrence in the GLB"}
             continue
         mesh = trimesh.util.concatenate(meshes)
         mesh.merge_vertices(merge_tex=True, merge_norm=True)
         faces = mesh.faces
         collapsed = (faces[:, 0] == faces[:, 1]) | (faces[:, 1] == faces[:, 2]) | (faces[:, 0] == faces[:, 2])
         mesh.update_faces(~collapsed)
-        report[pn] = {"watertight": bool(mesh.is_watertight), "triangles": int(len(mesh.faces)),
-                      "collapsed_triangles": int(collapsed.sum()), "euler_number": int(mesh.euler_number)}
+        report[oid] = {"watertight": bool(mesh.is_watertight), "triangles": int(len(mesh.faces)),
+                       "collapsed_triangles": int(collapsed.sum()), "euler_number": int(mesh.euler_number)}
     return report
+
+
+def node_names(part_map_data: Mapping[str, Any]) -> dict[str, str]:
+    """Occurrence id -> GLB node name from a written part map (version 1: PN -> its first node)."""
+    if part_map_data.get("schema_version", 1) == 1:
+        return {pn: entry["nodes"][0] for pn, entry in part_map_data["parts"].items() if entry["nodes"]}
+    return {oid: entry["nodes"][0] for oid, entry in part_map_data["occurrences"].items() if entry["nodes"]}

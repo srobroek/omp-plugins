@@ -173,14 +173,15 @@ def _load(hw: str, version: str, check_path: str | None) -> Loaded:
     check = record.read_json(Path(check_path)) if check_path else None
     panel = record.panel_model(loaded, check)
     rows = loaded.nominal_rows()
-    shown = {pn: motion.rigid_from_rows(rows[pn]) for pn in rows}
+    shown = {oid: motion.rigid_from_rows(rows[oid]) for oid in rows}
     pose = motion.pose_module()
     with pose.stdout_to_stderr():
-        parts = pose.load_parts(loaded.hw, parts_dir=loaded.parts_dir)
-    missing = [p.pn for p in loaded.parts if p.pn not in parts]
+        parts = pose.load_definitions(loaded.hw, loaded.parts_dir)
+    missing = sorted({p.pn for p in loaded.parts if p.pn not in parts})
     if missing:
         raise ViewerError(f"{loaded.parts_dir}: no STEP for {missing}")
-    shapes = {p.pn: pose.placed(parts[p.pn].shape, shown[p.pn]) for p in loaded.parts}
+    # One shape per occurrence: its PN's definition at the occurrence's built placement T = D P.
+    shapes = {p.id: pose.placed(parts[p.pn].shape, shown[p.id]) for p in loaded.parts}
     return Loaded(loaded, check_path, panel, shown, shapes)
 
 
@@ -265,9 +266,9 @@ class Host:
         version = loaded.version
 
         def leaf(part: record.Part) -> Any:
-            return OCP_Part(loaded.shapes[part.pn], name=part.product, color=Color(part.colour, self.view.alpha(part.pn)))
+            return OCP_Part(loaded.shapes[part.id], name=part.product, color=Color(part.colour, self.view.alpha(part.id)))
 
-        children: list[Any] = [OCP_PartGroup([leaf(version.part(pn)) for pn in g.parts], name=g.id)
+        children: list[Any] = [OCP_PartGroup([leaf(version.part(oid)) for oid in g.parts], name=g.id)
                                for g in version.groups]
         children += [leaf(p) for p in version.parts if p.group is None]
         return OCP_PartGroup(children, name=version.product_id)
@@ -304,7 +305,7 @@ class Host:
         if slot.showing is None:
             return
         version = self.versions[slot.showing].version
-        states = {p.path: [1, 1] if self.view.visible(p.pn) else [0, 0] for p in version.parts}
+        states = {p.path: [1, 1] if self.view.visible(p.id) else [0, 0] for p in version.parts}
         self._config(slot, audiences, states=states)
 
     def _layout(self) -> dict[str, str | None]:
@@ -354,7 +355,7 @@ class Host:
         with self.lock:
             self.versions = {"A": loaded}
             self.mode, self.active = "single", "A"
-            self.view = ViewState(hidden={pn for pn in self.view.hidden if pn in loaded.shapes})
+            self.view = ViewState(hidden={oid for oid in self.view.hidden if oid in loaded.shapes})
             self._push_layout()
         return self.state()
 
@@ -521,7 +522,7 @@ class Host:
         version = self.versions[self._layout()["a"]].version
         animation = Animation()
         for track in plan.tracks:
-            path = version.part(track.pn).path
+            path = version.part(track.id).path
             animation.add_track(path, "t", list(plan.times), [list(v) for v in track.translations])
             animation.add_track(path, "q", list(plan.times), [list(v) for v in track.quaternions])
         for audience in audiences:
@@ -537,7 +538,7 @@ class Host:
         self.animation_request = dict(body)
         self.animation = {"joint": plan.joint, "unit": plan.unit, "from": plan.start, "to": plan.end,
                           "keyframes": len(plan.times), "seconds": plan.times[-1],
-                          "moving_parts": [t.pn for t in plan.tracks], "at": at,
+                          "moving_parts": [version.part(t.id).ref for t in plan.tracks], "at": at,
                           "value_at": None if at is None else plan.value_at(at)}
         return self.animation
 

@@ -6,42 +6,62 @@
 
 Usage:
     uv run --script pose.py --hw HW (--version vN|latest | --step ASSEMBLY.step | --parts-dir DIR)
-        [--attach PN=PARENT_PN ...] [--set J-###=VALUE ...] --out POSED.step
+        [--attach REF=PARENT_REF ...] [--set J-###=VALUE ...] --out POSED.step
 
-Joint record: hw/assembly.yaml `joints`. Supported types: revolute (values in
-degrees), prismatic (values in mm) and fixed. `origin` (mm) and `axis` are in
-assembly coordinates at the zero pose, where every joint value is 0.
+Occurrences: hw/assembly.yaml places part definitions (PNs). An explicit
+occurrence (`occurrences: [{id: ring-base, PN: LMP-0011, placement: ...}]`)
+is one placement of its PN at a rest placement; a PN listed in a
+subassembly's `parts` is one implicit occurrence whose id is the PN, at the
+identity placement. A reference is `"@id"` for one occurrence, or a bare PN
+when that PN has exactly one occurrence (cad-record assembly_data.py).
+
+Joint record: hw/assembly.yaml `joints`, whose parent and child are
+references. Supported types: revolute (values in degrees), prismatic (values
+in mm) and fixed. `origin` (mm) and `axis` are in assembly coordinates at the
+zero pose, where every joint value is 0.
 
 Geometry, exactly one of:
-    --version VER    a cad-model version: the zero-pose per-part STEPs in
+    --version VER    a cad-model version: the per-PN definition STEPs in
                      HW/versions/<VER>/parts. `latest` is the label
                      HW/versions/latest.json names; the version must be built
                      (manifest.json present).
     --step FILE      one assembly STEP; every leaf product whose name starts
-                     with a PN (`LMP-0003` or `LMP-0003 Lower link`) is a part.
-                     Instance placements are flattened into assembly
-                     coordinates; a PN instanced more than once is rejected.
-                     A cad-model version's assembly.step is posed at the
-                     joints' nominal values; when one is non-zero it is
-                     refused (its manifest.json tells), since posing it again
-                     would apply the nominal twice. Use --version instead.
-    --parts-dir DIR  one STEP per part, named `<PN>.step` or
+                     with a PN (`LMP-0003` or `LMP-0003 Lower link`) is a part
+                     definition, read from the referred product, and each of
+                     its components one placement at its cumulative location.
+                     A component named `<product> [@id]` is the occurrence
+                     `@id`, whose location must equal its rest placement; any
+                     other component is its PN's implicit occurrence, placed
+                     where the STEP puts it. A PN instanced more than once
+                     without `[@id]` names is rejected. A cad-model version's
+                     assembly.step is posed at the joints' nominal values;
+                     when one is non-zero it is refused (its manifest.json
+                     tells), since posing it again would apply the nominal
+                     twice. Use --version instead.
+    --parts-dir DIR  one STEP per part definition, named `<PN>.step` or
                      `<PN> <anything>.step` (`.stp` also accepted). The part
                      keeps the file's PN-first product name; an unnamed file
                      is named `<PN> <title>` from hw/parts/<PN>/part.yaml.
-Every part is modeled in place: assembly coordinates at the zero pose.
+A part's frame is its part.yaml `model_frame`: `assembly_zero`, the default,
+is modeled in place (assembly coordinates at the zero pose) and has one
+identity-placed occurrence; `part_local` is modeled about its own origin, and
+each occurrence's rest placement puts it into the assembly.
 
-Kinematics: the ground is the one part that is never a joint child; its
-transform is the identity. Each joint maps its child as
-T_child = T_parent * M(value), where M is the rotation by `value` degrees
-(right hand) about `axis` through `origin` for a revolute joint, the
-translation by `value` mm along `axis` for a prismatic joint, and the
-identity for a fixed joint. A part with geometry but no joint must be
-connected with a fixed joint in assembly.yaml or `--attach PN=PARENT_PN`.
-A movable joint without `--set` takes its `nominal` value.
+Kinematics: the ground is the one occurrence that is never a joint child.
+Each occurrence i has a motion D_i: D_ground is the identity, and a joint
+maps its child as D_child = D_parent * M(value), where M is the rotation by
+`value` degrees (right hand) about `axis` through `origin` for a revolute
+joint, the translation by `value` mm along `axis` for a prismatic joint, and
+the identity for a fixed joint. The occurrence's placement T_i = D_i * P_i,
+with P_i its rest placement, is applied once to its definition geometry.
+An occurrence with geometry but no joint must be connected with a fixed joint
+in assembly.yaml or `--attach REF=PARENT_REF`; attaching a PN that has no
+occurrence adds its identity singleton. A movable joint without `--set`
+takes its `nominal` value.
 
-The posed STEP keeps every part's product name and in-place geometry and
-carries the pose in the instance placements under one top assembly.
+The posed STEP holds one product per PN definition, named `<PN> <title>`,
+placed once per occurrence under one top assembly; an explicit occurrence's
+component is named `<PN> <title> [@id]`.
 
 stdout: JSON. stderr: diagnostics (OCCT translator output included).
 Exit 0 = posed STEP written, 1 = a value is outside its joint's [min, max]
@@ -54,13 +74,14 @@ import argparse
 import contextlib
 import ctypes
 import functools
+import importlib.util
 import json
 import math
 import os
 import re
 import sys
 import traceback
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -81,6 +102,11 @@ INTERFERENCE_MM3 = 1e-3
 OVERLAP_GATE_MM = 1e-6
 FUZZY_MM = 1e-7
 VERSION_LABEL = re.compile(r"^v([1-9][0-9]*)$")  # a cad-model version label: v1, v2, ...
+# An explicit occurrence's STEP component and GLB node name: `<PN> <title> [@id]`.
+OCCURRENCE_TAG = re.compile(r" \[@([a-z][a-z0-9_-]*)\]$")
+# A STEP component location matches a rest placement within these bounds (mm, rotation-matrix entries).
+PLACEMENT_TOL_MM, PLACEMENT_TOL_ROT = 1e-6, 1e-9
+ASSEMBLY_DATA_PATH = Path(__file__).resolve().parents[2] / "cad-record" / "scripts" / "assembly_data.py"
 
 Vec = tuple[float, float, float]
 
@@ -88,6 +114,22 @@ Vec = tuple[float, float, float]
 class MotionError(RuntimeError):
     """The inputs cannot be used; maps to exit 2."""
 
+
+def _load_assembly_data() -> Any:
+    """cad-record's kernel-free occurrence normalizer, the one reader of assembly.yaml occurrences."""
+    name = "cad_record_assembly_data"
+    if name in sys.modules:
+        return sys.modules[name]
+    spec = importlib.util.spec_from_file_location(name, ASSEMBLY_DATA_PATH)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cad-record assembly_data.py not found at {ASSEMBLY_DATA_PATH}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+assembly_data = _load_assembly_data()
 
 # --------------------------------------------------------------------------- rigid transforms
 
@@ -121,6 +163,17 @@ class Rigid:
     @staticmethod
     def translation(axis: Vec, distance: float) -> Rigid:
         return Rigid(Rigid.identity().rot, (axis[0] * distance, axis[1] * distance, axis[2] * distance))
+
+    @staticmethod
+    def from_placement(placement: Any) -> Rigid:
+        """An assembly_data.Placement: rotation about the local origin, then translation."""
+        rotation = Rigid.rotation(placement.axis, placement.angle_deg, (0.0, 0.0, 0.0))
+        return Rigid(rotation.rot, placement.translation_mm)
+
+    def close_to(self, other: Rigid) -> bool:
+        """Equal within PLACEMENT_TOL_MM (translation) and PLACEMENT_TOL_ROT (rotation entries)."""
+        return (all(abs(a - b) <= PLACEMENT_TOL_ROT for ra, rb in zip(self.rot, other.rot) for a, b in zip(ra, rb))
+                and all(abs(a - b) <= PLACEMENT_TOL_MM for a, b in zip(self.trans, other.trans)))
 
     @staticmethod
     def from_quaternion(q: Iterable[float], base: Iterable[float]) -> Rigid:
@@ -242,10 +295,44 @@ class Joint:
         return value, residual.angle_degrees(), _distance(residual.apply(self.origin), self.origin)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class Assembly:
+    """The normalized record: occurrences and groups (an assembly_data.Inventory), joints whose
+    parent and child are occurrence ids, and the PN definitions with their model frames."""
+
+    inventory: Any  # assembly_data.Inventory
     joints: tuple[Joint, ...]
-    listed_parts: tuple[str, ...]  # subassembly parts, file order
+    frames: Mapping[str, str]  # PN -> part.yaml model_frame, for every part record
+
+    @property
+    def occurrences(self) -> tuple[Any, ...]:
+        return self.inventory.occurrences
+
+    @property
+    def groups(self) -> tuple[Any, ...]:
+        return self.inventory.groups
+
+    @property
+    def definitions(self) -> tuple[str, ...]:
+        """The PNs the occurrences instantiate, in record order."""
+        return self.inventory.pns
+
+    def resolve(self, ref: str, where: str = "") -> str:
+        """The occurrence id `ref` names: `@id`, or a PN with exactly one occurrence."""
+        try:
+            return self.inventory.resolve(ref).id
+        except assembly_data.UnresolvedReference as error:
+            raise MotionError(f"{where}{error}") from None
+
+    def attachable(self, ref: str, where: str = "") -> str:
+        """`resolve`, except that a PN with no occurrence names its implicit identity singleton."""
+        if not ref.startswith("@") and not self.inventory.of(ref):
+            return ref
+        return self.resolve(ref, where)
+
+    def pn(self, occurrence_id: str) -> str:
+        """The PN of an occurrence id; an id outside the record is an implicit singleton, its own PN."""
+        return self.inventory.get(occurrence_id).pn if occurrence_id in self.inventory else occurrence_id
 
 
 def _vector(value: Any, where: str) -> Vec:
@@ -258,8 +345,8 @@ def _is_number(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
 
 
-def make_joint(raw: Mapping[str, Any]) -> Joint:
-    """Validate one assembly.yaml joint mapping."""
+def make_joint(raw: Mapping[str, Any], resolve: Callable[[str, str], str] | None = None) -> Joint:
+    """Validate one assembly.yaml joint mapping; `resolve(ref, where)` turns parent and child into occurrence ids."""
     jid = raw.get("id")
     if not isinstance(jid, str):
         raise MotionError(f"joint without a string id: {raw!r}")
@@ -268,9 +355,12 @@ def make_joint(raw: Mapping[str, Any]) -> Joint:
         raise MotionError(f"{jid}: joint type {kind!r} is not supported; use one of {sorted(UNITS)}")
     for key in ("parent", "child"):
         if not isinstance(raw.get(key), str):
-            raise MotionError(f"{jid}: {key} must be a part number")
+            raise MotionError(f"{jid}: {key} must be a part number or @occurrence reference")
     if raw["parent"] == raw["child"]:
         raise MotionError(f"{jid}: parent and child are both {raw['parent']}")
+    parent, child = raw["parent"], raw["child"]
+    if resolve is not None:
+        parent, child = resolve(parent, f"{jid} parent: "), resolve(child, f"{jid} child: ")
     axis = _vector(raw.get("axis"), f"{jid}.axis")
     norm = math.sqrt(sum(v * v for v in axis))
     if norm < 1e-12:
@@ -285,13 +375,29 @@ def make_joint(raw: Mapping[str, Any]) -> Joint:
     if not limits["min"] <= limits["nominal"] <= limits["max"]:
         raise MotionError(f"{jid}: nominal {limits['nominal']} is outside [{limits['min']}, {limits['max']}]")
     return Joint(
-        id=jid, type=kind, parent=raw["parent"], child=raw["child"],
+        id=jid, type=kind, parent=parent, child=child,
         axis=(axis[0] / norm, axis[1] / norm, axis[2] / norm),
         origin=_vector(raw.get("origin"), f"{jid}.origin"), **limits,
     )
 
 
+def _part_records(hw: Path) -> dict[str, dict[str, Any]]:
+    """Every readable hw/parts/<PN>/part.yaml mapping, keyed by its folder name."""
+    import yaml
+
+    records = {}
+    for record in sorted((hw / "parts").glob("*/part.yaml")):
+        try:
+            data = yaml.safe_load(record.read_text(encoding="utf-8"))
+        except (OSError, yaml.YAMLError):
+            continue
+        if isinstance(data, dict):
+            records[record.parent.name] = data
+    return records
+
+
 def load_assembly(hw: Path) -> Assembly:
+    """Normalize hw/assembly.yaml (cad-record assembly_data) and resolve its joint references."""
     import yaml
 
     path = hw / "assembly.yaml"
@@ -301,48 +407,93 @@ def load_assembly(hw: Path) -> Assembly:
         raise MotionError(f"cannot read {path}: {error}") from error
     if not isinstance(data, dict) or not isinstance(data.get("joints"), list):
         raise MotionError(f"{path}: expected a mapping with a `joints` list")
-    joints = tuple(make_joint(raw) if isinstance(raw, dict) else _bad_joint(raw) for raw in data["joints"])
+    frames = {pn: str(record.get("model_frame", assembly_data.DEFAULT_FRAME))
+              for pn, record in _part_records(hw).items()}
+    try:
+        inventory = assembly_data.normalize(data, frames)
+    except assembly_data.InventoryError as error:
+        raise MotionError(f"{path}: {error}") from None
+    assembly = Assembly(inventory, (), frames)
+    joints = tuple(make_joint(raw, assembly.attachable) if isinstance(raw, dict) else _bad_joint(raw)
+                   for raw in data["joints"])
     ids = [j.id for j in joints]
     duplicates = sorted({i for i in ids if ids.count(i) > 1})
     if duplicates:
         raise MotionError(f"{path}: duplicate joint ids {duplicates}")
-    listed: list[str] = []
-    for sub in data.get("subassemblies") or []:
-        for pn in (sub.get("parts") or []) if isinstance(sub, dict) else []:
-            if isinstance(pn, str) and pn not in listed:
-                listed.append(pn)
-    return Assembly(joints, tuple(listed))
+    return Assembly(inventory, joints, frames)
 
 
 def _bad_joint(raw: Any) -> Joint:
     raise MotionError(f"joint entry is not a mapping: {raw!r}")
 
 
-def attach_joints(specs: Iterable[str]) -> list[Joint]:
-    """Turn `PN=PARENT_PN` options into fixed joints."""
+def is_ref(text: str) -> bool:
+    """A reference: a PN exactly, or `@` and an occurrence id."""
+    return bool(PN_PREFIX.fullmatch(text) or (text.startswith("@") and assembly_data.OCCURRENCE_ID.fullmatch(text[1:])))
+
+
+def attach_joints(specs: Iterable[str], assembly: Assembly) -> list[Joint]:
+    """Turn `REF=PARENT_REF` options into fixed joints between occurrence ids.
+
+    A PN with no occurrence names its identity singleton, an otherwise unlisted built part; a PN
+    placed several times must be named by `@id`.
+    """
     joints = []
     for spec in specs:
         child, sep, parent = spec.partition("=")
-        if not sep or not PN_PREFIX.fullmatch(child) or not PN_PREFIX.fullmatch(parent):
-            raise MotionError(f"--attach expects PN=PARENT_PN, got {spec!r}")
-        joints.append(Joint(f"attach:{child}", "fixed", parent, child, (0.0, 0.0, 1.0), (0.0, 0.0, 0.0), 0.0, 0.0, 0.0))
+        if not sep or not is_ref(child) or not is_ref(parent):
+            raise MotionError(f"--attach expects REF=PARENT_REF (a PN or @occurrence each), got {spec!r}")
+        where = f"--attach {spec}: "
+        joints.append(Joint(f"attach:{child}", "fixed", assembly.attachable(parent, where),
+                            assembly.attachable(child, where), (0.0, 0.0, 1.0), (0.0, 0.0, 0.0), 0.0, 0.0, 0.0))
     return joints
 
 
-@dataclass(frozen=True)
+def singleton(pn: str) -> Any:
+    """A PN's implicit occurrence record: id PN, identity placement."""
+    return assembly_data.Occurrence(pn, pn, assembly_data.IDENTITY, False)
+
+
+@dataclass(frozen=True, eq=False)
 class Chain:
-    """A kinematic tree rooted at the ground part; joints are parent-before-child."""
+    """A kinematic tree of occurrences rooted at the ground occurrence; joints are parent-before-child.
+
+    `inventory` holds the chain's occurrence records (id, PN, explicit); `rests` their rest
+    placements P_i, which an assembly STEP input may supply for implicit occurrences.
+    """
 
     root: str
     joints: tuple[Joint, ...]
+    inventory: Any  # assembly_data.Inventory of the chain's occurrences
+    rests: Mapping[str, Rigid]
 
     @property
-    def parts(self) -> tuple[str, ...]:
+    def ids(self) -> tuple[str, ...]:
+        """Occurrence ids: the ground, then each joint's child in tree order."""
         return (self.root, *(j.child for j in self.joints))
+
+    def pn(self, occurrence_id: str) -> str:
+        return self.inventory.get(occurrence_id).pn
+
+    def ref(self, occurrence_id: str) -> str:
+        """The copyable reference: `@id`, or the PN of an implicit singleton."""
+        return self.inventory.get(occurrence_id).ref
+
+    def resolve(self, ref: str, where: str = "") -> str:
+        """The chain occurrence id `ref` names; a PN placed more than once is ambiguous."""
+        try:
+            return self.inventory.resolve(ref).id
+        except assembly_data.UnresolvedReference as error:
+            raise MotionError(f"{where}{error}") from None
 
     @property
     def movable(self) -> tuple[Joint, ...]:
         return tuple(j for j in self.joints if j.movable)
+
+    @property
+    def independent(self) -> tuple[Joint, ...]:
+        """The author-settable joints. Without couplings every movable joint is independent."""
+        return self.movable
 
     def joint(self, jid: str) -> Joint:
         for joint in self.joints:
@@ -353,22 +504,22 @@ class Chain:
     def adjacent_pairs(self) -> set[frozenset[str]]:
         return {frozenset((j.parent, j.child)) for j in self.joints}
 
-    def path(self, pn: str) -> list[Joint]:
-        """Joints from the root to `pn`."""
+    def path(self, occurrence_id: str) -> list[Joint]:
+        """Joints from the root to `occurrence_id`."""
         incoming = {j.child: j for j in self.joints}
         path: list[Joint] = []
-        while pn in incoming:
-            path.append(incoming[pn])
-            pn = incoming[pn].parent
+        while occurrence_id in incoming:
+            path.append(incoming[occurrence_id])
+            occurrence_id = incoming[occurrence_id].parent
         return path[::-1]
 
-    def complete(self, values: Mapping[str, float]) -> dict[str, float]:
-        """Every movable joint's value, defaulting to nominal."""
-        movable = {j.id for j in self.movable}
-        for jid in values:
-            if jid not in movable:
-                raise MotionError(f"{jid} is not a movable joint; movable joints: {sorted(movable)}")
-        return {j.id: float(values.get(j.id, j.nominal)) for j in self.movable}
+    def complete(self, settings: Mapping[str, float]) -> dict[str, float]:
+        """The full coordinate map: every movable joint's value, an independent joint without a setting at nominal."""
+        independent = {j.id for j in self.independent}
+        for jid in settings:
+            if jid not in independent:
+                raise MotionError(f"{jid} is not a movable joint; movable joints: {sorted(independent)}")
+        return {j.id: float(settings.get(j.id, j.nominal)) for j in self.movable}
 
     def limit_findings(self, values: Mapping[str, float]) -> list[dict[str, Any]]:
         findings = []
@@ -382,44 +533,47 @@ class Chain:
                 })
         return findings
 
-    def transforms(self, values: Mapping[str, float]) -> dict[str, Rigid]:
-        placed = {self.root: Rigid.identity()}
+    def motions(self, values: Mapping[str, float]) -> dict[str, Rigid]:
+        """D_i per occurrence id: the joint motions from the ground, without rest placements."""
+        moved = {self.root: Rigid.identity()}
         for joint in self.joints:
             value = values[joint.id] if joint.movable else 0.0
-            placed[joint.child] = placed[joint.parent] @ joint.motion(value)
-        return placed
+            moved[joint.child] = moved[joint.parent] @ joint.motion(value)
+        return moved
+
+    def transforms(self, values: Mapping[str, float]) -> dict[str, Rigid]:
+        """T_i = D_i P_i per occurrence id: the placement of its definition geometry at `values` (a full map)."""
+        return {occurrence_id: motion @ self.rests[occurrence_id] for occurrence_id, motion in self.motions(values).items()}
 
 
-def build_chain(joints: Iterable[Joint], parts: Iterable[str] = ()) -> Chain:
-    """Order the joints into a tree over the joint parts plus `parts`."""
+def build_chain(joints: Iterable[Joint], occurrences: Iterable[Any] = (),
+                rests: Mapping[str, Rigid] | None = None) -> Chain:
+    """Order the joints into a tree over the joint endpoints plus `occurrences`.
+
+    An occurrence is an assembly_data.Occurrence or a PN, which stands for its implicit singleton;
+    so is a joint endpoint that is not among `occurrences`. `rests` overrides record placements.
+    """
     joints = list(joints)
-    incoming: dict[str, Joint] = {}
+    records: dict[str, Any] = {}
+    for item in occurrences:
+        record = singleton(item) if isinstance(item, str) else item
+        records[record.id] = record
     for joint in joints:
-        if joint.child in incoming:
-            raise MotionError(f"{joint.child} is the child of both {incoming[joint.child].id} and {joint.id}")
-        incoming[joint.child] = joint
-    nodes = list(dict.fromkeys([*(n for j in joints for n in (j.parent, j.child)), *parts]))
-    roots = [n for n in nodes if n not in incoming]
-    if not roots:
-        raise MotionError("the joints form a cycle; no part is the ground")
-    if len(roots) > 1:
-        ground = next((r for r in roots if any(j.parent == r for j in joints)), roots[0])
-        loose = [r for r in roots if r != ground]
-        raise MotionError(
-            f"parts not connected to the ground {ground}: {loose}; connect each with a fixed joint "
-            "in assembly.yaml or --attach PN=PARENT_PN"
-        )
-    ordered: list[Joint] = []
-    frontier = [roots[0]]
-    while frontier:
-        parent = frontier.pop(0)
-        for joint in joints:
-            if joint.parent == parent:
-                ordered.append(joint)
-                frontier.append(joint.child)
-    if len(ordered) != len(joints):
-        raise MotionError("the joints form a cycle that is not connected to the ground")
-    return Chain(roots[0], tuple(ordered))
+        for node in (joint.parent, joint.child):
+            if node not in records:
+                if not PN_PREFIX.fullmatch(node):
+                    raise MotionError(f"{joint.id}: {node!r} is no occurrence of this assembly")
+                records[node] = singleton(node)
+    order = list(dict.fromkeys([*(n for j in joints for n in (j.parent, j.child)), *records]))
+    inventory = assembly_data.Inventory(tuple(records[n] for n in order))
+    try:
+        root, indices = assembly_data.joint_tree([(j.id, j.parent, j.child) for j in joints], order,
+                                                 lambda node: inventory.get(node).ref)
+    except assembly_data.InventoryError as error:
+        raise MotionError(str(error)) from None
+    placed = {n: rests[n] if rests is not None and n in rests else Rigid.from_placement(records[n].placement)
+              for n in order}
+    return Chain(root, tuple(joints[i] for i in indices), inventory, placed)
 
 
 def parse_values(specs: Iterable[str]) -> dict[str, float]:
@@ -441,9 +595,35 @@ def parse_values(specs: Iterable[str]) -> dict[str, float]:
 
 @dataclass(frozen=True)
 class Part:
+    """One part definition: the geometry every occurrence of `pn` places."""
+
     pn: str
     name: str  # STEP product name, PN first
-    shape: Any  # TopoDS_Shape in assembly coordinates at the zero pose
+    shape: Any  # TopoDS_Shape in the PN's model frame, unlocated
+
+
+@dataclass(frozen=True)
+class Component:
+    """One placed instance of a definition in an assembly STEP."""
+
+    pn: str
+    occurrence: str | None  # the id an `<product> [@id]` component name carries
+    name: str  # the component's own name, or the product name when it has none
+    location: Rigid  # cumulative from the STEP root
+    path: tuple[str, ...]  # product names from the root assembly down to the definition
+
+
+@dataclass(frozen=True)
+class StepAssembly:
+    """An assembly STEP read once: definitions by PN, separate from their cumulative placements."""
+
+    definitions: dict[str, Part]
+    components: tuple[Component, ...]
+
+
+def component_name(part: Part, occurrence: Any) -> str | None:
+    """The STEP component (and GLB node) name of an occurrence: `<product> [@id]`; None for a legacy singleton."""
+    return f"{part.name} [@{occurrence.id}]" if occurrence.explicit else None
 
 
 @contextlib.contextmanager
@@ -542,20 +722,6 @@ def interference(shape_a: Any, shape_b: Any) -> tuple[float, float]:
     return distance, max(0.0, volume_properties(common.Shape()).Mass())
 
 
-def _part_titles(hw: Path) -> dict[str, str]:
-    import yaml
-
-    titles = {}
-    for record in sorted((hw / "parts").glob("*/part.yaml")):
-        try:
-            data = yaml.safe_load(record.read_text(encoding="utf-8"))
-        except (OSError, yaml.YAMLError):
-            continue
-        if isinstance(data, dict) and isinstance(data.get("title"), str):
-            titles[record.parent.name] = data["title"]
-    return titles
-
-
 def _read_single(path: Path) -> Any:
     from OCP.IFSelect import IFSelect_RetDone
     from OCP.STEPControl import STEPControl_Reader
@@ -571,8 +737,21 @@ def _read_single(path: Path) -> Any:
     return shape
 
 
-def _read_assembly(path: Path) -> dict[str, Part]:
-    from OCP.BRepBuilderAPI import BRepBuilderAPI_Transform
+def rigid_from_trsf(trsf: Any, where: str) -> Rigid:
+    """A gp_Trsf as Rigid; a scaled or mirrored location is refused."""
+    if abs(trsf.ScaleFactor() - 1.0) > 1e-9:
+        raise MotionError(f"{where}: a component location with scale {trsf.ScaleFactor()} is not a rigid placement")
+    rows = [[trsf.Value(r, c) for c in range(1, 5)] for r in range(1, 4)]
+    return Rigid(tuple(tuple(row[:3]) for row in rows), tuple(row[3] for row in rows))  # type: ignore[arg-type]
+
+
+def read_assembly_step(path: Path) -> StepAssembly:
+    """Read an assembly STEP through XCAF: each PN's definition from its referred product label, and
+    every component placing it, with its cumulative location and its product path from the root.
+
+    A leaf product whose name does not start with a PN is ignored. Two different products named
+    with one PN are refused: a PN is one definition.
+    """
     from OCP.IFSelect import IFSelect_RetDone
     from OCP.STEPCAFControl import STEPCAFControl_Reader
     from OCP.TCollection import TCollection_ExtendedString
@@ -599,109 +778,165 @@ def _read_assembly(path: Path) -> dict[str, Part]:
         attribute = TDataStd_Name()
         return attribute.Get().ToExtString() if label.FindAttribute(TDataStd_Name.GetID_s(), attribute) else ""
 
-    found: dict[str, Part] = {}
+    definitions: dict[str, Part] = {}
+    labels: dict[str, Any] = {}
+    components: list[Component] = []
 
-    def visit(label: Any, location: Any) -> None:
+    def visit(label: Any, location: Any, trail: tuple[str, ...], instance: Any) -> None:
         if XCAFDoc_ShapeTool.IsAssembly_s(label):
-            components = Sequence_TDF_Label()
-            XCAFDoc_ShapeTool.GetComponents_s(label, components, False)
-            for index in range(1, components.Length() + 1):
-                component = components.Value(index)
+            children = Sequence_TDF_Label()
+            XCAFDoc_ShapeTool.GetComponents_s(label, children, False)
+            for index in range(1, children.Length() + 1):
+                component = children.Value(index)
                 referred = TDF_Label()
                 if XCAFDoc_ShapeTool.GetReferredShape_s(component, referred):
-                    visit(referred, location.Multiplied(XCAFDoc_ShapeTool.GetLocation_s(component)))
+                    visit(referred, location.Multiplied(XCAFDoc_ShapeTool.GetLocation_s(component)),
+                          (*trail, name(label)), component)
             return
         product = name(label)
         match = PN_PREFIX.match(product)
         if not match:
             return
         pn = match.group(1)
-        if pn in found:
-            raise MotionError(f"{path}: {pn} is instanced more than once; a posed part needs one instance")
-        shape = XCAFDoc_ShapeTool.GetShape_s(label)
-        if not location.IsIdentity():
-            shape = BRepBuilderAPI_Transform(shape, location.Transformation(), True).Shape()
-        found[pn] = Part(pn, product, shape)
+        if pn not in definitions:
+            definitions[pn] = Part(pn, product, XCAFDoc_ShapeTool.GetShape_s(label))
+            labels[pn] = label
+        elif not labels[pn].IsEqual(label):
+            raise MotionError(f"{path}: {pn} names two different product definitions")
+        own = name(instance) if instance is not None else ""
+        tag = OCCURRENCE_TAG.search(own)
+        components.append(Component(pn, tag.group(1) if tag else None, own if tag else product,
+                                    rigid_from_trsf(location.Transformation(), f"{path}: {product}"), trail))
 
     roots = Sequence_TDF_Label()
     tool.GetFreeShapes(roots)
     for index in range(1, roots.Length() + 1):
-        visit(roots.Value(index), TopLoc_Location())
+        visit(roots.Value(index), TopLoc_Location(), (), None)
+    return StepAssembly(definitions, tuple(components))
+
+
+def load_definitions(hw: Path, parts_dir: Path) -> dict[str, Part]:
+    """Part definitions keyed by PN from one STEP per part: `<PN>.step` or `<PN> <anything>.step`."""
+    if not parts_dir.is_dir():
+        raise MotionError(f"parts directory not found: {parts_dir}")
+    records = _part_records(hw)
+    found: dict[str, Part] = {}
+    for path in sorted(parts_dir.iterdir()):
+        match = PN_PREFIX.match(path.stem)
+        if path.suffix.lower() not in STEP_SUFFIXES or not match:
+            continue
+        pn = match.group(1)
+        if pn in found:
+            raise MotionError(f"{parts_dir}: more than one STEP file for {pn}")
+        named = read_assembly_step(path)
+        if set(named.definitions) == {pn}:
+            if len(named.components) != 1:
+                raise MotionError(f"{path}: places {pn} {len(named.components)} times; a part STEP holds one definition")
+            part, location = named.definitions[pn], named.components[0].location
+            if location != Rigid.identity():  # a located single product keeps its in-file position
+                from OCP.BRepBuilderAPI import BRepBuilderAPI_Transform
+
+                part = Part(pn, part.name, BRepBuilderAPI_Transform(part.shape, to_trsf(location), True).Shape())
+            found[pn] = part  # the file's own product name, PN first
+        elif not named.definitions:
+            title = records.get(pn, {}).get("title")
+            found[pn] = Part(pn, f"{pn} {title}" if isinstance(title, str) else pn, _read_single(path))
+        else:
+            raise MotionError(f"{path}: holds products of {sorted(named.definitions)}, expected only {pn}")
     return found
 
 
-def load_parts(hw: Path, step: Path | None = None, parts_dir: Path | None = None) -> dict[str, Part]:
-    """Part geometry keyed by PN, from one assembly STEP or one STEP per part."""
-    if (step is None) == (parts_dir is None):
-        raise MotionError("give exactly one of --step or --parts-dir")
-    if step is not None:
-        if not step.is_file():
-            raise MotionError(f"STEP file not found: {step}")
-        found = _read_assembly(step)
-    else:
-        assert parts_dir is not None
-        if not parts_dir.is_dir():
-            raise MotionError(f"parts directory not found: {parts_dir}")
-        titles = _part_titles(hw)
-        found = {}
-        for path in sorted(parts_dir.iterdir()):
-            match = PN_PREFIX.match(path.stem)
-            if path.suffix.lower() not in STEP_SUFFIXES or not match:
-                continue
-            pn = match.group(1)
-            if pn in found:
-                raise MotionError(f"{parts_dir}: more than one STEP file for {pn}")
-            named = _read_assembly(path)
-            if set(named) == {pn}:
-                found[pn] = named[pn]  # the file's own product name, PN first
-            elif not named:
-                title = titles.get(pn)
-                found[pn] = Part(pn, f"{pn} {title}" if title else pn, _read_single(path))
-            else:
-                raise MotionError(f"{path}: holds products of {sorted(named)}, expected only {pn}")
-    if not found:
-        raise MotionError("no part geometry found; product or file names must start with a PN")
-    return found
+def bind_components(assembly: Assembly, step: StepAssembly, source: Path) -> dict[str, Rigid]:
+    """Occurrence id -> the location of the STEP component that is that occurrence.
+
+    A component named `<product> [@id]` is the explicit occurrence `@id`; an untagged component is
+    its PN's implicit singleton, so a PN instanced more than once without tags is refused.
+    """
+    untagged: dict[str, int] = {}
+    for component in step.components:
+        if component.occurrence is None:
+            untagged[component.pn] = untagged.get(component.pn, 0) + 1
+    located: dict[str, Rigid] = {}
+    for component in step.components:
+        if component.occurrence is not None:
+            occurrence = assembly.inventory.get(component.occurrence) if component.occurrence in assembly.inventory else None
+            if occurrence is None or not occurrence.explicit or occurrence.pn != component.pn:
+                raise MotionError(f"{source}: component {component.name!r} names no occurrence of {component.pn} "
+                                  "in assembly.yaml")
+            if occurrence.id in located:
+                raise MotionError(f"{source}: occurrence {occurrence.ref} is instanced more than once")
+            located[occurrence.id] = component.location
+            continue
+        if untagged[component.pn] > 1:
+            raise MotionError(f"{source}: {component.pn} is instanced more than once without [@id] component names; "
+                              "a posed part needs one instance per occurrence")
+        explicit = [o.ref for o in assembly.inventory.of(component.pn) if o.explicit]
+        if explicit:
+            raise MotionError(f"{source}: a {component.pn} component carries no [@id] name, but assembly.yaml "
+                              f"places {component.pn} as {', '.join(explicit)}")
+        located[component.pn] = component.location
+    return located
 
 
-def require_geometry(chain: Chain, parts: Mapping[str, Part]) -> None:
-    missing = [pn for pn in chain.parts if pn not in parts]
+def assembly_chain(assembly: Assembly, definitions: Mapping[str, Part], extra_joints: Iterable[Joint] = (),
+                   located: Mapping[str, Rigid] | None = None) -> Chain:
+    """The chain over every occurrence that has geometry or a joint.
+
+    A built PN with no occurrence is its identity singleton, which must then be attached. Rest
+    placements come from the record; with `located` (an assembly STEP's bound components), an
+    explicit occurrence must sit at its rest placement, and an implicit one rests where the STEP
+    puts it.
+    """
+    joints = [*assembly.joints, *extra_joints]
+    used = {n for j in joints for n in (j.parent, j.child)}
+    inventory = assembly.inventory.extended([*definitions, *sorted(n for n in used if n not in assembly.inventory)])
+    nodes = [o for o in inventory.occurrences if o.pn in definitions or o.id in used]
+    rests: dict[str, Rigid] = {}
+    for occurrence in nodes:
+        record = Rigid.from_placement(occurrence.placement)
+        if located is None or occurrence.pn not in definitions:
+            rests[occurrence.id] = record
+        elif occurrence.id not in located:
+            raise MotionError(f"the assembly STEP has no component for {occurrence.ref}")
+        elif occurrence.explicit and not located[occurrence.id].close_to(record):
+            raise MotionError(f"the assembly STEP places {occurrence.ref} at {located[occurrence.id].rows()}, "
+                              f"not at its rest placement {record.rows()}")
+        else:
+            rests[occurrence.id] = record if occurrence.explicit else located[occurrence.id]
+    return build_chain(joints, nodes, rests)
+
+
+def require_geometry(chain: Chain, definitions: Mapping[str, Part]) -> None:
+    missing = [chain.ref(i) for i in chain.ids if chain.pn(i) not in definitions]
     if missing:
         raise MotionError(f"joint parts without geometry: {missing}")
 
 
-def write_step(path: Path, top_name: str | None, items: Iterable[tuple[Part, Rigid]]) -> None:
-    """Write AP242: each part a named product placed by its transform under `top_name`.
+def _new_document() -> tuple[Any, Any]:
+    from OCP.TCollection import TCollection_ExtendedString
+    from OCP.TDocStd import TDocStd_Document
+    from OCP.XCAFApp import XCAFApp_Application
+    from OCP.XCAFDoc import XCAFDoc_DocumentTool
 
-    With `top_name` None the parts are written as free products in place (one
-    part per file is the per-part STEP form); their transforms must be identity.
-    """
+    doc = TDocStd_Document(TCollection_ExtendedString("MDTV-XCAF"))
+    XCAFApp_Application.GetApplication_s().InitDocument(doc)
+    return doc, XCAFDoc_DocumentTool.ShapeTool_s(doc.Main())
+
+
+def _set_name(label: Any, text: str) -> None:
+    from OCP.TCollection import TCollection_ExtendedString
+    from OCP.TDataStd import TDataStd_Name
+
+    TDataStd_Name.Set_s(label, TCollection_ExtendedString(text))
+
+
+def _write_document(path: Path, doc: Any, tool: Any) -> None:
     from OCP.IFSelect import IFSelect_RetDone
     from OCP.Interface import Interface_Static
     from OCP.STEPCAFControl import STEPCAFControl_Controller, STEPCAFControl_Writer
     from OCP.STEPControl import STEPControl_AsIs, STEPControl_Controller
-    from OCP.TCollection import TCollection_ExtendedString
-    from OCP.TDataStd import TDataStd_Name
-    from OCP.TDocStd import TDocStd_Document
-    from OCP.TopLoc import TopLoc_Location
-    from OCP.XCAFApp import XCAFApp_Application
-    from OCP.XCAFDoc import XCAFDoc_DocumentTool
     from OCP.XSControl import XSControl_WorkSession
 
-    doc = TDocStd_Document(TCollection_ExtendedString("MDTV-XCAF"))
-    XCAFApp_Application.GetApplication_s().InitDocument(doc)
-    tool = XCAFDoc_DocumentTool.ShapeTool_s(doc.Main())
-    top = None
-    if top_name is not None:
-        top = tool.NewShape()
-        TDataStd_Name.Set_s(top, TCollection_ExtendedString(top_name))
-    for part, rigid in items:
-        if top is None and rigid != Rigid.identity():
-            raise MotionError(f"{part.pn}: a free product cannot carry a placement")
-        label = tool.AddShape(part.shape, False)
-        TDataStd_Name.Set_s(label, TCollection_ExtendedString(part.name))
-        if top is not None:
-            tool.AddComponent(top, label, TopLoc_Location(to_trsf(rigid)))
     tool.UpdateAssemblies()
     path.parent.mkdir(parents=True, exist_ok=True)
     with stdout_to_stderr():
@@ -716,6 +951,35 @@ def write_step(path: Path, top_name: str | None, items: Iterable[tuple[Part, Rig
             raise MotionError(f"cannot write {path}")
 
 
+def write_part_step(path: Path, part: Part) -> None:
+    """Write AP242 with one free product, the definition named `part.name`, in its own frame."""
+    doc, tool = _new_document()
+    _set_name(tool.AddShape(part.shape, False), part.name)
+    _write_document(path, doc, tool)
+
+
+def write_assembly_step(path: Path, top_name: str, definitions: Mapping[str, Part], occurrences: Iterable[Any],
+                        placements: Mapping[str, Rigid]) -> None:
+    """Write AP242: one product per PN definition and, under the top product `top_name`, one component per
+    occurrence at `placements[occurrence.id]`. An explicit occurrence's component is named `<product> [@id]`."""
+    from OCP.TopLoc import TopLoc_Location
+
+    doc, tool = _new_document()
+    top = tool.NewShape()
+    _set_name(top, top_name)
+    labels: dict[str, Any] = {}
+    for occurrence in occurrences:
+        part = definitions[occurrence.pn]
+        if occurrence.pn not in labels:
+            labels[occurrence.pn] = tool.AddShape(part.shape, False)
+            _set_name(labels[occurrence.pn], part.name)
+        component = tool.AddComponent(top, labels[occurrence.pn], TopLoc_Location(to_trsf(placements[occurrence.id])))
+        tag = component_name(part, occurrence)
+        if tag is not None:
+            _set_name(component, tag)
+    _write_document(path, doc, tool)
+
+
 def product_id(hw: Path) -> str:
     import yaml
 
@@ -726,10 +990,12 @@ def product_id(hw: Path) -> str:
     return str(data["id"]) if isinstance(data, dict) and data.get("id") else "assembly"
 
 
-def write_posed(path: Path, hw: Path, chain: Chain, parts: Mapping[str, Part], values: Mapping[str, float]) -> dict[str, Rigid]:
-    """Write the posed assembly STEP; return the part transforms."""
+def write_posed(path: Path, hw: Path, chain: Chain, definitions: Mapping[str, Part],
+                values: Mapping[str, float]) -> dict[str, Rigid]:
+    """Write the posed assembly STEP at the full coordinate map `values`; return the occurrence placements."""
     transforms = chain.transforms(values)
-    write_step(path, f"{product_id(hw)} posed", ((parts[pn], transforms[pn]) for pn in chain.parts))
+    write_assembly_step(path, f"{product_id(hw)} posed", definitions, (chain.inventory.get(i) for i in chain.ids),
+                        transforms)
     return transforms
 
 
@@ -747,11 +1013,11 @@ def add_geometry_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--hw", type=Path, required=True, help="hardware design record directory (hw/)")
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--version", type=_version, metavar="vN|latest",
-                        help="cad-model version whose zero-pose parts/<PN>.step files to use")
+                        help="cad-model version whose parts/<PN>.step definitions to use")
     source.add_argument("--step", type=Path, help="zero-pose assembly STEP with PN-first product names")
-    source.add_argument("--parts-dir", type=Path, help="directory with one zero-pose <PN>.step per part")
-    parser.add_argument("--attach", action="append", default=[], metavar="PN=PARENT_PN",
-                        help="rigidly attach a part without a joint to a parent part (repeatable)")
+    source.add_argument("--parts-dir", type=Path, help="directory with one <PN>.step definition per part")
+    parser.add_argument("--attach", action="append", default=[], metavar="REF=PARENT_REF",
+                        help="rigidly attach an occurrence without a joint (a PN or @id) to a parent (repeatable)")
 
 
 def version_parts_dir(hw: Path, version: str) -> Path:
@@ -794,19 +1060,28 @@ def refuse_posed_version_step(step: Path) -> None:
 
 
 def load_inputs(args: argparse.Namespace) -> tuple[Assembly, Chain, dict[str, Part]]:
-    """Read the joint record and geometry and build the connected chain."""
+    """Read the record and the definitions and build the connected occurrence chain."""
     assembly = load_assembly(args.hw)
+    located = None
     if args.step is not None:
         refuse_posed_version_step(args.step)
-    parts_dir = version_parts_dir(args.hw, args.version) if args.version else args.parts_dir
-    parts = load_parts(args.hw, args.step, parts_dir)
-    chain = build_chain([*assembly.joints, *attach_joints(args.attach)], parts)
-    require_geometry(chain, parts)
-    return assembly, chain, parts
+        if not args.step.is_file():
+            raise MotionError(f"STEP file not found: {args.step}")
+        step = read_assembly_step(args.step)
+        definitions, located = step.definitions, bind_components(assembly, step, args.step)
+    else:
+        definitions = load_definitions(args.hw, version_parts_dir(args.hw, args.version) if args.version
+                                       else args.parts_dir)
+    if not definitions:
+        raise MotionError("no part geometry found; product or file names must start with a PN")
+    chain = assembly_chain(assembly, definitions, attach_joints(args.attach, assembly), located)
+    require_geometry(chain, definitions)
+    return assembly, chain, definitions
 
 
 def placements_report(chain: Chain, transforms: Mapping[str, Rigid]) -> dict[str, list[list[float]]]:
-    return {pn: transforms[pn].rows() for pn in chain.parts}
+    """3x4 placement rows per occurrence id."""
+    return {occurrence_id: transforms[occurrence_id].rows() for occurrence_id in chain.ids}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -817,7 +1092,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", type=Path, required=True, help="posed STEP AP242 path")
     args = parser.parse_args(argv)
     try:
-        assembly, chain, parts = load_inputs(args)
+        assembly, chain, definitions = load_inputs(args)
         values = chain.complete(parse_values(args.set))
         findings = chain.limit_findings(values)
         result: dict[str, Any] = {
@@ -825,10 +1100,11 @@ def main(argv: list[str] | None = None) -> int:
             "values": values,
             "units": {j.id: j.unit for j in chain.movable},
             "findings": findings,
-            "no_geometry": [pn for pn in assembly.listed_parts if pn not in parts],
+            "no_geometry": [pn for pn in assembly.definitions if pn not in definitions],
+            "occurrences": {occurrence_id: chain.pn(occurrence_id) for occurrence_id in chain.ids},
         }
         if not findings:
-            transforms = write_posed(args.out, args.hw, chain, parts, values)
+            transforms = write_posed(args.out, args.hw, chain, definitions, values)
             result["placements"] = placements_report(chain, transforms)
             result["out"] = str(args.out)
     except (MotionError, OSError) as error:

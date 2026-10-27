@@ -18,23 +18,29 @@ TRIGGER
 
 ## Workflow
 
-Every script takes `--hw hw` plus zero-pose geometry (all joint values 0) as one of:
+Every script takes `--hw hw` plus the part definitions as one of:
 `--version vN|latest` (a cad-model version's `hw/versions/vN/parts/`; `latest` via
 `hw/versions/latest.json`), `--parts-dir DIR` (one `<PN>.step` per part), or `--step ASSEMBLY.step`
 (leaf products named PN first). Pass a cad-model version with `--version`: its `assembly.step` is
 posed at the nominal joint values, and `--step` refuses it when any nominal is non-zero. A part
-without a joint needs a `fixed` joint or `--attach PN=PARENT_PN`. Revolute values are degrees,
+without a joint needs a `fixed` joint or `--attach REF=PARENT_REF`. Revolute values are degrees,
 prismatic mm. Full contract: each script's docstring.
+
+Occurrences: a PN placed several times has one occurrence per placement in `assembly.yaml`
+(`occurrences`, `@id` references); joints attach to occurrences, so moving one leaves its
+siblings. A REF is `@id`, or a PN placed once; a bare PN placed twice is refused as ambiguous.
+Results key placements by occurrence id and report pairs as REFs. Each occurrence's placement is
+T = D P: its joint motion D times its rest placement P, applied once to the PN's definition.
 
 1. Pose: `uv run --script skill://cad-motion/scripts/pose.py --hw hw --version vN --set J-002=-90 --out posed.step`
    → posed STEP AP242 with product names kept. A value outside [min, max] exits 1 with a
    `joint_limit` finding and writes no STEP.
 2. Sweep: `uv run --script skill://cad-motion/scripts/sweep.py --hw hw --version vN --worst-step worst.step
-   [--steps 19] [--grid 3] [--min-clearance MM] [--include-pair PN:PN] [--end-effector PN]`
+   [--steps 19] [--grid 3] [--min-clearance MM] [--include-pair REF:REF] [--end-effector REF]`
    → JSON: `collisions` (pose + pair + volume), `min_clearance` per pair with its pose,
    `reach_envelope`, `worst_case` (max horizontal reach of the end effector's centre of mass,
    collision-free poses only; written to `--worst-step`), and `timings_s`.
-3. FreeCAD: `uv run --script skill://cad-motion/scripts/freecad_assembly.py --hw hw --version vN [--report-part PN]`
+3. FreeCAD: `uv run --script skill://cad-motion/scripts/freecad_assembly.py --hw hw --version vN [--report-part REF]`
    → JSON: `frames`, start/mid/end `placements`, per-joint `limit_check`, `violations`, `residuals`.
 4. Record each result as a `verification.csv` row: `requirement_id` from requirements.yaml,
    `result` pass|fail from the exit code, `evidence` = script, inputs, pose, and key numbers.
@@ -49,7 +55,10 @@ violation or residual), 2 usage/infrastructure error or a sweep stopped by `--ti
   state `steps_per_joint` and `grid_per_joint` beside every sweep result. Refine with more steps or
   pose the suspect configuration with `pose.py`.
 - Per-joint sweeps hold the other joints at nominal; only the grid combines joints.
-- Joint-connected pairs are excluded from interference checks unless `--include-pair` names them.
+- Interference checks cover every occurrence pair except joint-connected parent/child pairs; `--include-pair` adds such a pair back.
+  Two occurrences of one PN are checked like any other pair. An overlap declared in
+  `interfaces.yaml` (interference press fit, heat-set insert) on exactly that occurrence pair is
+  not a collision (`pair_policy.py`, shared with cad-model `check`).
 - FreeCAD 1.1.4 stores AngleMin/AngleMax but its solver does not enforce them; `freecad_assembly.py`
   measures every frame itself. freecadcmd exiting 139 after its completion marker is a warning.
 

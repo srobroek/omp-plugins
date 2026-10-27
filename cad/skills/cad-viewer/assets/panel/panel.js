@@ -184,15 +184,15 @@ function renderParts(version) {
       actions.node));
   }
   for (const part of version.parts) {
-    const actions = rowActions(part.pn, part.pn, [part.pn], view);
+    const actions = rowActions(part.ref, part.ref, [part.id], view);
     const findings = part.findings.map((f) => el("li", { class: "finding", dataset: { severity: f.severity } },
       el("span", { class: "finding-check", text: `${f.check}: ` }), f.message));
     parts.append(el("li", { class: "item", dataset: { isolated: String(actions.isolated), hidden: String(actions.hidden) } },
       el("span", { class: "swatch", "aria-hidden": "true", style: `background: ${part.colour}` }),
       el("div", { class: "item-body" },
-        el("p", { class: "item-name", text: `${part.pn} ${part.title}` }),
+        el("p", { class: "item-name", text: part.ref === part.pn ? `${part.pn} ${part.title}` : `${part.ref} · ${part.pn} ${part.title}` }),
         el("p", { class: "item-meta", text: `${part.material || "material not set"} · ${part.process || "process not set"}${part.group ? ` · ${part.group}` : ""}` }),
-        findings.length ? el("ul", { class: "findings", "aria-label": `${part.pn} findings` }, findings) : null),
+        findings.length ? el("ul", { class: "findings", "aria-label": `${part.ref} findings` }, findings) : null),
       actions.node));
   }
 }

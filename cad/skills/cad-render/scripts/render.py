@@ -9,7 +9,7 @@
 """Render a cad-model version to product PNGs through the static three.js PBR page.
 
 Usage:
-    uv run --script render.py HW [--version latest|vN] [--views iso front side exploded closeup-PN part-PN ...]
+    uv run --script render.py HW [--version latest|vN] [--views iso front side exploded closeup-REF part-REF ...]
         [--size 1600x1200] [--force] [--cache-dir DIR]
 
 Resolves the version through HW/versions/latest.json (or HW/versions/vN/), maps each part's
@@ -19,6 +19,10 @@ Playwright, and writes:
 
     HW/renders/<version>/<view>.png   one per view
     HW/renders/<version>/manifest.json
+
+Scene objects are occurrences: one per placed instance, with its own GLB node; materials stay per
+PN. A close-up or part view names one occurrence: `closeup-@ring-head`, or `closeup-LMP-0004` for a
+PN placed once; a bare PN placed several times is ambiguous and refused.
 
 Each frame is graded from its pixels and subject mask. BLANK, CLIPPED, and close-up OCCLUDED (less than 25% of the subject's isolated visible pixels remain visible) make a view unusable; NO_SHADOW and INVERTED_SHADOW are cosmetic warnings and keep the PNG.
 A rerun whose source (GLB, part map, manifest, metrics, assembly.yaml), materials, and renderer hashes match a passing or warning manifest is a cache hit.
@@ -60,7 +64,7 @@ CONCEPT_TOKENS = SKILL.parent / "cad-concept" / "assets" / "viewer" / "tokens.cs
 THREE_VERSION = "0.186.1"
 CHROMIUM_ARGS = ["--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist"]
 BOOT_TIMEOUT_MS = 180_000
-VIEW_NAME = re.compile(r"^(iso|front|side|exploded|(closeup|part)-[A-Z]{2,5}-[0-9]{4})$")
+VIEW_NAME = re.compile(r"^(iso|front|side|exploded|(closeup|part)-([A-Z]{2,5}-[0-9]{4}|@[a-z][a-z0-9_-]*))$")
 SIZE = re.compile(r"^([1-9][0-9]{2,3})x([1-9][0-9]{2,3})$")
 DEFAULT_VIEWS = ["iso", "front", "side", "exploded"]
 CONTENT_TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
@@ -130,6 +134,7 @@ class Version:
     part_map: dict[str, Any]
     manifest: dict[str, Any]
     metrics: dict[str, Any]
+    occurrences: dict[str, Any]  # occurrence id -> versions.BuiltOccurrence
 
 
 def _json(path: Path) -> Any:
@@ -145,7 +150,12 @@ def resolve_version(hw: Path, version: str) -> Version:
     except version_layout.VersionError as exc:
         raise InfraError(str(exc)) from exc
     files = found.files
-    return Version(found.label, files, _json(files["part_map"]), _json(files["manifest"]), _json(files["metrics"]))
+    part_map, manifest = _json(files["part_map"]), _json(files["manifest"])
+    try:
+        occurrences = version_layout.built_occurrences(part_map, manifest)
+    except version_layout.VersionError as exc:
+        raise InfraError(f"{found.label}: {exc}") from exc
+    return Version(found.label, files, part_map, manifest, _json(files["metrics"]), occurrences)
 
 
 def part_records(hw: Path, pns: list[str]) -> dict[str, dict[str, Any]]:
@@ -200,14 +210,16 @@ def to_glb(v: Vec, scale: float = 1.0) -> list[float]:
     return [v[0] * scale, v[2] * scale, -v[1] * scale]
 
 
-def explode_offsets(joints: list[dict[str, Any]], root: str, transforms: dict[str, Any],
+def explode_offsets(joints: list[dict[str, Any]], root: str, motions: dict[str, Any], transforms: dict[str, Any],
                     bboxes: dict[str, Any], toward: Vec) -> dict[str, Vec]:
-    """Exploded offset per part (assembly mm), following the joint tree from `root`.
+    """Exploded offset per occurrence (assembly mm), following the joint tree from `root`.
 
-    A moving child slides out of its joint, along the unit vector from the posed joint origin
-    to its posed bounding-box centre, by MOVABLE_GAP of its diagonal. A fixed child (pin,
-    fastener) is pulled along its posed joint axis, on the side facing `toward`, by FIXED_GAP of
-    its longest bounding-box side. Every child carries its parent's offset.
+    Joint axes and origins are in the zero-pose assembly frame, so the parent's motion D (not its
+    placement T = D P) carries them; `bboxes` are in each definition's frame, so the child's
+    placement T carries its centre. A moving child slides out of its joint, along the unit vector
+    from the posed joint origin to its posed bounding-box centre, by MOVABLE_GAP of its diagonal.
+    A fixed child (pin, fastener) is pulled along its posed joint axis, on the side facing
+    `toward`, by FIXED_GAP of its longest bounding-box side. Every child carries its parent's offset.
     """
     identity = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]]
     offsets: dict[str, Vec] = {root: (0.0, 0.0, 0.0)}
@@ -217,19 +229,19 @@ def explode_offsets(joints: list[dict[str, Any]], root: str, transforms: dict[st
     stack = [root]
     while stack:
         parent = stack.pop()
-        t_parent = transforms.get(parent, identity)
+        d_parent = motions.get(parent, identity)
         for joint in children.get(parent, []):
             child = joint["child"]
             if child in offsets or child not in bboxes:
                 continue
             box = bboxes[child]
             size = box["size"]
-            axis = _unit(_rotate(t_parent, tuple(joint["axis"]))) or (0.0, 0.0, 1.0)
+            axis = _unit(_rotate(d_parent, tuple(joint["axis"]))) or (0.0, 0.0, 1.0)
             if joint.get("type") == "fixed":
                 sign = 1.0 if sum(a * b for a, b in zip(axis, toward)) >= 0 else -1.0
                 step = tuple(sign * c * FIXED_GAP * max(size) for c in axis)
             else:
-                origin = _apply(t_parent, tuple(joint["origin"]))
+                origin = _apply(d_parent, tuple(joint["origin"]))
                 centre = _apply(transforms.get(child, identity),
                                 tuple((lo + hi) / 2 for lo, hi in zip(box["min"], box["max"])))
                 outward = _unit(tuple(c - o for c, o in zip(centre, origin))) or axis
@@ -490,13 +502,33 @@ def view_kind(name: str) -> str:
     return name
 
 
-def parse_views(tokens: list[str], pns: list[str]) -> list[str]:
+def view_subject(name: str, occurrences: dict[str, str]) -> str:
+    """The occurrence id a close-up or part view names: `@id`, or a PN placed exactly once.
+
+    `occurrences` maps occurrence id -> PN; a legacy singleton's id is its PN, an explicit id never is."""
+    kind, ref = name.split("-", 1)
+    if ref.startswith("@"):
+        if occurrences.get(ref[1:], ref[1:]) != ref[1:]:
+            return ref[1:]
+        raise InfraError(f"{name}: no occurrence {ref} in this version")
+    found = [oid for oid, pn in occurrences.items() if pn == ref]
+    if len(found) == 1:
+        return found[0]
+    if not found:
+        raise InfraError(f"{name}: no part {ref} in this version")
+    raise InfraError(f"{name}: {ref} is placed {len(found)} times; name one: "
+                     + ", ".join(f"{kind}-@{oid}" for oid in found))
+
+
+def parse_views(tokens: list[str], occurrences: dict[str, str]) -> list[str]:
+    """The requested views, deduplicated; a close-up or part view must name one occurrence (`view_subject`)."""
     views = []
     for token in tokens:
         if not VIEW_NAME.match(token):
-            raise InfraError(f"unknown view {token!r}; use iso, front, side, exploded, closeup-<PN>, or part-<PN>")
-        if token.startswith(("closeup-", "part-")) and token.split("-", 1)[1] not in pns:
-            raise InfraError(f"{token}: no part {token.split('-', 1)[1]} in this version")
+            raise InfraError(f"unknown view {token!r}; use iso, front, side, exploded, closeup-<REF>, or part-<REF> "
+                             "with REF a PN placed once or @occurrence")
+        if token.startswith(("closeup-", "part-")):
+            view_subject(token, occurrences)
         if token not in views:
             views.append(token)
     return views
@@ -506,11 +538,12 @@ def build_scene(hw: Path, version: Version, views: list[str], size: tuple[int, i
                 table: material_rules.MaterialTable) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     """Returns (scene payload for the page, materials per PN, cache key).
 
-    The key's source hash covers every version file the scene reads (GLB, part map, manifest
-    pose and ground, metrics bboxes) and assembly.yaml, whose joints shape the explode; part.yaml
+    Scene parts are occurrences, keyed by occurrence id; materials are per PN. The key's source
+    hash covers every version file the scene reads (GLB, part map, manifest pose, joints and
+    ground, metrics bboxes) and assembly.yaml, whose joints shape a version 1 explode; part.yaml
     enters through the resolved materials."""
-    parts_map = version.part_map["parts"]
-    pns = sorted(parts_map)
+    occurrences = {oid: version.occurrences[oid] for oid in sorted(version.occurrences)}
+    pns = sorted({o.pn for o in occurrences.values()})
     records = part_records(hw, pns)
     materials = {}
     for pn in pns:
@@ -520,25 +553,32 @@ def build_scene(hw: Path, version: Version, views: list[str], size: tuple[int, i
                          "rule": rule.id, "label": rule.label, "pbr": rule.pbr}
 
     assembly, assembly_raw = load_assembly(hw)
-    joints = [j for j in assembly.get("joints") or [] if j.get("parent") in parts_map and j.get("child") in parts_map]
-    root = version.manifest.get("ground") or pns[0]
-    offsets = explode_offsets(joints, root, version.manifest.get("pose", {}).get("transforms", {}),
-                              {pn: version.metrics["parts"][pn]["bbox_mm"] for pn in pns},
+    try:
+        joints = version_layout.built_joints(version.manifest, assembly.get("joints") or [])
+    except version_layout.VersionError as exc:
+        raise InfraError(f"{version.label}: {exc}") from exc
+    joints = [j for j in joints if j.get("parent") in occurrences and j.get("child") in occurrences]
+    root = version.manifest.get("ground") or next(iter(occurrences))
+    offsets = explode_offsets(joints, root, {oid: o.motion for oid, o in occurrences.items()},
+                              {oid: o.transform for oid, o in occurrences.items()},
+                              {oid: version.metrics["parts"][o.pn]["bbox_mm"] for oid, o in occurrences.items()},
                               DIRECTIONS["exploded"])
+    by_pn = {oid: o.pn for oid, o in occurrences.items()}
     view_specs = []
     for name in views:
         kind = view_kind(name)
         view_specs.append({"name": name, "direction": to_glb(DIRECTIONS[kind]),
-                           "subject": [name.split("-", 1)[1]] if kind in {"closeup", "part"} else None,
+                           "subject": [view_subject(name, by_pn)] if kind in {"closeup", "part"} else None,
                            "explode": kind == "exploded", "isolated": kind == "part"})
     scene = {
         "version": version.label,
         "glb": "/render/model.glb",
         "image": {"width": size[0], "height": size[1]},
-        "parts": [{"pn": pn, "node_indices": parts_map[pn]["node_indices"],
-                   "material": {"id": materials[pn]["rule"], "pbr": materials[pn]["pbr"]}} for pn in pns],
+        "parts": [{"id": oid, "pn": o.pn, "ref": o.ref, "node_indices": list(o.node_indices),
+                   "material": {"id": materials[o.pn]["rule"], "pbr": materials[o.pn]["pbr"]}}
+                  for oid, o in occurrences.items()],
         "views": view_specs,
-        "explode": {pn: to_glb(offsets[pn], 0.001) for pn in pns if pn in offsets},
+        "explode": {oid: to_glb(offsets[oid], 0.001) for oid in occurrences if oid in offsets},
     }
     assembly_sha = sha256(assembly_raw)
     sources = {name: sha256(version.files[name].read_bytes()) for name in SOURCE_FILES}
@@ -548,7 +588,7 @@ def build_scene(hw: Path, version: Version, views: list[str], size: tuple[int, i
         "renderer_sha256": renderer_sha256(),
         "image": f"{size[0]}x{size[1]}",
     }
-    extra = {"explode_offsets_mm": {pn: [round(c, 3) for c in offsets[pn]] for pn in pns if pn in offsets},
+    extra = {"explode_offsets_mm": {oid: [round(c, 3) for c in offsets[oid]] for oid in occurrences if oid in offsets},
              "assembly_yaml_sha256": assembly_sha,
              "assembly_yaml_matches_version": assembly_sha == version.manifest.get("assembly_yaml_sha256")}
     return scene, materials, {"key": key, **extra}
@@ -670,7 +710,7 @@ def capture_views(url: str, views: list[str], size: tuple[int, int]) -> tuple[di
     if errors:
         raise InfraError(f"renderer page reported errors: {errors}")
     if info.get("unmapped_meshes"):
-        raise InfraError(f"GLB meshes owned by no part-map PN: {info['unmapped_meshes']}")
+        raise InfraError(f"GLB meshes owned by no part-map occurrence: {info['unmapped_meshes']}")
     return info, results, timings
 
 
@@ -840,7 +880,7 @@ def run(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     hw = args.hw.resolve()
     size = parse_size(args.size)
     version = resolve_version(hw, args.version)
-    views = parse_views(args.views, sorted(version.part_map["parts"]))
+    views = parse_views(args.views, {oid: o.pn for oid, o in version.occurrences.items()})
     try:
         table = material_rules.MaterialTable.load()
     except material_rules.MaterialsError as exc:

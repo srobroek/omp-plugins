@@ -6,15 +6,30 @@
   "additionalProperties": false,
   "required": ["subassemblies", "joints"],
   "properties": {
+    "occurrences": {
+      "description": "Explicit placements of part definitions; a PN listed in a subassembly's parts is one implicit occurrence at the identity placement instead",
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "PN"],
+        "properties": {
+          "id": {"$ref": "#/$defs/occurrence_id"},
+          "PN": {"$ref": "#/$defs/pn"},
+          "placement": {"$ref": "#/$defs/placement"}
+        }
+      }
+    },
     "subassemblies": {
       "type": "array", "minItems": 1,
       "items": {
         "type": "object", "additionalProperties": false,
-        "required": ["id", "title", "parts"],
+        "required": ["id", "title"],
+        "anyOf": [{"required": ["parts"]}, {"required": ["occurrences"]}],
         "properties": {
           "id": {"type": "string", "pattern": "^[a-z][a-z0-9_-]*$"},
           "title": {"type": "string", "minLength": 1},
-          "parts": {"type": "array", "minItems": 1, "items": {"type": "string", "pattern": "^[A-Z]{2,5}-[0-9]{4}$"}}
+          "parts": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/pn"}},
+          "occurrences": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/occurrence_ref"}}
         }
       }
     },
@@ -26,8 +41,8 @@
         "properties": {
           "id": {"type": "string", "pattern": "^J-[0-9]{3}$"},
           "type": {"type": "string", "enum": ["revolute", "prismatic", "fixed"]},
-          "parent": {"type": "string", "pattern": "^[A-Z]{2,5}-[0-9]{4}$"},
-          "child": {"type": "string", "pattern": "^[A-Z]{2,5}-[0-9]{4}$"},
+          "parent": {"$ref": "#/$defs/part_ref"},
+          "child": {"$ref": "#/$defs/part_ref"},
           "axis": {"$ref": "#/$defs/vector"},
           "origin": {"$ref": "#/$defs/vector"},
           "min": {"type": "number"},
@@ -38,6 +53,33 @@
     }
   },
   "$defs": {
-    "vector": {"type": "array", "prefixItems": [{"type": "number"}, {"type": "number"}, {"type": "number"}], "minItems": 3, "maxItems": 3}
+    "vector": {"type": "array", "prefixItems": [{"type": "number"}, {"type": "number"}, {"type": "number"}], "minItems": 3, "maxItems": 3},
+    "pn": {"type": "string", "pattern": "^[A-Z]{2,5}-[0-9]{4}$"},
+    "occurrence_id": {"type": "string", "pattern": "^[a-z][a-z0-9_-]*$"},
+    "occurrence_ref": {"description": "One physical instance: @ followed by an occurrence id", "type": "string", "pattern": "^@[a-z][a-z0-9_-]*$"},
+    "part_ref": {"description": "An occurrence reference, or a PN that has exactly one occurrence", "anyOf": [{"$ref": "#/$defs/pn"}, {"$ref": "#/$defs/occurrence_ref"}]},
+    "placement": {
+      "description": "Rest placement x -> R x + t: rotation about the definition's local origin, then translation (mm)",
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "translation_mm": {"$ref": "#/$defs/vector"},
+        "rotation": {
+          "type": "object", "additionalProperties": false, "required": ["axis", "angle_deg"],
+          "properties": {
+            "axis": {"$ref": "#/$defs/vector"},
+            "angle_deg": {"type": "number"}
+          }
+        }
+      }
+    },
+    "drawing_item": {
+      "description": "One assembly-drawing item row: a PN and, when it is placed more than once, the occurrences it stands for",
+      "type": "object", "additionalProperties": false, "required": ["item", "PN"],
+      "properties": {
+        "item": {"type": "integer", "minimum": 1},
+        "PN": {"$ref": "#/$defs/pn"},
+        "occurrences": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/occurrence_ref"}}
+      }
+    }
   }
 }

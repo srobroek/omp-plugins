@@ -2,21 +2,27 @@
 # requires-python = ">=3.11,<3.15"
 # dependencies = ["cadquery-ocp-novtk==8.0.1.1.0", "pyyaml>=6.0"]
 # ///
-"""Write cad-motion test geometry as STEP AP242, modeled in place at the zero pose.
+"""Write cad-motion test geometry as STEP AP242.
 
 Usage: uv run --script build_fixtures.py OUT_DIR
 
-OUT_DIR/lamp/       LMP-0001..LMP-0013 as one STEP per part, plus
-                    lamp-arm.step (one assembly STEP of the same parts). The
-                    geometry is a stand-in for the cad-record lamp-arm template,
-                    whose model.py files are placeholders; it follows the
-                    template's assembly.yaml joint origins and axes: the arm lies
-                    straight along +X at the zero pose.
+OUT_DIR/lamp/       LMP-0001..LMP-0011 as one STEP per part definition, plus
+                    lamp-arm.step (one assembly STEP placing every occurrence of
+                    the cad-record lamp-arm template's assembly.yaml: each part
+                    once, the LMP-0011 ring three times). The geometry is a
+                    stand-in for the template's models; it follows the
+                    template's joint origins and axes: the arm lies straight
+                    along +X at the zero pose. LMP-0011 is part-local (axis +Z,
+                    one face on z 0), every other part is modeled in place.
 OUT_DIR/planar/     TST-0001..TST-0003, a planar three-link arm in two Z layers:
                     TST-0001 (ground, layer 0) x 0..100, TST-0002 (layer 1)
                     x 100..200, TST-0003 (layer 0) x 200..350. Folding TST-0003
                     back by 180 degrees about (200, 0) overlaps TST-0001 in
                     x 50..100: 50 x 10 x 10 = 5000 mm^3.
+OUT_DIR/twins/      TST-0201, a ground plate z -5..0 over x -20..80, y -20..60,
+                    and TST-0202, a part-local arm box x 0..50, y -5..5, z 0..5
+                    with a 5 x 5 x 5 tab at x 0..5, y 5..10 (asymmetric: a
+                    mirrored or misrotated placement moves the tab).
 """
 
 from __future__ import annotations
@@ -26,6 +32,7 @@ import sys
 from pathlib import Path
 
 POSE_PATH = Path(__file__).resolve().parents[2] / "scripts" / "pose.py"
+TEMPLATE_HW = Path(__file__).resolve().parents[3] / "cad-record" / "assets" / "project-template" / "hw"
 _spec = importlib.util.spec_from_file_location("cad_motion_pose", POSE_PATH)
 assert _spec and _spec.loader
 pose = importlib.util.module_from_spec(_spec)
@@ -44,8 +51,6 @@ LAMP_TITLES = {
     "LMP-0009": "Bushing SPIROL CMPL 4 X 6 EK CL8100",
     "LMP-0010": "Heat-set insert QT M10x1 x 12.7 OD 12.6",
     "LMP-0011": "Retaining ring DIN 471 - 5x0.6",
-    "LMP-0012": "Retaining ring DIN 471 - 5x0.6",
-    "LMP-0013": "Retaining ring DIN 471 - 5x0.6",
 }
 PIN_R, BORE_R, LUG_R = 2.5, 2.6, 6.0  # M5 shank in a 5.2 mm bore: 0.1 mm radial clearance
 
@@ -116,13 +121,12 @@ def lamp_shapes() -> dict[str, object]:
         "LMP-0005": fuse(cylinder((0, 0, 16), Z, PIN_R, 30), cylinder((0, 0, 46.5), Z, 4, 3)),
         "LMP-0006": fuse(cylinder((160, -12.5, 40), Y, PIN_R, 25), cylinder((160, 10.5, 40), Y, 4, 3)),
         "LMP-0007": fuse(cylinder((360, -9.5, 40), Y, PIN_R, 20), cylinder((360, -13.5, 40), Y, 4, 3)),
-        # Bushings, insert and rings: tubes on the template's J-007..J-012 axes.
+        # Bushings and insert: tubes on the template's J-007..J-009 axes.
         "LMP-0008": tube((0, 0, 21.5), Z, 4.0, BORE_R, 8),
         "LMP-0009": tube((360, 2, 40), Y, 4.0, BORE_R, 7),
         "LMP-0010": tube((430, 0, 30), Z, 6.3, 4.5, 10),
-        "LMP-0011": tube((0, 0, 16.5), Z, 3.2, PIN_R, 0.6),
-        "LMP-0012": tube((160, -12, 40), Y, 3.2, PIN_R, 0.6),
-        "LMP-0013": tube((360, 9, 40), Y, 3.2, PIN_R, 0.6),
+        # The ring definition, part-local; the template's occurrences place it on the three pins.
+        "LMP-0011": tube((0, 0, 0), Z, 3.2, PIN_R, 0.6),
     }
 
 
@@ -134,19 +138,28 @@ def planar_shapes() -> dict[str, object]:
     }
 
 
-def write_set(folder: Path, shapes: dict[str, object], titles: dict[str, str], top: str | None) -> None:
+def twin_shapes() -> dict[str, object]:
+    return {
+        "TST-0201": box(-20, -20, -5, 80, 60, 0),
+        "TST-0202": fuse(box(0, -5, 0, 50, 5, 5), box(0, 5, 0, 5, 10, 5)),
+    }
+
+
+def write_set(folder: Path, shapes: dict[str, object], titles: dict[str, str]) -> dict[str, object]:
     folder.mkdir(parents=True, exist_ok=True)
-    identity = pose.Rigid.identity()
-    parts = [pose.Part(pn, f"{pn} {titles[pn]}", shape) for pn, shape in shapes.items()]
-    for part in parts:
-        pose.write_step(folder / f"{part.pn}.step", None, [(part, identity)])
-    if top:
-        pose.write_step(folder / f"{top}.step", top, [(part, identity) for part in parts])
+    parts = {pn: pose.Part(pn, f"{pn} {titles[pn]}", shape) for pn, shape in shapes.items()}
+    for part in parts.values():
+        pose.write_part_step(folder / f"{part.pn}.step", part)
+    return parts
 
 
 def main(out: Path) -> int:
-    write_set(out / "lamp", lamp_shapes(), LAMP_TITLES, "lamp-arm")
-    write_set(out / "planar", planar_shapes(), {"TST-0001": "Ground link", "TST-0002": "Middle link", "TST-0003": "Tip link"}, None)
+    lamp = write_set(out / "lamp", lamp_shapes(), LAMP_TITLES)
+    assembly = pose.load_assembly(TEMPLATE_HW)
+    rests = {o.id: pose.Rigid.from_placement(o.placement) for o in assembly.occurrences}
+    pose.write_assembly_step(out / "lamp" / "lamp-arm.step", "lamp-arm", lamp, assembly.occurrences, rests)
+    write_set(out / "planar", planar_shapes(), {"TST-0001": "Ground link", "TST-0002": "Middle link", "TST-0003": "Tip link"})
+    write_set(out / "twins", twin_shapes(), {"TST-0201": "Ground plate", "TST-0202": "Arm"})
     return 0
 
 

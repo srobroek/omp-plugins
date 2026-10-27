@@ -124,15 +124,16 @@ def screws() -> list[tuple[str, Any]]:
 
 def scene(kernel_parts: Path, hw: Path, pose_name: str, pose: Any) -> tuple[list[Any], list[str], list[str], dict[str, Any]]:
     assembly = pose.load_assembly(hw)
-    chain = pose.build_chain(assembly.joints, assembly.listed_parts)
+    parts = pose.load_definitions(hw, kernel_parts)
+    chain = pose.assembly_chain(assembly, parts)
     values = chain.complete({}) if pose_name == "nominal" else {j.id: 0.0 for j in chain.movable}
     transforms = chain.transforms(values)
-    parts = pose.load_parts(hw, parts_dir=kernel_parts)
     process = process_of(hw)
     shapes, names, colors = [], [], []
-    for pn in chain.parts:
-        shapes.append(pose.placed(parts[pn].shape, transforms[pn]))
-        names.append(parts[pn].name)
+    for oid in chain.ids:  # one shape per occurrence, its PN's definition at T = D P
+        pn = chain.pn(oid)
+        shapes.append(pose.placed(parts[pn].shape, transforms[oid]))
+        names.append(pose.component_name(parts[pn], chain.inventory.get(oid)) or parts[pn].name)
         colors.append(HEAD_COLOR if pn == "LMP-0004" else COLORS.get(process.get(pn, ""), "#999999"))
     for name, shape in screws():
         shapes.append(pose.placed(shape, transforms[chain.root]))

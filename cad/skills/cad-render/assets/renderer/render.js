@@ -263,6 +263,8 @@ async function boot() {
   world.add(root);
   root.updateMatrixWorld(true);
 
+  // One entry per occurrence (scene.parts[].id; a legacy part's id is its PN). Materials stay per
+  // part definition: every occurrence of a PN carries its PN's material spec.
   const parts = new Map();
   const owned = new Set();
   for (const part of scene.parts) {
@@ -270,14 +272,14 @@ async function boot() {
     const nodes = await Promise.all(part.node_indices.map((i) => gltf.parser.getDependency("node", i)));
     const meshes = [];
     for (const node of nodes) node.traverse((o) => { if (o.isMesh) meshes.push(o); });
-    if (!meshes.length) throw new Error(`${part.pn}: no mesh under GLB nodes ${part.node_indices.join(", ")}`);
+    if (!meshes.length) throw new Error(`${part.ref}: no mesh under GLB nodes ${part.node_indices.join(", ")}`);
     for (const mesh of meshes) {
       mesh.material = material;
       mesh.castShadow = true;
       mesh.receiveShadow = true;
       owned.add(mesh);
     }
-    parts.set(part.pn, { nodes, meshes, material, rest: nodes.map((n) => ({
+    parts.set(part.id, { pn: part.pn, nodes, meshes, material, rest: nodes.map((n) => ({
       parent: n.parent, position: n.position.clone(), quaternion: n.quaternion.clone(), visible: n.visible,
     })) });
   }
@@ -412,8 +414,8 @@ async function boot() {
     }
     root.updateMatrixWorld(true);
     if (!on) return;
-    for (const [pn, part] of parts) {
-      const offset = scene.explode[pn];
+    for (const [id, part] of parts) {
+      const offset = scene.explode[id];
       if (!offset) continue;
       part.nodes.forEach((node) => {
         const moved = node.getWorldPosition(new THREE.Vector3()).add(new THREE.Vector3(...offset));
@@ -424,8 +426,8 @@ async function boot() {
     root.updateMatrixWorld(true);
   }
 
-  function restOnFloor(pn) {
-    const part = parts.get(pn);
+  function restOnFloor(id) {
+    const part = parts.get(id);
     const box = new THREE.Box3().makeEmpty();
     part.meshes.forEach((mesh) => box.expandByObject(mesh));
     const size = box.getSize(new THREE.Vector3());
@@ -484,10 +486,10 @@ async function boot() {
   // when null), then restores the beauty materials.
   function withMaterials(partMaterial, floorMaterial, body) {
     const saved = new Map();
-    for (const [pn, part] of parts) {
+    for (const [id, part] of parts) {
       for (const mesh of part.meshes) {
         saved.set(mesh, mesh.material);
-        mesh.material = partMaterial(pn);
+        mesh.material = partMaterial(id);
       }
     }
     ground.material = floorMaterial ?? floorShadow;
@@ -585,8 +587,8 @@ async function boot() {
     world.background = null;
     const toneMapping = renderer.toneMapping;
     renderer.toneMapping = THREE.NoToneMapping;
-    withMaterials((pn) => {
-      if (subject.has(pn)) return maskSubject;
+    withMaterials((id) => {
+      if (subject.has(id)) return maskSubject;
       return ghostOccluders ? maskGhost : maskOther;
     }, maskFloor, () => {
       renderer.setRenderTarget(maskTarget);
@@ -613,8 +615,8 @@ async function boot() {
   }
   function withGhostContext(subject, body) {
     const saved = new Map();
-    for (const [pn, part] of parts) {
-      if (subject.has(pn)) continue;
+    for (const [id, part] of parts) {
+      if (subject.has(id)) continue;
       for (const mesh of part.meshes) {
         saved.set(mesh, mesh.material);
         const ghost = mesh.material.clone();
@@ -635,8 +637,8 @@ async function boot() {
 
   function withIsolatedSubject(subject, body) {
     const hidden = [];
-    for (const [pn, part] of parts) {
-      if (subject.has(pn)) continue;
+    for (const [id, part] of parts) {
+      if (subject.has(id)) continue;
       for (const object of [...part.nodes, ...part.meshes]) {
         hidden.push([object, object.visible]);
         object.visible = false;
@@ -656,14 +658,16 @@ async function boot() {
     applyExplode(view.explode);
     const subject = new Set(view.subject ?? [...parts.keys()]);
     const isolated = view.isolated || options.isolated === true;
-    for (const [pn, part] of parts) {
+    for (const [id, part] of parts) {
       for (let i = 0; i < part.nodes.length; i += 1) part.nodes[i].visible = part.rest[i].visible;
-      if (isolated && !subject.has(pn)) for (const node of part.nodes) node.visible = false;
+      if (isolated && !subject.has(id)) {
+        for (const node of part.nodes) node.visible = false;
+      }
     }
     if (isolated) restOnFloor(view.subject[0]);
-    const subjectMeshes = [...subject].flatMap((pn) => {
-      if (!parts.has(pn)) throw new Error(`view ${name}: unknown part ${pn}`);
-      return parts.get(pn).meshes;
+    const subjectMeshes = [...subject].flatMap((id) => {
+      if (!parts.has(id)) throw new Error(`view ${name}: unknown occurrence ${id}`);
+      return parts.get(id).meshes;
     });
     const sceneBox = new THREE.Box3().makeEmpty();
     subjectMeshes.forEach((mesh) => sceneBox.expandByObject(mesh));
@@ -690,7 +694,7 @@ async function boot() {
     const isolatedSubjectPixels = isolatedMask.reduce((count, cls) => count + (cls === 2), 0);
     const { mask, floor, pixels, png } = finalFrame;
     const applied = {};
-    for (const [pn, part] of parts) applied[pn] = readBack(part.material);
+    for (const part of parts.values()) applied[part.pn] = readBack(part.material);
     return {
       view: name,
       width,
