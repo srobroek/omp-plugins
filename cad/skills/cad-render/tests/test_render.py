@@ -101,6 +101,14 @@ class QualityHeuristics(unittest.TestCase):
         quality = render.assess(frame(subject=(30, 20, 120, 60), shadow=(40, 60, 95, 75)))
         self.assertEqual(quality.failures, ["CLIPPED"])
         self.assertEqual(quality.metrics["subject_edge_px"]["right"], 40)
+    def test_closeup_below_visible_fraction_threshold_is_occluded(self) -> None:
+        quality = render.assess(frame(**GOOD), closeup=True, visible_fraction=0.249)
+        self.assertIn("OCCLUDED", quality.failures)
+        self.assertEqual(quality.metrics["visible_subject_fraction"], 0.249)
+
+    def test_closeup_at_visible_fraction_threshold_is_not_occluded(self) -> None:
+        quality = render.assess(frame(**GOOD), closeup=True, visible_fraction=0.25)
+        self.assertNotIn("OCCLUDED", quality.failures)
 
     def test_a_subject_cut_at_the_top_is_clipped(self) -> None:
         self.assertIn("CLIPPED", render.assess(frame(subject=(30, 0, 70, 50), shadow=(40, 50, 95, 75))).failures)
@@ -109,35 +117,37 @@ class QualityHeuristics(unittest.TestCase):
         quality = render.assess(frame(**GOOD, other=(0, 30, 30, 45)))
         self.assertTrue(quality.passed, quality.failures)
 
-    def test_no_shadow_fails(self) -> None:
-        self.assertEqual(render.assess(frame(subject=GOOD["subject"])).failures, ["NO_SHADOW"])
+    def test_no_shadow_is_a_cosmetic_warning(self) -> None:
+        quality = render.assess(frame(subject=GOOD["subject"]))
+        self.assertTrue(quality.passed)
+        self.assertEqual(quality.failures, [])
+        self.assertEqual(quality.warnings, ["NO_SHADOW"])
 
-    def test_the_spike_faint_contact_shadow_fails(self) -> None:
-        """The render spike's radial catcher darkened the floor by at most 3 luminance levels."""
-        self.assertEqual(render.assess(frame(**GOOD, shadow_drop=3)).failures, ["NO_SHADOW"])
+    def test_faint_shadow_is_a_cosmetic_warning(self) -> None:
+        self.assertEqual(render.assess(frame(**GOOD, shadow_drop=3)).warnings, ["NO_SHADOW"])
 
-    def test_a_shadow_too_light_to_read_fails(self) -> None:
-        self.assertEqual(render.assess(frame(**GOOD, shadow_drop=14)).failures, ["NO_SHADOW"])
+    def test_too_light_shadow_is_a_cosmetic_warning(self) -> None:
+        self.assertEqual(render.assess(frame(**GOOD, shadow_drop=14)).warnings, ["NO_SHADOW"])
 
-    def test_a_shadow_too_small_to_read_fails(self) -> None:
+    def test_too_small_shadow_is_a_cosmetic_warning(self) -> None:
         quality = render.assess(frame(subject=GOOD["subject"], shadow=(40, 60, 46, 63)))
-        self.assertEqual(quality.failures, ["NO_SHADOW"])
+        self.assertEqual(quality.warnings, ["NO_SHADOW"])
 
     def test_a_dark_anti_aliased_rim_is_not_a_shadow(self) -> None:
         """A 2 px dark fringe hugging the product is edge blending, not a ground shadow."""
         quality = render.assess(frame(subject=GOOD["subject"], shadow=(28, 18, 72, 62), shadow_drop=80))
-        self.assertEqual(quality.failures, ["NO_SHADOW"])
+        self.assertEqual(quality.warnings, ["NO_SHADOW"])
         self.assertEqual(quality.metrics["shadow_ratio"], 0.0)
-
     def test_a_contact_darker_than_the_overhang_shadow_passes(self) -> None:
         quality = render.assess(frame(**GROUNDED, shadow_drop=40, overhung_drop=12))
         self.assertTrue(quality.passed, quality.failures)
         self.assertEqual((quality.metrics["contact_depth"], quality.metrics["overhang_depth"]), (40.0, 12.0))
 
-    def test_an_overhang_shadow_darker_than_the_contact_is_inverted(self) -> None:
+    def test_an_overhang_shadow_darker_than_contact_warns_but_passes(self) -> None:
         """Head 85e4829914: the shade 117 mm up cast the darkest shadow, the base barely grounded."""
         quality = render.assess(frame(**GROUNDED, shadow_drop=12, overhung_drop=40))
-        self.assertEqual(quality.failures, ["INVERTED_SHADOW"])
+        self.assertTrue(quality.passed)
+        self.assertEqual(quality.warnings, ["INVERTED_SHADOW"])
 
     def test_without_floor_zones_the_inversion_check_is_skipped(self) -> None:
         quality = render.assess(frame(**GOOD))
