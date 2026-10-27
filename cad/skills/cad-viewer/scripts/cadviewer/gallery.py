@@ -169,6 +169,8 @@ def _renders(hw: Path, version: str) -> dict[str, Any]:
             continue
         quality = entry.get("quality") if isinstance(entry.get("quality"), dict) else {}
         subject = entry.get("subject") if isinstance(entry.get("subject"), list) else None
+        if subject is not None and set(materials) <= set(subject):
+            subject = None  # the whole assembly: the materials list already names every PN
         shown = [pn for pn in (subject or sorted(materials)) if pn in materials]
         tile.update({
             "status": str(quality.get("status") or "unknown"),

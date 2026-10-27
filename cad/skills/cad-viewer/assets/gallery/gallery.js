@@ -51,18 +51,29 @@ function fact(key, value, factTone) {
     el("span", { class: "fact-key", text: `${key}: ` }), value);
 }
 
+// Two entries or fewer show inline; a longer list folds into a disclosure that names its count.
+function folded(summary, lines, factTone) {
+  const items = lines.map((line) => el("li", { text: line }));
+  if (lines.length <= 2) return el("ul", { class: "facts", dataset: factTone ? { tone: factTone } : undefined }, items);
+  return el("details", { class: "materials", dataset: factTone ? { tone: factTone } : undefined },
+    el("summary", { text: `${summary}, ${lines.length}` }), el("ul", {}, items));
+}
+
 function materials(rows) {
   if (!rows?.length) return null;
-  const items = rows.map((m) => el("li", { text: `${m.pn} · ${m.label || "unlabelled"} (${m.rule || "no rule"})` }));
-  if (rows.length <= 2) return el("ul", { class: "facts" }, items);
-  return el("details", { class: "materials" },
-    el("summary", { text: `Materials, ${rows.length} PNs` }), el("ul", {}, items));
+  return folded("Materials per PN",
+    rows.map((m) => `${m.pn} · ${m.label || "unlabelled"} (${m.rule || "no rule"})`));
+}
+
+function warnings(lines) {
+  if (!lines?.length) return null;
+  if (lines.length === 1) return el("ul", { class: "facts" }, fact("Warning", lines[0], "warn"));
+  return folded("Warnings", lines, "warn");
 }
 
 function facts(tile) {
   const rows = [];
   if (tile.failures?.length) rows.push(fact("Failures", tile.failures.join(", "), "fail"));
-  if (tile.warnings?.length) rows.push(fact("Warnings", tile.warnings.join(", "), "warn"));
   if (tile.retry) {
     const attempts = `${tile.retry.attempts} attempt${tile.retry.attempts === 1 ? "" : "s"}`;
     rows.push(fact("Retry", `${tile.retry.strategy}, ${attempts}${tile.retry.note ? ` — ${tile.retry.note}` : ""}`));
@@ -91,6 +102,7 @@ function tileNode(section, tile, version) {
         el("span", { class: "tile-title", text: tile.title }),
         tile.status ? el("span", { class: "pill", dataset: { tone: tone(tile.status) }, text: tile.status }) : null),
       facts(tile),
+      warnings(tile.warnings),
       materials(tile.materials),
       pdf,
       pathRow(tile.path, label)));
@@ -135,6 +147,9 @@ async function load(version) {
     render(data);
   } catch (error) {
     setStatus(`Gallery unavailable: ${error.message}`, "error");
+    $("sections").replaceChildren(el("p", { class: "empty" },
+      `Nothing to show for ${version}. `,
+      version === "latest" ? null : el("a", { class: "tile-link", href: "/gallery", text: "Open the latest version" })));
   } finally {
     select.disabled = select.options.length === 0;
     $("gallery").setAttribute("aria-busy", "false");

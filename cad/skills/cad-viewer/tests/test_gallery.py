@@ -60,7 +60,8 @@ def make_project(root: Path) -> Path:
         "materials": {"LMP-0001": {"rule": "al-anodised", "label": "Anodised aluminium"},
                       "LMP-0002": {"rule": "pa12", "label": "PA12 nylon"}},
         "views": {
-            "iso": {"png": "iso.png", "subject": None, "quality": {"status": "pass", "failures": [], "warnings": []}},
+            "iso": {"png": "iso.png", "subject": ["LMP-0001", "LMP-0002"],
+                    "quality": {"status": "pass", "failures": [], "warnings": []}},
             "part-LMP-0001": {"png": "part-LMP-0001.png", "subject": ["LMP-0001"],
                               "quality": {"status": "pass", "failures": [], "warnings": ["NO_SHADOW"]}},
             "closeup-LMP-0002": {"png": "closeup-LMP-0002.png", "subject": ["LMP-0002"],
@@ -122,6 +123,8 @@ class Index(Fixture):
         self.assertEqual(tiles["iso"]["path"], str(self.hw / "renders" / "v2" / "iso.png"))
         self.assertEqual(tiles["iso"]["url"], "/gallery/file?path=renders/v2/iso.png")
         self.assertEqual([m["pn"] for m in tiles["iso"]["materials"]], ["LMP-0001", "LMP-0002"])
+        self.assertIsNone(tiles["iso"]["subject"])  # the whole assembly; materials already name every PN
+        self.assertEqual(tiles["part-LMP-0001"]["subject"], ["LMP-0001"])
         self.assertEqual(tiles["part-LMP-0001"]["warnings"], ["NO_SHADOW"])
         self.assertEqual(tiles["part-LMP-0001"]["status"], "pass")
         self.assertEqual(tiles["part-LMP-0001"]["materials"],

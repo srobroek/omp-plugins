@@ -177,12 +177,15 @@ body {
   color: var(--color-danger);
 }
 
-.fact[data-tone="warn"] {
-  color: var(--color-accent-strong);
-}
-
 .fact-key {
   color: var(--color-fg-muted);
+}
+
+.fact[data-tone="warn"],
+.facts[data-tone="warn"],
+.materials[data-tone="warn"] summary,
+.materials[data-tone="warn"] li {
+  color: var(--color-accent-strong);
 }
 
 .materials summary {
@@ -199,6 +202,10 @@ body {
 }
 
 .tile-link {
+  display: inline-flex;
+  align-items: center;
+  justify-self: start;
+  min-height: var(--target-min);
   color: var(--color-focus);
   font-weight: var(--weight-medium);
 }
@@ -212,4 +219,9 @@ body {
 .path-row .path {
   flex: 1 1 auto;
   padding-top: var(--space-1);
+}
+
+.path-row .button {
+  flex: none;
+  white-space: nowrap;
 }
