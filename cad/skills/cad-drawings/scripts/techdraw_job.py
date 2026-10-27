@@ -61,9 +61,12 @@ def _cut(shape, section):
         common = face.section(plane)
         if common.Edges:
             per_face[str(index)] = _points(common)
+    # the cut faces themselves, outer and inner wires: a slice can double the seam lines of cylinders the
+    # plane contains, which flips the even-odd fill and leaves cut material unhatched
     outlines = []
-    for wire in shape.slice(normal, normal.dot(origin)):
-        outlines.append([[p.x, p.y, p.z] for p in wire.discretize(Deflection=CUT_DEFLECTION_MM)])
+    for cut_face in shape.common(plane).Faces:
+        for wire in cut_face.Wires:
+            outlines.append([[p.x, p.y, p.z] for p in wire.discretize(Deflection=CUT_DEFLECTION_MM)])
     return per_face, outlines
 
 

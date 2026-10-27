@@ -24,7 +24,7 @@ from typing import Any
 from drawing_document import CoverageReport
 from drawing_intent import FIT_KEYS, Characteristic, Measured, finding
 from feature_geometry import Binding
-from sheet import Presentation
+from sheet import Presentation, dimension_key
 
 UNTOLERANCED = ("profile", "thread")   # controlled by their frame or designation
 
@@ -61,6 +61,23 @@ def _conflicts(chars: Sequence[Characteristic]) -> list[dict[str, Any]]:
             found.append(finding("dimension_conflict", f"{char.id} and {seen[key].id} control the same {char.operation} "
                                  f"of {char.feature} differently", feature=char.feature))
         seen.setdefault(key, char)
+    return found
+
+
+def _repeated_dimensions(chars: Sequence[Characteristic], presentation: Presentation) -> list[dict[str, Any]]:
+    """One sheet states each dimension once (ISO 129-1, ASME Y14.5 1.4): no two dimension lines say the same."""
+    by_id = {c.id: c for c in chars}
+    stated: dict[tuple[Any, ...], str] = {}
+    found = []
+    for linear in presentation.linears:
+        char = by_id.get(linear.characteristics[0])
+        key = dimension_key(char) if char is not None else None
+        if key is None:
+            continue
+        if key in stated:
+            found.append(finding("dimension_conflict", f"{linear.id} repeats {stated[key]}: {char.axis} = "
+                                 f"{char.value:.3f} is dimensioned twice", feature=char.feature))
+        stated.setdefault(key, linear.id)
     return found
 
 
@@ -103,6 +120,7 @@ def evaluate(pn: str, part: Mapping[str, Any], interfaces: Sequence[Mapping[str,
         for item in presentation.unplaced:
             findings.append(finding("feature_not_presentable", f"{item['characteristic']} has no visible point of "
                                     f"{item['feature']} in any {item['presentation']} view", feature=item["feature"]))
+        findings += _repeated_dimensions(measured.characteristics, presentation)
     if measured.frame is None and not any(f["code"] == "datum_invalid" for f in findings):
         findings.append(finding("datum_invalid", "no datum frame"))
     return CoverageReport(status="fail" if findings else "pass", rows=tuple(rows), findings=tuple(findings))

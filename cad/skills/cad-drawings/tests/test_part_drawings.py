@@ -16,12 +16,17 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from decimal import Decimal
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
+import completeness  # noqa: E402
 import freecad_runtime  # noqa: E402
+from drawing_intent import Characteristic, Measured, Tolerance  # noqa: E402
+from feature_geometry import Binding  # noqa: E402
 from layout_check import Box, SheetRegions, check_layout  # noqa: E402
+from sheet import Linear, Presentation  # noqa: E402
 
 SKILLS = SCRIPTS.parents[1]
 TEMPLATE = SKILLS / "cad-record" / "assets" / "project-template" / "hw"
@@ -68,6 +73,30 @@ class AnnotationClasses(unittest.TestCase):
 
 def run(*args: str, timeout: float = 3600) -> subprocess.CompletedProcess[str]:
     return subprocess.run([*args], capture_output=True, text=True, env=ENV, timeout=timeout, check=False)
+
+
+class RepeatedDimensions(unittest.TestCase):
+    """The gate fails a sheet that dimensions one coordinate twice; features sharing that dimension pass."""
+
+    def test_two_dimension_lines_for_one_coordinate_fail(self) -> None:
+        tolerance = Tolerance("general", Decimal("-0.2"), Decimal("0.2"))
+        chars = [Characteristic(id=f"{name}.axis_location.y", feature=name, operation="axis_location", value=-3.5,
+                                faces=(index,), quantity=1, axis="y", tolerance=tolerance, presentation="auto",
+                                details={}) for index, name in enumerate(("neck", "cable_run"))]
+
+        def line(number: int, ids: list[str]) -> Linear:
+            return Linear(id=f"dim-{number}", view="plan", origin=(0.0, 0.0), target=(0.0, 3.5), horizontal=False,
+                          text="3.5", boxed=False, reference=False, characteristics=ids)
+
+        repeated = Presentation(linears=[line(0, [chars[0].id]), line(1, [chars[1].id])])
+        shared = Presentation(linears=[line(0, [c.id for c in chars])])
+        for presentation, expected in ((repeated, 1), (shared, 0)):
+            measured = Measured(frame=None)
+            measured.characteristics.extend(chars)
+            report = completeness.evaluate("TST-0001", {"drawing": {}}, [], Binding({}, {}, ()), measured,
+                                           presentation, "0" * 64)
+            self.assertEqual(sum(f["code"] == "dimension_conflict" for f in report.findings), expected, report.findings)
+
 
 
 @unittest.skipUnless(FREECAD_PRESENT and UV, "the gate tests need uv and FreeCAD's freecadcmd")

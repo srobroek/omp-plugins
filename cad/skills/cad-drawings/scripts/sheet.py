@@ -325,6 +325,14 @@ def _datum_reference(axis: str, frame: DatumFrame, binding: Mapping[str, Resolve
                                             if d.direction is not None) else None
 
 
+def dimension_key(char: Characteristic) -> tuple[Any, ...] | None:
+    """What a location dimension states: its frame axis, coordinate and control; None for other operations."""
+    if char.operation not in ("location", "axis_location", "floor_location") or char.axis is None:
+        return None
+    tolerance = None if char.tolerance is None else (char.tolerance.kind, char.tolerance.lower, char.tolerance.upper)
+    return (char.axis, round(char.value, 6), tolerance, char.reference)
+
+
 def build_presentation(chars: Sequence[Characteristic], frame: DatumFrame, binding: Mapping[str, ResolvedFeature],
                        faces: Mapping[int, Face], views: Mapping[str, ViewData], regime: str,
                        geometric: Sequence[Mapping[str, Any]], intents: Mapping[str, Mapping[str, Any]]) -> Presentation:
@@ -341,15 +349,23 @@ def build_presentation(chars: Sequence[Characteristic], frame: DatumFrame, bindi
                                     candidates=[sheet for _, sheet in points])
         return callouts[key]
 
+    stated: dict[tuple[Any, ...], Linear] = {}   # one dimension per datum coordinate (ISO 129-1, ASME Y14.5 1.4)
     for char in chars:
         own = [faces[i] for i in char.faces]
         placed = False
         if char.operation in LINEAR_OPERATIONS:
+            same = stated.get(dimension_key(char))
+            if same is not None:   # features on one centre line or plane share the dimension that locates it
+                same.characteristics.append(char.id)
+                result.placed[char.id] = {"annotation": same.id, "view": same.view, "anchor": list(same.target)}
+                continue
             for plan in _preferred(char, plans):
                 item = _linear(char, frame, binding, faces, views[plan.id], regime)
                 if item is not None:
                     result.linears.append(item)
                     result.placed[char.id] = {"annotation": item.id, "view": plan.id, "anchor": list(item.target)}
+                    if dimension_key(char) is not None:
+                        stated[dimension_key(char)] = item
                     placed = True
                     break
         else:
