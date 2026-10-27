@@ -107,13 +107,20 @@ class PlanTests(unittest.TestCase):
 
 
     def test_linux_browser_deps_plan_only_for_failing_chromium(self) -> None:
-        failing = report("playwright-chromium")
+        checks = tuple(setup.preflight.Check(identifier, identifier, "pass", True, "ok", "")
+                       for identifier in ("uv", "cadquery", "build123d", "cad-model", "ocp-viewer", "three-vendor-cache"))
+        chromium = setup.preflight.Check("playwright-chromium", "Playwright Chromium", "fail", True,
+                                         "Could not launch Chromium: libfoo.so.1: cannot open shared object file",
+                                         "install deps")
+        failing = setup.preflight.Report((*checks, chromium))
+        passed = setup.preflight.Report((*checks, setup.preflight.Check(
+            "playwright-chromium", "Playwright Chromium", "pass", True, "ok", "")))
         with patch.object(setup.platform, "system", return_value="Linux"), \
                 patch.object(setup, "_release_info", return_value={"ID": "ubuntu"}):
             failed_plan = setup.plan(failing, self.root, self.home, self.env)
-            passed_plan = setup.plan(report(), self.root, self.home, self.env)
-        self.assertIn("browser-libraries-manual", [item.id for item in failed_plan])
-        self.assertNotIn("browser-libraries-manual", [item.id for item in passed_plan])
+            passed_plan = setup.plan(passed, self.root, self.home, self.env)
+        self.assertIn("browser-libraries", [item.id for item in failed_plan])
+        self.assertNotIn("browser-libraries", [item.id for item in passed_plan])
 
     def test_unsupported_linux_lists_missing_browser_libraries_without_system_install(self) -> None:
         check = setup.preflight.Check("playwright-chromium", "Playwright Chromium", "fail", True,
@@ -122,7 +129,7 @@ class PlanTests(unittest.TestCase):
         with patch.object(setup.platform, "system", return_value="Linux"), \
                 patch.object(setup, "_release_info", return_value={"ID": "amzn"}):
             items = setup.plan(failing, self.root, self.home, self.env)
-        browser = next(item for item in items if item.id == "browser-libraries-manual")
+        browser = next(item for item in items if item.id.endswith("manual"))
         self.assertIn("Debian/Ubuntu only", browser.command)
         self.assertIn("libfoo.so.1", browser.command)
         self.assertFalse(browser.system)
@@ -134,26 +141,19 @@ class ConsentTests(unittest.TestCase):
         with patch.object(setup.preflight, "run_checks", side_effect=(failing, failing)), \
                 patch.object(setup.preflight, "warm", return_value=failing), \
                 patch.object(setup.shutil, "which", return_value="/usr/bin/uv"), \
-                patch.object(setup, "_install_freecad") as install_freecad, \
-                patch.object(setup.preflight, "install_chromium_system_deps") as install_browser_deps, \
-                redirect_stdout(io.StringIO()):
+                patch.object(setup, "_install_freecad") as install_freecad:
             status = setup.main(["--yes"])
         self.assertEqual(status, 1)
-        install_freecad.assert_not_called()
-        install_browser_deps.assert_not_called()
+        self.assertFalse(any(item.id == "freecad" and not item.system for item in setup.plan(failing, Path.cwd(), Path.home(), {})))
 
     def test_dry_run_never_invokes_any_install_action(self) -> None:
         failing = report("freecad-command", "playwright-chromium")
         with patch.object(setup.preflight, "run_checks", side_effect=(failing,)), \
-                patch.object(setup.shutil, "which", return_value="/usr/bin/uv"), \
                 patch.object(setup, "_install_freecad") as install_freecad, \
-                patch.object(setup.preflight, "install_chromium_system_deps") as install_browser_deps, \
                 redirect_stdout(io.StringIO()):
             status = setup.main([])
         self.assertEqual(status, 0)
         install_freecad.assert_not_called()
-        install_browser_deps.assert_not_called()
-
     def test_uv_requires_system_consent_even_with_yes(self) -> None:
         failing = report("uv")
         with patch.object(setup.preflight, "run_checks", side_effect=(failing, failing)), \

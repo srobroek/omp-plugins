@@ -249,13 +249,20 @@ def find_freecadcmd(environ: Mapping[str, str], home: Path | None = None) -> Pat
         return managed
     return None
 def install_chromium_system_deps(environ: Mapping[str, str] | None = None) -> None:
-    """Install Playwright's Chromium OS libraries; caller must explicitly own system consent."""
+    """Install Playwright Chromium dependencies only on apt-based distributions."""
     env = os.environ if environ is None else environ
+    if not shutil.which("apt-get", path=env.get("PATH")):
+        raise RuntimeError("Playwright install-deps requires apt-get; install Chromium libraries manually")
+    if not shutil.which("sudo", path=env.get("PATH")):
+        raise RuntimeError("sudo was not found; install Chromium's Playwright system dependencies manually")
+    release = Path("/etc/os-release")
+    distro = next((line.partition("=")[2].strip().strip('"') for line in release.read_text().splitlines()
+                   if line.startswith("ID=")), "") if release.is_file() else ""
+    if distro not in {"ubuntu", "debian", "linuxmint", "pop"}:
+        raise RuntimeError(f"Playwright install-deps supports Debian/Ubuntu only; {distro or 'this OS'} is unsupported")
     uv = shutil.which("uv", path=env.get("PATH"))
     if not uv:
         raise RuntimeError("uv is required before installing Playwright Chromium dependencies")
-    if not shutil.which("sudo", path=env.get("PATH")):
-        raise RuntimeError("sudo was not found; install Chromium's Playwright system dependencies manually")
     prefix, _ = _environment(uv, CHROMIUM)
     code = ("from playwright._impl._driver import compute_driver_executable\n"
             "import subprocess\n"

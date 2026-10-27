@@ -165,10 +165,14 @@ def plan(report, cwd: Path, home: Path, environ: Mapping[str, str], harness: str
     if chromium is not None and chromium.status != "pass" and platform.system() == "Linux":
         release = _release_info(Path("/etc/os-release"))
         libraries = _missing_browser_libraries(chromium.detail)
-        target_os = release.get("ID", "this OS")
-        detail = (f"Playwright install-deps supports Debian/Ubuntu only; {target_os} is unsupported. "
-                  f"Install missing libraries: {', '.join(libraries) if libraries else chromium.detail}")
-        items.append(PlanItem("browser-libraries-manual", "Install Chromium system libraries manually", detail))
+        if release.get("ID") in {"ubuntu", "debian", "linuxmint", "pop"}:
+            detail = f"Install Chromium shared libraries using Playwright install-deps: {', '.join(libraries)}"
+            items.append(PlanItem("browser-libraries", "Install Playwright Chromium system libraries", detail, system=True))
+        else:
+            target_os = release.get("ID", "this OS")
+            detail = (f"Playwright install-deps supports Debian/Ubuntu only; {target_os} is unsupported. "
+                      f"Install missing libraries manually: {', '.join(libraries) if libraries else chromium.detail}")
+            items.append(PlanItem("browser-libraries-manual", "Install Chromium system libraries manually", detail))
     workspace = preflight.beads_workspace(cwd, environ)
     if workspace is None:
         print("Warning: no Beads workspace found; skipped copying CAD formulas.")
@@ -410,20 +414,21 @@ def main(argv: Sequence[str] | None = None) -> int:
             print("Setup will not execute the downloaded uv installer without --yes --system.", file=sys.stderr)
             failures.append("uv: run setup with --yes --system to approve the official installer")
             continue
+        if item.id == "browser-libraries-manual":
+            print(f"Manual browser libraries step: {item.command}", file=sys.stderr)
+            continue
         if item.system and not args.system:
             continue
         try:
             if item.id == "uv":
                 environ = _install_uv(home, environ)
+                environ["PATH"] = os.pathsep.join([str(home / ".local" / "bin"), environ.get("PATH", "")])
             elif item.id == "freecad":
                 _install_freecad(environ)
             elif item.id.startswith("warm-"):
                 if not warm_started:
                     print("Warming runtime environments, Chromium, and the pinned three.js cache...")
                     print(preflight.render_text(preflight.warm(environ, cwd, home, args.harness)))
-                    warm_started = True
-            elif item.id.startswith("browser-libraries-manual"):
-                print(f"Manual browser libraries step: {item.command}", file=sys.stderr)
             elif item.id == "formulas":
                 _copy_formulas(cwd, environ)
             elif item.id.startswith("harness-"):
