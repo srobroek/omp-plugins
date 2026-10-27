@@ -218,7 +218,7 @@ class OpencodeProjectInstall(InstallTest):
             shutil.copy2(path, commands / path.name)
         command = (commands / "cad-flow.md").read_text(encoding="utf-8")
         self.assertIn("description: Prototype-to-CAD flow (cad plugin)", command)
-        self.assertIn("When the user provides arguments, load the `cad-flow` skill", command)
+        self.assertIn("Load the `cad-flow` skill and follow it", command)
         self.assertIn("$ARGUMENTS", command)
 
 if __name__ == "__main__":

@@ -137,7 +137,7 @@ def opencode_command() -> str:
 description: Prototype-to-CAD flow (cad plugin)
 ---
 
-When the user provides arguments, load the `cad-flow` skill and follow it for $ARGUMENTS. Otherwise, load the existing `hw/` design record and resume the workflow from its current state.
+Load the `cad-flow` skill and follow it. With arguments, apply it to $ARGUMENTS. Without arguments, resume the existing `hw/` design record, or ask what to design when there is none.
 """
 
 
