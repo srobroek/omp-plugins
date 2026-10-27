@@ -18,8 +18,9 @@ def build(params: dict):
 
 
 def _witness(face, support_type: str) -> dict:
-    return {"support_type": support_type, "point_mm": list(face.position_at(0.5, 0.5).to_tuple()),
-            "normal": list(face.normal_at(0.5, 0.5).normalized().to_tuple())}
+    point, normal = face.position_at(0.5, 0.5), face.normal_at(0.5, 0.5).normalized()
+    return {"support_type": support_type, "point_mm": [point.X, point.Y, point.Z],
+            "normal": [normal.X, normal.Y, normal.Z]}
 
 
 def drawing_features(params: dict, shape) -> dict:
