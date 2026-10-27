@@ -23,7 +23,8 @@ deliver copies each unit PN's scratch hw/parts/<PN>/ over HW/parts/<PN>/ and lis
         scratch file that differs from the baseline as a proposal for the lead. When any
         HW/parts/<PN>/ changed since init it writes nothing and exits 1.
 
-stdout: one JSON document; every path in it is absolute. stderr: the tools' diagnostics.
+stdout: one JSON document; every path in it is absolute. build writes each tool's diagnostics to
+<workspace>/<tool>-<label>.log and names the log in the JSON, so its output stays small.
 Exit codes: 0 pass; 1 build: a part failed to build, a blocking check failed, or the unit's
 parts have form findings; deliver: HW/parts/<PN>/ changed since init; 2 usage or
 infrastructure error.
@@ -111,16 +112,18 @@ def init(hw: Path, unit: str, parts: list[str], reset: bool) -> tuple[int, dict[
                "parts": baseline["parts"], "files": len(baseline["files"])}
 
 
-def run_tool(argv: list[str]) -> tuple[int, dict[str, Any] | None]:
-    """Run one `uv run --script` tool; its exit code and its stdout JSON (None when unparseable)."""
+def run_tool(argv: list[str], log: Path) -> tuple[int, dict[str, Any] | None]:
+    """Run one `uv run --script` tool with its stderr in `log`; its exit code and stdout JSON (None when unparseable)."""
     try:
-        done = subprocess.run(["uv", "run", "--quiet", "--script", *argv], stdout=subprocess.PIPE, text=True)
+        with log.open("w", encoding="utf-8") as stderr:
+            done = subprocess.run(["uv", "run", "--quiet", "--script", *argv], stdout=subprocess.PIPE, stderr=stderr, text=True)
     except FileNotFoundError as error:
         raise UsageError("uv is not on PATH") from error
     try:
         return done.returncode, json.loads(done.stdout)
     except ValueError:
-        sys.stderr.write(done.stdout)
+        with log.open("a", encoding="utf-8") as stderr:
+            stderr.write(done.stdout)
         return done.returncode, None
 
 
@@ -138,8 +141,9 @@ def build(hw: Path, unit: str, kernel: str, fidelity: str) -> tuple[int, dict[st
     label = next_label(scratch_hw)
     report: dict[str, Any] = {"unit": unit, "scratch_hw": str(scratch_hw), "label": label, "parts": sorted(own)}
 
-    code, ran = run_tool([str(CAD_MODEL), "run", str(scratch_hw), "--label", label, "--kernel", kernel])
-    report["run"] = {"exit": code, "findings": (ran or {}).get("findings", [])}
+    run_log = work / f"run-{label}.log"
+    code, ran = run_tool([str(CAD_MODEL), "run", str(scratch_hw), "--label", label, "--kernel", kernel], run_log)
+    report["run"] = {"exit": code, "log": str(run_log), "findings": (ran or {}).get("findings", [])}
     if code != 0:
         report["status"] = "fail" if code == 1 else "error"
         return (1 if code == 1 else 2), report
@@ -148,18 +152,20 @@ def build(hw: Path, unit: str, kernel: str, fidelity: str) -> tuple[int, dict[st
                    "metrics": str(version / "metrics.json"), "assembly_step": str(version / "assembly.step")})
 
     check_out = work / f"check-{label}.json"
-    code, checked = run_tool([str(CAD_MODEL), "check", label, "--hw", str(scratch_hw), "--out", str(check_out)])
-    report["check"] = {"exit": code, "json": str(check_out),
+    check_log = work / f"check-{label}.log"
+    code, checked = run_tool([str(CAD_MODEL), "check", label, "--hw", str(scratch_hw), "--out", str(check_out)], check_log)
+    report["check"] = {"exit": code, "json": str(check_out), "log": str(check_log),
                        "blocking_failures": (checked or {}).get("blocking_failures"),
                        "warnings": (checked or {}).get("warnings")}
 
     form_out = work / f"form-{label}.json"
+    form_log = work / f"form-{label}.log"
     form_code, form = run_tool([str(FORM_CHECK), "--hw", str(scratch_hw), "--parts-dir", str(version / "parts"),
-                                "--fidelity", fidelity])
+                                "--fidelity", fidelity], form_log)
     findings = (form or {}).get("findings", [])
     if form is not None:
         form_out.write_text(json.dumps(form, indent=2) + "\n", encoding="utf-8")
-    report["form"] = {"exit": form_code, "fidelity": fidelity, "json": str(form_out),
+    report["form"] = {"exit": form_code, "fidelity": fidelity, "json": str(form_out), "log": str(form_log),
                       "own_findings": [f for f in findings if f.get("part") in own],
                       "other_findings": [f for f in findings if f.get("part") not in own]}
 

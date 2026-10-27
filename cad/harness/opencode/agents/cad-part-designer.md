@@ -29,6 +29,8 @@ You are a CAD part designer. The cad-flow lead assigned you one unit: an L2 suba
 
 On a harness other than OMP, resolve `skill://<name>/` to that skill's directory; `cad-flow` is the directory next to `cad-model`.
 
+Run each `uv run --script` command as its own shell call from the project root, with no pipes, redirects, `;` or `&&` chains, or other commands; read files with the read tool. A scratch build can take 15 minutes, so give that call a 20-minute timeout where the shell tool takes one.
+
 ## Rules
 
 MUST Write only inside `.cad-work/<unit>/`; hw/ changes only through `scratch.py deliver`.

@@ -39,7 +39,7 @@ GROUND, INTENT, SPECIFY, L1 LAYOUT, BOM, RELEASE, and every gate stay with you. 
 Dispatch a batch with the harness's subagent tool, one unit per worker:
 - OMP: one `task` call with one `tasks[]` entry per unit and `agent: <agent>`.
 - Claude Code: one `Task` call per unit with `subagent_type: cad:<agent>`, all in one message.
-- OpenCode: one `task` call per unit with `subagent_type: <agent>`, all in one message.
+- OpenCode 2: one `subagent` call per unit with `agent: <agent>`, all in one message.
 - Kiro: the subagent tool, one workspace agent per unit.
 
 ## Rules

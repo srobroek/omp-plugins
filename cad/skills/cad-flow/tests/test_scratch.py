@@ -140,6 +140,8 @@ class Build(ScratchCase):
         self.assertTrue((scratch_hw / "versions" / "v1" / "parts" / "LMP-0001.step").is_file())
         self.assertEqual(report["check"]["exit"], 0)
         self.assertTrue(Path(report["check"]["json"]).is_file() and Path(report["form"]["json"]).is_file())
+        for tool in ("run", "check", "form"):
+            self.assertTrue(Path(report[tool]["log"]).is_file(), tool)  # diagnostics go to logs, not the caller
         self.assertEqual(report["form"]["own_findings"], [])
         self.assertEqual(tree(self.hw), before)  # hw/versions, hw/renders, and every record unchanged
 
