@@ -37,6 +37,7 @@ class PlanTests(unittest.TestCase):
         self.home = self.root / "home"
         self.home.mkdir()
         self.env = {"HOME": str(self.home)}
+
     def test_each_runtime_failure_uses_the_existing_warm_step(self) -> None:
         for identifier in setup.WARM_IDS:
             with self.subTest(check=identifier):
@@ -87,12 +88,13 @@ class PlanTests(unittest.TestCase):
             managed.write_text("managed")
             managed.chmod(0o755)
             resolver = setup.preflight.find_freecadcmd
-            self.assertEqual(resolver({"FREECADCMD": str(executable), "HOME": str(home)}, home), executable)
-            with patch.object(setup.preflight.shutil, "which", return_value="/path/freecadcmd"):
-                self.assertEqual(resolver({"PATH": "/path", "HOME": str(home)}, home), Path("/path/freecadcmd"))
-            self.assertEqual(resolver({"HOME": str(home)}, home), user_executable)
-            user_executable.unlink()
-            self.assertEqual(resolver({"HOME": str(home)}, home), managed)
+            with patch.object(setup.preflight.sys, "platform", "linux"):
+                self.assertEqual(resolver({"FREECADCMD": str(executable), "HOME": str(home)}, home), executable)
+                with patch.object(setup.preflight.shutil, "which", return_value="/path/freecadcmd"):
+                    self.assertEqual(resolver({"PATH": "/path", "HOME": str(home)}, home), Path("/path/freecadcmd"))
+                self.assertEqual(resolver({"HOME": str(home)}, home), user_executable)
+                user_executable.unlink()
+                self.assertEqual(resolver({"HOME": str(home)}, home), managed)
 
     def test_preflight_resolves_setup_install_without_path_changes(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -101,24 +103,41 @@ class PlanTests(unittest.TestCase):
             command.parent.mkdir(parents=True)
             command.write_text("#!/bin/sh\necho 'FreeCAD 1.1.4'\n", encoding="utf-8")
             command.chmod(0o755)
-            with patch.object(setup.preflight.shutil, "which", return_value=None):
+            with patch.object(setup.preflight.shutil, "which", return_value=None), \
+                    patch.object(setup.preflight.sys, "platform", "linux"):
                 resolved = setup.preflight.find_freecadcmd({"HOME": str(home), "PATH": ""}, home)
             self.assertEqual(resolved, command)
 
+    def test_macos_bundle_precedes_user_link_when_env_and_path_are_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            app_command = root / "FreeCAD.app" / "Contents" / "Resources" / "bin" / "freecadcmd"
+            app_command.parent.mkdir(parents=True)
+            app_command.write_text("app command", encoding="utf-8")
+            app_command.chmod(0o755)
+            home = root / "home"
+            user_link = home / ".local" / "bin" / "freecadcmd"
+            user_link.parent.mkdir(parents=True)
+            user_link.write_text("user command", encoding="utf-8")
+            user_link.chmod(0o755)
+            with patch.object(setup.preflight.shutil, "which", return_value=None):
+                found = setup.preflight.find_freecadcmd({"HOME": str(home), "PATH": ""}, home,
+                                                        platform_name="darwin", macos_command=app_command)
+            self.assertEqual(found, app_command)
 
     def test_linux_browser_deps_plan_only_for_failing_chromium(self) -> None:
-        checks = tuple(setup.preflight.Check(identifier, identifier, "pass", True, "ok", "")
-                       for identifier in ("uv", "cadquery", "build123d", "cad-model", "ocp-viewer", "three-vendor-cache"))
-        chromium = setup.preflight.Check("playwright-chromium", "Playwright Chromium", "fail", True,
-                                         "Could not launch Chromium: libfoo.so.1: cannot open shared object file",
-                                         "install deps")
-        failing = setup.preflight.Report((*checks, chromium))
-        passed = setup.preflight.Report((*checks, setup.preflight.Check(
-            "playwright-chromium", "Playwright Chromium", "pass", True, "ok", "")))
+        base = tuple(setup.preflight.Check(identifier, identifier, "pass", True, "ok", "")
+                     for identifier in ("uv", "cadquery", "build123d", "cad-model", "ocp-viewer", "three-vendor-cache"))
+        failed_chromium = setup.preflight.Check("playwright-chromium", "Playwright Chromium", "fail", True,
+                                                 "Could not launch Chromium: libfoo.so.1: cannot open shared object file",
+                                                 "install deps")
+        passing_chromium = setup.preflight.Check("playwright-chromium", "Playwright Chromium", "pass", True, "ok", "")
         with patch.object(setup.platform, "system", return_value="Linux"), \
                 patch.object(setup, "_release_info", return_value={"ID": "ubuntu"}):
-            failed_plan = setup.plan(failing, self.root, self.home, self.env)
-            passed_plan = setup.plan(passed, self.root, self.home, self.env)
+            failed_plan = setup.plan(setup.preflight.Report((*base, failed_chromium)),
+                                     self.root, self.home, self.env)
+            passed_plan = setup.plan(setup.preflight.Report((*base, passing_chromium)),
+                                     self.root, self.home, self.env)
         self.assertIn("browser-libraries", [item.id for item in failed_plan])
         self.assertNotIn("browser-libraries", [item.id for item in passed_plan])
 
@@ -145,6 +164,7 @@ class ConsentTests(unittest.TestCase):
             status = setup.main(["--yes"])
         self.assertEqual(status, 1)
         self.assertFalse(any(item.id == "freecad" and not item.system for item in setup.plan(failing, Path.cwd(), Path.home(), {})))
+        install_freecad.assert_not_called()
 
     def test_dry_run_never_invokes_any_install_action(self) -> None:
         failing = report("freecad-command", "playwright-chromium")
@@ -154,6 +174,7 @@ class ConsentTests(unittest.TestCase):
             status = setup.main([])
         self.assertEqual(status, 0)
         install_freecad.assert_not_called()
+
     def test_uv_requires_system_consent_even_with_yes(self) -> None:
         failing = report("uv")
         with patch.object(setup.preflight, "run_checks", side_effect=(failing, failing)), \
@@ -176,6 +197,7 @@ class ConsentTests(unittest.TestCase):
                 redirect_stdout(io.StringIO()):
             status = setup.main(["--yes", "--system"])
         self.assertEqual(status, 1)
+
     def test_system_flag_requires_yes(self) -> None:
         with self.assertRaises(SystemExit) as raised:
             setup.main(["--system"])
@@ -202,7 +224,6 @@ class FreeCADInstallTests(unittest.TestCase):
             self.assertTrue(copied_link.is_symlink())
             self.assertEqual(os.readlink(copied_link), os.readlink(extracted / "usr" / "compiler_compat" / "ld"))
             self.assertTrue((copied / "usr" / "bin" / "freecadcmd").is_file())
-
 
 
 class TransactionalFreeCADTests(unittest.TestCase):
@@ -321,6 +342,7 @@ class TransactionalFreeCADTests(unittest.TestCase):
         self.assertEqual(events[1], ("verify", self.command))
         self.assertEqual((self.prefix / "squashfs-root" / "usr" / "bin" / "freecadcmd").read_text(),
                          "#!/bin/sh\necho 'FreeCAD 1.1.4 test'\n")
+
 
 if __name__ == "__main__":
     unittest.main()

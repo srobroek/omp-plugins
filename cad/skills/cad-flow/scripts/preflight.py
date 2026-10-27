@@ -231,8 +231,10 @@ def _chromium_check(uv: str, install: bool = False) -> Check:
                   f"Playwright {expected} launches Chromium {found['chromium']} ({found['path']}).", "")
 
 
-def find_freecadcmd(environ: Mapping[str, str], home: Path | None = None) -> Path | None:
-    """Resolve FREECADCMD, PATH, the user link, then the setup-managed AppImage executable."""
+def find_freecadcmd(environ: Mapping[str, str], home: Path | None = None,
+                    platform_name: str | None = None,
+                    macos_command: Path = Path("/Applications/FreeCAD.app/Contents/Resources/bin/freecadcmd")) -> Path | None:
+    """Resolve FreeCAD like cad-drawings, then the setup-managed user installs."""
     configured = environ.get("FREECADCMD")
     if configured:
         return Path(configured)
@@ -240,6 +242,8 @@ def find_freecadcmd(environ: Mapping[str, str], home: Path | None = None) -> Pat
         found = shutil.which(name, path=environ.get("PATH"))
         if found:
             return Path(found)
+    if (platform_name or sys.platform) == "darwin" and macos_command.is_file():
+        return macos_command
     home_dir = home or Path(environ.get("HOME", str(Path.home())))
     user_link = home_dir / ".local" / "bin" / "freecadcmd"
     if user_link.is_file() and os.access(user_link, os.X_OK):
