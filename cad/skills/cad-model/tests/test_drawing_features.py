@@ -189,7 +189,7 @@ class DrawingFeatureCapture(unittest.TestCase):
         latest = json.loads((hw / "versions" / "latest.json").read_text(encoding="utf-8"))
         self.assertEqual(latest["drawing_features"], f"versions/{label}/drawing-features.json")
         features = json.loads(sidecar.read_text(encoding="utf-8"))
-        self.assertEqual((features["label"], features["frame"]), (label, "assembly_zero"))
+        self.assertEqual((features["label"], features["frames"]), (label, {"TST-0001": "assembly_zero"}))
         self.assertEqual(sorted(features["parts"]), ["TST-0001"], "the arm defines no hook")
         base = features["parts"]["TST-0001"]
         self.assertEqual(sorted(base), ["base_bore", "bed_face"], base_kernel)
