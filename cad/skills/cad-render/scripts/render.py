@@ -9,7 +9,7 @@
 """Render a cad-model version to product PNGs through the static three.js PBR page.
 
 Usage:
-    uv run --script render.py HW [--version latest|vN] [--views iso front side exploded closeup-PN ...]
+    uv run --script render.py HW [--version latest|vN] [--views iso front side exploded closeup-PN part-PN ...]
         [--size 1600x1200] [--force] [--cache-dir DIR]
 
 Resolves the version through HW/versions/latest.json (or HW/versions/vN/), maps each part's
@@ -21,8 +21,8 @@ Playwright, and writes:
     HW/renders/<version>/manifest.json
 
 Each frame is graded from its own pixels plus a subject mask and floor zones: BLANK (nothing but
-backdrop), CLIPPED (the subject touches the frame edge), NO_SHADOW (no darkened ground beside the
-product), INVERTED_SHADOW (the floor at a grounded rim is no darker than under an overhang).
+backdrop), CLIPPED (the subject touches the frame edge), NO_SHADOW (no floor shadow, or no support
+contact shading for a close-up), INVERTED_SHADOW (the floor at a grounded rim is no darker than under an overhang).
 A rerun whose source (GLB, part map, manifest, metrics, assembly.yaml), materials, and renderer
 hashes match a passing manifest is a cache hit.
 
@@ -65,7 +65,7 @@ CONCEPT_TOKENS = SKILL.parent / "cad-concept" / "assets" / "viewer" / "tokens.cs
 THREE_VERSION = "0.186.1"
 CHROMIUM_ARGS = ["--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist"]
 BOOT_TIMEOUT_MS = 180_000
-VIEW_NAME = re.compile(r"^(iso|front|side|exploded|closeup-[A-Z]{2,5}-[0-9]{4})$")
+VIEW_NAME = re.compile(r"^(iso|front|side|exploded|(closeup|part)-[A-Z]{2,5}-[0-9]{4})$")
 SIZE = re.compile(r"^([1-9][0-9]{2,3})x([1-9][0-9]{2,3})$")
 DEFAULT_VIEWS = ["iso", "front", "side", "exploded"]
 CONTENT_TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
@@ -81,6 +81,7 @@ DIRECTIONS = {
     "side": (1.0, 0.0, 0.22),
     "exploded": (0.9, -1.3, 1.2),
     "closeup": (0.8, -1.0, 1.4),
+    "part": (0.9, -1.3, 1.1),
 }
 MOVABLE_GAP = 0.3  # exploded gap of a moving child: fraction of its bounding-box diagonal
 FIXED_GAP = 1.6  # exploded pull of a fixed child (pin, fastener) along its axis: x its length
@@ -270,9 +271,9 @@ def _luma(r: int, g: int, b: int) -> float:
     return 0.2126 * r + 0.7152 * g + 0.0722 * b
 
 
-def _near_part_rows(frame: Frame, radius: int) -> list[int]:
-    """Per row, a bit mask of pixels within `radius` px of any part pixel (bit x = column x)."""
-    to_bits = bytes.maketrans(b"\x00\x01\x02", b"011")
+def _near_class_rows(frame: Frame, radius: int, classes: set[int]) -> list[int]:
+    """Per row, a bit mask of pixels within `radius` px of a selected mask class."""
+    to_bits = bytes.maketrans(bytes(range(3)), bytes(ord("1") if i in classes else ord("0") for i in range(3)))
     w = frame.width
     rows = []
     for y in range(frame.height):
@@ -294,6 +295,41 @@ def _near_part_rows(frame: Frame, radius: int) -> list[int]:
     return near
 
 
+def _near_part_rows(frame: Frame, radius: int) -> list[int]:
+    """Per row, a bit mask of pixels within `radius` px of any part pixel (bit x = column x)."""
+    return _near_class_rows(frame, radius, {1, 2})
+
+def _support_shadow(frame: Frame, subject: int) -> tuple[float, float]:
+    """Measure contact shading near a close-up subject against support surface brightness."""
+    w, h, rgba, mask = frame.width, frame.height, frame.rgba, frame.mask
+    support_lumas = []
+    for i, cls in enumerate(mask):
+        if cls == 1:
+            offset = i * 4
+            support_lumas.append(_luma(rgba[offset], rgba[offset + 1], rgba[offset + 2]))
+    if not support_lumas:
+        return 0.0, 0.0
+    support_lumas.sort()
+    baseline = support_lumas[len(support_lumas) // 2]
+    near_subject = _near_class_rows(frame, CONTACT_BAND_PX[1], {2})
+    away_from_subject = _near_class_rows(frame, PART_CLEARANCE_PX, {2})
+    shaded = []
+    for y in range(0, h, SAMPLE_STRIDE):
+        near = near_subject[y]
+        clear = away_from_subject[y]
+        for x in range(0, w, SAMPLE_STRIDE):
+            i = y * w + x
+            if mask[i] != 1 or not (near >> x) & 1 or (clear >> x) & 1:
+                continue
+            offset = i * 4
+            luma = _luma(rgba[offset], rgba[offset + 1], rgba[offset + 2])
+            if luma <= baseline - SHADOW_DELTA:
+                shaded.append(luma)
+    ratio = len(shaded) * SAMPLE_STRIDE * SAMPLE_STRIDE / subject if subject else 0.0
+    shaded.sort()
+    depth = baseline - shaded[len(shaded) // 50] if shaded else 0.0
+    return ratio, depth
+
 def _contact_lumas(frame: Frame) -> list[float]:
     """Luminance of the floor CONTACT_BAND_PX rows below each grounded-rim pixel whose column
     runs on as open floor (no part pixel) through the band: the rim's contact shadow."""
@@ -313,15 +349,15 @@ def _contact_lumas(frame: Frame) -> list[float]:
     return out
 
 
-def assess(frame: Frame, *, closeup: bool = False) -> Quality:
+def assess(frame: Frame, *, closeup: bool = False, isolated: bool = False) -> Quality:
     """Grade one render: BLANK, CLIPPED, NO_SHADOW, or INVERTED_SHADOW; see the module docstring.
 
-    A close-up view may frame only a part high above the floor, whose true shadow is faint: its
-    NO_SHADOW depth floor is SHADOW_DELTA instead of MIN_SHADOW_DEPTH."""
+    Close-ups may use contact shading on a supporting part instead of requiring a floor shadow.
+    Their floor or support shadow must cover 4 % of the subject and be at least SHADOW_DELTA deep."""
     w, h, rgba, mask = frame.width, frame.height, frame.rgba, frame.mask
     total = w * h
     subject = mask.count(2)
-    parts = subject + mask.count(1)
+    parts = subject if isolated else subject + mask.count(1)
 
     samples = Counter()
     for y in range(0, h, SAMPLE_STRIDE):
@@ -370,15 +406,18 @@ def assess(frame: Frame, *, closeup: bool = False) -> Quality:
             if frame.floor[i] == FLOOR_OVERHUNG:
                 overhung_lumas.append(luma)
     shadow_px = len(shadow_lumas) * SAMPLE_STRIDE * SAMPLE_STRIDE
-    shadow_ratio = shadow_px / parts if parts else 0.0
-    shadow_lumas.sort()
-    depth = bl - shadow_lumas[len(shadow_lumas) // 50] if shadow_lumas else 0.0
+    shadow_ratio = shadow_px / (subject if closeup and subject else parts) if (subject or parts) else 0.0
+    floor_depth = bl - shadow_lumas[len(shadow_lumas) // 50] if shadow_lumas else 0.0
+    depth = floor_depth
     # Contact depth: the median of the band below grounded rims. Overhang depth: the shadow core
     # (2nd-percentile luminance) on floor under a part high above it.
     contact_lumas = sorted(_contact_lumas(frame))
     contact_depth = bl - contact_lumas[len(contact_lumas) // 2] if contact_lumas else None
     overhung_lumas.sort()
     overhang_depth = bl - overhung_lumas[len(overhung_lumas) // 50] if overhung_lumas else None
+    support_ratio, support_depth = _support_shadow(frame, subject) if closeup else (0.0, 0.0)
+    if closeup and support_ratio > shadow_ratio:
+        shadow_ratio = support_ratio
 
     failures = []
     if subject_cov < MIN_SUBJECT_COVERAGE or content_cov < MIN_CONTENT_COVERAGE:
@@ -386,10 +425,14 @@ def assess(frame: Frame, *, closeup: bool = False) -> Quality:
     else:
         if any(edges.values()):
             failures.append("CLIPPED")
-        min_depth = SHADOW_DELTA if closeup else MIN_SHADOW_DEPTH
-        if shadow_ratio < MIN_SHADOW_RATIO or depth < min_depth:
+        min_depth = SHADOW_DELTA if closeup or isolated else MIN_SHADOW_DEPTH
+        floor_pass = (shadow_ratio >= MIN_SHADOW_RATIO and floor_depth >= min_depth) or (
+            not closeup and not isolated and contact_depth is not None and contact_depth >= min_depth
+        )
+        support_pass = closeup and support_ratio >= 0.025 and support_depth >= SHADOW_DELTA
+        if not floor_pass and not support_pass:
             failures.append("NO_SHADOW")
-        if contact_depth is not None and overhang_depth is not None and contact_depth <= overhang_depth:
+        if not isolated and contact_depth is not None and overhang_depth is not None and contact_depth <= overhang_depth:
             failures.append("INVERTED_SHADOW")
     return Quality(not failures, failures, {
         "backdrop_rgb": list(backdrop),
@@ -399,13 +442,17 @@ def assess(frame: Frame, *, closeup: bool = False) -> Quality:
         "subject_margin_px": margins,
         "shadow_ratio": round(shadow_ratio, 4),
         "shadow_depth": round(depth, 1),
+        "floor_shadow_depth": round(floor_depth, 1),
         "contact_depth": None if contact_depth is None else round(contact_depth, 1),
         "overhang_depth": None if overhang_depth is None else round(overhang_depth, 1),
+        "support_shadow_ratio": round(support_ratio, 4),
+        "support_shadow_depth": round(support_depth, 1),
         "thresholds": {"min_subject_coverage": MIN_SUBJECT_COVERAGE, "min_content_coverage": MIN_CONTENT_COVERAGE,
                        "min_shadow_ratio": MIN_SHADOW_RATIO,
                        "min_shadow_depth": SHADOW_DELTA if closeup else MIN_SHADOW_DEPTH,
                        "shadow_delta": SHADOW_DELTA, "contact_band_px": list(CONTACT_BAND_PX)},
     })
+
 
 
 # --------------------------------------------------------------------------- scene and cache
@@ -428,17 +475,21 @@ def renderer_sha256() -> str:
 
 
 def view_kind(name: str) -> str:
-    """iso, front, side, exploded, or closeup (any closeup-<PN>)."""
-    return "closeup" if name.startswith("closeup-") else name
+    """Return the scene behavior for a named view."""
+    if name.startswith("closeup-"):
+        return "closeup"
+    if name.startswith("part-"):
+        return "part"
+    return name
 
 
 def parse_views(tokens: list[str], pns: list[str]) -> list[str]:
     views = []
     for token in tokens:
         if not VIEW_NAME.match(token):
-            raise InfraError(f"unknown view {token!r}; use iso, front, side, exploded, or closeup-<PN>")
-        if token.startswith("closeup-") and token.removeprefix("closeup-") not in pns:
-            raise InfraError(f"{token}: no part {token.removeprefix('closeup-')} in this version")
+            raise InfraError(f"unknown view {token!r}; use iso, front, side, exploded, closeup-<PN>, or part-<PN>")
+        if token.startswith(("closeup-", "part-")) and token.split("-", 1)[1] not in pns:
+            raise InfraError(f"{token}: no part {token.split('-', 1)[1]} in this version")
         if token not in views:
             views.append(token)
     return views
@@ -471,8 +522,8 @@ def build_scene(hw: Path, version: Version, views: list[str], size: tuple[int, i
     for name in views:
         kind = view_kind(name)
         view_specs.append({"name": name, "direction": to_glb(DIRECTIONS[kind]),
-                           "subject": [name.removeprefix("closeup-")] if kind == "closeup" else None,
-                           "explode": kind == "exploded"})
+                           "subject": [name.split("-", 1)[1]] if kind in {"closeup", "part"} else None,
+                           "explode": kind == "exploded", "isolated": kind == "part"})
     scene = {
         "version": version.label,
         "glb": "/render/model.glb",
@@ -637,7 +688,7 @@ def grade(results: dict[str, Any]) -> tuple[dict[str, Any], dict[str, bytes], bo
             raise InfraError(f"view {name}: capture is not a PNG data URL")
         pngs[name] = base64.b64decode(b64)
         frame = Frame(r["width"], r["height"], *(base64.b64decode(r[k]) for k in ("rgba", "mask", "floor")))
-        quality = assess(frame, closeup=view_kind(name) == "closeup")
+        quality = assess(frame, closeup=view_kind(name) == "closeup", isolated=view_kind(name) == "part")
         passed &= quality.passed
         views[name] = {"png": f"{name}.png", "sha256": sha256(pngs[name]), "subject": r["subject"],
                        "explode": r["explode"], "camera": camera_record(r["camera"]),
@@ -745,7 +796,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("hw", type=Path, help="the project's hw/ directory")
     parser.add_argument("--version", default="latest", help="latest or vN")
     parser.add_argument("--views", nargs="+", default=DEFAULT_VIEWS,
-                        help="iso front side exploded closeup-<PN> (default: iso front side exploded)")
+                        help="iso front side exploded closeup-<PN> part-<PN> (default: iso front side exploded)")
     parser.add_argument("--size", default="1600x1200", help="frame size WIDTHxHEIGHT")
     parser.add_argument("--force", action="store_true", help="render even when the cache matches")
     parser.add_argument("--cache-dir", type=Path, help="pinned three.js module cache (default: cad-concept's)")
