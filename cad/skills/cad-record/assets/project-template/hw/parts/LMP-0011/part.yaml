@@ -8,3 +8,4 @@ mass_target: 0.081
 make_buy: buy
 supplier: null
 decisions: [DR-004]
+model_frame: part_local

@@ -483,7 +483,8 @@ class CheckRuleTests(unittest.TestCase):
                 "interfaces:\n  - id: IF-001\n    limits:\n      press_fit: {fit: 5 H7/p6, pair: [TST-0001, TST-0002]}\n",
                 encoding="utf-8")
             probe = ("import json, sys\nfrom pathlib import Path\nfrom cadmodel import check\n"
-                     "print(json.dumps({'fits': str(check.FITS_SCRIPT), 'declared': check.declared_press_fits(Path(sys.argv[1]))}))\n")
+                     "print(json.dumps({'fits': str(check.load_pair_policy().FITS_SCRIPT), "
+                     "'declared': check.declared_press_fits(Path(sys.argv[1]))}))\n")
             scripts = plugin / "skills" / "cad-model" / "scripts"
             proc = subprocess.run([sys.executable, "-c", probe, str(hw)], cwd=scripts, capture_output=True, text=True,
                                   check=False, timeout=60, env={**os.environ, "PYTHONPATH": str(scripts)})

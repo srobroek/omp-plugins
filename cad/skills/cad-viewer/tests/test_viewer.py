@@ -50,7 +50,7 @@ def load(name: str, path: Path):
 
 
 viewer = load("cad_viewer_cli", SCRIPTS / "viewer.py")
-PNS = tuple(f"LMP-{n:04d}" for n in range(1, 14))
+PNS = tuple(f"LMP-{n:04d}" for n in range(1, 12))  # LMP-0011, the retaining ring, is placed three times
 PORTS = {"a": 1001, "b": 1002, "presenter_a": 2001, "presenter_b": 2002}
 # Stands in for `python -m ocp_viewer`: records its PID and process group, never opens its port.
 FAKE_VIEWER = """
@@ -70,25 +70,33 @@ def wait_for(predicate, timeout: float = 20.0) -> bool:
 
 
 def make_version(hw: Path, label: str, products: dict[str, str] | None = None, latest: bool = True) -> None:
-    """A cad-model version folder with the files the viewer reads (no STEP or GLB content)."""
+    """A schema_version 2 cad-model version folder with the files the viewer reads (no STEP or GLB content)."""
     chain = motion.load_chain(hw)
-    rows = {pn: rigid.rows() for pn, rigid in chain.transforms(chain.complete({})).items()}
+    values = chain.complete({})
+    rows = {oid: rigid.rows() for oid, rigid in chain.transforms(values).items()}
+    groups = {member: g.id for g in motion.pose_module().load_assembly(hw).groups for member in g.members}
     titles = {pn: record.read_yaml(hw / "parts" / pn / "part.yaml")["title"] for pn in PNS}
     products = products or {pn: f"{pn} {titles[pn]}" for pn in PNS}
     folder = hw / "versions" / label
     (folder / "parts").mkdir(parents=True)
     for name in ("assembly.step", "assembly.glb"):
         (folder / name).write_text("", encoding="utf-8")
-    (folder / "part-map.json").write_text(json.dumps({"glb": "assembly.glb", "parts": {
-        pn: {"product": name, "nodes": [name], "node_indices": [i], "meshes": [name]}
-        for i, (pn, name) in enumerate(products.items(), start=1)}}), encoding="utf-8")
-    (folder / "metrics.json").write_text(json.dumps({"label": label, "parts": {
+    nodes = {oid: i for i, oid in enumerate(chain.ids, start=1)}
+    (folder / "part-map.json").write_text(json.dumps({"schema_version": 2, "glb": "assembly.glb", "parts": {
+        pn: {"product": name, "node_indices": [nodes[o] for o in chain.ids if chain.pn(o) == pn]}
+        for pn, name in products.items()}, "occurrences": {
+        oid: {"PN": chain.pn(oid), "node_indices": [i]} for oid, i in nodes.items()}}), encoding="utf-8")
+    (folder / "metrics.json").write_text(json.dumps({"schema_version": 2, "label": label, "parts": {
         pn: {"volume_mm3": 1000.0 * i, "mass_g": 2.7 * i, "mass_target_g": None,
              "bbox_mm": {"min": [0, 0, 0], "max": [10 * i, 5, 5], "size": [10 * i, 5, 5]}}
         for i, pn in enumerate(PNS, start=1)}, "totals": {"volume_mm3": 28000.0, "mass_g": 75.6}}),
         encoding="utf-8")
-    (folder / "manifest.json").write_text(json.dumps({"label": label, "product_id": "lamp-arm",
-                                                      "pose": {"transforms": rows}}), encoding="utf-8")
+    (folder / "manifest.json").write_text(json.dumps({
+        "schema_version": 2, "label": label, "product_id": "lamp-arm",
+        "occurrences": {oid: {"PN": chain.pn(oid), "ref": chain.ref(oid), "group": groups.get(oid),
+                              "rest": chain.rests[oid].rows()} for oid in chain.ids},
+        "pose": {"transforms": rows, "motions": {oid: r.rows() for oid, r in chain.motions(values).items()}}}),
+        encoding="utf-8")
     if latest:
         (hw / "versions" / "latest.json").write_text(json.dumps({
             "label": label, "assembly_step": f"versions/{label}/assembly.step",
@@ -463,10 +471,10 @@ class AnimateLimits(Fixture):
 
     def test_tracks_move_only_the_parts_beyond_the_joint(self) -> None:
         plan = motion.plan_animation(self.chain, self.shown, "J-002", -120.0, 0.0, steps=5)
-        self.assertEqual(sorted(t.pn for t in plan.tracks),
-                         ["LMP-0003", "LMP-0004", "LMP-0007", "LMP-0009", "LMP-0010", "LMP-0013"])
+        self.assertEqual(sorted(t.id for t in plan.tracks),
+                         ["LMP-0003", "LMP-0004", "LMP-0007", "LMP-0009", "LMP-0010", "ring-head"])
         self.assertEqual(plan.values, (-120.0, -90.0, -60.0, -30.0, 0.0))
-        upper = next(t for t in plan.tracks if t.pn == "LMP-0003")
+        upper = next(t for t in plan.tracks if t.id == "LMP-0003")
         x, y, z, w = upper.quaternions[3]  # -30 deg is the nominal pose: no motion from the shown pose
         self.assertAlmostEqual(w, 1.0, places=9)
         self.assertAlmostEqual(math.degrees(2 * math.acos(min(1.0, abs(upper.quaternions[0][3])))), 90.0, places=6)

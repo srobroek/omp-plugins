@@ -264,7 +264,7 @@ def check(args: argparse.Namespace, pose: Any) -> dict[str, Any]:
     from cadmodel.check import READBACK_REL
 
     level = FIDELITY.index(args.fidelity)
-    loaded = pose.load_parts(args.hw, parts_dir=args.parts_dir)
+    loaded = pose.load_definitions(args.hw, args.parts_dir)
     assembly = pose.load_assembly(args.hw)
     process = processes(args.hw)
     facts = kernel_facts(args.parts_dir)
@@ -305,12 +305,18 @@ def check(args: argparse.Namespace, pose: Any) -> dict[str, Any]:
     if level >= 1:
         for joint in assembly.joints:
             row = {"type": joint.type, "axis": list(joint.axis), "origin": list(joint.origin), "parts": {}}
-            for pn in (joint.parent, joint.child):
+            for oid in (joint.parent, joint.child):
+                pn = assembly.pn(oid)
+                ref = assembly.inventory.get(oid).ref if oid in assembly.inventory else pn
+                # The joint frame is in assembly coordinates; a placed occurrence's bores are in its PN's frame.
+                rest = (pose.Rigid.from_placement(assembly.inventory.get(oid).placement).inverse()
+                        if oid in assembly.inventory else pose.Rigid.identity())
+                axis = pose.Rigid(rest.rot, (0.0, 0.0, 0.0)).apply(joint.axis)
                 kind = "shank" if process.get(pn) == "purchased" else "bore"
-                found = bore_offset(cylinders[pn], joint.axis, joint.origin, kind) if pn in cylinders else None
-                row["parts"][pn] = found
+                found = bore_offset(cylinders[pn], axis, rest.apply(joint.origin), kind) if pn in cylinders else None
+                row["parts"][ref] = found
                 if found is None or found["offset_mm"] > args.joint_tol:
-                    findings.append({"check": "joint_bore_missing", "joint": joint.id, "part": pn, "kind": kind,
+                    findings.append({"check": "joint_bore_missing", "joint": joint.id, "part": ref, "kind": kind,
                                      "nearest": found, "tol_mm": args.joint_tol})
             joints[joint.id] = row
     return {"status": "fail" if findings else "pass", "fidelity": args.fidelity, "parts": parts,

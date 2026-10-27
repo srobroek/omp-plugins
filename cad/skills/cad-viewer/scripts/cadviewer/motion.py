@@ -35,10 +35,11 @@ def pose_module() -> ModuleType:
 
 
 def load_chain(hw: Path) -> Any:
+    """The occurrence chain of hw/assembly.yaml, at the record's rest placements."""
     pose = pose_module()
     try:
         assembly = pose.load_assembly(hw)
-        return pose.build_chain(assembly.joints, assembly.listed_parts)
+        return pose.build_chain(assembly.joints, assembly.occurrences)
     except pose.MotionError as error:
         raise ViewerError(str(error)) from error
 
@@ -52,7 +53,7 @@ def rigid_from_rows(rows: list[list[float]]) -> Any:
 
 @dataclass(frozen=True)
 class Track:
-    pn: str
+    id: str  # occurrence id
     translations: tuple[tuple[float, float, float], ...]
     quaternions: tuple[tuple[float, float, float, float], ...]  # (x, y, z, w)
 
@@ -73,10 +74,10 @@ class AnimationPlan:
 
 def plan_animation(chain: Any, shown: dict[str, Any], joint_id: str, start: float, end: float,
                    steps: int = 13, seconds: float = 4.0) -> AnimationPlan:
-    """Keyframes that move each part from its shown placement to the swept pose.
+    """Keyframes that move each occurrence from its shown placement to the swept pose.
 
-    `shown` maps PN -> the Rigid the part is displayed at. The viewer keeps that placement as the
-    part's group transform (position, quaternion) and composes a track onto it as position + t and
+    `shown` maps occurrence id -> the Rigid it is displayed at. The viewer keeps that placement as the
+    occurrence's group transform (position, quaternion) and composes a track onto it as position + t and
     quaternion * q, so t = t_pose - t_shown and q = R_shown^-1 R_pose. Other movable joints stay at
     their nominal value.
     Raises LimitError when `start` or `end` is outside the joint's [min, max].
@@ -99,21 +100,21 @@ def plan_animation(chain: Any, shown: dict[str, Any], joint_id: str, start: floa
     findings = [f for value in (start, end) for f in chain.limit_findings(chain.complete({joint_id: value}))]
     if findings:
         raise LimitError("; ".join(f["message"] for f in findings), findings)
-    missing = [pn for pn in chain.parts if pn not in shown]
+    missing = [chain.ref(oid) for oid in chain.ids if oid not in shown]
     if missing:
         raise ViewerError(f"parts in assembly.yaml but not in the version: {missing}")
     values = tuple(start + (end - start) * i / (steps - 1) for i in range(steps))
     times = tuple(seconds * i / (steps - 1) for i in range(steps))
-    rows: dict[str, list[tuple[tuple[float, ...], tuple[float, ...]]]] = {pn: [] for pn in chain.parts}
+    rows: dict[str, list[tuple[tuple[float, ...], tuple[float, ...]]]] = {oid: [] for oid in chain.ids}
     for value in values:
         transforms = chain.transforms(chain.complete({joint_id: value}))
-        for pn in chain.parts:
-            target, base = transforms[pn], shown[pn]
+        for oid in chain.ids:
+            target, base = transforms[oid], shown[oid]
             turn = (base.inverse() @ target).quaternion()  # quaternion_shown * q = rotation_pose
-            rows[pn].append((tuple(target.trans[i] - base.trans[i] for i in range(3)), tuple(turn)))
+            rows[oid].append((tuple(target.trans[i] - base.trans[i] for i in range(3)), tuple(turn)))
     tracks = tuple(
-        Track(pn, tuple(t for t, _ in keys), tuple(q for _, q in keys))
-        for pn, keys in rows.items()
+        Track(oid, tuple(t for t, _ in keys), tuple(q for _, q in keys))
+        for oid, keys in rows.items()
         if any(max(abs(c) for c in t) > IDENTITY_EPS or abs(abs(q[3]) - 1.0) > IDENTITY_EPS for t, q in keys)
     )
     return AnimationPlan(joint_id, joint.unit, start, end, values, times, tracks)
@@ -132,9 +133,10 @@ def section_plane(chain: Any, shown: dict[str, Any], joint_id: str) -> dict[str,
         raise ViewerError(str(error)) from error
     parent = shown.get(joint.parent)
     if parent is None:
-        raise ViewerError(f"{joint_id}: parent {joint.parent} is not in the version")
-    point = parent.apply(joint.origin)
-    moved = parent.apply(tuple(joint.origin[i] + joint.axis[i] for i in range(3)))
+        raise ViewerError(f"{joint_id}: parent {chain.ref(joint.parent)} is not in the version")
+    motion = parent @ chain.rests[joint.parent].inverse()  # the joint frame moves with D, not D P
+    point = motion.apply(joint.origin)
+    moved = motion.apply(tuple(joint.origin[i] + joint.axis[i] for i in range(3)))
     axis = tuple(moved[i] - point[i] for i in range(3))
     basis = min(((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0)),
                 key=lambda b: abs(sum(b[i] * axis[i] for i in range(3))))

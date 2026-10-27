@@ -4,7 +4,7 @@ Each `run_<kernel>.py` is a uv script that pins one kernel environment and calls
 orchestrator (`cad_model.py run`) sends one JSON request on stdin, naming the file for the result:
 
     {"result": "/abs/tmp/cadquery.json",
-     "parts": [{"pn": "LMP-0003", "name": "LMP-0003 Upper link",
+     "parts": [{"pn": "LMP-0003", "name": "LMP-0003 Upper link", "model_frame": "assembly_zero",
                 "model": "/abs/hw/parts/LMP-0003/model.py", "step": "/abs/out/LMP-0003.step"}]}
 
 and reads one JSON result from that file once the runner exits, identical in shape for every kernel:
@@ -19,6 +19,8 @@ and reads one JSON result from that file once the runner exits, identical in sha
 
 `drawing_features` is the optional `drawing_features(params, shape)` hook's result, checked by
 `feature_locators`: JSON primitives only, never a kernel object; null when the model has no hook.
+Each locator's `frame` must be the part's `model_frame` (part.yaml; `assembly_zero` when the
+request omits it), the frame build returns its shape in and the per-part STEP keeps.
 
 A part that fails never stops the others. stdout and stderr are console output only: model output
 and OCCT's console messages land there and never reach the result, whenever they are flushed.
@@ -45,7 +47,7 @@ from cadmodel.motion import load_pose
 
 CONTRACT = "model.py must define KERNEL (str), PARAMS (JSON-serialisable dict), and build(params) -> shape"
 FEATURE_ID = re.compile(r"[a-z][a-z0-9_]*")
-FEATURE_FRAME = "assembly_zero"  # build's coordinates: assembly frame at the zero joint pose
+FEATURE_FRAMES = ("assembly_zero", "part_local")  # part.yaml model_frame: the coordinates build returns
 SUPPORT_TYPES = frozenset({"plane", "cylinder", "cone", "sphere", "torus", "bezier", "bspline",
                            "revolution", "extrusion", "offset", "other"})
 LOCATOR_KEYS = frozenset({"kind", "frame", "patches", "anchors", "relations"})
@@ -107,14 +109,16 @@ def _keys(value: Any, allowed: frozenset[str], required: frozenset[str], where: 
     return value
 
 
-def feature_locators(value: Any) -> dict[str, Any]:
+def feature_locators(value: Any, frame: str = "assembly_zero") -> dict[str, Any]:
     """Check a drawing_features result and return its JSON copy: semantic ID -> FeatureLocator.
 
-    FeatureLocator: `kind` (str), `frame` "assembly_zero", `patches` (non-empty list of
-    `support_type`, `point_mm`, unit `normal`, optional `region` id), optional `anchors`
+    FeatureLocator: `kind` (str), `frame` (the part's model frame, `frame`), `patches` (non-empty
+    list of `support_type`, `point_mm`, unit `normal`, optional `region` id), optional `anchors`
     (id -> `point_mm`, optional unit `direction`), optional `relations` (name -> feature ids of
-    this result). Points are final-surface witnesses, not dimensions.
+    this result). Points are final-surface witnesses, not dimensions, in that frame.
     """
+    if frame not in FEATURE_FRAMES:
+        raise ContractError(f"model_frame {frame!r} must be one of {list(FEATURE_FRAMES)}")
     if not isinstance(value, dict) or not value:
         raise ContractError("drawing_features must return a non-empty dict of semantic ID -> locator")
     features: dict[str, Any] = {}
@@ -125,12 +129,12 @@ def feature_locators(value: Any) -> dict[str, Any]:
         _keys(locator, LOCATOR_KEYS, frozenset({"kind", "frame", "patches"}), where)
         if not isinstance(locator["kind"], str) or not FEATURE_ID.fullmatch(locator["kind"]):
             raise ContractError(f"{where}.kind must be a lower_snake_case string")
-        if locator["frame"] != FEATURE_FRAME:
-            raise ContractError(f"{where}.frame must be {FEATURE_FRAME!r}, the coordinates build returns")
+        if locator["frame"] != frame:
+            raise ContractError(f"{where}.frame must be {frame!r}, the part's model_frame: the coordinates build returns")
         patches = locator["patches"]
         if not isinstance(patches, list) or not patches:
             raise ContractError(f"{where}.patches must be a non-empty list")
-        checked: dict[str, Any] = {"kind": locator["kind"], "frame": FEATURE_FRAME, "patches": []}
+        checked: dict[str, Any] = {"kind": locator["kind"], "frame": frame, "patches": []}
         for index, patch in enumerate(patches):
             at = f"{where}.patches[{index}]"
             _keys(patch, PATCH_KEYS, frozenset({"support_type", "point_mm", "normal"}), at)
@@ -191,8 +195,9 @@ def build_part(kernel: str, request: Mapping[str, str]) -> dict[str, Any]:
     if solids == 0:
         raise ContractError("build returned a shape with no solid")
     # The hook sees build's own result, after every cut and fillet, and its own copy of the parameters.
-    features = feature_locators(hook(json.loads(json.dumps(params)), value)) if hook is not None else None
-    pose.write_step(Path(request["step"]), None, [(pose.Part(request["pn"], request["name"], shape), pose.Rigid.identity())])
+    frame = request.get("model_frame", "assembly_zero")
+    features = feature_locators(hook(json.loads(json.dumps(params)), value), frame) if hook is not None else None
+    pose.write_part_step(Path(request["step"]), pose.Part(request["pn"], request["name"], shape))
     errors = occ.check_statuses(shape)  # STEP export can hide an invalid solid (an open shell becomes a surface model)
     return {"ok": True, "params": params, "kernel_volume_mm3": occ.volume(shape), "kernel_solids": solids,
             "kernel_valid": not errors, "kernel_errors": errors, "build_s": round(time.perf_counter() - started, 3),

@@ -16,6 +16,10 @@
     "make_buy": {"type": "string", "enum": ["make", "buy"]},
     "supplier": {"type": ["string", "null"], "minLength": 1},
     "decisions": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^DR-[0-9]{3}$"}},
+    "model_frame": {
+      "description": "Frame of model.py's geometry: assembly_zero (default) is assembly coordinates at the zero joint pose, one identity-placed occurrence only; part_local is the definition's own origin and axes, placed by each occurrence",
+      "type": "string", "enum": ["assembly_zero", "part_local"]
+    },
     "procurement": {"$ref": "drawing.schema.json#/$defs/procurement"},
     "drawing": {"$ref": "drawing.schema.json#/$defs/part_drawing"}
   }

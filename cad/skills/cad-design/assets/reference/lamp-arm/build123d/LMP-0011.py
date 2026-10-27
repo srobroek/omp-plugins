@@ -5,11 +5,15 @@ an envelope: s 0.6 thick, the bore opened from d3 4.7 to the groove root d2 4.8,
 concentric 0.8 mm section (the mean of DIN 471 b 1.1 opposite the opening and about
 0.5 beside the lugs), and two lugs with d5 1.0 plier holes whose corners stay inside
 the d4 10.2 swept diameter. The bore and the load face sit 0.005 mm off the pin
-groove and the bushing end: a contact within cad-model's 0.01 mm, not a coincident
-Boolean face.
+groove and the face it bears on: a contact within cad-model's 0.01 mm, not a
+coincident Boolean face.
 
-Zero pose, assembly coordinates: in the LMP-0005 groove on the J-001 axis (0, 0, 40),
-load face up against the LMP-0008 bushing end at z 21.5; the opening points +X.
+Part-local frame (part.yaml model_frame: part_local): the ring axis is +Z, the load
+face lies on z 0 and the ring extends to z 0.6, the opening points +X. assembly.yaml
+places it three times, in the pin grooves at the zero pose: @ring-base on LMP-0005
+under the LMP-0008 bushing end (load face up at z 21.495), @ring-elbow on LMP-0006 and
+@ring-head on LMP-0007 outside the -Y clevis cheeks (load faces at y -11.005 and
+-8.505).
 """
 
 import build123d as bd
@@ -17,9 +21,6 @@ from cadmodel.safe import safe_cut, safe_fuse
 
 KERNEL = "build123d"
 PARAMS = {
-    "origin": [0.0, 0.0, 40.0],  # J-001 origin
-    "axis": [0.0, 0.0, -1.0],  # LMP-0005 head -> tip
-    "face_offset": 18.505,  # load face position along `axis` from the origin
     "thickness": 0.6,  # DIN 471 s
     "bore_d": 4.81,  # groove root d2 4.8 + 0.01 mm modelling clearance
     "section_w": 0.8,  # mean of b 1.1 (back) and ~0.5 (beside the lugs)
@@ -33,13 +34,6 @@ PARAMS = {
 BASE = (bd.Align.CENTER, bd.Align.CENTER, bd.Align.MIN)
 
 
-def _plane(p):
-    axis = bd.Vector(*p["axis"]).normalized()
-    x_dir = bd.Vector(1, 0, 0) if abs(axis.X) < 0.9 else bd.Vector(0, 1, 0)
-    x_dir = (x_dir - axis * x_dir.dot(axis)).normalized()
-    return bd.Plane(origin=bd.Vector(*p["origin"]) + axis * p["face_offset"], x_dir=x_dir, z_dir=axis)
-
-
 def build(params: dict) -> bd.Part:
     p = {**PARAMS, **params}
     t, ri = p["thickness"], p["bore_d"] / 2.0
@@ -51,4 +45,4 @@ def build(params: dict) -> bd.Part:
     bore = bd.Pos(0, 0, -1.0) * bd.Cylinder(ri, t + 2.0, align=BASE)
     opening = bd.Pos(reach, 0, -1.0) * bd.Box(2.0 * reach, p["gap"], t + 2.0, align=BASE)
     holes = [bd.Pos(p["hole_at"], y, -1.0) * bd.Cylinder(p["hole_d"] / 2.0, t + 2.0, align=BASE) for y in (lug_y, -lug_y)]
-    return _plane(p).location * safe_cut(ring, bore, opening, *holes)
+    return safe_cut(ring, bore, opening, *holes)

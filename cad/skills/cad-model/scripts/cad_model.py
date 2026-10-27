@@ -6,22 +6,26 @@
 
 Usage:
     uv run --script cad_model.py run <hw-dir> --label vN [--kernel auto|cadquery|build123d]
-                                     [--attach PN=PARENT_PN ...]
+                                     [--attach REF=PARENT_REF ...]
     uv run --script cad_model.py check vN --hw hw [--out FILE]
-       [--pair PN:PN ...] [--allow-interference PN:PN ...] [--expect-solids PN=N ...]
+       [--pair REF:REF ...] [--allow-interference REF:REF ...] [--expect-solids PN=N ...]
     uv run --script cad_model.py diff vA vB [--hw HW] [--out FILE]
+
+A REF is a PN placed once, or `@id` for one occurrence of hw/assembly.yaml.
 
 run   executes every hw/parts/<PN>/model.py in its declared kernel's own uv environment
       (run_cadquery.py, run_build123d.py), then writes hw/versions/vN/:
-        parts/<PN>.step   AP242, one product named "<PN> <title>", zero pose
-        assembly.step     AP242, top product "<product id> vN" placing every part at the
-                          joints' nominal pose (cad-motion pose.py)
-        assembly.glb      binary glTF of assembly.step, metres, +Y up, node names = products
-        part-map.json     PN -> glTF node and mesh names
-        metrics.json      per part: volume, area, bbox, solids, holes, mass from assets/materials.yaml
-        manifest.json     per part: kernel, model path, source sha256, params, kernel volume;
-                          tool versions per environment; pose; joint pairs with joint id and type;
-                          file hashes
+        parts/<PN>.step   AP242, one product named "<PN> <title>": the definition, in the
+                          part's model_frame
+        assembly.step     AP242, top product "<product id> vN" with one product per PN and one
+                          component per occurrence at the joints' nominal pose (cad-motion pose.py)
+        assembly.glb      binary glTF of assembly.step, metres, +Y up, one node per occurrence
+        part-map.json     occurrence -> glTF nodes and meshes, plus the PN aggregate
+        metrics.json      per PN: volume, area, bbox, solids, holes, mass from assets/materials.yaml;
+                          per occurrence: placement, placed bbox, centre and holes; totals by quantity
+        manifest.json     per PN: kernel, model frame, model path, source and record sha256, params,
+                          kernel volume; occurrences with rest placements; tool versions; pose
+                          (values, placements, motions); joints and joint pairs; file hashes
       and hw/versions/latest.json pointing at that version (paths relative to hw/). Labels
       increase: an existing label or one below the newest built version is refused.
 check runs the geometry checks on a built version; diff compares two built versions.
@@ -43,9 +47,11 @@ from cadmodel import build
 
 
 def _pair(text: str) -> tuple[str, str]:
+    from cadmodel.motion import load_pose
+
     a, sep, b = text.partition(":")
-    if not sep or not build.is_pn(a) or not build.is_pn(b) or a == b:
-        raise argparse.ArgumentTypeError(f"expected PN:PN, got {text!r}")
+    if not sep or not load_pose().is_ref(a) or not load_pose().is_ref(b) or a == b:
+        raise argparse.ArgumentTypeError(f"expected REF:REF (a PN or @occurrence each), got {text!r}")
     return a, b
 
 
@@ -64,14 +70,14 @@ def parser() -> argparse.ArgumentParser:
     run.add_argument("--label", required=True, help="version label: v1, v2, ...")
     run.add_argument("--kernel", choices=("auto", *build.KERNELS), default="auto",
                      help="auto: each part's declared KERNEL; otherwise every part must declare this kernel")
-    run.add_argument("--attach", action="append", default=[], metavar="PN=PARENT_PN",
-                     help="rigidly attach a part without a joint (repeatable)")
+    run.add_argument("--attach", action="append", default=[], metavar="REF=PARENT_REF",
+                     help="rigidly attach an occurrence without a joint (a PN or @id; repeatable)")
     check = sub.add_parser("check", help="geometry checks on a built version")
     check.add_argument("label")
     check.add_argument("--hw", type=Path, default=Path("hw"))
-    check.add_argument("--pair", action="append", type=_pair, metavar="PN:PN",
-                       help="check only these pairs for interference (default: all pairs)")
-    check.add_argument("--allow-interference", action="append", type=_pair, default=[], metavar="PN:PN",
+    check.add_argument("--pair", action="append", type=_pair, metavar="REF:REF",
+                       help="check only these occurrence pairs for interference (default: all pairs)")
+    check.add_argument("--allow-interference", action="append", type=_pair, default=[], metavar="REF:REF",
                        help="undeclared intentional overlap: reported, not blocking (repeatable)")
     check.add_argument("--expect-solids", action="append", type=_expect, default=[], metavar="PN=N",
                        help="expected solid count; overrides the previous version as baseline")
