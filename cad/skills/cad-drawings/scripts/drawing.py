@@ -9,54 +9,21 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import os
-import signal
-import subprocess
-import sys
-import time
 import uuid
 from pathlib import Path
 from typing import Any
 
 import yaml
+from defusedxml import ElementTree as SafeET
 
-FREECAD_SITE_PACKAGES = Path("/Applications/FreeCAD.app/Contents/Resources/lib/python3.11/site-packages")
-if FREECAD_SITE_PACKAGES.is_dir():
-    sys.path.insert(0, str(FREECAD_SITE_PACKAGES))
-from defusedxml import ElementTree as SafeET  # noqa: E402
+import freecad_runtime
+import layout_check
+import sheet
+import sheet_export
 
-import layout_check  # noqa: E402
-import sheet  # noqa: E402
+FREECADCMD = freecad_runtime.find_freecadcmd()
+TECHDRAW_JOB = Path(__file__).resolve().parent / "techdraw_job.py"
 
-FREECADCMD = Path(os.environ.get("FREECADCMD", "/Applications/FreeCAD.app/Contents/Resources/bin/freecadcmd"))
-SCRIPTS = Path(__file__).resolve().parent
-TECHDRAW_JOB = SCRIPTS / "techdraw_job.py"
-SVG_TO_PNG = SCRIPTS / "svg_to_png.swift"
-SVG_TO_PDF = SCRIPTS / "svg_to_pdf.swift"
-
-
-def _terminate_process_group(process: subprocess.Popen[str]) -> None:
-    try:
-        os.killpg(process.pid, signal.SIGTERM)
-    except ProcessLookupError:
-        process.wait()
-        return
-    deadline=time.monotonic()+2
-    while process.poll() is None and time.monotonic()<deadline:
-        time.sleep(0.05)
-    else:
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-    try:
-        process.wait(timeout=2)
-    except subprocess.TimeoutExpired:
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        process.wait()
 
 def fail(code: str, message: str) -> dict[str, Any]:
     return {"status": "error", "error": {"code": code, "message": message}}
@@ -123,64 +90,7 @@ def techdraw_job(step: Path, spec: sheet.SheetSpec, scale: float, holes: list[di
             "scales": sheet.candidate_scales(scale), "holes": holes}
 
 
-def run_techdraw(job: dict[str, Any], output: Path, timeout: float) -> tuple[dict[str, Any] | None, str]:
-    """Run techdraw_job.py in freecadcmd as its own process group and return its parsed result."""
-    run_id = uuid.uuid4().hex
-    job_path = output / f"techdraw_{run_id}.job.json"
-    result_path = output / f"techdraw_{run_id}.result.json"
-    job_path.write_text(json.dumps({**job, "result": str(result_path)}), encoding="utf-8")
-    process: subprocess.Popen[str] | None = None
-    try:
-        try:
-            process = subprocess.Popen([str(FREECADCMD), str(TECHDRAW_JOB)], cwd=output, stdin=subprocess.DEVNULL,
-                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True,
-                                       env={**os.environ, "CAD_DRAWING_JOB": str(job_path)})
-            stdout,stderr=process.communicate(timeout=timeout)
-        except FileNotFoundError:
-            return None, f"FreeCAD command line application not found: {FREECADCMD}"
-        except subprocess.TimeoutExpired:
-            _terminate_process_group(process)
-            process.communicate()
-            return None, f"FreeCAD projection exceeded {timeout:g} seconds"
-        except BaseException:
-            if process is not None:
-                _terminate_process_group(process)
-                process.communicate()
-            raise
-        _terminate_process_group(process)
-        if not result_path.is_file():
-            return None, f"FreeCAD projection wrote no result marker (exit {process.returncode}): {stderr[-1500:]}"
-        try:
-            result = json.loads(result_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            return None, f"invalid FreeCAD projection result: {exc}"
-    finally:
-        job_path.unlink(missing_ok=True)
-        result_path.unlink(missing_ok=True)
-    if result.get("status") != "pass":
-        return None, result.get("error", "projection failed")
-    return result, ""
-
-
-def render_pdf(svg: Path, pdf: Path, png: Path, timeout: float, required_text: list[str]) -> tuple[bool,str]:
-    try:
-        result=subprocess.run(["swift",str(SVG_TO_PDF),str(svg),str(pdf),str(png),*required_text],capture_output=True,text=True,timeout=timeout)
-    except FileNotFoundError: return False,"Swift/macOS PDF renderer unavailable"
-    except subprocess.TimeoutExpired: return False,"macOS SVG-to-PDF rendering timed out"
-    if result.returncode!=0 or not pdf.is_file() or pdf.stat().st_size==0 or not png.is_file() or png.stat().st_size==0:
-        return False,(result.stderr or result.stdout)[-1500:]
-    return True,""
-
-
-def render_svg(svg: Path, png: Path, timeout: float) -> tuple[bool,str]:
-    try: result=subprocess.run(["swift",str(SVG_TO_PNG),str(svg),str(png)],capture_output=True,text=True,timeout=timeout)
-    except FileNotFoundError: return False,"Swift/macOS SVG rasterizer unavailable"
-    except subprocess.TimeoutExpired: return False,"SVG rasterization timed out"
-    if result.returncode!=0 or not png.is_file() or png.stat().st_size==0: return False,(result.stderr or result.stdout)[-1500:]
-    return True,""
-
-
-def verify_svg_content(svg: Path, png: Path, part: dict[str,Any]) -> tuple[bool,str,int]:
+def verify_svg_content(svg: Path, part: dict[str,Any]) -> tuple[bool,str,int]:
     try: root=SafeET.parse(str(svg),forbid_dtd=True).getroot()
     except Exception as exc: return False,f"invalid or unsafe SVG output: {exc}",0
     ns={"svg":"http://www.w3.org/2000/svg"}
@@ -197,8 +107,8 @@ def run(args: argparse.Namespace) -> tuple[dict[str,Any],int]:
     output=args.output_dir.resolve(); output.mkdir(parents=True,exist_ok=True)
     spec=sheet.SPECS[product["regime"]]
     templates={name: candidate.template.is_file() for name,candidate in sheet.SPECS.items()}
-    if not templates[spec.regime]: return fail("template_missing",f"no shipped {spec.regime} template exists"),2
-    data,message=run_techdraw(techdraw_job(step,spec,args.scale,holes),output,args.timeout)
+    if not templates[spec.regime]: return fail("template_missing",f"no {spec.regime} template at {spec.template}"),2
+    data,message=freecad_runtime.run_job(FREECADCMD,TECHDRAW_JOB,techdraw_job(step,spec,args.scale,holes),output,args.timeout)
     if data is None:
         return fail("empty_drawing" if str(message).startswith("empty_drawing") else "projection_failed",message),1
     try: drawing=sheet.compose(data,part,product,spec)
@@ -210,20 +120,15 @@ def run(args: argparse.Namespace) -> tuple[dict[str,Any],int]:
         rejected=output/f"drawing_{run_id}.rejected.svg"
         rejected.write_text(drawing.svg,encoding="utf-8")
         return fail("layout_check_failed",f"{rejected}: "+"; ".join(violations)),1
-    svg=output/"drawing.svg"; pdf=output/"drawing.pdf"
-    svg_png=output/f"drawing_{run_id}_svg.png"; pdf_png=output/f"drawing_{run_id}_pdf.png"
+    svg=output/"drawing.svg"; pdf=output/"drawing.pdf"; png=output/f"drawing_{run_id}.png"
     marker=output/f"drawing_{run_id}.complete.json"
     svg.write_text(drawing.svg,encoding="utf-8")
-    ok,message=render_svg(svg,svg_png,args.timeout)
-    if not ok: return fail("empty_drawing",message),1
-    valid,message,path_count=verify_svg_content(svg,svg_png,part)
+    valid,message,path_count=verify_svg_content(svg,part)
     if not valid: return fail("empty_drawing",message),1
     required=[str(part[k]) for k in ("PN","rev","title","material")]+[str(product["general_tolerance"])]
-    ok,message=render_pdf(svg,pdf,pdf_png,args.timeout,required)
-    if not ok:
-        code="empty_drawing" if "missing" in message or "blank" in message else "pdf_conversion_unavailable"
-        return fail(code,message),1 if code=="empty_drawing" else 2
-    report={"status":"pass","run_id":run_id,"pdf":str(pdf),"svg":str(svg),"rendered_svg_png":str(svg_png),"rendered_pdf_png":str(pdf_png),
+    try: exported=sheet_export.export_sheet(FREECADCMD,svg,pdf,png,required,args.timeout)
+    except sheet_export.ExportError as exc: return fail(exc.code,str(exc)),1 if exc.code=="empty_drawing" else 2
+    report={"status":"pass","run_id":run_id,"pdf":str(pdf),"svg":str(svg),"rendered_png":str(png),"export":exported,
             "template":str(spec.template),"templates_found":templates,"projection":"FreeCAD TechDraw DrawProjGroup",
             "projection_method":"first-angle" if spec.first_angle else "third-angle",
             "scale":data["scale"],"layout_check":"pass","visible_paths":path_count,"face_count":data["face_count"],
@@ -243,6 +148,8 @@ def main(argv: list[str]|None=None) -> int:
     parser.add_argument("--timeout",type=float,default=120.0)
     args=parser.parse_args(argv)
     if args.timeout<=0: parser.error("--timeout must be positive")
+    if FREECADCMD is None:
+        print(json.dumps(fail("freecad_unavailable","freecadcmd not found; set FREECADCMD or put freecadcmd on PATH"))); return 2
     if not FREECADCMD.is_file():
         print(json.dumps(fail("freecad_unavailable",f"FreeCAD is not installed at {FREECADCMD}"))); return 2
     try: result,status=run(args)

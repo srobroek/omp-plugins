@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Focused projection, layout, rendered output, marker, and XML-security tests."""
+"""Focused projection, layout, export, marker, FreeCAD discovery and XML-security tests."""
 
 from __future__ import annotations
 
@@ -11,19 +11,27 @@ import sys
 import tempfile
 import time
 import unittest
+import zlib
 from pathlib import Path
+
+from defusedxml import ElementTree as SafeET
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts/drawing.py"
 sys.path.insert(0, str(SCRIPT.parent))
-import drawing  # noqa: E402  (sets up the defusedxml import path first)
+import drawing  # noqa: E402
+import freecad_runtime  # noqa: E402
 import layout_check  # noqa: E402
 import sheet  # noqa: E402
+import sheet_export  # noqa: E402
 from layout_check import Box, SheetRegions, check_layout  # noqa: E402
 
-FREECADCMD = Path("/Applications/FreeCAD.app/Contents/Resources/bin/freecadcmd")
+FREECADCMD = freecad_runtime.find_freecadcmd()
+FREECAD_PRESENT = FREECADCMD is not None and FREECADCMD.is_file()
 AUTHORITATIVE_STEP = Path("/tmp/cad-authoritative-source/project/hw/versions/v1/parts/LMP-0003.step")
 AUTHORITATIVE_METRICS = Path("/tmp/cad-authoritative-source/project/hw/versions/v1/metrics.json")
 TEMPLATES_PRESENT = all(spec.template.is_file() for spec in sheet.SPECS.values())
+# Qt writes the PDF page size in whole points: ISO A4 landscape and ANSI A landscape.
+PAGE_POINTS = {"iso": (842.0, 595.0), "asme": (792.0, 612.0)}
 
 REGIONS = SheetRegions(frame=Box(10, 10, 190, 140), title_block=Box(100, 110, 190, 140), symbol_cell=Box(170, 110, 190, 120))
 SYMBOL = '<g id="projection-symbol"><circle cx="180" cy="115" r="3"/></g>'
@@ -207,15 +215,10 @@ class DrawingContracts(unittest.TestCase):
         child_pid=self.root/"child.pid"
         fake.write_text(f'#!/bin/sh\nsleep 30 &\necho $! > "{child_pid}"\nwait\n',encoding="utf-8")
         fake.chmod(0o755)
-        previous_freecadcmd=drawing.FREECADCMD
-        drawing.FREECADCMD=fake
-        try:
-            result,message=drawing.run_techdraw({"step":str(self.root/"part.step")},self.root,2.0)
-        finally:
-            drawing.FREECADCMD=previous_freecadcmd
+        result,message=freecad_runtime.run_job(fake,drawing.TECHDRAW_JOB,{"step":str(self.root/"part.step")},self.root,2.0)
         self.assertIsNone(result)
         self.assertIn("exceeded",message)
-        self.assertEqual(list(self.root.glob("techdraw_*")), [])
+        self.assertEqual(list(self.root.glob("techdraw_job_*")), [])
         pid=int(child_pid.read_text(encoding="utf-8"))
         deadline=time.monotonic()+2
         while time.monotonic()<deadline:
@@ -228,6 +231,16 @@ class DrawingContracts(unittest.TestCase):
             time.sleep(0.05)
         else:
             self.fail(f"child process {pid} survived projection timeout")
+
+    def test_failed_job_result_is_reported_and_its_files_removed(self) -> None:
+        fake = self.root / "fake-freecad"
+        fake.write_text('#!/bin/sh\nprintf \'{"status": "error", "error": "boom"}\' > "${CAD_DRAWING_JOB%.job.json}.result.json"\n',
+                        encoding="utf-8")
+        fake.chmod(0o755)
+        result, message = freecad_runtime.run_job(fake, sheet_export.EXPORT_JOB, {}, self.root, 20.0)
+        self.assertIsNone(result)
+        self.assertEqual(message, "boom")
+        self.assertEqual(list(self.root.glob("export_job_*")), [])
 
     def test_missing_freecad_is_structured_exit_two(self) -> None:
         result = subprocess.run(
@@ -282,10 +295,16 @@ class DrawingContracts(unittest.TestCase):
         self.assertEqual(report["status"], "pass")
         self.assertEqual(report["layout_check"], "pass")
         self.assertEqual(report["hole_diameters_mm"], [5.009, 5.009])
-        for key in ("svg", "pdf", "rendered_svg_png", "rendered_pdf_png"):
+        for key in ("svg", "pdf", "rendered_png"):
             path = Path(report[key])
             self.assertTrue(path.is_file())
             self.assertGreater(path.stat().st_size, 0)
+        self.assertGreater(report["export"]["png"]["dark_pixels"], sheet_export.MIN_DARK_PIXELS)
+        pdf = sheet_export.read_pdf(Path(report["pdf"]))
+        self.assertEqual(pdf.page_sizes_pt, [PAGE_POINTS[regime]])
+        self.assertEqual(pdf.fonts, ["osifont"])
+        for required in ("LMP-0003", "X1", "Upper link", "Aluminum 6061-T6", "ISO 2768-m", "221.00", "21.00", "⌀5.01"):
+            self.assertIn(required, pdf.text)
         svg = Path(report["svg"]).read_text(encoding="utf-8")
         spec = sheet.SPECS[regime]
         self.assertEqual(check_layout(svg, spec.regions, sheet.STOCK_PLACEHOLDERS), [])
@@ -296,7 +315,7 @@ class DrawingContracts(unittest.TestCase):
         self.assertEqual(svg.count('id="projection-symbol"'), 1)
         return report, svg
 
-    @unittest.skipUnless(FREECADCMD.is_file(), "FreeCAD 1.1.4 freecadcmd is not installed")
+    @unittest.skipUnless(FREECAD_PRESENT, "FreeCAD 1.1.4 freecadcmd is not installed")
     def test_iso_lamp_upper_link_is_first_angle_with_complete_title_block(self) -> None:
         report, svg = self.real_drawing("iso")
         self.assertTrue(report["templates_found"]["iso"])
@@ -309,7 +328,7 @@ class DrawingContracts(unittest.TestCase):
         self.assertGreater(centers["top"][1], centers["front"][1])  # top view below the front view
         self.assertLess(centers["right"][0], centers["front"][0])  # right view left of the front view
 
-    @unittest.skipUnless(FREECADCMD.is_file(), "FreeCAD 1.1.4 freecadcmd is not installed")
+    @unittest.skipUnless(FREECAD_PRESENT, "FreeCAD 1.1.4 freecadcmd is not installed")
     def test_asme_lamp_upper_link_is_third_angle_with_unique_labels(self) -> None:
         report, svg = self.real_drawing("asme")
         self.assertEqual(report["projection_method"], "third-angle")
@@ -323,12 +342,108 @@ class DrawingContracts(unittest.TestCase):
     def test_safe_svg_validation_blocks_entity_expansion(self) -> None:
         svg = self.root / "hostile.svg"
         svg.write_text('<!DOCTYPE x [<!ENTITY boom "abc">]><svg xmlns="http://www.w3.org/2000/svg"><text>&boom;</text></svg>', encoding="utf-8")
-        ok, message, count = drawing.verify_svg_content(svg, self.root / "missing.png", {"PN":"x","rev":"A","title":"t","material":"m"})
+        ok, message, count = drawing.verify_svg_content(svg, {"PN":"x","rev":"A","title":"t","material":"m"})
         self.assertFalse(ok)
         self.assertEqual(count, 0)
         self.assertIn("unsafe SVG", message)
         with self.assertRaises(Exception):
             layout_check.check_layout(svg.read_text(encoding="utf-8"), REGIONS, [])
+
+
+class FreeCADDiscovery(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory(prefix="cad-freecad-lookup-")
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+
+    def executable(self, path: Path) -> Path:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("#!/bin/sh\n", encoding="utf-8")
+        path.chmod(0o755)
+        return path
+
+    def test_set_freecadcmd_is_used_as_given(self) -> None:
+        on_path = self.executable(self.root / "bin" / "freecadcmd")
+        environ = {"FREECADCMD": str(self.root / "missing"), "PATH": str(on_path.parent)}
+        self.assertEqual(freecad_runtime.find_freecadcmd(environ), self.root / "missing")
+
+    def test_path_lookup_accepts_both_command_names(self) -> None:
+        for name in ("freecadcmd", "FreeCADCmd"):
+            with self.subTest(name=name):
+                command = self.executable(self.root / name / name)
+                found = freecad_runtime.find_freecadcmd({"PATH": str(command.parent)})
+                self.assertTrue(found is not None and found.samefile(command), found)
+
+    def test_without_path_command_only_the_macos_app_remains(self) -> None:
+        app = freecad_runtime.MACOS_FREECADCMD
+        found = freecad_runtime.find_freecadcmd({"PATH": str(self.root)})
+        self.assertEqual(found, app if app.is_file() else None)
+
+    def test_templates_follow_a_symlinked_bundle_command(self) -> None:
+        command = self.executable(self.root / "squashfs-root" / "usr" / "bin" / "freecadcmd")
+        link = self.root / "local" / "bin" / "freecadcmd"
+        link.parent.mkdir(parents=True)
+        link.symlink_to(command)
+        self.assertEqual(freecad_runtime.templates_dir(link),
+                         command.resolve().parents[1] / "share" / "Mod" / "TechDraw" / "Templates")
+
+
+class SheetExportParts(unittest.TestCase):
+    """Text splitting and PDF reading without FreeCAD; the lamp drawings exercise the Qt export itself."""
+
+    SVG = ('<svg xmlns="http://www.w3.org/2000/svg" width="200mm" height="150mm" viewBox="0 0 200 150">'
+           '<g style="font-size:3.5px;font-family:osifont;fill:#000000" transform="translate(10 20)">'
+           '<text x="5" y="6" text-anchor="middle"><tspan>  Centred\n   label </tspan></text>'
+           '<text x="1" y="2"><tspan x="7" y="8" font-weight="bold" font-family="sans-serif, Arial">Moved</tspan></text>'
+           '</g><text x="0" y="0" font-size="2" fill="none">hidden</text>'
+           '<text x="3" y="4" transform="rotate(-90 3 4)" font-size="2.5" fill="#111">22.00</text>'
+           '<path d="M 0 0 L 1 1"/></svg>')
+
+    def test_text_runs_leave_a_text_free_svg(self) -> None:
+        root = SafeET.fromstring(self.SVG)
+        runs = sheet_export.split_text(root)
+        self.assertEqual(root.findall(f".//{sheet_export.TEXT}"), [])
+        self.assertEqual(len(root.findall(".//{http://www.w3.org/2000/svg}path")), 1)
+        self.assertEqual([run["text"] for run in runs], ["Centred label", "Moved", "22.00"])
+        centred, moved, rotated = runs
+        self.assertEqual((centred["x"], centred["y"], centred["anchor"], centred["size"], centred["family"], centred["bold"]),
+                         (5.0, 6.0, "middle", 3.5, "osifont", False))
+        self.assertEqual(centred["matrix"], [1.0, 0.0, 0.0, 1.0, 10.0, 20.0])
+        self.assertEqual((moved["x"], moved["y"], moved["family"], moved["bold"], moved["anchor"]), (7.0, 8.0, "sans-serif", True, "start"))
+        a, b, c, d, e, f = rotated["matrix"]
+        apply = lambda x, y: (round(a * x + c * y + e, 9), round(b * x + d * y + f, 9))
+        self.assertEqual((apply(3, 4), apply(4, 4)), ((3.0, 4.0), (3.0, 3.0)))  # rotated -90 degrees about (3, 4)
+        self.assertEqual((rotated["size"], rotated["fill"]), (2.5, "#111"))
+
+    def test_sheet_size_and_unsized_text_are_checked(self) -> None:
+        self.assertEqual(sheet_export.sheet_size_mm(SafeET.fromstring(self.SVG)), (200.0, 150.0))
+        letter = SafeET.fromstring('<svg xmlns="http://www.w3.org/2000/svg" width="11in" height="8.5in"/>')
+        self.assertAlmostEqual(sheet_export.sheet_size_mm(letter)[1], 215.9)
+        with self.assertRaisesRegex(sheet_export.ExportError, "not a length"):
+            sheet_export.sheet_size_mm(SafeET.fromstring('<svg xmlns="http://www.w3.org/2000/svg" width="100%"/>'))
+        with self.assertRaisesRegex(sheet_export.ExportError, "no font size"):
+            sheet_export.split_text(SafeET.fromstring('<svg xmlns="http://www.w3.org/2000/svg"><text>bare</text></svg>'))
+
+    def test_qt_style_pdf_text_and_page_size(self) -> None:
+        cmap = (b"begincmap\n1 beginbfchar\n<0001> <0041>\nendbfchar\n2 beginbfrange\n<0002> <0003> [<0042> <0009>]\n"
+                b"<0004> <0005> <0043>\nendbfrange\nendcmap\n")
+        content = zlib.compress(b"BT\n/F5 100 Tf 1 0 0 -1 0 0 Tm\n0 0 Td <0001> Tj\n1 0 Td <0003> Tj\n1 0 Td <0002> Tj\n"
+                                b"/Span << /ActualText <> >> BDC\n1 0 Td <0004> Tj\nEMC\nET\nBT\n/F5 100 Tf\n0 0 Td <0005> Tj\nET\n")
+        objects = [b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+                   b"<< /Type /Page /Parent 2 0 R /Contents 7 0 R /Resources 4 0 R /MediaBox [0 0 842.000000 595.000000] >>",
+                   b"<< /Font << /F5 5 0 R >> >>",
+                   b"<< /Type /Font /Subtype /Type0 /BaseFont /osifont /ToUnicode 6 0 R>>",
+                   b"<< /Length %d >>\nstream\n%sendstream" % (len(cmap), cmap),
+                   b"<< /Length %d /Filter /FlateDecode >>\nstream\n%s\nendstream" % (len(content), content)]
+        directory = tempfile.TemporaryDirectory(prefix="cad-pdf-read-")
+        self.addCleanup(directory.cleanup)
+        pdf = Path(directory.name) / "sheet.pdf"
+        pdf.write_bytes(b"%PDF-1.4\n" + b"".join(b"%d 0 obj\n%s\nendobj\n" % (number, body)
+                                                 for number, body in enumerate(objects, start=2)))
+        read = sheet_export.read_pdf(pdf)
+        self.assertEqual(read.page_sizes_pt, [(842.0, 595.0)])
+        self.assertEqual(read.fonts, ["osifont"])
+        self.assertEqual(read.text, "A B\nD")  # tab read as a space; the synthetic-bold repeat skipped
 
 
 if __name__ == "__main__":

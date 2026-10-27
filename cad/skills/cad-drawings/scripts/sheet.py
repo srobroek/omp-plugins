@@ -17,10 +17,11 @@ from xml.etree import ElementTree as ET
 
 from defusedxml import ElementTree as SafeET
 
+import freecad_runtime
 from layout_check import SVG_NS, TEXT_ADVANCE, TEXT_ASCENT, TEXT_DESCENT, Box, SheetRegions, geometry_box
 
 FREECAD_NS = "https://www.freecad.org/wiki/index.php?title=Svg_Namespace"
-TEMPLATES = Path("/Applications/FreeCAD.app/Contents/Resources/share/Mod/TechDraw/Templates")
+TEMPLATES = freecad_runtime.templates_dir(freecad_runtime.find_freecadcmd())
 # Sample values the review found leaking from stock templates; never acceptable on a sheet.
 STOCK_PLACEHOLDERS = frozenset({"A. Nemesis", "B. Hecate", "YYYY-MM-DD", "X / Y"})
 # Largest first; ISO 5455 recommended enlargement and reduction scales.
