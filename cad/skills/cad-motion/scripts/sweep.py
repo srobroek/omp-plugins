@@ -38,14 +38,21 @@ solid of the other, a solid of a compound part included) and, when it is within
 1e-6 mm, the overlap volume (non-destructive BRepAlgoAPI_Common, measured with
 pose.py's adaptive `volume_properties`). Centres of mass use `volume_properties`
 as well.
-A pair evaluation is cached on the two definitions and their relative
-transform (entries rounded to 1e-6), so a joint sweep recomputes only the pairs
-that joint moves, and two same-PN pairs in the same relative placement share
-one measurement. A cached distance is reused only when it is farther from each
-clearance threshold of the pair (its requirement, `--min-clearance`) than the
-placement difference can move it (|dR|_F times the radius of the moved
-definition's bounding box about its origin, plus |dt|); otherwise the pair is
-measured again, so a cache hit never carries a verdict across a threshold.
+Every pair request of every sample is planned first, then measured by
+pair_measure.py, then reduced in sample order. A pair evaluation is cached on
+the two definitions and their relative transform (entries rounded to 1e-6), so
+a joint sweep recomputes only the pairs that joint moves, and two same-PN pairs
+in the same relative placement share one measurement. A cached distance is
+reused only when it is farther from each clearance threshold of the pair (its
+requirement, `--min-clearance`) than the placement difference can move it
+(|dR|_F times the radius of the moved definition's bounding box about its
+origin, plus |dt|); otherwise the pair is measured again, so a cache hit never
+carries a verdict across a threshold. A request is not measured at all when an
+exact lower bound on its distance (the gap between the placed bounding boxes,
+or a measured distance at a nearby sample minus how far b's box moves between
+the two) exceeds the pair's smallest distance so far, 1e-6 mm and each
+threshold of the pair: no reported value or verdict can depend on it (`pruned`
+in `timings_s`).
 
 Checks: a collision is an overlap volume above `--volume-tol` mm^3 (default
 pose.py's INTERFERENCE_MM3, 1e-3) on a pair whose overlap hw/interfaces.yaml
@@ -95,7 +102,10 @@ an incomplete run, an error, or a sweep with no eligible pose (`worst_case`
 null) leaves none behind.
 
 Runtime is bounded: more than `--max-poses` poses is refused up front, and a
-sweep that passes `--time-limit` seconds stops and reports `incomplete`.
+sweep that passes `--time-limit` seconds stops measuring and reports
+`incomplete`, with the findings of the leading samples it measured in full
+(`poses.evaluated`; requests are measured out of sample order, so these can be
+few).
 
 stdout: JSON summary with timings; pairs and parts are reported as references
 (`@id`, or the PN of a singleton). stderr: diagnostics.
@@ -300,22 +310,27 @@ def plan(chain: Any, samples: list[Sample], pairs: list[tuple[str, str]], fitted
         transforms = chain.transforms(sample.values)
         planned.append(PlannedSample(sample, [], transforms, len(requests)))
         requests += [pair_measure.Request(chain.pn(a), chain.pn(b), transforms[a].inverse() @ transforms[b],
-                                          thresholds=thresholds[(a, b)]) for a, b in measured]
+                                          thresholds=thresholds[(a, b)], group=(a, b)) for a, b in measured]
     return Plan(checked, measured, thresholds, tightest, planned, requests)
 
 
 def measured_prefix(chain: Any, plan: Plan, outcomes: list[Any]) -> int:
-    """How many leading samples have every request answered; a kernel failure is an error."""
+    """How many leading samples the reduction can take: every request answered, and every pruned
+    one proved by a request inside them, so it is above the minimum of those samples too (a run
+    the deadline stopped measured out of sample order). A kernel failure is an error."""
     width = len(plan.measured)
     for index, outcome in enumerate(outcomes):
         if isinstance(outcome, pair_measure.Failure):
             a, b = plan.measured[index % width]
             raise pose.MotionError(f"{chain.ref(a)} / {chain.ref(b)}: {outcome.message}")
-    count = 0
-    for planned in plan.samples:
-        if planned.transforms is not None and None in outcomes[planned.start:planned.start + width]:
+    count, proof = 0, -1  # proof: the last request a pruned request so far relies on
+    for taken, planned in enumerate(plan.samples, start=1):
+        block = outcomes[planned.start:planned.start + width] if planned.transforms is not None else []
+        if None in block:
             break
-        count += 1
+        proof = max([proof, *(outcome.witness for outcome in block if isinstance(outcome, pair_measure.Pruned))])
+        if proof < planned.start + len(block):
+            count = taken
     return count
 
 
@@ -342,7 +357,8 @@ def reduce(chain: Any, geometry: Geometry, plan: Plan, outcomes: list[Any], eval
         closest: tuple[tuple[float, float], float, list[str] | None, tuple[float, str] | None] = \
             ((math.inf, 0.0), math.inf, None, None)
         overlap: tuple[float, list[str] | None] = (0.0, None)  # largest undeclared volume above volume_tol
-        for (a, b), (distance, volume) in zip(plan.measured, outcomes[planned.start:planned.start + width]):
+        for (a, b), outcome in zip(plan.measured, outcomes[planned.start:planned.start + width]):
+            distance, volume = pair_measure.reading(outcome)
             requirement = requirements.get((a, b))
             if requirement is not None:
                 seen = state.pair_clearance.setdefault((a, b), {"clearance_mm": math.inf, "overlap_mm3": 0.0,
@@ -404,7 +420,7 @@ def sweep(chain: Any, geometry: Geometry, measurer: Any, samples: list[Sample], 
     `deadline`, and reduce the samples measured in full. `fitted` pairs are declared as a fit or
     insert, which `required` (--min-clearance) does not bind."""
     planned = plan(chain, samples, pairs, fitted, requirements, required)
-    outcomes = measurer.measure(planned.requests, deadline, stop_on_failure=True)
+    outcomes = measurer.measure(planned.requests, deadline, stop_on_failure=True, prune=True)
     return reduce(chain, geometry, planned, outcomes, measured_prefix(chain, planned, outcomes), allowed,
                   requirements, effector, reference, volume_tol, criterion)
 
@@ -667,8 +683,9 @@ def main(argv: list[str] | None = None) -> int:
         "timings_s": {"load": round(loaded - started, 2), "sweep": round(swept - loaded, 2),
                       "export": round(exported - swept, 2), "total": round(time.monotonic() - started, 2),
                       "per_pose_ms": round(per_pose * 1000, 1),
-                      "pair_evaluations": measurer.measured, "cache_hits": measurer.reused,
-                      "threshold_rechecks": measurer.rechecks},
+                      "pair_requests": measurer.requested, "pair_evaluations": measurer.measured,
+                      "cache_hits": measurer.reused, "threshold_rechecks": measurer.rechecks,
+                      "pruned": measurer.pruned},
     }, indent=2))
     if not complete:
         print(f"sweep: stopped after {state.evaluated} of {len(samples)} poses at --time-limit {args.time_limit} s",

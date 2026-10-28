@@ -438,6 +438,75 @@ class PairRequirementTests(unittest.TestCase):
                 self.measure(measurer, [sweep.pose.Rigid.identity(), turned], [1.0, 1.0], [1.0000002, 1.0000002])
                 self.assertEqual(measurer.rechecks, rechecks)
 
+class BroadPhaseTests(unittest.TestCase):
+    """pair_measure's broad phase on stand-in unit cubes slid along x, whose box gap is their
+    distance, so every bound is tight; needs no OCP."""
+
+    @staticmethod
+    def run_requests(offsets: list[float], thresholds: tuple[float, ...] = (), prune: bool = True,
+                     reuse: bool = False) -> tuple[list, int]:
+        cube = ([0.0, 0.0, 0.0], [1.0, 1.0, 1.0])
+        measure = sweep.pair_measure
+        with mock.patch.object(measure, "box_corners", side_effect=lambda shape, tolerance=False: cube):
+            measurer = measure.PairMeasurer({"A": "a", "B": "b"}, reuse=reuse)
+        rigid = sweep.pose.Rigid
+        requests = [measure.Request("A", "B", rigid(rigid.identity().rot, (x, 0.0, 0.0)), thresholds=thresholds,
+                                    group="pair") for x in offsets]
+        with mock.patch.object(measure.pose, "placed", side_effect=lambda shape, at: at.trans[0] if shape == "b" else shape), \
+                mock.patch.object(measure.pose, "interference",
+                                  side_effect=lambda a, x, box_gap=0.0: (max(0.0, abs(x) - 1.0), 0.0)) as kernel:
+            return measurer.measure(requests, prune=prune), kernel.call_count
+
+    def assert_sound(self, offsets: list[float], thresholds: tuple[float, ...] = ()) -> list:
+        """Pruned and unpruned agree on every measured request; each pruned one is farther than the
+        group minimum, the gate and every threshold, and its witness holds a measured distance."""
+        full, _ = self.run_requests(offsets, thresholds, prune=False)
+        pruned, calls = self.run_requests(offsets, thresholds)
+        minimum = min(outcome[0] for outcome in full)
+        for got, want in zip(pruned, full):
+            if isinstance(got, sweep.pair_measure.Pruned):
+                self.assertGreater(want[0], max(minimum, sweep.pose.OVERLAP_GATE_MM, *thresholds))
+                self.assertIsInstance(pruned[got.witness], tuple)
+            else:
+                self.assertEqual(got, want)
+        self.assertEqual(calls, sum(1 for outcome in pruned if isinstance(outcome, tuple)))
+        return pruned
+
+    def test_requests_beyond_the_group_minimum_are_pruned_after_the_smallest_gap_is_measured(self) -> None:
+        pruned = self.assert_sound([6.0, 4.0, 3.0, 5.0, 2.5])
+        self.assertEqual(pruned, [sweep.pair_measure.Pruned(4)] * 4 + [(1.5, 0.0)])
+
+    def test_a_request_below_a_threshold_is_measured(self) -> None:
+        pruned = self.assert_sound([6.0, 4.0, 3.0, 5.0, 2.5], thresholds=(2.5,))
+        self.assertEqual([isinstance(outcome, tuple) for outcome in pruned], [False, False, True, False, True])
+
+    def test_a_threshold_just_above_a_distance_keeps_that_request_measured(self) -> None:
+        pruned = self.assert_sound([6.0, 4.0, 3.0, 5.0, 2.5], thresholds=(2.0 + 1e-7,))
+        self.assertEqual(pruned[2], (2.0, 0.0))
+
+    def test_nothing_is_pruned_within_the_slack_of_the_minimum_or_of_contact(self) -> None:
+        pruned = self.assert_sound([2.5 + 5e-7, 2.5, 6.0])
+        self.assertEqual([isinstance(outcome, tuple) for outcome in pruned], [True, True, False])
+        pruned = self.assert_sound([0.5, 1.0 + 5e-7, 0.7, 3.0])  # touching at 0.5 and 0.7, 5e-7 mm apart at 1.0000005
+        self.assertEqual([isinstance(outcome, tuple) for outcome in pruned], [True, True, True, False])
+
+    def test_a_reused_request_is_pruned_only_with_its_representative(self) -> None:
+        """3.0000001 rounds to 3.0's key and reuses its distance; both lie beyond the 1.5 mm minimum."""
+        pruned, calls = self.run_requests([3.0, 2.5, 3.0000001], reuse=True)
+        self.assertEqual((pruned, calls), ([sweep.pair_measure.Pruned(1), (1.5, 0.0), sweep.pair_measure.Pruned(1)], 1))
+
+    def test_a_stopped_sweep_reduces_only_samples_whose_pruned_requests_are_proved_inside_them(self) -> None:
+        """One pair, one request per sample: sample 1 is pruned on sample 3's distance."""
+        samples = [sweep.PlannedSample(None, [], {}, start) for start in range(5)]
+        plan = sweep.Plan({("a", "b")}, [("a", "b")], {}, {}, samples, [])
+        pruned = sweep.pair_measure.Pruned
+        for outcomes, taken in (([(1.0, 0.0), pruned(3), (2.0, 0.0), (0.5, 0.0), None], 4),
+                                ([(1.0, 0.0), pruned(3), (2.0, 0.0), None, None], 1),
+                                ([(1.0, 0.0), pruned(0), (2.0, 0.0), (0.5, 0.0), (0.7, 0.0)], 5)):
+            with self.subTest(outcomes=outcomes):
+                self.assertEqual(sweep.measured_prefix(mock.Mock(), plan, outcomes), taken)
+
+
 
 @unittest.skipUnless(shutil.which("uv"), "uv is required to build and read STEP through OCP")
 class StepTests(unittest.TestCase):
@@ -559,15 +628,18 @@ class StepTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
         return json.loads(proc.stdout)
 
-    def test_the_box_gap_bounds_the_distance_and_skips_only_a_containment_test_that_cannot_succeed(self) -> None:
-        """fixtures/measure_probe.py over every fixture pair at seeded placements: gap <= distance, and
-        a pair measured with its gap (no containment test past SOLID_GAP_MM) is bitwise unchanged."""
+    def test_the_bounds_hold_and_the_broad_phase_and_containment_skip_change_no_measured_value(self) -> None:
+        """fixtures/measure_probe.py over every fixture pair at seeded placements: box gap and motion
+        bound <= distance; a pair measured with its gap (no containment test past SOLID_GAP_MM) is
+        bitwise unchanged; pruned and full runs agree, and each pruned request lies beyond its group
+        minimum and threshold."""
         proc = subprocess.run(["uv", "run", "--quiet", "--script", str(HERE / "fixtures" / "measure_probe.py"),
                                str(self.root / "fx")], capture_output=True, text=True, check=False, timeout=900)
         self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
         report = json.loads(proc.stdout)
-        self.assertEqual((report["gap_violations"], report["mismatches"]), ([], []))
+        self.assertEqual((report["bound_violations"], report["mismatches"], report["prune_violations"]), ([], [], []))
         self.assertGreater(report["wrapped"], report["compared"] // 2, report)
+        self.assertGreater(report["pruned"], report["requests"] // 10, report)
         self.assertEqual(report["buried"]["gap"], 0.0)
         self.assertEqual(report["buried"]["result"][0], 0.0)
         self.assertAlmostEqual(report["buried"]["result"][1], 8.0, places=6)

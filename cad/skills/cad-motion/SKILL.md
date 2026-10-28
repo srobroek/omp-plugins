@@ -104,7 +104,9 @@ Exit codes for all scripts:
 - The sweep caches a pair measurement by the two definitions and their relative placement. When a
   threshold lies within the most the placement difference can move a cached distance, the sweep
   measures the pair again (`threshold_rechecks` in `timings_s`). No cached value decides a verdict
-  across a threshold.
+  across a threshold. A pair request whose exact lower bound (box gap, or a nearby sample's distance
+  minus the motion between them) lies beyond the pair's minimum and each of its thresholds is not
+  measured (`pruned`): no reported value depends on it.
 - FreeCAD 1.1.4 stores AngleMin/AngleMax but its solver does not enforce them; `freecad_assembly.py`
   measures every frame itself. freecadcmd exiting 139 after its completion marker is a warning.
 
