@@ -98,6 +98,20 @@ def _session_id(lines: list[str]) -> str | None:
     )
 
 
+def _error_detail(err) -> str:
+    """One line for an `error` event. OpenCode 2.1.4 sends `{type, message, status}`
+    (`provider.auth`, "The security token included in the request is ...", 403); a
+    NamedError sends `{name, data: {message}}`. The runner matches throttling and
+    expired credentials against this text, so the provider's message must survive."""
+    if not isinstance(err, dict):
+        return str(err) if err else "opencode error event"
+    kind = err.get("type") or err.get("name")
+    message = err.get("message") or (err.get("data") or {}).get("message")
+    detail = ": ".join(str(p) for p in (kind, message) if p) or "opencode error event"
+    status = err.get("status")
+    return f"{detail} (HTTP {status})" if status else detail
+
+
 @dataclass
 class OpencodeAdapter:
     bin: str = "opencode"
@@ -359,11 +373,6 @@ class OpencodeAdapter:
                 if part.get("reason") == "length":
                     turn.truncated = True
             elif kind == "error":
-                err = event.get("error") or part.get("error") or {}
-                if isinstance(err, dict):
-                    message = (err.get("data") or {}).get("message") or err.get("name")
-                else:
-                    message = str(err)
-                turn.error = message or "opencode error event"
+                turn.error = _error_detail(event.get("error") or part.get("error"))
         turn.usage = usage
         return turn
