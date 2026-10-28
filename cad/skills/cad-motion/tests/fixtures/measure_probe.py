@@ -13,7 +13,7 @@ definition placement and at seeded random rigid placements of b around a:
 The nest compound container must still hold its buried cube at distance 0 (`buried`).
 
 Then each ordered pair of the box sets is swept along a seeded path, one group per pair, with the
-group's median distance as a threshold, through PairMeasurer with reuse, once without and once with
+group's median distance as a threshold, through PairMeasurer, once without and once with
 the broad phase: every request the pruned run measured equals the full run's bitwise, and every
 pruned one is farther than its group minimum, the gate and its threshold (`prune_violations`).
 
@@ -110,7 +110,7 @@ def bounds(report: dict, name: str, measurer, shapes: dict) -> None:
 
 def broad_phase(report: dict, name: str, shapes: dict) -> None:
     rng = random.Random(f"paths {name}")
-    plain = pair_measure.PairMeasurer(shapes, reuse=True)
+    plain = pair_measure.PairMeasurer(shapes)
     requests = []
     for a in sorted(shapes):
         for b in sorted(shapes):
@@ -119,8 +119,8 @@ def broad_phase(report: dict, name: str, shapes: dict) -> None:
     median = {group: statistics.median(o[0] for r, o in zip(requests, first) if r.group == group)
               for group in {r.group for r in requests}}
     requests = [pair_measure.Request(r.a, r.b, r.placement, thresholds=(median[r.group],), group=r.group) for r in requests]
-    full = pair_measure.PairMeasurer(shapes, reuse=True).measure(requests)
-    pruned = pair_measure.PairMeasurer(shapes, reuse=True).measure(requests, prune=True)
+    full = pair_measure.PairMeasurer(shapes).measure(requests)
+    pruned = pair_measure.PairMeasurer(shapes).measure(requests, prune=True)
     minimum = {group: min(o[0] for r, o in zip(requests, full) if r.group == group) for group in median}
     for index, (request, got, want) in enumerate(zip(requests, pruned, full)):
         report["requests"] += 1

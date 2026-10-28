@@ -92,6 +92,21 @@ class KinematicsTests(unittest.TestCase):
         assert_close(self, transforms["TST-0003"].apply((200.0, 0.0, 0.0)), (100.0, 100.0, 0.0))
         assert_close(self, transforms["TST-0003"].apply((350.0, 0.0, 0.0)), (-50.0, 100.0, 0.0))
 
+    def test_a_pairs_relative_placement_leaves_out_the_joints_above_its_common_ancestor(self) -> None:
+        """J-001 moves TST-0002 and TST-0003 alike, so their relative placement keeps its bits at every
+        J-001 value; the pair across J-001 follows it. Both equal T_a^-1 T_b."""
+        chain = planar_chain()
+        inner, across = ("TST-0002", "TST-0003"), ("TST-0001", "TST-0003")
+        values = [{"J-001": q, "J-002": 37.0} for q in (0.0, 13.7, -71.3)]
+        relative = [chain.relative_transforms(v, [inner, across]) for v in values]
+        self.assertEqual(len({r[inner] for r in relative}), 1)
+        self.assertEqual(len({r[across] for r in relative}), 3)
+        for v, r in zip(values, relative):
+            transforms = chain.transforms(v)
+            for a, b in (inner, across):
+                for row, expected in zip(r[(a, b)].rows(12), (transforms[a].inverse() @ transforms[b]).rows(12)):
+                    assert_close(self, row, expected)
+
     def test_prismatic_translates_along_its_axis(self) -> None:
         chain = pose.build_chain([joint("J-001", "prismatic", "TST-0001", "TST-0002", (2, 0, 0), (0, 0, 0), 0, 50)])
         assert_close(self, chain.transforms({"J-001": 30.0})["TST-0002"].apply((1.0, 2.0, 3.0)), (31.0, 2.0, 3.0))
@@ -312,7 +327,7 @@ class OccurrenceKinematicsTests(unittest.TestCase):
 
 
 class PairRequirementTests(unittest.TestCase):
-    """Clearance requirements: pair_policy's reader, sweep's options and its threshold-safe cache; needs no OCP."""
+    """Clearance requirements: pair_policy's reader and sweep's options; needs no OCP."""
 
     policy = sweep.pair_policy
 
@@ -405,51 +420,17 @@ class PairRequirementTests(unittest.TestCase):
         with self.assertRaisesRegex(sweep.pose.MotionError, "TST-0999 is not in the swept chain"):
             sweep.pair_requirements(chain_of(GAP_YAML), stray, [])
 
-    @staticmethod
-    def measurer(radius: float):
-        """A reusing PairMeasurer over two stand-in definitions, A fixed and B (of `radius`) placed in A's frame."""
-        boxes = {"a": ([-1.0, 0.0, 0.0], [0.0, 0.0, 0.0]), "b": ([-radius, 0.0, 0.0], [0.0, 0.0, 0.0])}
-        with mock.patch.object(sweep.pair_measure, "box_corners", side_effect=lambda shape, tolerance=False: boxes[shape]):
-            return sweep.pair_measure.PairMeasurer({"A": "a", "B": "b"}, reuse=True)
-
-    def measure(self, measurer, placements: list, thresholds: list, distances: list) -> list:
-        requests = [sweep.pair_measure.Request("A", "B", placement, thresholds=(threshold,))
-                    for placement, threshold in zip(placements, thresholds)]
-        motion = sweep.pair_measure.pose  # pair_measure's own pose; another test file may load a newer one
-        with mock.patch.object(motion, "placed", side_effect=lambda shape, rigid: shape), \
-                mock.patch.object(motion, "interference", side_effect=[(d, 0.0) for d in distances]):
-            return [outcome[0] for outcome in measurer.measure(requests)]
-
-    def test_a_reused_measurement_is_measured_again_when_a_threshold_lies_within_its_placement_bound(self) -> None:
-        """10.0000001 and 10.0000004 share the key rounded to 1e-6; 3e-7 mm apart, a measured 1.0000002 mm
-        may be below 1.0 mm at the second placement, never below 0.5 mm."""
-        rigid = sweep.pose.Rigid
-        at = [rigid(rigid.identity().rot, (x, 0.0, 0.0)) for x in (10.0000001, 10.0000001, 10.0000004, 10.0000004)]
-        measurer = self.measurer(radius=1.0)
-        self.assertEqual(self.measure(measurer, at, [1.0, 1.0, 0.5, 1.0], [1.0000002, 0.9999999]),
-                         [1.0000002, 1.0000002, 1.0000002, 0.9999999])
-        self.assertEqual((measurer.measured, measurer.reused, measurer.rechecks), (2, 2, 1))
-
-    def test_the_placement_bound_scales_a_rotation_by_the_moved_definitions_radius(self) -> None:
-        """A 4e-7 deg turn rounds to the same key and moves points 50 mm out by about 3.5e-7 mm."""
-        turned = sweep.pose.Rigid.rotation((0.0, 0.0, 1.0), 4e-7, (0.0, 0.0, 0.0))
-        for radius, rechecks in ((50.0, 1), (1.0, 0)):
-            with self.subTest(radius=radius):
-                measurer = self.measurer(radius)
-                self.measure(measurer, [sweep.pose.Rigid.identity(), turned], [1.0, 1.0], [1.0000002, 1.0000002])
-                self.assertEqual(measurer.rechecks, rechecks)
 
 class BroadPhaseTests(unittest.TestCase):
     """pair_measure's broad phase on stand-in unit cubes slid along x, whose box gap is their
     distance, so every bound is tight; needs no OCP."""
 
     @staticmethod
-    def run_requests(offsets: list[float], thresholds: tuple[float, ...] = (), prune: bool = True,
-                     reuse: bool = False) -> tuple[list, int]:
+    def run_requests(offsets: list[float], thresholds: tuple[float, ...] = (), prune: bool = True) -> tuple[list, int]:
         cube = ([0.0, 0.0, 0.0], [1.0, 1.0, 1.0])
         measure = sweep.pair_measure
         with mock.patch.object(measure, "box_corners", side_effect=lambda shape, tolerance=False: cube):
-            measurer = measure.PairMeasurer({"A": "a", "B": "b"}, reuse=reuse)
+            measurer = measure.PairMeasurer({"A": "a", "B": "b"})
         rigid = sweep.pose.Rigid
         requests = [measure.Request("A", "B", rigid(rigid.identity().rot, (x, 0.0, 0.0)), thresholds=thresholds,
                                     group="pair") for x in offsets]
@@ -491,10 +472,10 @@ class BroadPhaseTests(unittest.TestCase):
         pruned = self.assert_sound([0.5, 1.0 + 5e-7, 0.7, 3.0])  # touching at 0.5 and 0.7, 5e-7 mm apart at 1.0000005
         self.assertEqual([isinstance(outcome, tuple) for outcome in pruned], [True, True, True, False])
 
-    def test_a_reused_request_is_pruned_only_with_its_representative(self) -> None:
-        """3.0000001 rounds to 3.0's key and reuses its distance; both lie beyond the 1.5 mm minimum."""
-        pruned, calls = self.run_requests([3.0, 2.5, 3.0000001], reuse=True)
-        self.assertEqual((pruned, calls), ([sweep.pair_measure.Pruned(1), (1.5, 0.0), sweep.pair_measure.Pruned(1)], 1))
+    def test_bitwise_equal_placements_share_one_measurement_and_one_bit_apart_does_not(self) -> None:
+        above = math.nextafter(3.0, math.inf)
+        outcomes, calls = self.run_requests([3.0, 3.0, above, 3.0], prune=False)
+        self.assertEqual((outcomes, calls), ([(2.0, 0.0), (2.0, 0.0), (above - 1.0, 0.0), (2.0, 0.0)], 2))
 
     def test_a_stopped_sweep_reduces_only_samples_whose_pruned_requests_are_proved_inside_them(self) -> None:
         """One pair, one request per sample: sample 1 is pruned on sample 3's distance."""

@@ -592,6 +592,40 @@ class Chain:
         """T_i = D_i P_i per occurrence id: the placement of its definition geometry at `values` (a full map)."""
         return {occurrence_id: motion @ self.rests[occurrence_id] for occurrence_id, motion in self.motions(values).items()}
 
+    def relative_transforms(self, values: Mapping[str, float],
+                            pairs: Iterable[tuple[str, str]]) -> dict[tuple[str, str], Rigid]:
+        """T_a^-1 T_b per occurrence pair (a, b) at `values` (a full map), composed from the pair's
+        lowest common ancestor down: (M_a P_a)^-1 (M_b P_b), with M_i the joint motions from the
+        ancestor to i. The joints above the ancestor move a and b alike and cancel, so they are left
+        out: a pair whose own joints keep their values keeps the bits of its placement, whatever the
+        rest of the chain does, and an exact measurement key finds every such repeat."""
+        incoming = {j.child: j for j in self.joints}
+        lineage: dict[str, list[Joint]] = {}
+        composed: dict[tuple[int, str], Rigid] = {}  # (ancestor depth, i) -> M_i P_i
+
+        def joints_to(oid: str) -> list[Joint]:
+            if oid not in lineage:
+                lineage[oid] = joints_to(incoming[oid].parent) + [incoming[oid]] if oid in incoming else []
+            return lineage[oid]
+
+        def from_ancestor(oid: str, depth: int) -> Rigid:
+            if (depth, oid) not in composed:
+                motion = None
+                for joint in joints_to(oid)[depth:]:
+                    step = joint.motion(values[joint.id] if joint.movable else 0.0)
+                    motion = step if motion is None else motion @ step
+                composed[(depth, oid)] = self.rests[oid] if motion is None else motion @ self.rests[oid]
+            return composed[(depth, oid)]
+
+        relative = {}
+        for a, b in pairs:
+            path_a, path_b = joints_to(a), joints_to(b)
+            depth = 0
+            while depth < min(len(path_a), len(path_b)) and path_a[depth] is path_b[depth]:
+                depth += 1
+            relative[(a, b)] = from_ancestor(a, depth).inverse() @ from_ancestor(b, depth)
+        return relative
+
 
 def build_chain(joints: Iterable[Joint], occurrences: Iterable[Any] = (),
                 rests: Mapping[str, Rigid] | None = None, couplings: Any = coupling.NONE) -> Chain:

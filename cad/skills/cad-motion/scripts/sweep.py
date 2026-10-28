@@ -39,15 +39,13 @@ solid of the other, a solid of a compound part included) and, when it is within
 pose.py's adaptive `volume_properties`). Centres of mass use `volume_properties`
 as well.
 Every pair request of every sample is planned first, then measured by
-pair_measure.py, then reduced in sample order. A pair evaluation is cached on
-the two definitions and their relative transform (entries rounded to 1e-6), so
-a joint sweep recomputes only the pairs that joint moves, and two same-PN pairs
-in the same relative placement share one measurement. A cached distance is
-reused only when it is farther from each clearance threshold of the pair (its
-requirement, `--min-clearance`) than the placement difference can move it
-(|dR|_F times the radius of the moved definition's bounding box about its
-origin, plus |dt|); otherwise the pair is measured again, so a cache hit never
-carries a verdict across a threshold. A request is not measured at all when an
+pair_measure.py, then reduced in sample order. A pair's placement is b's
+definition in the frame of a's, composed from the joints below the pair's
+lowest common ancestor only, and a measurement is reused within the run on the
+two definitions and the exact bits of that placement: a joint sweep measures
+only the pairs that joint moves, two same-PN pairs in the same relative
+placement share one measurement, and every value is the one an unshared
+measurement gives. A request is not measured at all when an
 exact lower bound on its distance (the gap between the placed bounding boxes,
 or a measured distance at a nearby sample minus how far b's box moves between
 the two) exceeds the pair's smallest distance so far, 1e-6 mm and each
@@ -289,7 +287,8 @@ class Plan:
 def plan(chain: Any, samples: list[Sample], pairs: list[tuple[str, str]], fitted: set[tuple[str, str]],
          requirements: dict[tuple[str, str], dict[str, Any]], required: float) -> Plan:
     """The requests of every sample: occurrence b's definition placed by T_a^-1 T_b in the frame of
-    a's. `requirements` (pair_requirements) are measured on their pairs at every sample whether or
+    a's, composed from the pair's lowest common ancestor (Chain.relative_transforms). `requirements`
+    (pair_requirements) are measured on their pairs at every sample whether or
     not the pairs are checked; `fitted` pairs (sorted occurrence ids) are not held to `required`
     (--min-clearance)."""
     checked = set(pairs)
@@ -309,7 +308,8 @@ def plan(chain: Any, samples: list[Sample], pairs: list[tuple[str, str]], fitted
             continue
         transforms = chain.transforms(sample.values)
         planned.append(PlannedSample(sample, [], transforms, len(requests)))
-        requests += [pair_measure.Request(chain.pn(a), chain.pn(b), transforms[a].inverse() @ transforms[b],
+        relative = chain.relative_transforms(sample.values, measured)
+        requests += [pair_measure.Request(chain.pn(a), chain.pn(b), relative[(a, b)],
                                           thresholds=thresholds[(a, b)], group=(a, b)) for a, b in measured]
     return Plan(checked, measured, thresholds, tightest, planned, requests)
 
@@ -622,7 +622,7 @@ def main(argv: list[str] | None = None) -> int:
             raise pose.MotionError(f"no movable joint moves the end effector {chain.ref(effector)}")
         used = {pn: definitions[pn] for pn in {chain.pn(oid) for oid in chain.ids}}
         geometry = Geometry(chain, used)
-        measurer = pair_measure.PairMeasurer({pn: part.shape for pn, part in used.items()}, reuse=True, jobs=args.jobs)
+        measurer = pair_measure.PairMeasurer({pn: part.shape for pn, part in used.items()}, jobs=args.jobs)
         loaded = time.monotonic()
         samples = generate_poses(chain, args.steps, args.grid)
         state = sweep(chain, geometry, measurer, samples, pairs, allowed, fitted, requirements, effector,
@@ -686,8 +686,7 @@ def main(argv: list[str] | None = None) -> int:
                       "export": round(exported - swept, 2), "total": round(time.monotonic() - started, 2),
                       "per_pose_ms": round(per_pose * 1000, 1),
                       "pair_requests": measurer.requested, "pair_evaluations": measurer.measured,
-                      "cache_hits": measurer.reused, "threshold_rechecks": measurer.rechecks,
-                      "pruned": measurer.pruned},
+                      "cache_hits": measurer.reused, "pruned": measurer.pruned},
     }, indent=2))
     if not complete:
         print(f"sweep: stopped after {state.evaluated} of {len(samples)} poses at --time-limit {args.time_limit} s",

@@ -103,12 +103,12 @@ Exit codes for all scripts:
   design, it inherits no global running clearance. An interference fit or an insert excuses its
   pair's overlap. None of these exempts a pair from its own clearance requirement: the sweep
   measures it at every sample.
-- The sweep caches a pair measurement by the two definitions and their relative placement. When a
-  threshold lies within the most the placement difference can move a cached distance, the sweep
-  measures the pair again (`threshold_rechecks` in `timings_s`). No cached value decides a verdict
-  across a threshold. A pair request whose exact lower bound (box gap, or a nearby sample's distance
-  minus the motion between them) lies beyond the pair's minimum and each of its thresholds is not
-  measured (`pruned`): no reported value depends on it.
+- The sweep reuses a pair measurement within the run when the two definitions and the exact bits of
+  their relative placement repeat (`cache_hits` in `timings_s`). That placement is composed from the
+  joints below the pair's lowest common ancestor, so a joint that moves both parts alike leaves it
+  unchanged. A reused value is the one a fresh measurement gives. A pair request whose exact lower
+  bound (box gap, or a nearby sample's distance minus the motion between them) lies beyond the
+  pair's minimum and each of its thresholds is not measured (`pruned`): no reported value depends on it.
 - FreeCAD 1.1.4 stores AngleMin/AngleMax but its solver does not enforce them; `freecad_assembly.py`
   measures every frame itself. freecadcmd exiting 139 after its completion marker is a warning.
 

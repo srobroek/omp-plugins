@@ -1,29 +1,19 @@
 """Pair measurements for cad-motion `sweep.py` and cad-model `check`.
 
 The one measuring module of both tools. A request asks for the (minimum distance mm, overlap volume
-mm^3) of two part definitions: definition `b` placed by `placement` in the frame of definition `a`
-(sweep: a at its definition frame) or of `a` placed by `a_placement` (check: both in world
-coordinates). Every measurement is pose.py's `interference` rule on the definition shapes moved by
+mm^3) of two part definitions: definition `b` placed by `placement` in the frame of definition `a`.
+Every measurement is pose.py's `interference` rule on the definition shapes, b moved by
 `pose.placed`; nothing is copied, meshed or rebuilt per request. Each measurement is given the gap
 between the two placed bounding boxes (`box_gap`), so a pair whose boxes are apart skips the
-kernel's containment test, which cannot succeed there. Requests with bitwise equal definitions and
-placements are measured once.
-
-With `reuse` (sweep), a measurement is reused within the run by the two definitions and the
-placement rounded to 1e-6 per matrix entry, so a joint sweep measures only the pairs that joint
-moves and two same-PN pairs in one relative placement share one measurement. The reused value
-belongs to the first request of the rounded key in request order. A reused distance that lies
-within the request's placement bound of one of its clearance `thresholds` is measured again: moving
-b from the measured placement to the requested one moves none of its points farther than
-|dR|_F r + |dt| (r: the radius of b's bounding box about its origin), so the distance changes by at
-most that, and a reused value never carries a verdict across a threshold.
+kernel's containment test, which cannot succeed there. Requests of the same two definitions at
+bitwise equal placements are measured once: the key is exact, so a shared measurement is the very
+value each request would get from a measurement of its own.
 
 With `prune` (sweep), a request of a `group` (the caller's occurrence pair, whose minimum it
 reduces) is not measured when a lower bound on its distance exceeds, by SLACK_MM, the group's
 smallest distance known so far, OVERLAP_GATE_MM and each of its `thresholds`. Its distance then lies
 above the group's final minimum and every threshold, and it has no overlap, so no reduction over the
-group depends on it: it is answered `Pruned`, which reads as (inf, 0). A reused request is pruned
-only when the bound holds for both the placement it would reuse and its own. The bounds use exact
+group depends on it: it is answered `Pruned`, which reads as (inf, 0). The bounds use exact
 geometry, no tessellation: the box gap, and a known distance at a nearby placement of the group
 minus the farthest any corner of b's box moves between the two placements (a rigid motion's
 displacement is affine in the point, so its maximum over the box is at a corner, and distance is
@@ -73,14 +63,13 @@ MOTION_WINDOW = 6  # a known distance bounds the requests this many places eithe
 
 @dataclass(frozen=True)
 class Request:
-    """Definition `b` placed by `placement`, against definition `a` at its definition frame or
-    placed by `a_placement`; `thresholds` are the clearance thresholds (mm) the caller compares the
-    distance with, and `group` the requests whose minimum it reduces together (None: never pruned)."""
+    """Definition `b` placed by `placement` in the frame of definition `a`; `thresholds` are the
+    clearance thresholds (mm) the caller compares the distance with, and `group` the requests whose
+    minimum it reduces together (None: never pruned)."""
 
     a: str
     b: str
     placement: Any
-    a_placement: Any = None
     thresholds: tuple[float, ...] = ()
     group: Hashable | None = None
 
@@ -113,22 +102,17 @@ class PairMeasurer:
     `jobs` > 1, in that many worker processes (`start_method`: forkserver, spawn on macOS and
     Windows; never fork)."""
 
-    def __init__(self, shapes: Mapping[str, Any], reuse: bool = False, jobs: int = 1,
-                 start_method: str | None = None) -> None:
+    def __init__(self, shapes: Mapping[str, Any], jobs: int = 1, start_method: str | None = None) -> None:
         self.shapes = dict(shapes)
-        self.reuse = reuse
         self.jobs = jobs
         self.start_method = start_method or _default_start_method()
-        self.radii = {key: max(math.hypot(*corner) for corner in itertools.product(*zip(*box_corners(shape))))
-                      for key, shape in self.shapes.items()} if reuse else {}
         # The corners of each definition's bounding box, enlarged by its shape tolerances: the box
         # holds the shape, so its placed corners' axis-aligned hull holds the placed shape.
         self.corners = {key: list(itertools.product(*zip(*box_corners(shape, tolerance=True))))
                         for key, shape in self.shapes.items()}
         self.requested = 0  # requests answered
         self.measured = 0  # kernel measurements
-        self.reused = 0  # requests answered by an earlier measurement
-        self.rechecks = 0  # reuse candidates measured again: a threshold lies within their placement bound
+        self.reused = 0  # requests answered by a measurement taken for an earlier request
         self.pruned = 0  # requests the broad phase answered without a measurement
 
     def measure(self, requests: Sequence[Request], deadline: float = math.inf, stop_on_failure: bool = False,
@@ -143,15 +127,9 @@ class PairMeasurer:
             executor.close()
         return run.outcomes
 
-    def placement_bound(self, measured: Request, request: Request) -> float:
-        """How far moving b from `measured`'s placement to `request`'s can move any of its points."""
-        return (math.dist([v for row in measured.placement.rot for v in row],
-                          [v for row in request.placement.rot for v in row])
-                * self.radii[request.b] + math.dist(measured.placement.trans, request.placement.trans))
-
     def moved_corners(self, request: Request) -> tuple[list[tuple[float, float, float]], list[tuple[float, float, float]]]:
-        """(a's, b's) bounding-box corners at the request's placements."""
-        return (_moved(self.corners[request.a], request.a_placement), _moved(self.corners[request.b], request.placement))
+        """(a's, b's) bounding-box corners, b's at the request's placement."""
+        return self.corners[request.a], [request.placement.apply(corner) for corner in self.corners[request.b]]
 
     def box_gap(self, request: Request) -> float:
         """The distance between the axis-aligned hulls of the two placed bounding boxes: a lower
@@ -160,33 +138,20 @@ class PairMeasurer:
 
 
 class _Run:
-    """One `measure` call: the requests' units (distinct exact measurements), reuse and groups."""
+    """One `measure` call: the requests' units (distinct exact measurements) and groups."""
 
     def __init__(self, measurer: PairMeasurer, requests: Sequence[Request], prune: bool) -> None:
         self.measurer, self.requests, self.prune = measurer, requests, prune
         count = len(requests)
         self.outcomes: list[Outcome | None] = [None] * count
-        units: dict[tuple[Any, ...], int] = {}
-        self.unit_of = [units.setdefault((r.a, r.b, _bits(r.a_placement), _bits(r.placement)), len(units))
-                        for r in requests]
+        units: dict[tuple[str, str, bytes], int] = {}
+        self.unit_of = [units.setdefault((r.a, r.b, _bits(r.placement)), len(units)) for r in requests]
         self.unit_request = {unit: index for index, unit in reversed(list(enumerate(self.unit_of)))}
         self.known: dict[int, tuple[float, float] | Failure] = {}
-        self.rep, self.bound = list(range(count)), [0.0] * count
-        if measurer.reuse:
-            first: dict[tuple[Any, ...], int] = {}
-            for index, request in enumerate(requests):
-                if request.a_placement is None:
-                    key = (request.a, request.b, *(round(v, 6) for row in request.placement.rows(9) for v in row))
-                    rep = first.setdefault(key, index)
-                    if rep != index:
-                        self.rep[index], self.bound[index] = rep, measurer.placement_bound(requests[rep], request)
-        self.waiting: dict[int, list[int]] = defaultdict(list)  # unit -> requests its outcome may answer
-        self.own: dict[int, list[int]] = defaultdict(list)  # unit -> requests at exactly its placement
-        for index in range(count):
-            self.own[self.unit_of[index]].append(index)
-            self.waiting[self.unit_of[self.rep[index]]].append(index)
-            if self.rep[index] != index:
-                self.waiting[self.unit_of[index]].append(index)
+        self.answering: set[int] = set()  # units whose outcome answered a request
+        self.own: dict[int, list[int]] = defaultdict(list)  # unit -> its requests
+        for index, unit in enumerate(self.unit_of):
+            self.own[unit].append(index)
         self.members: dict[Hashable, list[int]] = defaultdict(list)
         self.position = [0] * count
         for index, request in enumerate(requests):
@@ -219,37 +184,6 @@ class _Run:
     def lower(self, unit: int) -> float:
         return max(self.gap(unit), self.motion.get(unit, -math.inf))
 
-    def need(self, index: int) -> int:
-        """The unit an open request waits on: its representative's, else its own."""
-        rep = self.rep[index]
-        if rep != index and self.unit_of[rep] not in self.known:
-            return self.unit_of[rep]
-        return self.unit_of[index]
-
-    def resolve(self, index: int) -> bool:
-        """Answer request `index` from the known units if they decide it; whether it is answered."""
-        if self.outcomes[index] is not None:
-            return True
-        own = self.known.get(self.unit_of[index])
-        rep = self.rep[index]
-        if rep != index:
-            earlier = self.known.get(self.unit_of[rep])
-            if earlier is None:
-                return False
-            bound = self.bound[index]
-            if isinstance(earlier, Failure) or not bound or all(abs(earlier[0] - threshold) > bound
-                                                                for threshold in self.requests[index].thresholds):
-                self.measurer.reused += 1
-                self.settle(index, earlier)
-                return True
-            if own is None:
-                return False
-            self.measurer.rechecks += 1
-        elif own is None:
-            return False
-        self.settle(index, own)
-        return True
-
     def settle(self, index: int, outcome: Outcome) -> None:
         self.outcomes[index] = outcome
         self.measurer.requested += 1
@@ -263,32 +197,32 @@ class _Run:
         floor = self.floor.get(request.group)
         if floor is None:
             return False
-        limit = max(floor[0], pose.OVERLAP_GATE_MM, *request.thresholds)
-        units = {self.unit_of[index], self.need(index)}
-        return all(self.lower(unit) - SLACK_MM > limit for unit in units)
+        return self.lower(self.unit_of[index]) - SLACK_MM > max(floor[0], pose.OVERLAP_GATE_MM, *request.thresholds)
 
     def prune_group(self, group: Hashable) -> None:
         for index in self.members[group]:
-            if self.outcomes[index] is None and self.need(index) not in self.inflight and self.prunable(index):
+            if self.outcomes[index] is None and self.unit_of[index] not in self.inflight and self.prunable(index):
                 self.measurer.pruned += 1
                 self.settle(index, Pruned(self.floor[group][1]))
 
     def learn(self, unit: int, outcome: tuple[float, float] | Failure) -> None:
-        """A unit's outcome is known: answer what it decides, bound its group neighbours, prune."""
+        """A unit's outcome is known: answer its open requests, bound their group neighbours."""
         self.known[unit] = outcome
-        for index in self.waiting[unit]:
-            if not self.resolve(index):
-                self.queue(index)
+        for index in self.own[unit]:
+            if self.outcomes[index] is None:
+                if unit in self.answering:
+                    self.measurer.reused += 1
+                self.answering.add(unit)
+                self.settle(index, outcome)
         if self.prune and isinstance(outcome, tuple):
             for index in self.own[unit]:
                 group = self.requests[index].group
-                if group is None or self.requests[index].a_placement is not None:
+                if group is None:
                     continue
                 members, at = self.members[group], self.position[index]
                 for neighbour in members[max(0, at - MOTION_WINDOW):at + MOTION_WINDOW + 1]:
                     if self.outcomes[neighbour] is None:
-                        for target in {self.unit_of[neighbour], self.need(neighbour)}:
-                            self.bound_by_motion(unit, outcome[0], target)
+                        self.bound_by_motion(unit, outcome[0], self.unit_of[neighbour])
                         self.touched.add(group)
 
     def bound_by_motion(self, unit: int, distance: float, target: int) -> None:
@@ -299,9 +233,9 @@ class _Run:
     # -- scheduling ----------------------------------------------------------------------------
 
     def queue(self, index: int) -> None:
-        """Put an open request in its group's best-first queue, keyed by its needed unit's box gap."""
+        """Put an open request in its group's best-first queue, keyed by its unit's box gap."""
         key = self.requests[index].group if self.prune else None
-        heapq.heappush(self.queues[key], (self.gap(self.need(index)) if self.prune else index, index))
+        heapq.heappush(self.queues[key], (self.gap(self.unit_of[index]) if self.prune else index, index))
 
     def next_unit(self) -> int | None:
         """The next unit to measure: groups in turn, each its open request of the smallest box gap."""
@@ -311,10 +245,8 @@ class _Run:
             queue = self.queues[key]
             while queue:
                 _, index = heapq.heappop(queue)
-                if self.outcomes[index] is not None:
-                    continue
-                unit = self.need(index)
-                if unit in self.inflight or unit in self.known:
+                unit = self.unit_of[index]
+                if self.outcomes[index] is not None or unit in self.inflight:
                     continue
                 if self.prune and self.prunable(index):
                     self.measurer.pruned += 1
@@ -327,8 +259,7 @@ class _Run:
         if time.monotonic() > deadline:
             return
         for index in range(len(self.requests)):
-            if not self.resolve(index):
-                self.queue(index)
+            self.queue(index)
         self.order = list(self.queues)
         while True:
             while len(self.inflight) < executor.capacity and time.monotonic() <= deadline:
@@ -338,7 +269,7 @@ class _Run:
                 self.inflight.add(unit)
                 self.measurer.measured += 1
                 request = self.requests[self.unit_request[unit]]
-                executor.submit(unit, (request.a, request.b, _rows(request.a_placement), _rows(request.placement),
+                executor.submit(unit, (request.a, request.b, (request.placement.rot, request.placement.trans),
                                        self.gap(unit)))
             if not self.inflight:
                 return
@@ -354,15 +285,14 @@ class _Run:
             self.touched.clear()
 
 
-Task = tuple[str, str, Any, Any, float]  # (a, b, a's placement rows or None, b's placement rows, box gap)
+Task = tuple[str, str, Any, float]  # (a, b, b's placement rows, box gap)
 
 
 def _measure(shapes: Mapping[str, Any], task: Task) -> tuple[float, float] | str:
     """pose.interference on one task: (distance, volume), or the kernel error's message."""
-    a, b, a_rows, b_rows, box_gap = task
+    a, b, b_rows, box_gap = task
     try:
-        shape_a = shapes[a] if a_rows is None else pose.placed(shapes[a], pose.Rigid(*a_rows))
-        return pose.interference(shape_a, pose.placed(shapes[b], pose.Rigid(*b_rows)), box_gap=box_gap)
+        return pose.interference(shapes[a], pose.placed(shapes[b], pose.Rigid(*b_rows)), box_gap=box_gap)
     except Exception as error:  # noqa: BLE001 - OCP raises Standard_Failure on broken input
         return str(error) or type(error).__name__
 
@@ -466,17 +396,9 @@ def shape_bytes(shape: Any) -> bytes:
     return buffer.getvalue()
 
 
-def _rows(rigid: Any) -> tuple[Any, Any] | None:
-    return None if rigid is None else (rigid.rot, rigid.trans)
-
-
 def _bits(rigid: Any) -> bytes:
-    """A placement's 12 IEEE doubles, or nothing for no placement."""
-    return b"" if rigid is None else struct.pack("<12d", *rigid.rot[0], *rigid.rot[1], *rigid.rot[2], *rigid.trans)
-
-
-def _moved(corners: list[tuple[float, float, float]], rigid: Any) -> list[tuple[float, float, float]]:
-    return corners if rigid is None else [rigid.apply(corner) for corner in corners]
+    """A placement's 12 IEEE doubles: the exact measurement key."""
+    return struct.pack("<12d", *rigid.rot[0], *rigid.rot[1], *rigid.rot[2], *rigid.trans)
 
 
 def _hull_gap(moved_a: list[tuple[float, float, float]], moved_b: list[tuple[float, float, float]]) -> float:
