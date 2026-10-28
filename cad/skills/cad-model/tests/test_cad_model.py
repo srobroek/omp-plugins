@@ -249,7 +249,7 @@ class KernelChecks:
 
     def test_check_reports_template_declared_press_pairs(self) -> None:
         hw = self.runs["hw"]
-        template = HERE.parents[1] / "cad-record" / "assets" / "project-template" / "hw" / "interfaces.yaml"
+        template = HERE.parents[3] / "examples" / "lamp-arm" / "hw" / "interfaces.yaml"
         shutil.copy(template, hw / "interfaces.yaml")
         _, result, _ = cli("check", "v1", "--hw", str(hw))
         declared = result["checks"]["interference"]["declared_pairs"]
@@ -778,8 +778,8 @@ class CheckRuleTests(unittest.TestCase):
                                     "source": "interfaces.yaml#/interfaces/0/limits/press_fit"}])
 
     def test_template_press_pairs_are_declared_and_classified(self) -> None:
-        template = HERE.parents[1] / "cad-record" / "assets" / "project-template"
-        declared = check.declared_press_fits(template / "hw")
+        template = HERE.parents[3] / "examples" / "lamp-arm" / "hw"
+        declared = check.declared_press_fits(template)
         self.assertEqual({tuple(item["pair"]) for item in declared}, {
             ("LMP-0002", "LMP-0005"), ("LMP-0002", "LMP-0006"), ("LMP-0003", "LMP-0007")})
         self.assertTrue(all(item["classification"] == "interference" for item in declared))

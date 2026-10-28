@@ -29,7 +29,7 @@ from layout_check import Box, SheetRegions, check_layout  # noqa: E402
 from sheet import Linear, Presentation, TextureSymbol, edge_lines, edge_note, edge_size  # noqa: E402
 
 SKILLS = SCRIPTS.parents[1]
-TEMPLATE = SKILLS / "cad-record" / "assets" / "project-template" / "hw"
+TEMPLATE = SKILLS.parent.parent / "examples" / "lamp-arm" / "hw"
 CAD_MODEL = SKILLS / "cad-model" / "scripts" / "cad_model.py"
 DRAWING = SCRIPTS / "drawing.py"
 FREECADCMD = freecad_runtime.find_freecadcmd()

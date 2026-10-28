@@ -1,0 +1,8 @@
+requirement_id,method,criteria,result,evidence
+REQ-001,T,"Measure head travel on both sides of nominal; each direction is at least 45 degrees.",planned,
+REQ-002,T,"Sweep the elbow joint and verify both endpoints.",planned,
+REQ-003,I,"Inspect the modeled hard-stop range against the joint record.",planned,
+REQ-004,A,"Static analysis at worst-case pose shows required margin per project review.",planned,
+REQ-005,I,"Inspect mounting hole pattern and fastener access.",planned,
+REQ-006,I,"Inspect and deburr every user-accessible edge.",planned,
+REQ-007,D,"Demonstrate installation and removal using standard metric hex keys.",planned,

@@ -23,7 +23,7 @@ from unittest import mock
 HERE = Path(__file__).resolve().parent
 SCRIPTS = HERE.parent / "scripts"
 BUILDER = HERE / "fixtures" / "build_fixtures.py"
-TEMPLATE_HW = HERE.parents[1] / "cad-record" / "assets" / "project-template" / "hw"
+TEMPLATE_HW = HERE.parents[3] / "examples" / "lamp-arm" / "hw"
 sys.path.insert(0, str(HERE / "fixtures"))
 import v6_record  # noqa: E402 - the kernel-free V6-like record
 

@@ -15,7 +15,7 @@ Usage:
     uv run --script skill://cad-flow/scripts/run.py cad-design/scripts/review_render.py --out DIR [--kernels cadquery build123d]
         [--parts-root DIR] [--hw HW] [--pose nominal|zero] [--port 0]
 
-Builds each kernel's reference parts with build_reference.py into
+Builds the checkout's `cad/examples/lamp-arm` parts with build_reference.py into
 DIR/<kernel>/parts (or reads `<kernel>/<PN>.step` under --parts-root), poses
 them with cad-motion's chain at the joints' nominal values, adds ISO 4762 M6
 socket head cap screws from bd_warehouse in the base counterbores, and renders
@@ -52,8 +52,9 @@ from typing import Any
 HERE = Path(__file__).resolve().parent
 SKILL = HERE.parent
 POSE_PATH = SKILL.parent / "cad-motion" / "scripts" / "pose.py"
-DEFAULT_HW = SKILL.parent / "cad-record" / "assets" / "project-template" / "hw"
-BASE_MODEL = SKILL / "assets" / "reference" / "lamp-arm" / "cadquery" / "LMP-0001.py"
+EXAMPLE = SKILL.parent.parent / "examples" / "lamp-arm"
+DEFAULT_HW = EXAMPLE / "hw"
+BASE_MODEL = DEFAULT_HW / "parts" / "LMP-0001" / "model.py"
 CHROMIUM_ARGS = ["--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist"]
 COLORS = {"fdm": "#3a3f44", "cnc": "#c4c9cf", "purchased": "#6f747a"}
 HEAD_COLOR = "#e8e2d6"  # LMP-0004 printed in a light PETG so the shade reads against the dark base
@@ -227,6 +228,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--pose", choices=["nominal", "zero"], default="nominal")
     parser.add_argument("--port", type=int, default=0)
     args = parser.parse_args(argv)
+    if args.hw == DEFAULT_HW and not DEFAULT_HW.is_dir():
+        print(json.dumps({"error": f"cad/examples/lamp-arm example is missing: expected {DEFAULT_HW}"}))
+        return 2
+    if not BASE_MODEL.is_file():
+        print(json.dumps({"error": f"cad/examples/lamp-arm base model is missing: expected {BASE_MODEL}"}))
+        return 2
     args.out.mkdir(parents=True, exist_ok=True)
     try:
         report = render(args)

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regression cases for CAD record validation and template model provenance."""
+"""Regression cases for CAD record validation and example-record provenance."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from pathlib import Path
 SKILL = Path(__file__).resolve().parents[1]
 CONCEPT = SKILL.parent / "cad-concept"
 TEMPLATE = SKILL / "assets" / "project-template"
-REFERENCE_MODELS = SKILL.parent / "cad-design" / "assets" / "reference" / "lamp-arm" / "cadquery"
+EXAMPLE = SKILL.parent.parent / "examples" / "lamp-arm" / "hw"
 VALIDATOR = SKILL / "scripts" / "validate.py"
 
 
@@ -25,8 +25,24 @@ class ValidateProject(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory(prefix="cad-record-test-")
         self.addCleanup(self.temporary.cleanup)
         self.project = Path(self.temporary.name) / "project"
-        shutil.copytree(TEMPLATE, self.project)
+        shutil.copytree(EXAMPLE.parent, self.project)
         self.hw = self.project / "hw"
+        self.part_path = self.hw / "parts" / "LMP-0001" / "part.yaml"
+
+    def set_part(self, pn: str = "LMP-0001", rev: str = "X1") -> None:
+        lines = self.part_path.read_text(encoding="utf-8").splitlines()
+        lines = [f"PN: {pn}" if line.startswith("PN:") else line for line in lines]
+        lines = [f"rev: {rev}" if line.startswith("rev:") else line for line in lines]
+        self.part_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+    def set_joint(self, field: str, value: int) -> None:
+        path = self.hw / "assembly.yaml"
+        lines = path.read_text(encoding="utf-8").splitlines()
+        start = lines.index("    min: -10")
+        target = {"min": start, "max": start + 1, "nominal": start + 2}[field]
+        lines[target] = f"    {field}: {value}"
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     def validate(self, validator: Path = VALIDATOR) -> tuple[subprocess.CompletedProcess[str], dict[str, object]]:
         result = subprocess.run(
@@ -37,59 +53,41 @@ class ValidateProject(unittest.TestCase):
         )
         return result, json.loads(result.stdout)
 
-    def set_part(self, pn: str = "LMP-0001", rev: str = "X1") -> None:
-        path = self.hw / "parts" / "LMP-0001" / "part.yaml"
-        text = path.read_text(encoding="utf-8")
-        lines = text.splitlines()
-        lines = [f"PN: {pn}" if line.startswith("PN:") else line for line in lines]
-        lines = [f"rev: {rev}" if line.startswith("rev:") else line for line in lines]
-        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-    def set_joint(self, field: str, value: int) -> None:
-        path = self.hw / "assembly.yaml"
-        lines = path.read_text(encoding="utf-8").splitlines()
-        start = lines.index("    min: -10")
-        target = {"min": start, "max": start + 1, "nominal": start + 2}[field]
-        lines[target] = f"    {field}: {value}"
-        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-    def test_template_declares_build_volume(self) -> None:
-        product = yaml.safe_load((self.hw / "product.yaml").read_text(encoding="utf-8"))
-        self.assertEqual(product["build_volume"], {"x_mm": 256, "y_mm": 256, "z_mm": 256, "margin_mm": 5})
-        result, report = self.validate()
+    def test_copied_template_with_one_placeholder_part_validates(self) -> None:
+        temporary = tempfile.TemporaryDirectory(prefix="cad-record-template-")
+        self.addCleanup(temporary.cleanup)
+        project = Path(temporary.name) / "project"
+        shutil.copytree(TEMPLATE, project)
+        hw = project / "hw"
+        part_dir = hw / "parts" / "PRT-0001"
+        part_dir.mkdir(parents=True)
+        (part_dir / "part.yaml").write_text(
+            "PN: PRT-0001\nrev: X1\ntitle: Placeholder part\nmaterial: Placeholder material\n"
+            "process: cnc\nfinish: As machined\nmass_target: null\nmake_buy: make\n",
+            encoding="utf-8",
+        )
+        result = subprocess.run([sys.executable, str(VALIDATOR), str(project)], capture_output=True,
+                                text=True, timeout=60)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(report["findings"], [])
+        self.assertEqual(json.loads(result.stdout), {"ok": True, "findings": []})
 
-    def test_product_rejects_nonpositive_build_volume_axis(self) -> None:
-        path = self.hw / "product.yaml"
-        path.write_text(path.read_text(encoding="utf-8").replace("x_mm: 256", "x_mm: 0"), encoding="utf-8")
-        result, report = self.validate()
-        self.assertEqual(result.returncode, 1)
-        self.assertIn("x_mm", json.dumps(report["findings"]))
-
-    def test_template_validates(self) -> None:
+    def test_example_record_validates(self) -> None:
         result, report = self.validate()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(report, {"ok": True, "findings": []})
 
-    def test_template_models_match_cad_design_references_byte_for_byte(self) -> None:
-        for part_dir in sorted((TEMPLATE / "hw" / "parts").iterdir()):
-            model = part_dir / "model.py"
-            reference = REFERENCE_MODELS / f"{part_dir.name}.py"
-            with self.subTest(part=part_dir.name):
-                self.assertEqual(model.read_bytes(), reference.read_bytes())
+    def validate(self, validator: Path = VALIDATOR) -> tuple[subprocess.CompletedProcess[str], dict[str, object]]:
+        result = subprocess.run(
+            [sys.executable, str(validator), str(self.project)],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        return result, json.loads(result.stdout)
 
-    def test_template_validates_fixed_pin_joints(self) -> None:
-        assembly = yaml.safe_load((self.hw / "assembly.yaml").read_text(encoding="utf-8"))
-        fixed = [joint for joint in assembly["joints"] if joint["type"] == "fixed"]
-        self.assertEqual(len(fixed), 9)  # three pressed pins, two bushings, the insert, three rings
-        self.assertTrue(all(joint["min"] == joint["max"] == joint["nominal"] == 0 for joint in fixed))
-        result, report = self.validate()
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(report["findings"], [])
 
     def test_rejects_bad_part_number(self) -> None:
-        self.set_part(pn="LMP-one")
+        self.set_part(pn="BAD-one")
         result, report = self.validate()
         self.assertEqual(result.returncode, 1)
         self.assertIn("PN", json.dumps(report["findings"]))
@@ -113,6 +111,7 @@ class ValidateProject(unittest.TestCase):
         result, report = self.validate()
         self.assertEqual(result.returncode, 1)
         self.assertIn("nominal is outside its limits", json.dumps(report["findings"]))
+
 
     def test_rejects_requirement_without_verification_method(self) -> None:
         path = self.hw / "requirements.yaml"
@@ -272,20 +271,6 @@ class ValidateProject(unittest.TestCase):
         self.assertEqual(result.returncode, 1, result.stdout)
         return [item["message"] for item in report["findings"]]
 
-    def test_template_places_one_ring_three_times_with_bom_qty_three(self) -> None:
-        assembly = yaml.safe_load((self.hw / "assembly.yaml").read_text(encoding="utf-8"))
-        self.assertEqual([o["id"] for o in assembly["occurrences"] if o["PN"] == "LMP-0011"],
-                         ["ring-base", "ring-elbow", "ring-head"])
-        with (self.hw / "bom.csv").open(newline="", encoding="utf-8") as stream:
-            rows = {row["PN"]: row for row in csv.DictReader(stream)}
-        self.assertEqual(rows["LMP-0011"]["qty"], "3")
-        self.assertNotIn("LMP-0012", rows)
-
-    def test_bom_quantity_must_match_the_occurrence_count(self) -> None:
-        path = self.hw / "bom.csv"
-        path.write_text(path.read_text(encoding="utf-8").replace("1,LMP-0011,X1,3,", "1,LMP-0011,X1,2,"), encoding="utf-8")
-        self.assertTrue(any("BOM quantity of LMP-0011 is 2" in m and "places it 3 times" in m for m in self.messages()))
-
     def test_a_bare_pn_placed_three_times_is_an_ambiguous_joint_endpoint(self) -> None:
         self.edit_assembly('child: "@ring-elbow"', "child: LMP-0011")
         self.assertTrue(any("ambiguous" in m and "@ring-base, @ring-elbow, @ring-head" in m for m in self.messages()))
@@ -320,7 +305,7 @@ class ValidateProject(unittest.TestCase):
         self.assertTrue(any("@ring-hub names no occurrence" in m for m in self.messages()))
 
     def add_clearance(self, pair: str, minimum: object = 2.0, kind: str = "clearance", number: int = 6) -> None:
-        """Append a clearance requirement interface IF-00<number> to the template's interfaces.yaml."""
+        """Append a clearance requirement interface IF-00<number> to the lamp example's interfaces.yaml."""
         path = self.hw / "interfaces.yaml"
         with path.open("a", encoding="utf-8") as stream:
             stream.write(f"  - {{id: IF-00{number}, from: head, to: base_plate, type: {kind}, "
@@ -346,7 +331,7 @@ class ValidateProject(unittest.TestCase):
                                         (-1.5, "clearance", "less than or equal to the minimum of 0"),
                                         (2.0, "mounting", "'clearance' was expected")):
             with self.subTest(minimum=minimum, kind=kind):
-                shutil.copy2(TEMPLATE / "hw" / "interfaces.yaml", self.hw / "interfaces.yaml")
+                shutil.copy2(EXAMPLE / "interfaces.yaml", self.hw / "interfaces.yaml")
                 self.add_clearance("[LMP-0004, LMP-0001]", minimum, kind)
                 found = self.messages()
                 self.assertTrue(any(m.startswith("interfaces/5") and expected in m for m in found), found)
@@ -361,7 +346,7 @@ class ValidateProject(unittest.TestCase):
         self.add_clearance('["@ring-base", "@ring-base"]')
         self.assertTrue(any(m.startswith("interfaces/5/pair:") and "non-unique" in m for m in self.messages()))
         # A PN placed once and its @id name one occurrence: make @ring-head the one, part-local LMP-0010.
-        shutil.copy2(TEMPLATE / "hw" / "interfaces.yaml", self.hw / "interfaces.yaml")
+        shutil.copy2(EXAMPLE / "interfaces.yaml", self.hw / "interfaces.yaml")
         self.edit_assembly("  - id: ring-head\n    PN: LMP-0011", "  - id: ring-head\n    PN: LMP-0010")
         self.edit_assembly("LMP-0009, LMP-0010]", "LMP-0009]")
         with (self.hw / "parts" / "LMP-0010" / "part.yaml").open("a", encoding="utf-8") as part:

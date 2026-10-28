@@ -19,11 +19,11 @@ import unittest
 HERE = Path(__file__).resolve().parent
 SKILL = HERE.parent
 SCRIPTS = SKILL / "scripts"
-TEMPLATE_HW = SKILL.parent / "cad-record" / "assets" / "project-template" / "hw"
+EXAMPLE = SKILL.parent.parent / "examples" / "lamp-arm"
+TEMPLATE_HW = EXAMPLE / "hw"
 FIXTURES = SKILL.parent / "cad-motion" / "tests" / "fixtures" / "build_fixtures.py"
 DEFECTS = HERE / "fixtures" / "defects"
-KERNELS = ("cadquery", "build123d")
-TEMPLATE_PARTS = sorted(p.name for p in (TEMPLATE_HW / "parts").iterdir() if (p / "part.yaml").is_file())
+TEMPLATE_PARTS = sorted(p.name for p in (EXAMPLE / "hw" / "parts").iterdir() if (p / "part.yaml").is_file())
 MADE_PARTS = ["LMP-0001", "LMP-0002", "LMP-0003", "LMP-0004"]
 
 

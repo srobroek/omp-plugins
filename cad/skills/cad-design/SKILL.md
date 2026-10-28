@@ -23,8 +23,8 @@ TRIGGER
 2. Write or grow `hw/parts/<PN>/model.py` to the stage's level: F0 at L1 LAYOUT, F1 then F2
    during L2 PARTS, F3 during L3 DETAIL. Follow the model.py contract: one `KERNEL`, a JSON
    `PARAMS` dict in mm and degrees, `build(params)` returning one part in place at the zero pose.
-3. Start from the matching reference model in `assets/reference/lamp-arm/`. Its filename pairs the kernel and PN, such as `cadquery-LMP-0001.py`. The reference uses CadQuery 2.8 or build123d 0.13 with matching PARAMS keys.
-   The files model a base puck, tapered clevis links, a revolved head, stepped shoulder pins bought to their drawing, and catalogue envelopes of the brass bushings, the heat-set insert, and the DIN 471 rings.
+3. Start by using the skill's own references: read `references/fidelity.md`, the model.py contract, and the fidelity ladder. Extract the applicable shape and detail decisions from the part's requirements, interfaces, joints, material, and process; do not assume a reference model belongs to an installed skill.
+   Checkout users may optionally read `cad/examples/lamp-arm/reference/` as a worked example; it is not a runtime dependency.
 4. On "commit batch" from L1 onward, review the batch with realistic renders through the
    `cad-render` step (later; until it exists, report it as missing, not done). For the
    reference arm, `uv run --script skill://cad-flow/scripts/run.py cad-design/scripts/review_render.py --out DIR` writes an iso view and

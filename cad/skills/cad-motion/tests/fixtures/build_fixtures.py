@@ -8,12 +8,11 @@ Usage: uv run --script build_fixtures.py OUT_DIR
 
 OUT_DIR/lamp/       LMP-0001..LMP-0011 as one STEP per part definition, plus
                     lamp-arm.step (one assembly STEP placing every occurrence of
-                    the cad-record lamp-arm template's assembly.yaml: each part
-                    once, the LMP-0011 ring three times). The geometry is a
-                    stand-in for the template's models; it follows the
-                    template's joint origins and axes: the arm lies straight
-                    along +X at the zero pose. LMP-0011 is part-local (axis +Z,
-                    one face on z 0), every other part is modeled in place.
+                    cad/examples/lamp-arm/hw/assembly.yaml: each part once, the
+                    LMP-0011 ring three times. The geometry is a stand-in for the
+                    example's models; it follows the example's joint origins and axes:
+                    the arm lies straight along +X at the zero pose. LMP-0011 is part-local
+                    (axis +Z, one face on z 0); every other part is modeled in place.
 OUT_DIR/planar/     TST-0001..TST-0003, a planar three-link arm in two Z layers:
                     TST-0001 (ground, layer 0) x 0..100, TST-0002 (layer 1)
                     x 100..200, TST-0003 (layer 0) x 200..350. Folding TST-0003
@@ -38,7 +37,7 @@ import sys
 from pathlib import Path
 
 POSE_PATH = Path(__file__).resolve().parents[2] / "scripts" / "pose.py"
-TEMPLATE_HW = Path(__file__).resolve().parents[3] / "cad-record" / "assets" / "project-template" / "hw"
+TEMPLATE_HW = Path(__file__).resolve().parents[5] / "examples" / "lamp-arm" / "hw"
 _spec = importlib.util.spec_from_file_location("cad_motion_pose", POSE_PATH)
 assert _spec and _spec.loader
 pose = importlib.util.module_from_spec(_spec)

@@ -21,7 +21,7 @@ from pathlib import Path
 
 SKILL = Path(__file__).resolve().parent.parent
 SCRIPTS = SKILL / "scripts"
-TEMPLATE_HW = SKILL.parent / "cad-record" / "assets" / "project-template" / "hw"
+TEMPLATE_HW = SKILL.parent.parent / "examples" / "lamp-arm" / "hw"
 sys.path.insert(0, str(SCRIPTS))
 
 from cadviewer import ViewerError, gallery, host, session  # noqa: E402

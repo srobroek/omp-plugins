@@ -22,7 +22,7 @@ from pathlib import Path
 SKILL = Path(__file__).resolve().parent.parent
 RENDER_PY = SKILL / "scripts" / "render.py"
 MATERIALS_PY = SKILL / "scripts" / "materials.py"
-TEMPLATE_HW = SKILL.parent / "cad-record" / "assets" / "project-template" / "hw"
+TEMPLATE_HW = SKILL.parent.parent / "examples" / "lamp-arm" / "hw"
 COMPARE_PY = SKILL / "scripts" / "compare_renders.py"
 
 def load(name: str, path: Path):

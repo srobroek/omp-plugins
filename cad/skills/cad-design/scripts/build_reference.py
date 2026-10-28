@@ -9,10 +9,11 @@ Usage:
     python3 build_reference.py --kernel cadquery|build123d --out DIR
         [--models DIR] [--hw HW] [--only PN ...]
 
---models  directory of `<PN>.py` files that follow the model.py contract
-          (default: assets/reference/lamp-arm/<kernel>/).
---hw      design record whose parts/<PN>/part.yaml titles name the STEP
-          products `<PN> <title>` (default: the cad-record lamp-arm template).
+--models  directory of `<PN>.py` or `parts/<PN>/model.py` files (default:
+          cad/examples/lamp-arm/reference/<kernel> for build123d, and the
+          example record's parts for cadquery).
+--hw      design record whose parts/<PN>/part.yaml titles name STEP products
+          `<PN> <title>` (default: cad/examples/lamp-arm/hw).
 --out     receives `<PN>.step` per part plus `build.json`.
 
 The parts are built by cad-model's kernel runner (`run_cadquery.py` or
@@ -45,11 +46,14 @@ from typing import Any
 
 HERE = Path(__file__).resolve().parent
 SKILL = HERE.parent
+CAD_ROOT = SKILL.parent.parent
+EXAMPLE = CAD_ROOT / "examples" / "lamp-arm"
+DEFAULT_HW = EXAMPLE / "hw"
+REFERENCE = EXAMPLE / "reference"
+CADQUERY_PARTS = DEFAULT_HW / "parts"
 CAD_MODEL_SCRIPTS = SKILL.parent / "cad-model" / "scripts"
 sys.path.insert(0, str(CAD_MODEL_SCRIPTS))
 from cadmodel import scriptenv  # noqa: E402 - standard library helper
-DEFAULT_HW = SKILL.parent / "cad-record" / "assets" / "project-template" / "hw"
-REFERENCE = SKILL / "assets" / "reference" / "lamp-arm"
 ENV_MARKER = "CAD_DESIGN_BUILD_ENV"
 
 
@@ -62,26 +66,24 @@ def reexec_in_script_env(argv: list[str]) -> int:
         return 2
 
 
-def part_titles(hw: Path) -> dict[str, str]:
-    import yaml
-
-    titles = {}
-    for record in sorted((hw / "parts").glob("*/part.yaml")):
-        data = yaml.safe_load(record.read_text(encoding="utf-8"))
-        if isinstance(data, dict) and isinstance(data.get("title"), str):
-            titles[record.parent.name] = data["title"]
-    return titles
+def model_number(path: Path) -> str:
+    return path.parent.name if path.name == "model.py" else path.stem
 
 
 def build_all(kernel: str, models: Path, hw: Path, out: Path, only: list[str]) -> tuple[dict[str, Any], list[str]]:
-    """Build every `<PN>.py` under `models` (or the `only` ones) with cad-model's runner for `kernel`."""
+    """Build each model file with cad-model's runner for `kernel`."""
     from cadmodel import build
 
     titles = part_titles(hw)
     out.mkdir(parents=True, exist_ok=True)
-    request = [{"pn": path.stem, "name": f"{path.stem} {titles[path.stem]}" if path.stem in titles else path.stem,
-                "model": str(path.resolve()), "step": str(out.resolve() / f"{path.stem}.step")}
-               for path in sorted(models.glob("*.py")) if not only or path.stem in only]
+    model_files = sorted(models.glob("*/model.py"))
+    if not model_files:
+        model_files = sorted(models.glob("*.py"))
+    request = [{"pn": model_number(path),
+                "name": f"{model_number(path)} {titles[model_number(path)]}" if model_number(path) in titles
+                        else model_number(path),
+                "model": str(path.resolve()), "step": str(out.resolve() / f"{model_number(path)}.step")}
+               for path in model_files if not only or model_number(path) in only]
     result = build.run_kernels({kernel: request})[kernel]
     sys.stderr.write(result["console_tail"])
     parts: dict[str, Any] = {}
@@ -105,6 +107,8 @@ def build_all(kernel: str, models: Path, hw: Path, out: Path, only: list[str]) -
     return parts, errors
 
 
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     if os.environ.get(ENV_MARKER) != "1":
@@ -115,16 +119,21 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Build cad-design reference parts to STEP AP242")
     parser.add_argument("--kernel", choices=build.KERNELS, required=True)
     parser.add_argument("--models", type=Path)
-    parser.add_argument("--hw", type=Path, default=DEFAULT_HW)
+    parser.add_argument("--hw", type=Path)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--only", nargs="*", default=[], metavar="PN")
     args = parser.parse_args(argv)
-    models = args.models or REFERENCE / args.kernel
+    if args.hw is None and not DEFAULT_HW.is_dir():
+        print(json.dumps({"kernel": args.kernel, "parts": {},
+                          "errors": [f"cad/examples/lamp-arm example is missing: expected {DEFAULT_HW}"]}))
+        return 2
+    hw = args.hw or DEFAULT_HW
+    models = args.models or (CADQUERY_PARTS if args.kernel == "cadquery" else REFERENCE / args.kernel)
     if not models.is_dir():
         print(json.dumps({"kernel": args.kernel, "parts": {}, "errors": [f"models directory not found: {models}"]}))
         return 2
     try:
-        parts, errors = build_all(args.kernel, models, args.hw, args.out, args.only)
+        parts, errors = build_all(args.kernel, models, hw, args.out, args.only)
     except Exception as error:  # noqa: BLE001 - a runner or uv failure is no result, never a part failure
         traceback.print_exc(file=sys.stderr)
         print(json.dumps({"kernel": args.kernel, "parts": {}, "errors": [f"{type(error).__name__}: {error}"]}))
