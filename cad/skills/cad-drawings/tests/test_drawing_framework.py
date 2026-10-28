@@ -183,7 +183,7 @@ def leader(annotation_id: str, tip: tuple[float, float], text_at: tuple[float, f
     (tx, ty), (lx, ly) = tip, text_at
     return SvgAnnotation(annotation_id, "leader",
                          f'<line x1="{lx}" y1="{ly}" x2="{tx}" y2="{ty}" stroke="#000" stroke-width="0.25"/>'
-                         f'<text x="{lx + 1}" y="{ly}" font-size="3.5" font-family="sans-serif">{text}</text>',
+                         f'<text x="{lx + 1}" y="{ly}" font-size="3.5" font-family="osifont">{text}</text>',
                          {"measurement": "m1", "requirement": "r1"})
 
 
@@ -395,10 +395,10 @@ class FreeCadViewsAndPackage(unittest.TestCase):
         package = json.loads((output / "package.json").read_text(encoding="utf-8"))
         self.assertEqual(package["provenance"]["subject"], PN)
         self.assertEqual(package["provenance"]["step_sha256"], context.part(PN).step_sha256)
-        self.assertEqual(package["sheets"][0]["export"]["page_mm"], [420.0, 297.0])
+        self.assertEqual(package["sheets"][0]["export"]["pdf_fonts"], ["osifont"])
         self.assertEqual(package["sheets"][0]["sha256"]["pdf"], sha((output / "sheet-1.pdf").read_bytes()))
 
-        crossing = SvgAnnotation("over-view", "label", '<text x="100" y="77" font-size="3.5">ON THE PART</text>')
+        crossing = SvgAnnotation("over-view", "label", '<text x="100" y="77" font-size="3.5" font-family="osifont">ON THE PART</text>')
         failed = publish_package(context, [self.compose([crossing])], CoverageReport("pass"), output, FREECADCMD, 300)
         self.assertEqual((failed.status, failed.exit_code, [f["code"] for f in failed.findings]),
                          ("fail", 1, ["layout_check_failed"]))

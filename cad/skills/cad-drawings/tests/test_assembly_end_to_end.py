@@ -166,6 +166,7 @@ class EndToEnd(unittest.TestCase):
                 for record in package["sheets"]:
                     for kind in ("svg", "pdf", "png"):
                         self.assertTrue((root / "out" / record["files"][kind]).is_file())
+                    self.assertEqual(record["export"]["pdf_fonts"], ["osifont"])
                 self.assertEqual(assembly_check.check_package(root / "out")["status"], "pass")
 
                 # Removing one balloon from the published SVG fails the package re-check.

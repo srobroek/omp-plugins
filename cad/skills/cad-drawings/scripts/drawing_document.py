@@ -320,7 +320,7 @@ def _element(tag: str, attributes: Mapping[str, Any] | None = None, text: str | 
 
 
 def _text(content: str, x: float, y: float, size: float, anchor: str = "start", bold: bool = False) -> ET.Element:
-    attributes: dict[str, Any] = {"x": x, "y": y, "font-size": size, "font-family": "sans-serif", "fill": "#000",
+    attributes: dict[str, Any] = {"x": x, "y": y, "font-size": size, "font-family": "osifont", "fill": "#000",
                                   "stroke": "none"}
     if anchor != "start":
         attributes["text-anchor"] = anchor

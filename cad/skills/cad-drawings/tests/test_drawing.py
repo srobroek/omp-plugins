@@ -262,6 +262,20 @@ class SheetExportParts(unittest.TestCase):
         self.assertEqual(read.page_sizes_pt, [(842.0, 595.0)])
         self.assertEqual(read.fonts, ["osifont"])
         self.assertEqual(read.text, "A B\nD")  # tab read as a space; the synthetic-bold repeat skipped
+    def test_svg_generic_families_are_painted_with_osifont(self) -> None:
+        command = freecad_runtime.find_freecadcmd()
+        self.assertIsNotNone(command)
+        with tempfile.TemporaryDirectory(prefix="cad-font-parity-") as tmp:
+            root = Path(tmp)
+            svg = root / "input.svg"
+            pdf = root / "output.pdf"
+            png = root / "output.png"
+            svg.write_text('<svg xmlns="http://www.w3.org/2000/svg" width="200mm" height="150mm" viewBox="0 0 200 150">'
+                           '<text x="10" y="20" font-family="sans-serif" font-size="10">Aa 0123</text></svg>',
+                           encoding="utf-8")
+            sheet_export.export_sheet(command, svg, pdf, png, ["Aa 0123"], 300)
+            content = sheet_export.read_pdf(pdf)
+        self.assertEqual(content.fonts, ["osifont"])
 
 
 if __name__ == "__main__":
