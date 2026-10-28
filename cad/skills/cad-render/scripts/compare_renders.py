@@ -1,7 +1,7 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["pillow>=10"]
+# dependencies = ["pillow==13.0.0"]
 # ///
 """Compare two cad-render directories by decisions and a bounded PNG pixel difference."""
 from __future__ import annotations
