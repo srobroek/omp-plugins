@@ -14,7 +14,7 @@ FAKE_AGENT_MODE selects the behaviour:
   linger      answer, leaving a child in its process group and a detached one naming the cwd;
               both PIDs are appended to FAKE_AGENT_PIDS
 
-FAKE_AGENT_VERSION sets the `--version` answer (default: the declared OMP baseline).
+  credential-expired-once  emit an expired token error once, then succeed
 """
 
 import json
@@ -29,16 +29,25 @@ MODEL = "global.anthropic.claude-haiku-5-5"
 
 def leaked() -> str:
     env = os.environ
-    return (f"key={env.get('AWS_SECRET_ACCESS_KEY')} token={env.get('AWS_SESSION_TOKEN')}"
-            f" cwd={os.getcwd()} echo={env.get('FAKE_AGENT_ECHO')}")
+    return (
+        f"key={env.get('AWS_SECRET_ACCESS_KEY')} token={env.get('AWS_SESSION_TOKEN')}"
+        f" cwd={os.getcwd()} echo={env.get('FAKE_AGENT_ECHO')}"
+    )
 
 
 def linger() -> None:
     """One child stays in the harness's process group; the other detaches into its own
     session, as the cad-viewer host does, and only its command line names the trial."""
     sleep = [sys.executable, "-c", "import time; time.sleep(120)"]
-    quiet = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
-    children = [subprocess.Popen(sleep, **quiet), subprocess.Popen([*sleep, os.getcwd()], start_new_session=True, **quiet)]
+    quiet = {
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+    }
+    children = [
+        subprocess.Popen(sleep, **quiet),
+        subprocess.Popen([*sleep, os.getcwd()], start_new_session=True, **quiet),
+    ]
     with open(os.environ["FAKE_AGENT_PIDS"], "a", encoding="utf-8") as fh:
         fh.write("".join(f"{child.pid}\n" for child in children))
 
@@ -47,18 +56,46 @@ def emit(text: str, model: str = MODEL) -> None:
     prompt = sys.argv[-1]
     events = [
         {"type": "session", "id": "fake-session"},
-        {"type": "message_end", "message": {"role": "user", "content": [{"type": "text", "text": prompt}]}},
-        {"type": "message_end", "message": {
-            "role": "assistant", "model": model, "stopReason": "stop",
-            "content": [{"type": "toolCall", "name": "write", "arguments": {"path": "x"}}],
-            "usage": {"input": 100, "output": 10, "cacheRead": 5, "cacheWrite": 0, "cost": {"total": 0.001}},
-        }},
-        {"type": "message_end", "message": {"role": "toolResult", "toolName": "write", "content": [{"type": "text", "text": "ok"}]}},
-        {"type": "message_end", "message": {
-            "role": "assistant", "model": model, "stopReason": "stop",
-            "content": [{"type": "text", "text": text}],
-            "usage": {"input": 120, "output": 20, "cacheRead": 0, "cacheWrite": 0},
-        }},
+        {
+            "type": "message_end",
+            "message": {"role": "user", "content": [{"type": "text", "text": prompt}]},
+        },
+        {
+            "type": "message_end",
+            "message": {
+                "role": "assistant",
+                "model": model,
+                "stopReason": "stop",
+                "content": [
+                    {"type": "toolCall", "name": "write", "arguments": {"path": "x"}}
+                ],
+                "usage": {
+                    "input": 100,
+                    "output": 10,
+                    "cacheRead": 5,
+                    "cacheWrite": 0,
+                    "cost": {"total": 0.001},
+                },
+            },
+        },
+        {
+            "type": "message_end",
+            "message": {
+                "role": "toolResult",
+                "toolName": "write",
+                "content": [{"type": "text", "text": "ok"}],
+            },
+        },
+        {
+            "type": "message_end",
+            "message": {
+                "role": "assistant",
+                "model": model,
+                "stopReason": "stop",
+                "content": [{"type": "text", "text": text}],
+                "usage": {"input": 120, "output": 20, "cacheRead": 0, "cacheWrite": 0},
+            },
+        },
         {"type": "agent_end", "messages": []},
     ]
     for event in events:
@@ -69,17 +106,45 @@ def rpc_inventory() -> int:
     """Answer the OMP inventory probe (`--mode rpc`): get_state and get_available_commands.
     FAKE_AGENT_PROBE=leaky adds a user skill and a user rule, as an unisolated OMP would."""
     leaky = os.environ.get("FAKE_AGENT_PROBE") == "leaky"
-    skills = "<skills>\n- cad-flow: Leads mechanical CAD.\n" + ("- user-skill: Something of the user's.\n" if leaky else "") + "</skills>"
-    rules = "\n<domain-rules>\n- user-rule (): A rule of the user's.\n</domain-rules>" if leaky else ""
+    skills = (
+        "<skills>\n- cad-flow: Leads mechanical CAD.\n"
+        + ("- user-skill: Something of the user's.\n" if leaky else "")
+        + "</skills>"
+    )
+    rules = (
+        "\n<domain-rules>\n- user-rule (): A rule of the user's.\n</domain-rules>"
+        if leaky
+        else ""
+    )
     print(json.dumps({"type": "ready"}))
     for line in sys.stdin:
         request = json.loads(line)
         if request["type"] == "get_state":
-            data = {"systemPrompt": [skills + rules + "\n<project-context>\n<workstation>\n- OS: x\n</workstation>\n</project-context>"],
-                    "dumpTools": [{"name": "task", "description": "# Available Agents\n- `scout`: bundled\n- `cad-mech-reviewer`: cad"}]}
+            data = {
+                "systemPrompt": [
+                    skills
+                    + rules
+                    + "\n<project-context>\n<workstation>\n- OS: x\n</workstation>\n</project-context>"
+                ],
+                "dumpTools": [
+                    {
+                        "name": "task",
+                        "description": "# Available Agents\n- `scout`: bundled\n- `cad-mech-reviewer`: cad",
+                    }
+                ],
+            }
         else:
-            data = {"commands": [{"name": "skill:cad-flow", "source": "skill"}, {"name": "model", "source": "builtin"}]}
-        print(json.dumps({"type": "response", "id": request["id"], "success": True, "data": data}))
+            data = {
+                "commands": [
+                    {"name": "skill:cad-flow", "source": "skill"},
+                    {"name": "model", "source": "builtin"},
+                ]
+            }
+        print(
+            json.dumps(
+                {"type": "response", "id": request["id"], "success": True, "data": data}
+            )
+        )
     return 0
 
 
@@ -95,8 +160,23 @@ def main() -> int:
         print("fatal: invalid configuration", file=sys.stderr)
         return 1
     if mode == "throttle":
-        print("ThrottlingException: Too many requests, rate limit exceeded", file=sys.stderr)
+        print(
+            "ThrottlingException: Too many requests, rate limit exceeded",
+            file=sys.stderr,
+        )
         return 1
+    if mode == "credential-expired-once":
+        marker = os.environ.get("FAKE_AGENT_MARKER")
+        if not marker or not os.path.exists(marker):
+            if marker:
+                open(marker, "w").close()
+            print(
+                "UnrecognizedClientException: The security token included in the request is expired",
+                file=sys.stderr,
+            )
+            return 1
+        emit("refreshed credentials accepted")
+        return 0
     if mode == "sleep":
         time.sleep(60)
         return 0

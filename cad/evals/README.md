@@ -33,14 +33,29 @@ directory can serve as a `ratchet` variant.
 
 ## Credentials
 
-The runner exports AWS credentials from one profile with `aws configure export-credentials` and passes them to the harnesses that call Bedrock (OMP, Claude Code, OpenCode) as environment variables. Kiro uses its own trial-local copy of the user's login database and receives no AWS credentials. The profile comes from `[auth] aws_profile` in `matrix.toml`, or from `--aws-profile PROFILE` given before the command (`run.py --aws-profile cad-eval-bedrock run --pilot …`), which overrides it; without either, `$AWS_PROFILE` is used.
+The runner exports temporary credentials from one profile with
+`aws configure export-credentials`. OMP receives credentials through a per-run
+authenticated HTTP endpoint on `127.0.0.1`; OpenCode and Claude Code receive short-lived
+static credential environment variables because their installed versions did not work
+with that endpoint. The endpoint returns the ECS container credential JSON shape and
+re-exports from the profile when current credentials are within five minutes of
+expiry, so OMP can refresh during long trials.
 
-An agent under test can read those variables, so the credentials reach exactly as far as the profile's role. Give the runner a dedicated profile:
+They reach exactly as far as the profile's role, so give the runner a dedicated profile:
 
-- **Bedrock invocation only.** An IAM Identity Center permission set, or a role reached through `role_arn` and `source_profile`, whose policy allows `bedrock:InvokeModel` and `bedrock:InvokeModelWithResponseStream` and nothing else. The Converse and ConverseStream calls need exactly these two permissions ([Converse API](https://docs.aws.amazon.com/bedrock/latest/userguide/conversation-inference.html)). Scope the resources to the foundation models and inference profiles in the matrix.
-- **Temporary credentials.** The runner refuses credentials with no `Expiration`, which are long-lived access keys, as an `auth_error` before any trial starts. Before staging each trial, credentials must remain valid for its wall-clock ceiling (`case_timeout_s`, or the smoke `--timeout`) plus five minutes. This profile's credential process returns cached credentials until they expire. If an export remains too short-lived, the runner polls every 30 seconds for up to the credential's remaining lifetime plus five minutes (capped at one hour), then re-exports. If suitable credentials still do not arrive, the slot is `not_started`; rerun after the profile refreshes to resume it.
+- **Bedrock invocation only.** An IAM Identity Center permission set, or a role reached
+  through `role_arn` and `source_profile`, whose policy allows `bedrock:InvokeModel` and
+  `bedrock:InvokeModelWithResponseStream` and nothing else. The Converse and
+  ConverseStream calls need exactly these two permissions
+  ([Converse API](https://docs.aws.amazon.com/bedrock/latest/userguide/conversation-inference.html)).
+  Scope the resources to the foundation models and inference profiles in the matrix.
+- **Temporary credentials.** The runner refuses credentials with no `Expiration`, which
+  are long-lived access keys, as an `auth_error` before any trial starts. It exports
+  once at run start; the OMP endpoint refreshes near expiry, while OpenCode and Claude
+  Code re-export only after an expired-token error. No harness waits for the profile's
+  session to renew.
 
-The runner does not narrow the credentials itself. An `sts assume-role` with an inline session policy would narrow them, but it needs a second role whose trust policy admits your SSO role. That role chaining was not proven with SSO credentials, so the runner does not try it.
+- The runner does not narrow the credentials itself. An `sts assume-role` with an inline session policy would narrow them, but it needs a second role whose trust policy admits your SSO role. That role chaining was not proven with SSO credentials, so the runner does not try it.
 
 ## Cases and ground truth
 
@@ -113,11 +128,11 @@ CAD_EVALS_SKIP_GEOMETRY=1 python3 -m unittest discover -s cad/evals/tests -v
 # See what would run, with the exact argv per cell. No model calls.
 python3 cad/evals/run.py plan --pilot
 
-# Pilot: the [pilot] cases (3) x 1 rep in every cell. Traces for all pilot cases.
-python3 cad/evals/run.py run --pilot --out cad/evals/out/pilot
+# Pilot: all cases x 1 rep in every cell. Explicitly retain every pilot trace.
+python3 cad/evals/run.py run --pilot --traces all --out cad/evals/out/pilot
 
-# Full matrix: every case x reps (2) x every cell. Traces only for train ids.
-python3 cad/evals/run.py run --out cad/evals/out/matrix --train-ids train-ids.txt
+# Full matrix: every case x reps (2) x every cell. Only explicitly selected train ids.
+python3 cad/evals/run.py run --traces train --out cad/evals/out/matrix --train-ids train-ids.txt
 
 # Narrow to cells or cases; repeat the flags as needed.
 python3 cad/evals/run.py run --cell omp:amazon-bedrock/global.anthropic.claude-opus-5-5 \
@@ -147,9 +162,9 @@ A rerun into the same `--out` resumes pending slots:
 - a `(case, rep)` with a row in `results.jsonl` is skipped;
 - a slot that only errored runs again.
 
-AWS-credential-refused slots have no error row. Refresh the source profile to obtain fresh credentials, then rerun. Kiro may refresh its isolated login copy without stopping any trial; the copy is deleted at trial end.
+Credential export failures and refused slots are recorded in `errors.jsonl` with their case, rep and reason. The runner never waits for a profile session to renew: OMP refreshes through the endpoint, while OpenCode and Claude Code retry once with a fresh static export after an expired-token failure; that infrastructure retry is noted in the row and does not score as a failure.
 
-The pilot writes traces for every pilot case because no split exists yet. A ratchet variant run must pass `--train-ids`, one case id per line, so that test cases never get transcripts.
+The default `--traces train` mode writes traces and raw streams only for case ids explicitly listed in `--train-ids`; without that file it writes none. `--traces all` writes them for every case, including pilot runs, and `--traces none` writes none. The explicit mode wins over `--pilot`; use `--traces all` when pilot transcripts are wanted.
 
 ## Output (one directory per cell, `<harness>--<model>`)
 
@@ -176,7 +191,7 @@ The pilot writes traces for every pilot case because no split exists yet. A ratc
   | `runner_error` | An unexpected runner exception |
 
   Throttling, 5xx and connection errors are retried with jittered exponential backoff (`[retry]`). The number of retries is recorded. A low grade is never retried.
-- `traces/<id>_rep<k>.json`: the transcript as `[{role, content, thinking?, name?}]`, for train ids only. `raw/` holds the raw streams of the same slots.
+- `traces/<id>_rep<k>.json`: the transcript; `raw/` holds the raw streams. `--traces train` limits these to ids in `--train-ids` (none if no file); `all` includes every case and `none` disables both.
 - `artifacts/<id>_rep<k>/`: the case's `collect` directory without its symlinks, kept as input to the judge, which never follows a link either.
 
 Every record above, and the smoke, probe and judge records, passes one scrub (`runner.Redactor`) before it is written: the credential values the runner exported become `<redacted>`, trial roots `<trial>`, the temp directory `$TMPDIR` and your home `~`. A smoke record only counts the shared-temp entries other processes added (`added_by_other_processes`).
@@ -185,7 +200,7 @@ Every record above, and the smoke, probe and judge records, passes one scrub (`r
 
 ## Isolation
 
-Trials are comparable only if each harness loads the cad plugin and nothing else of the user's. Every child process gets an environment built from an allowlist (`PATH`, locale, user, uv cache locations); nothing else of the user's shell is inherited. `TMPDIR`, `TMP` and `TEMP` point at the trial's own `tmp/`, which is removed with the trial; Claude Code also gets `CLAUDE_CODE_TMPDIR`, because its own temp root is `/tmp` on macOS whatever `TMPDIR` says ([env vars](https://code.claude.com/docs/en/env-vars)). AWS credentials are exported once per window from the `[auth]` profile (`aws configure export-credentials`) and passed as environment variables, so no harness loads `~/.aws` or runs the profile's credential process. This keeps configuration out; it does not stop an agent with a shell from reading `~/.aws` (see the residual risk under [Cases and ground truth](#cases-and-ground-truth)).
+Trials are comparable only if each harness loads the cad plugin and nothing else of the user's. Every child process gets an environment built from an allowlist (`PATH`, locale, user, uv cache locations) plus only that harness's credential transport; nothing else of the user's shell is inherited. `TMPDIR`, `TMP` and `TEMP` point at the trial's own `tmp/`, which is removed with the trial; Claude Code also gets `CLAUDE_CODE_TMPDIR`, because its own temp root is `/tmp` on macOS whatever `TMPDIR` says ([env vars](https://code.claude.com/docs/en/env-vars)). OMP receives the runner's authenticated container endpoint; OpenCode and Claude Code receive one export of short-lived credentials (and a single re-export/retry after an expired-token failure); Kiro uses its private login copy. This keeps configuration out; it does not stop an agent with a shell from reading `~/.aws` (see the residual risk under [Cases and ground truth](#cases-and-ground-truth)).
 
 Each row then records what the harness itself reported loading, and the leaks: everything that is neither the cad plugin nor in that harness's declared baseline, plus any capability cad needs that is missing. A baseline is what a harness bundles and no supported setting removes, observed in a clean run of one harness version. Each row's `inventory.baseline` lists the baseline items it loaded and the version they were declared for. A row whose harness reports another version, or no version, leaks `baseline: declared for …` until the baseline is observed again; this holds for every harness, including those that bundle nothing. An inventory the harness did not report counts as contaminated. `summary` and `judge` refuse contaminated cells unless `--allow-contaminated`.
 
@@ -193,14 +208,20 @@ Each row then records what the harness itself reported loading, and the leaks: e
 |---|---|---|---|
 | OMP 18.12.3 | HOME, `PI_CODING_AGENT_DIR`, `XDG_*` and `TMPDIR` in the trial; cad via `--plugin-dir` | `omp --mode rpc` after the turn: `get_state` (the assembled system prompt: skills, rules, project context, MCP; the task tool's agents) and `get_available_commands` | clean: the cad skills and reviewers, plus the baseline (OMP's bundled agents and commands). Nothing added to the shared temp directories |
 | Claude Code 2.1.310 | The real binary behind the Amazon toolbox launcher, which otherwise copies Amazon builder rules into the rules directory. A launcher whose binary cannot be found is refused, because it needs your real HOME. HOME, `CLAUDE_CONFIG_DIR`, `TMPDIR` and `CLAUDE_CODE_TMPDIR` point into the trial. Flags: `--setting-sources project,local`, plus `--strict-mcp-config` with an empty `--mcp-config`. A trial `--settings` pins the model (`modelOverrides`) and disables the two `@builtin` plugins. The bundled-component switches below apply. cad loads via `--plugin-dir`. | `system/init` in the first turn (version, plugins, skills, agents, commands, MCP, tools, memory path) plus the config dir's `rules/` and `CLAUDE.md` on disk | clean: `plugins: [cad]`, only cad skills and agents, the 28 built-in commands of the baseline, served `claude-haiku-5-5`. Its temp folder (`claude-<uid>/<work dir>`) landed in the trial; earlier runs had left such folders in `/tmp/claude-<uid>`. Earlier attempts: `smoke/claude-attempts.json` (without `modelOverrides` Opus served; `--bare` removes the Skill, Task, Write, Glob and Grep tools, so it is off) |
-| Kiro 2.34.1 (v3) | HOME, `XDG_*` and `TMPDIR` point into the trial. A trial-own Kiro database holds a copy of the user's login (`auth_kv` and the sign-in `state` keys). It is checked for a refresh and deleted when the trial ends. Sessions (`~/.kiro/sessions`), prompt history, logs and the extracted agent runtime are therefore written only inside the trial. The kiro-cli executables are linked in from `~/.local/bin`. Runs pin the sandbox agent `.kiro/agents/cad-eval.json` (V3 format: capability `permissions`, cad skills as `skill://` resources). `--trust-all-tools` pre-approves every tool without confining it to the trial. A headless run treats every `ask` as a deny ([permissions](https://kiro.dev/docs/permissions.md)). V3 `--trust-tools` matches exact V3 tool ids only, not the CLI 2.x names ([headless mode](https://kiro.dev/docs/cli/headless.md), [CLI commands](https://kiro.dev/docs/reference/cli-commands.md)). cad is copied to `<work>/cad`. | the turn's stream: final mode, final command list, context files, memory and MCP use | clean: mode `cad-eval`, the cad skills and reviewers, no steering, no memory. List Directory on the workspace root completed. The user's `~/.kiro` was unchanged; in the user's database only `extracted_kas_versions` changed, which the user's running Kiro rewrites twice a minute with no trial running (`smoke/kiro-store-control.json`); no row names the trial. The first attempt (`smoke/kiro-attempts.json`), with `--trust-tools=fs_read,…`, failed List Directory headless |
+| Kiro 2.34.1 (v3) | HOME, `XDG_*` and TMPDIR point into the trial; Linux explicitly sets `XDG_DATA_HOME` to `<trial home>/.local/share`. A trial-own Kiro database at the platform-specific Kiro data location holds a copy of the user's login (`auth_kv` and the sign-in `state` keys). It is checked for a refresh and deleted when the trial ends. Sessions (`~/.kiro/sessions`), prompt history, logs and the extracted agent runtime are therefore written only inside the trial. The kiro-cli executables are linked in from `~/.local/bin`. Runs pin the sandbox agent `.kiro/agents/cad-eval.json` (V3 format: capability `permissions`, cad skills as `skill://` resources). `--trust-all-tools` pre-approves every tool without confining it to the trial. A headless run treats every `ask` as a deny ([permissions](https://kiro.dev/docs/permissions.md)). V3 `--trust-tools` matches exact V3 tool ids only, not the CLI 2.x names ([headless mode](https://kiro.dev/docs/cli/headless.md), [CLI commands](https://kiro.dev/docs/reference/cli-commands.md)). cad is copied to `<work>/cad`. | the turn's stream: final mode, final command list, context files, memory and MCP use | clean: mode `cad-eval`, the cad skills and reviewers, no steering, no memory. List Directory on the workspace root completed. The user's `~/.kiro` was unchanged; in the user's database only `extracted_kas_versions` changed, which the user's running Kiro rewrites twice a minute with no trial running (`smoke/kiro-store-control.json`); no row names the trial. The first attempt (`smoke/kiro-attempts.json`), with `--trust-tools=fs_read,…`, failed List Directory headless |
 | OpenCode 2.1.4 | HOME, `XDG_*` and `TMPDIR` in the trial; `--standalone` (a private server in the trial's environment, not the shared background service); cad skills and agents in `<work>/.opencode/` | `opencode api --standalone` after the turn (instruction entries, plugins, MCP, config sources) plus OpenCode's documented skill and agent directories on disk. Its API skill and agent lists stay empty in a standalone server, so they are not used | clean: the cad skills and reviewers, no instructions or config outside the trial. The native libraries Bun extracts at startup (`.bun-<uid>-<hash>.dylib`, `.node`) and OpenCode's `opencode/` temp dir landed in the trial, not in the shared `$TMPDIR` |
 
 **Claude Code's bundled components.** The adapter sets every documented switch that removes a bundled skill, subagent or command (`BUNDLED_OFF` in `adapters/claude.py`): `CLAUDE_CODE_DISABLE_BUNDLED_SKILLS` (the env form of [`disableBundledSkills`](https://code.claude.com/docs/en/settings-reference#disablebundledskills), added in 2.1.169: bundled skills and workflows go), `CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS` (every built-in subagent type in `-p` mode, `general-purpose` included; [sub-agents](https://code.claude.com/docs/en/sub-agents)), `CLAUDE_CODE_DISABLE_WORKFLOWS`, `CLAUDE_CODE_DISABLE_POLICY_SKILLS`, and the `DISABLE_*_COMMAND` variables for `/doctor`, `/feedback`, `/usage-credits`, `/install-github-app`, `/login`, `/logout` and `/upgrade` ([env vars](https://code.claude.com/docs/en/env-vars)). The two `@builtin` plugins only have `enabledPlugins`. `--disable-slash-commands` is not used because it also removes the cad skills ([CLI reference](https://code.claude.com/docs/en/cli-reference)), and `DISABLE_COMPACT` is not used because it turns compaction off, not just the command. What remains are 28 built-in commands (`/clear`, `/compact`, `/model`, `/init`, …). No supported switch removes them; with bundled skills off they "stay typable but are hidden from the model" ([settings reference](https://code.claude.com/docs/en/settings-reference#disablebundledskills)). They are the declared baseline for 2.1.310 and are recorded in every row's `inventory.baseline`. A Claude Code update has to be re-observed before its rows count as clean.
 
 **Host effects.** `run.py smoke` snapshots the shared temp directories (`$TMPDIR` and `/tmp`, two levels deep) and the harness's user stores before staging and after cleanup. For Kiro the stores are `~/Library/Application Support/kiro-cli` and `~/.kiro`, with per-table row counts and digests of every SQLite file, and the targets of the kiro-cli executables linked into the trial, by size, mtime and SHA-256, so an updater writing through a link shows. It records what the harness wrote to the trial's own `TMPDIR`, attributes shared-temp additions to the trial when their path names the trial (Claude slugs the work dir) or matches a name in the trial's `TMPDIR`, counts every other addition as a concurrent process's without naming it, and reports added, removed or changed store entries, changed tables and rows that mention the trial. `host.unchanged` is strict, so a user's Kiro running beside the smoke makes it false; compare with `smoke/kiro-store-control.json`.
 
-- **Kiro login.** Each trial gets a private copy of the login database under its isolated HOME. Kiro refreshes its own token as needed; the runner never refuses Kiro trials based on token expiry or stops later trials when the copied token changes. A changed token is noted in `inventory.kiro_login_refreshed`; the copy is deleted after each trial, including kept sandboxes, without modifying the user's login store.
+- **Kiro login.** macOS reads `~/Library/Application Support/kiro-cli/data.sqlite3`;
+  Linux reads `$XDG_DATA_HOME/kiro-cli/data.sqlite3` (default
+  `~/.local/share/kiro-cli/data.sqlite3`). Each trial gets a private copy under its
+  isolated HOME/XDG data root; on Linux the runner explicitly sets the trial's
+  `XDG_DATA_HOME`. Kiro refreshes its own token as needed; a changed token is noted in
+  `inventory.kiro_login_refreshed`, and the copy is deleted after each trial, including
+  kept sandboxes, without modifying the user's login store.
 
 The smoke records in `smoke/` predate the CLI version lookup, so their `inventory.version` is null for OMP, Kiro and OpenCode. The CLIs reported the declared versions (18.12.3, 2.34.0, 2.1.4) when those smokes ran. When the record scrub landed, the committed records' `added_by_other_processes` lists were reduced to counts and Kiro's `isolation_mechanism` was corrected, without new calls. The records predate the Kiro executable fingerprint.
 

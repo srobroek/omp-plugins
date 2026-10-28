@@ -15,8 +15,8 @@ declared `BASELINE`. TMPDIR and CLAUDE_CODE_TMPDIR (Claude's own temp root, `/tm
 by default on macOS) point into the trial, and so does HOME. A `claude` that is the
 Amazon toolbox launcher runs as the real binary behind it; when that binary cannot
 be found, `preflight` refuses, because the launcher needs the real HOME and injects
-builder rules. Bedrock auth: `CLAUDE_CODE_USE_BEDROCK` plus exported AWS
-credentials. The `system/init` event lists what loaded and is the inventory.
+builder rules. Bedrock auth: `CLAUDE_CODE_USE_BEDROCK` plus static short-lived AWS
+credentials; one expired-token failure triggers an infrastructure retry.
 """
 
 from __future__ import annotations
@@ -28,7 +28,18 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable
 
-from .base import Baseline, Host, Inventory, TrialPaths, Turn, copy_tree, isolated_home, json_lines, tool_text, trial_temp
+from .base import (
+    Baseline,
+    Host,
+    Inventory,
+    TrialPaths,
+    Turn,
+    copy_tree,
+    isolated_home,
+    json_lines,
+    tool_text,
+    trial_temp,
+)
 
 REQUIRED_TOOLS = ("Skill",)  # without it the agent cannot load a cad skill
 
@@ -56,14 +67,43 @@ BUNDLED_OFF = {
 # run whose CLAUDE_CONFIG_DIR was empty: built-in commands only (no bundled skill,
 # subagent or plugin remains). No supported switch removes them; with bundled
 # skills off they stay typable but are hidden from the model.
-BASELINE = Baseline("2.1.310", {
-    "commands": frozenset({
-        "__remote-workflow", "agents", "auto-mode-setup", "autocompact", "clear", "color", "compact", "config",
-        "context", "effort", "fast", "focus", "goal", "heapdump", "init", "insights", "list-agents", "mcp", "model",
-        "output-style", "recap", "reload-plugins", "reload-skills", "rename", "security-review", "team-onboarding",
-        "usage", "workflow-launch-exec",
-    }),
-})
+BASELINE = Baseline(
+    "2.1.310",
+    {
+        "commands": frozenset(
+            {
+                "__remote-workflow",
+                "agents",
+                "auto-mode-setup",
+                "autocompact",
+                "clear",
+                "color",
+                "compact",
+                "config",
+                "context",
+                "effort",
+                "fast",
+                "focus",
+                "goal",
+                "heapdump",
+                "init",
+                "insights",
+                "list-agents",
+                "mcp",
+                "model",
+                "output-style",
+                "recap",
+                "reload-plugins",
+                "reload-skills",
+                "rename",
+                "security-review",
+                "team-onboarding",
+                "usage",
+                "workflow-launch-exec",
+            }
+        ),
+    },
+)
 
 
 def canonical_model(model: str) -> str:
@@ -74,7 +114,11 @@ def canonical_model(model: str) -> str:
     flag is silently ignored and the default model serves (seen in the isolated smoke)."""
     model = model.rsplit("/", 1)[-1]
     parts = model.split(".")
-    return parts[-1] if len(parts) >= 3 and parts[0] in {"global", "us", "eu", "apac", "jp", "au"} else model
+    return (
+        parts[-1]
+        if len(parts) >= 3 and parts[0] in {"global", "us", "eu", "apac", "jp", "au"}
+        else model
+    )
 
 
 def is_launcher(bin_name: str) -> bool:
@@ -92,9 +136,13 @@ def resolve_launcher(bin_name: str) -> str:
     or a launcher whose binary is missing, is returned unchanged."""
     if not is_launcher(bin_name):
         return bin_name
-    tool = Path(os.path.realpath(shutil.which(bin_name))).parents[2] / "claude-code"  # tools/toolbox/<v>/toolbox-exec
+    tool = (
+        Path(os.path.realpath(shutil.which(bin_name))).parents[2] / "claude-code"
+    )  # tools/toolbox/<v>/toolbox-exec
     try:
-        version = json.loads((tool / "info.json").read_text(encoding="utf-8"))["CurrentVersion"]["Version"]
+        version = json.loads((tool / "info.json").read_text(encoding="utf-8"))[
+            "CurrentVersion"
+        ]["Version"]
     except (OSError, KeyError, json.JSONDecodeError):
         return bin_name
     real = tool / version / "claude"
@@ -116,31 +164,50 @@ class ClaudeAdapter:
         " --setting-sources project,local; trial --settings pins the model and disables bundled plugins;"
         " bundled skills, subagents, workflows and hideable commands switched off (BUNDLED_OFF);"
         " TMPDIR and CLAUDE_CODE_TMPDIR in the trial; --strict-mcp-config with an empty --mcp-config;"
-        " cad via --plugin-dir; AWS credentials exported to env"
+        " cad via --plugin-dir; static short-lived Bedrock credentials with one expired-token refresh retry"
     )
     baseline: Baseline = field(default_factory=lambda: BASELINE)
 
     def __post_init__(self) -> None:
         self.bin = resolve_launcher(self.bin)
-        self.via_launcher = is_launcher(self.bin)  # the real binary behind the launcher was not found
+        self.via_launcher = is_launcher(
+            self.bin
+        )  # the real binary behind the launcher was not found
 
     def prepare(self, paths: TrialPaths, host: Host) -> None:
         # Generated Claude agents ship under harness/claude/agents; project scope
         # makes them visible without touching the user's ~/.claude.
-        copy_tree(paths.plugin / "harness" / "claude" / "agents", paths.work / ".claude" / "agents")
+        copy_tree(
+            paths.plugin / "harness" / "claude" / "agents",
+            paths.work / ".claude" / "agents",
+        )
         (paths.home / ".claude").mkdir(parents=True, exist_ok=True)
         (paths.root / "mcp.json").write_text('{"mcpServers": {}}\n', encoding="utf-8")
 
-    def command(self, *, model: str, prompt: str, paths: TrialPaths, resume: bool) -> list[str]:
+    def command(
+        self, *, model: str, prompt: str, paths: TrialPaths, resume: bool
+    ) -> list[str]:
         canonical = canonical_model(model)
         settings: dict = {"enabledPlugins": {name: False for name in BUILTIN_PLUGINS}}
         if canonical != model:
             settings["modelOverrides"] = {canonical: model}
         argv = [
-            self.bin, "-p", "--model", canonical, "--output-format", "stream-json", "--verbose",
-            "--permission-mode", "bypassPermissions",
-            "--strict-mcp-config", "--mcp-config", str(paths.root / "mcp.json"),
-            "--setting-sources", self.setting_sources, "--settings", json.dumps(settings, sort_keys=True),
+            self.bin,
+            "-p",
+            "--model",
+            canonical,
+            "--output-format",
+            "stream-json",
+            "--verbose",
+            "--permission-mode",
+            "bypassPermissions",
+            "--strict-mcp-config",
+            "--mcp-config",
+            str(paths.root / "mcp.json"),
+            "--setting-sources",
+            self.setting_sources,
+            "--settings",
+            json.dumps(settings, sort_keys=True),
         ]
         if self.bare:
             argv.append("--bare")
@@ -152,16 +219,34 @@ class ClaudeAdapter:
         return argv
 
     def env(self, paths: TrialPaths, host: Host) -> dict[str, str]:
-        return {
-            **host.base_env, **isolated_home(paths), **trial_temp(paths), **host.aws_env, **BUNDLED_OFF, **self.extra_env,
-            "CLAUDE_CONFIG_DIR": str(paths.home / ".claude"), "CLAUDE_CODE_TMPDIR": str(paths.tmp), "NO_COLOR": "1",
+        env = {
+            **host.base_env,
+            **isolated_home(paths),
+            **trial_temp(paths),
+            **host.aws_env,
+            **BUNDLED_OFF,
+            **self.extra_env,
         }
+        env.update(
+            {
+                "CLAUDE_CONFIG_DIR": str(paths.home / ".claude"),
+                "CLAUDE_CODE_TMPDIR": str(paths.tmp),
+                "NO_COLOR": "1",
+            }
+        )
+        if "AWS_CONTAINER_CREDENTIALS_FULL_URI" in host.aws_env:
+            for key in (
+                "AWS_ACCESS_KEY_ID",
+                "AWS_SECRET_ACCESS_KEY",
+                "AWS_SESSION_TOKEN",
+            ):
+                env.pop(key, None)
+        return env
 
     def user_stores(self, host: Host) -> list[Path]:
         return []  # sessions and history follow CLAUDE_CONFIG_DIR into the trial
 
     def preflight(self, host: Host, ceiling_s: float) -> str | None:
-        # Bedrock credentials are re-exported per trial with margin (HostSource).
         if self.via_launcher:
             return (
                 f"`{self.bin}` is the Amazon toolbox launcher and the Claude Code binary behind it was not found"
@@ -176,31 +261,57 @@ class ClaudeAdapter:
     def version_command(self) -> list[str]:
         return []  # system/init reports `claude_code_version`
 
-    def probe(self, paths: TrialPaths, model: str, stream_lines: list[str]) -> list[tuple[list[str], str]]:
+    def probe(
+        self, paths: TrialPaths, model: str, stream_lines: list[str]
+    ) -> list[tuple[list[str], str]]:
         return []  # system/init in the first turn's stream is the inventory
 
-    def complete(self, turn: Turn, lines: list[str], paths: TrialPaths, env: dict[str, str]) -> Turn:
+    def complete(
+        self, turn: Turn, lines: list[str], paths: TrialPaths, env: dict[str, str]
+    ) -> Turn:
         return turn
 
-    def inventory(self, probe_outputs: list[str], stream_lines: list[str], paths: TrialPaths) -> Inventory:
+    def inventory(
+        self, probe_outputs: list[str], stream_lines: list[str], paths: TrialPaths
+    ) -> Inventory:
         inv = Inventory()
-        init = next((e for e in json_lines(stream_lines) if e.get("type") == "system" and e.get("subtype") == "init"), None)
+        init = next(
+            (
+                e
+                for e in json_lines(stream_lines)
+                if e.get("type") == "system" and e.get("subtype") == "init"
+            ),
+            None,
+        )
         if init is None:
             return inv
         inv.observed = True
         inv.version = init.get("claude_code_version")
         # Instruction files Claude reads from its config dir; init does not list them.
         config = paths.home / ".claude"
-        inv.context += [str(p) for p in sorted(config.glob("rules/**/*.md")) + sorted(config.glob("CLAUDE.md"))]
+        inv.context += [
+            str(p)
+            for p in sorted(config.glob("rules/**/*.md"))
+            + sorted(config.glob("CLAUDE.md"))
+        ]
         roots = (str(paths.root), str(paths.root.resolve()))
         for plugin in init.get("plugins") or []:
             where = plugin.get("path", "")
             inside = any(where.startswith(r) for r in roots)
-            inv.plugins.append(plugin.get("name", "") if inside else f"{plugin.get('name', '')}@{where}")
+            inv.plugins.append(
+                plugin.get("name", "")
+                if inside
+                else f"{plugin.get('name', '')}@{where}"
+            )
         inv.skills = [s for s in init.get("skills") or [] if isinstance(s, str)]
         inv.agents = [a for a in init.get("agents") or [] if isinstance(a, str)]
-        inv.commands = [c for c in init.get("slash_commands") or [] if isinstance(c, str)]
-        inv.mcp = [m.get("name", "") if isinstance(m, dict) else str(m) for m in init.get("mcp_servers") or []]
+        inv.commands = [
+            c for c in init.get("slash_commands") or [] if isinstance(c, str)
+        ]
+        inv.mcp = [
+            m.get("name", "") if isinstance(m, dict) else str(m)
+            for m in init.get("mcp_servers") or []
+        ]
         tools = set(init.get("tools") or [])
         inv.missing = [f"tool:{t}" for t in REQUIRED_TOOLS if t not in tools]
         # Auto-memory lives under the config dir. Inside the trial's fresh config dir it
@@ -234,13 +345,25 @@ class ClaudeAdapter:
         for block in message.get("content") or []:
             kind = block.get("type")
             if kind == "text":
-                turn.transcript.append({"role": "assistant", "content": block.get("text", "")})
+                turn.transcript.append(
+                    {"role": "assistant", "content": block.get("text", "")}
+                )
             elif kind == "thinking":
-                turn.transcript.append({"role": "assistant", "content": "", "thinking": block.get("thinking", "")})
+                turn.transcript.append(
+                    {
+                        "role": "assistant",
+                        "content": "",
+                        "thinking": block.get("thinking", ""),
+                    }
+                )
             elif kind == "tool_use":
                 turn.tools.append(block.get("name", ""))
                 turn.transcript.append(
-                    {"role": "tool_call", "name": block.get("name", ""), "content": json.dumps(block.get("input", {}), sort_keys=True)}
+                    {
+                        "role": "tool_call",
+                        "name": block.get("name", ""),
+                        "content": json.dumps(block.get("input", {}), sort_keys=True),
+                    }
                 )
 
     @staticmethod
@@ -251,9 +374,17 @@ class ClaudeAdapter:
             return
         for block in content or []:
             if block.get("type") == "tool_result":
-                turn.transcript.append({"role": "tool_result", "name": block.get("tool_use_id", ""), "content": tool_text(block.get("content"))})
+                turn.transcript.append(
+                    {
+                        "role": "tool_result",
+                        "name": block.get("tool_use_id", ""),
+                        "content": tool_text(block.get("content")),
+                    }
+                )
             elif block.get("type") == "text":
-                turn.transcript.append({"role": "user", "content": block.get("text", "")})
+                turn.transcript.append(
+                    {"role": "user", "content": block.get("text", "")}
+                )
 
     @staticmethod
     def _result(turn: Turn, event: dict) -> None:
@@ -272,4 +403,8 @@ class ClaudeAdapter:
         if subtype == "error_max_turns":
             turn.truncated = True
         elif event.get("is_error") or subtype.startswith("error"):
-            turn.error = (event.get("result") if isinstance(event.get("result"), str) else None) or subtype or "result is_error"
+            turn.error = (
+                (event.get("result") if isinstance(event.get("result"), str) else None)
+                or subtype
+                or "result is_error"
+            )

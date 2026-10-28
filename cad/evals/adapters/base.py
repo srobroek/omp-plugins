@@ -71,8 +71,10 @@ class Host:
     """What a trial may take from the host. Nothing else of the user's environment
     reaches the harness: adapters build the child environment from this alone."""
 
-    base_env: dict[str, str]  # allowlisted variables: PATH, locale, user, toolchain caches
-    aws_env: dict[str, str]  # temporary credentials of the [auth] profile: as broad as its role, not Bedrock by itself
+    base_env: dict[
+        str, str
+    ]  # allowlisted variables: PATH, locale, user, toolchain caches
+    aws_env: dict[str, str]  # per-harness AWS region and static keys or runner endpoint
     real_home: Path
 
 
@@ -96,7 +98,9 @@ def trial_temp(paths: TrialPaths) -> dict[str, str]:
 
 
 CATEGORIES = ("plugins", "skills", "agents", "commands", "context", "mcp")
-EVAL_AGENT = "cad-eval"  # the sandbox-local agent a harness is pinned to, where it needs one
+EVAL_AGENT = (
+    "cad-eval"  # the sandbox-local agent a harness is pinned to, where it needs one
+)
 
 
 @dataclass(frozen=True)
@@ -118,27 +122,44 @@ class Inventory:
     skills: list[str] = field(default_factory=list)
     agents: list[str] = field(default_factory=list)
     commands: list[str] = field(default_factory=list)
-    context: list[str] = field(default_factory=list)  # instruction files, steering, rules, memory
+    context: list[str] = field(
+        default_factory=list
+    )  # instruction files, steering, rules, memory
     mcp: list[str] = field(default_factory=list)
-    missing: list[str] = field(default_factory=list)  # capabilities cad needs that the harness withheld
-    version: str | None = None  # the harness version: from its stream (Claude Code) or its CLI
-    observed: bool = False  # the harness reported its components; False means nothing to verify
+    missing: list[str] = field(
+        default_factory=list
+    )  # capabilities cad needs that the harness withheld
+    version: str | None = (
+        None  # the harness version: from its stream (Claude Code) or its CLI
+    )
+    observed: bool = (
+        False  # the harness reported its components; False means nothing to verify
+    )
 
     def as_dict(self) -> dict[str, list[str]]:
-        return {cat: sorted(set(getattr(self, cat))) for cat in (*CATEGORIES, "missing")}
+        return {
+            cat: sorted(set(getattr(self, cat))) for cat in (*CATEGORIES, "missing")
+        }
 
 
 def cad_allowlist(plugin: Path) -> dict[str, set[str]]:
-    skills = {p.name for p in (plugin / "skills").glob("*") if (p / "SKILL.md").is_file()}
+    skills = {
+        p.name for p in (plugin / "skills").glob("*") if (p / "SKILL.md").is_file()
+    }
     agents = {p.stem for p in (plugin / "agents").glob("*.md")} | {EVAL_AGENT}
-    return {"plugins": {"cad"}, "skills": skills, "agents": agents, "commands": skills | agents}
+    return {
+        "plugins": {"cad"},
+        "skills": skills,
+        "agents": agents,
+        "commands": skills | agents,
+    }
 
 
 def _bare(name: str) -> str:
     name = name.strip().lstrip("/")
     for prefix in ("skill:", "cad:"):
         if name.startswith(prefix):
-            name = name[len(prefix):]
+            name = name[len(prefix) :]
     return name
 
 
@@ -151,7 +172,9 @@ def parse_version(text: str) -> str | None:
     return match.group(0) if match else None
 
 
-def audit(inventory: Inventory, paths: TrialPaths, baseline: Baseline) -> tuple[list[str], dict[str, list[str]]]:
+def audit(
+    inventory: Inventory, paths: TrialPaths, baseline: Baseline
+) -> tuple[list[str], dict[str, list[str]]]:
     """(leaks, bundled). Leaks: every loaded component that is neither the cad plugin
     nor in the harness's baseline, every capability cad needs that is missing, and a
     harness version the baseline was not declared for (an unknown version included).
@@ -161,7 +184,9 @@ def audit(inventory: Inventory, paths: TrialPaths, baseline: Baseline) -> tuple[
     if not inventory.observed:
         return ["inventory: the harness reported no loaded components to verify"], {}
     allow = cad_allowlist(paths.plugin)
-    cad_dirs = {str(p) for d in (paths.plugin, paths.work / "cad") for p in (d, d.resolve())}
+    cad_dirs = {
+        str(p) for d in (paths.plugin, paths.work / "cad") for p in (d, d.resolve())
+    }
     found: set[str] = set()
     bundled: dict[str, set[str]] = {}
     for cat in CATEGORIES:
@@ -177,21 +202,29 @@ def audit(inventory: Inventory, paths: TrialPaths, baseline: Baseline) -> tuple[
             found.add(f"{cat}:{item}")
     found.update(f"missing:{m}" for m in inventory.missing)
     if inventory.version is None:
-        found.add(f"baseline: declared for {baseline.version}, the harness reported no version")
+        found.add(
+            f"baseline: declared for {baseline.version}, the harness reported no version"
+        )
     elif inventory.version != baseline.version:
-        found.add(f"baseline: declared for {baseline.version}, the harness reports {inventory.version}")
+        found.add(
+            f"baseline: declared for {baseline.version}, the harness reports {inventory.version}"
+        )
     return sorted(found), {cat: sorted(items) for cat, items in sorted(bundled.items())}
 
 
 class Adapter(Protocol):
     name: str
-    plugin_marker: str  # plugin-root-relative path whose presence means the plugin can load
+    plugin_marker: (
+        str  # plugin-root-relative path whose presence means the plugin can load
+    )
     isolation: str  # one line: how ambient user config is kept out
     baseline: Baseline  # what the harness bundles and no supported setting removes
 
     def prepare(self, paths: TrialPaths, host: Host) -> None: ...
 
-    def command(self, *, model: str, prompt: str, paths: TrialPaths, resume: bool) -> list[str]: ...
+    def command(
+        self, *, model: str, prompt: str, paths: TrialPaths, resume: bool
+    ) -> list[str]: ...
 
     def env(self, paths: TrialPaths, host: Host) -> dict[str, str]:
         """The complete child environment, `trial_temp` included; nothing else is inherited."""
@@ -211,16 +244,22 @@ class Adapter(Protocol):
         """Model-free argv whose stdout names the harness version; [] when the turn's
         own stream reports it (Claude Code's `system/init`)."""
 
-    def probe(self, paths: TrialPaths, model: str, stream_lines: list[str]) -> list[tuple[list[str], str]]:
+    def probe(
+        self, paths: TrialPaths, model: str, stream_lines: list[str]
+    ) -> list[tuple[list[str], str]]:
         """Model-free commands (argv, stdin), run after the trial's first turn, whose
         stdout reports loaded components; [] when the turn's own stream reports them."""
 
-    def inventory(self, probe_outputs: list[str], stream_lines: list[str], paths: TrialPaths) -> Inventory:
+    def inventory(
+        self, probe_outputs: list[str], stream_lines: list[str], paths: TrialPaths
+    ) -> Inventory:
         """`probe_outputs` holds one stdout per probe command, in order ('' if it failed)."""
 
     def parse(self, lines: Iterable[str]) -> Turn: ...
 
-    def complete(self, turn: Turn, lines: list[str], paths: TrialPaths, env: dict[str, str]) -> Turn:
+    def complete(
+        self, turn: Turn, lines: list[str], paths: TrialPaths, env: dict[str, str]
+    ) -> Turn:
         """Fill what the stream lacks from the harness's own model-free record (OpenCode:
         served model and usage from the session store). Most adapters return `turn`."""
 
@@ -276,7 +315,9 @@ def _norm(model: str) -> str:
     return re.sub(r"[._:]", "-", model)
 
 
-def served_matches(requested: str, served: str | None, expect: str | None = None) -> bool:
+def served_matches(
+    requested: str, served: str | None, expect: str | None = None
+) -> bool:
     """True when the served model is the requested one.
 
     `expect` is an explicit regex from the matrix. Without it, both ids are
@@ -288,4 +329,4 @@ def served_matches(requested: str, served: str | None, expect: str | None = None
     if expect:
         return re.search(expect, served) is not None
     want, got = _norm(requested), _norm(served)
-    return got.startswith(want) and _SUFFIX.fullmatch(got[len(want):]) is not None
+    return got.startswith(want) and _SUFFIX.fullmatch(got[len(want) :]) is not None
