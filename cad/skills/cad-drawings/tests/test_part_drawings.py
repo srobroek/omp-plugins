@@ -187,21 +187,23 @@ class PinDrawingGate(unittest.TestCase):
         sourcing = package_json["provenance"]["sourcing_inputs"]
         self.assertEqual([s["url"].startswith("https://") for s in sourcing], [True])  # the PDF stays outside hw/
 
-    def test_open_procurement_fields_block_release_and_undeclared_ones_fail(self) -> None:
+    def test_open_procurement_fields_block_release_and_a_standard_designation_orders(self) -> None:
         code, result = self.draw("v1", "insert", "LMP-0010")
         self.assertEqual((code, result["status"]), (0, "pass"), result.get("findings"))
         blockers = [b["message"] for b in result["release"]["blockers"]]
         self.assertTrue(any(m.startswith("manufacturer_part_number is open") for m in blockers), blockers)
         code, result = self.draw("v1", "ring", "LMP-0011")
         self.assertEqual((code, result["status"]), (0, "not_required"))   # a standard part needs no sheet
+        blockers = [b["message"] for b in result["release"]["blockers"]]
+        self.assertFalse(any(" is open: " in m for m in blockers), blockers)   # DIN 471 - 5x0.6 identifies it
         part = self.hw / "parts" / "LMP-0011" / "part.yaml"
         original = part.read_text(encoding="utf-8")
         try:
-            part.write_text(re.sub(r"  open:\n    manufacturer_part_number: .*\n", "", original), encoding="utf-8")
-            code, result = self.draw("v1", "ring-undeclared", "LMP-0011")
+            part.write_text(original.replace("  standard: DIN 471\n", ""), encoding="utf-8")
+            code, result = self.draw("v1", "ring-unstandard", "LMP-0011")
         finally:
             part.write_text(original, encoding="utf-8")
-        self.assertEqual((code, result["status"]), (1, "fail"))
+        self.assertEqual((code, result["status"]), (1, "fail"))   # without its standard it needs a part number
         self.assertEqual([f["code"] for f in result["findings"]], ["procurement_incomplete"])
 
 
