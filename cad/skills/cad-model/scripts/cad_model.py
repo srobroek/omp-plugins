@@ -8,7 +8,8 @@ Usage:
     uv run --script skill://cad-flow/scripts/run.py cad-model/scripts/cad_model.py run <hw-dir> --label vN [--kernel auto|cadquery|build123d]
                                      [--attach REF=PARENT_REF ...]
     uv run --script skill://cad-flow/scripts/run.py cad-model/scripts/cad_model.py check vN --hw hw [--out FILE]
-       [--pair REF:REF ...] [--allow-interference REF:REF ...] [--expect-solids PN=N ...]
+       [--pair REF:REF ...] [--allow-interference REF:REF ...] [--expect-solids PN=N ...] [--jobs 1|N|auto]
+       [--cache DIR | --no-cache]
     uv run --script skill://cad-flow/scripts/run.py cad-model/scripts/cad_model.py diff vA vB [--hw HW] [--out FILE]
 
 A REF is a PN placed once, or `@id` for one occurrence of hw/assembly.yaml.
@@ -62,6 +63,12 @@ def _expect(text: str) -> tuple[str, int]:
     return pn, int(n)
 
 
+def _jobs(text: str) -> int:
+    from cadmodel.motion import load_pair_measure
+
+    return load_pair_measure().jobs_argument(text)
+
+
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(description="Build, check, and diff CAD design versions")
     sub = root.add_subparsers(dest="command", required=True)
@@ -82,6 +89,14 @@ def parser() -> argparse.ArgumentParser:
     check.add_argument("--expect-solids", action="append", type=_expect, default=[], metavar="PN=N",
                        help="expected solid count; overrides the previous version as baseline")
     check.add_argument("--out", type=Path, help="also write the result JSON here")
+    check.add_argument("--jobs", type=_jobs, default="1", metavar="N|auto",
+                       help="worker processes measuring pairs (1, the default: this process, on OCCT's thread pool; "
+                            "auto: the CPU count, at most 8)")
+    caching = check.add_mutually_exclusive_group()
+    caching.add_argument("--cache", type=Path, metavar="DIR",
+                         help="pair measurement cache shared with cad-motion sweep.py (default: "
+                              "$XDG_CACHE_HOME/cad-motion, else ~/.cache/cad-motion)")
+    caching.add_argument("--no-cache", action="store_true", help="measure every pair, reading and writing no cache")
     diff = sub.add_parser("diff", help="compare two built versions")
     diff.add_argument("a")
     diff.add_argument("b")
@@ -92,7 +107,7 @@ def parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
-    from cadmodel.motion import load_pose
+    from cadmodel.motion import load_pair_measure, load_pose
 
     pose = load_pose()
     try:
@@ -102,7 +117,9 @@ def main(argv: list[str] | None = None) -> int:
             elif args.command == "check":
                 from cadmodel.check import check
 
-                code, result = check(args.hw, args.label, args.pair, args.allow_interference, dict(args.expect_solids))
+                cache_dir = None if args.no_cache else (args.cache or load_pair_measure().default_cache_dir())
+                code, result = check(args.hw, args.label, args.pair, args.allow_interference, dict(args.expect_solids),
+                                     cache_dir, args.jobs)
             else:
                 from cadmodel.diff import diff
 
