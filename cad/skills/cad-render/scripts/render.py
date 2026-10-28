@@ -70,7 +70,7 @@ BOOT_TIMEOUT_MS = 180_000
 VIEW_NAME = re.compile(r"^(iso|front|side|exploded|(closeup|part)-([A-Z]{2,5}-[0-9]{4}|@[a-z][a-z0-9_-]*))$")
 SIZE = re.compile(r"^([1-9][0-9]{2,3})x([1-9][0-9]{2,3})$")
 DEFAULT_VIEWS = ["iso", "front", "side", "exploded"]
-DEFAULT_JOBS = 4
+DEFAULT_JOBS = 1
 MAX_JOBS = 8
 CONTENT_TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
                  ".css": "text/css; charset=utf-8", ".json": "application/json", ".glb": "model/gltf-binary"}

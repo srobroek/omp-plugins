@@ -24,11 +24,13 @@ TRIGGER
 2. Render: `uv run --script skill://cad-flow/scripts/run.py cad-render/scripts/render.py hw [--version latest|vN] [--views iso front side exploded closeup-<PN> part-<PN>] [--jobs N]`
    -> `hw/renders/<vN>/<view>.png` and `manifest.json` (version, camera per attempt, quality metrics,
    retry strategy, material applied per PN, three and Chromium versions, phase timings); JSON summary on stdout.
-   `--jobs` uses 1-8 dedicated pages in one Chromium process (default 4); each page loads the scene once and
-   renders its assigned views serially, while pages capture concurrently. Use `--jobs 1` for the serial baseline.
-   The manifest records page-load time, each view's elapsed capture time, renderer time, and PNG encoding time;
-   per-view PNG SHA-256 values remain the cache integrity check.
-   Each capture attempt seeds GTAO noise from the view and retry index. The floor-shadow bake key also includes visible part transforms and its sampling settings.
+   `--jobs` uses 1-8 dedicated pages in one Chromium process (default 1). Each page loads the scene once
+   and renders its assigned views serially, while pages capture concurrently. On CPU-only SwiftShader, keep
+   the default: SwiftShader already multithreads, and pace measured 11s at jobs=1, 12s at 2, and 17s at 4
+   for five 800x600 views. Use higher values when hardware and workload tests show a benefit.
+   The manifest records page-load time, each view's elapsed capture time, renderer time, and PNG encoding time.
+   Per-view PNG SHA-256 values remain the cache integrity check.
+   Each capture attempt seeds GTAO noise from the view and retry index. The floor-shadow bake key also includes visible part transforms and sampling settings.
 3. Close-ups: add `closeup-<PN>` for each part/interface to show, or `part-<PN>` for a studio view of
    one part in stable resting orientation with the other assembly parts hidden.
 4. Read every PNG before describing it. Name the material each PN shows from
