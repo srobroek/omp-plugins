@@ -36,7 +36,6 @@ class ValidateProject(unittest.TestCase):
         lines = [f"rev: {rev}" if line.startswith("rev:") else line for line in lines]
         self.part_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
-
     def set_joint(self, field: str, value: int) -> None:
         path = self.hw / "assembly.yaml"
         lines = path.read_text(encoding="utf-8").splitlines()
@@ -77,15 +76,12 @@ class ValidateProject(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(report, {"ok": True, "findings": []})
 
-    def validate(self, validator: Path = VALIDATOR) -> tuple[subprocess.CompletedProcess[str], dict[str, object]]:
-        result = subprocess.run(
-            [sys.executable, str(validator), str(self.project)],
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-        return result, json.loads(result.stdout)
-
+    def test_product_rejects_nonpositive_build_volume_axis(self) -> None:
+        path = self.hw / "product.yaml"
+        path.write_text(path.read_text(encoding="utf-8").replace("x_mm: 256", "x_mm: 0"), encoding="utf-8")
+        result, report = self.validate()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("x_mm", json.dumps(report["findings"]))
 
     def test_rejects_bad_part_number(self) -> None:
         self.set_part(pn="BAD-one")
@@ -284,6 +280,11 @@ class ValidateProject(unittest.TestCase):
         path = self.hw / "parts" / "LMP-0011" / "part.yaml"
         path.write_text(path.read_text(encoding="utf-8").replace("model_frame: part_local\n", ""), encoding="utf-8")
         self.assertTrue(any("LMP-0011 is placed 3 times but its model_frame is assembly_zero" in m for m in self.messages()))
+
+    def test_bom_quantity_must_match_the_occurrence_count(self) -> None:
+        path = self.hw / "bom.csv"
+        path.write_text(path.read_text(encoding="utf-8").replace("1,LMP-0011,X1,3,", "1,LMP-0011,X1,2,"), encoding="utf-8")
+        self.assertTrue(any("BOM quantity of LMP-0011 is 2" in m and "places it 3 times" in m for m in self.messages()))
 
     def test_an_explicit_pn_cannot_also_be_a_legacy_member(self) -> None:
         self.edit_assembly("LMP-0009, LMP-0010]", "LMP-0009, LMP-0010, LMP-0011]")
