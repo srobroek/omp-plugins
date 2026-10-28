@@ -16,11 +16,10 @@ import yaml
 SKILL = Path(__file__).resolve().parents[1]
 SCRIPT = SKILL / "scripts" / "build_guide.py"
 TEMPLATE = SKILL / "assets" / "project-template" / "hw"
-COVERAGE = {"rows": [{
-    "kind": "assembly_operation",
-    "operation": "press_base_pin",
-    "measured": {"gap": 0.29999999999999716},
-}]}
+COVERAGE = {"rows": [
+    {"kind": "assembly_operation", "operation": operation, "measured": {"gap": 0.3}}
+    for operation in ("press_base_pin", "press_elbow_pin", "press_head_pin")
+]}
 
 
 class BuildGuide(unittest.TestCase):
@@ -80,8 +79,8 @@ class BuildGuide(unittest.TestCase):
         self.assertIn("Press item 5 into item 2 along -Z", guide)
         self.assertIn("0.3 mm off the hub top face, as modelled", guide)
         self.assertIn("Press item 6 into item 2 along -Y", guide)
-        self.assertIn("by the modelled gap; gap not measured: run the assembly drawing for v1", guide)
         self.assertIn("Press item 7 into item 3 along -Y", guide)
+        self.assertIn("0.3 mm off the cheek face, as modelled", guide)
         self.assertIn("fit 5 H7/p6 (IF-001)", guide)
         self.assertIn("## Assembly steps\n\n1. Heat-set item 8 into item 1", guide)
         self.assertIn("9. Fit ring item 11 onto item 7", guide)
