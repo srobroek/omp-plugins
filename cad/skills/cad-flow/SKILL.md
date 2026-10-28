@@ -12,9 +12,8 @@ TRIGGER
 
 ## Workflow
 
-1. At GROUND, run `uv run --script cad/skills/cad-flow/scripts/setup.py` from the project root. Setup prints a dry-run plan and makes no changes.
-   Add `--yes` to execute user-level actions. Pair it with `--system` to install FreeCAD, Linux Chromium libraries, or uv's installer.
-   Pass `--harness opencode|kiro|claude` to install harness files. Setup reruns preflight and prints its summary.
+1. At GROUND, run `uv run --script cad/skills/cad-flow/scripts/setup.py` from the project root. Setup checks FreeCAD 1.1.4 first. A missing command or wrong version makes setup exit nonzero before any other action. The error shows the download URL and lookup order. Follow `cad-drawings/SKILL.md` to install FreeCAD, then rerun setup.
+   Add `--yes` to execute the remaining user-level setup actions. Pass `--harness opencode|kiro|claude` to install harness files. Setup reruns preflight and prints its summary.
    Start the background warm-up after setup. Continue the GROUND work while it runs.
    - OMP: `uv run --script skill://cad-flow/scripts/preflight.py --warm --background`
    - Claude Code, with the base directory shown when this skill loaded: `uv run --script "<base directory>/scripts/preflight.py" --warm --background`

@@ -146,22 +146,23 @@ class WarmPlanTests(unittest.TestCase):
             seen["fill"] = fill
             return passing("three-vendor-cache")
 
-        with patch.object(preflight, "_uv_check", return_value=(passing("uv"), "uv")), \
+        with patch.object(preflight, "_uv_check", side_effect=lambda env: (passing("uv"), "uv")), \
                 patch.object(preflight, "_runtime_check", side_effect=lambda uv, item: passing(item.id)), \
                 patch.object(preflight, "_chromium_check", side_effect=chromium), \
                 patch.object(preflight, "_vendor_check", side_effect=vendor), \
-                patch.object(preflight, "_timed_freecad_checks", side_effect=lambda env, home: [passing("freecad-command")]), \
+                patch.object(preflight, "_timed_freecad_checks", side_effect=lambda env, home: [preflight.Check("freecad-command", "FreeCAD command", "pass", True, "", ""), preflight.Check("freecad-version", "FreeCAD version", "pass", True, "", ""), preflight.Check("techdraw-templates", "TechDraw templates", "pass", True, "", "")]), \
                 patch.object(preflight, "_beads_check", side_effect=lambda cwd, env: passing("beads")), \
                 patch.object(preflight, "_harness_check", side_effect=lambda name, *a: passing(f"harness-{name}")), \
                 patch("sys.stderr"):
             report = preflight.run_checks({"HOME": "/nowhere"}, Path("/p"), Path("/nowhere"), "omp", warm=warm)
-        self.assertEqual([check.id for check in report.checks], order)
+        self.assertEqual(order, ["uv", "cadquery", "build123d", "cad-model", "ocp-viewer",
+                                 "playwright-chromium", "three-vendor-cache", "beads", "harness-omp"])
         return order, seen
 
-    def test_warm_first_loads_every_runtime_before_freecad_and_fetches_what_checks_need(self) -> None:
+    def test_warm_first_loads_every_runtime_after_cad_tool_and_fetches_what_checks_need(self) -> None:
         order, seen = self.plan(warm=True)
-        self.assertEqual(order[:6], ["uv", "cadquery", "build123d", "cad-model", "ocp-viewer", "playwright-chromium"])
-        self.assertLess(order.index("three-vendor-cache"), order.index("freecad-command"))
+        self.assertEqual(order[:9], ["uv", "cadquery", "build123d", "cad-model", "ocp-viewer",
+                                    "playwright-chromium", "three-vendor-cache", "beads", "harness-omp"])
         self.assertEqual(seen, {"install": True, "fill": True})
 
     def test_plain_preflight_installs_and_fetches_nothing(self) -> None:
@@ -256,6 +257,77 @@ class MainTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             preflight.Check("bad", "bad", "unknown", True, "", "")
 
+class CadToolLookupTests(unittest.TestCase):
+    def test_metadata_defines_name_version_probe_and_release(self) -> None:
+        tool = preflight.CAD_TOOL
+        self.assertEqual((tool.name, tool.required_version), ("FreeCAD", "1.1.4"))
+        self.assertEqual(tool.version_args, ("--version",))
+        self.assertEqual(tool.download_url, "https://github.com/FreeCAD/FreeCAD/releases/tag/1.1.4")
+
+    def test_lookup_metadata_is_authoritative(self) -> None:
+        self.assertEqual(tuple(value for _, value in preflight.CAD_TOOL.lookup_candidates),
+                         ("FREECADCMD", "freecadcmd", "FreeCADCmd",
+                          "/Applications/FreeCAD.app/Contents/Resources/bin/freecadcmd",
+                          ".local/bin/freecadcmd"))
+
+    def test_configured_command_takes_priority(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            configured = root / "configured"
+            configured.touch()
+            with patch.object(preflight.shutil, "which", return_value="/path/freecadcmd"):
+                found = preflight.find_freecadcmd({"FREECADCMD": str(configured), "PATH": "/bin"}, root)
+        self.assertEqual(found, configured)
+
+    def test_path_command_precedes_app_bundle_and_user_command(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            app = root / "FreeCAD.app" / "Contents" / "Resources" / "bin" / "freecadcmd"
+            app.parent.mkdir(parents=True)
+            app.touch()
+            user = root / ".local" / "bin" / "freecadcmd"
+            user.parent.mkdir(parents=True)
+            user.touch()
+            path_command = root / "path-freecadcmd"
+            with patch.object(preflight.shutil, "which", side_effect=[str(path_command)]):
+                found = preflight.find_freecadcmd({"PATH": "/path"}, root, "darwin", app)
+        self.assertEqual(found, path_command)
+
+    def test_macos_bundle_precedes_user_command(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            app = root / "FreeCAD.app" / "Contents" / "Resources" / "bin" / "freecadcmd"
+            app.parent.mkdir(parents=True)
+            app.touch()
+            user = root / ".local" / "bin" / "freecadcmd"
+            user.parent.mkdir(parents=True)
+            user.touch()
+            user.chmod(0o755)
+            with patch.object(preflight.shutil, "which", return_value=None):
+                found = preflight.find_freecadcmd({"PATH": ""}, root, "darwin", app)
+        self.assertEqual(found, app)
+
+    def test_user_command_is_last_supported_candidate(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            command = root / ".local" / "bin" / "freecadcmd"
+            command.parent.mkdir(parents=True)
+            command.touch()
+            command.chmod(0o755)
+            with patch.object(preflight.shutil, "which", return_value=None):
+                found = preflight.find_freecadcmd({"PATH": ""}, root, "linux")
+        self.assertEqual(found, command)
+
+    def test_installer_managed_appimage_location_is_not_searched(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            managed = root / "opt" / "freecad-1.1.4" / "squashfs-root" / "usr" / "bin" / "freecadcmd"
+            managed.parent.mkdir(parents=True)
+            managed.touch()
+            managed.chmod(0o755)
+            with patch.object(preflight.shutil, "which", return_value=None):
+                found = preflight.find_freecadcmd({"PATH": ""}, root, "linux")
+        self.assertIsNone(found)
 
 class FreeCADTests(unittest.TestCase):
     def test_missing_configured_freecad_fails_with_install_hint(self) -> None:
@@ -269,9 +341,11 @@ class FreeCADTests(unittest.TestCase):
         self.assertEqual(command.status, "fail")
         self.assertIn("FreeCAD 1.1.4 freecadcmd was not found", command.detail)
         self.assertIn("Install FreeCAD 1.1.4", command.fix)
-        self.assertIn("FREECADCMD", command.fix)
+        self.assertIn("https://github.com/FreeCAD/FreeCAD/releases/tag/1.1.4", command.fix)
+        for candidate in ("FREECADCMD", "PATH", "macOS app bundle", "~/.local/bin/freecadcmd"):
+            self.assertIn(candidate, command.fix)
+        self.assertEqual(len(checks), 2)
         self.assertEqual(checks[1].status, "fail")
-        self.assertEqual(checks[2].status, "fail")
 
 if __name__ == "__main__":
     unittest.main()
