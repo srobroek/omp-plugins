@@ -52,11 +52,13 @@ record with couplings (exit 2). Verify coupled motion with `pose.py` and `sweep.
    → posed STEP AP242 with product names kept. A value outside [min, max] exits 1 with a
    `joint_limit` finding and writes no STEP.
 2. Sweep: `uv run --script skill://cad-flow/scripts/run.py cad-motion/scripts/sweep.py --hw hw --version vN --worst-step worst.step
-   [--steps 19] [--grid 3] [--min-clearance MM] [--pair-clearance REF:REF=MM] [--include-pair REF:REF] [--end-effector REF]`
+   [--steps 19] [--grid 3] [--min-clearance MM] [--pair-clearance REF:REF=MM] [--include-pair REF:REF] [--end-effector REF] [--jobs N]`
    → JSON: `collisions` (sample, independent and complete pose, pair, volume), `min_clearance` per
    pair with its pose, `pair_clearance` per clearance requirement, `limit_findings`,
    `reach_envelope`, `worst_case` (written to `--worst-step`, evidence in `<worst-step>.json`), and
    `timings_s`. Only independent joints are sampled; every coupled joint is derived at each sample.
+   `--jobs N` measures pairs in N worker processes (forkserver; spawn on macOS), each about 110 MB;
+   the result is the same as in one process.
    `--worst-criterion` picks the worst case:
    `max_horizontal_reach` (default; collision-free poses, the end effector's cantilever arm),
    `minimum_clearance` (smallest margin: a pair's distance minus its tightest requirement), or

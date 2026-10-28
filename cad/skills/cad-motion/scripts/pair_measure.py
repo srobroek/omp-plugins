@@ -38,10 +38,14 @@ Stdlib only; OCP is imported when a shape is touched.
 
 from __future__ import annotations
 
+import concurrent.futures
+import concurrent.futures.process
 import heapq
 import importlib.util
+import io
 import itertools
 import math
+import multiprocessing
 import struct
 import sys
 import time
@@ -105,11 +109,16 @@ def reading(outcome: tuple[float, float] | Pruned) -> tuple[float, float]:
 
 
 class PairMeasurer:
-    """Measures requests on `shapes` (definition key -> TopoDS_Shape)."""
+    """Measures requests on `shapes` (definition key -> TopoDS_Shape), in this process or, with
+    `jobs` > 1, in that many worker processes (`start_method`: forkserver, spawn on macOS and
+    Windows; never fork)."""
 
-    def __init__(self, shapes: Mapping[str, Any], reuse: bool = False) -> None:
+    def __init__(self, shapes: Mapping[str, Any], reuse: bool = False, jobs: int = 1,
+                 start_method: str | None = None) -> None:
         self.shapes = dict(shapes)
         self.reuse = reuse
+        self.jobs = jobs
+        self.start_method = start_method or _default_start_method()
         self.radii = {key: max(math.hypot(*corner) for corner in itertools.product(*zip(*box_corners(shape))))
                       for key, shape in self.shapes.items()} if reuse else {}
         # The corners of each definition's bounding box, enlarged by its shape tolerances: the box
@@ -127,7 +136,11 @@ class PairMeasurer:
         """One outcome per request, in request order; None for the requests the deadline left
         unanswered, and for those still open after a failure when `stop_on_failure`."""
         run = _Run(self, requests, prune)
-        run.execute(deadline, stop_on_failure)
+        executor = _InProcess(self.shapes) if self.jobs <= 1 else _Workers(self.shapes, self.jobs, self.start_method)
+        try:
+            run.execute(executor, deadline, stop_on_failure)
+        finally:
+            executor.close()
         return run.outcomes
 
     def placement_bound(self, measured: Request, request: Request) -> float:
@@ -144,16 +157,6 @@ class PairMeasurer:
         """The distance between the axis-aligned hulls of the two placed bounding boxes: a lower
         bound on the distance between the placed shapes."""
         return _hull_gap(*self.moved_corners(request))
-
-    def _measure_one(self, request: Request, box_gap: float) -> tuple[float, float] | Failure:
-        self.measured += 1
-        shape_a = self.shapes[request.a]
-        if request.a_placement is not None:
-            shape_a = pose.placed(shape_a, request.a_placement)
-        try:
-            return pose.interference(shape_a, pose.placed(self.shapes[request.b], request.placement), box_gap=box_gap)
-        except Exception as error:  # noqa: BLE001 - OCP raises Standard_Failure on broken input
-            return Failure(str(error) or type(error).__name__)
 
 
 class _Run:
@@ -320,22 +323,23 @@ class _Run:
                 return unit
         return None
 
-    def execute(self, deadline: float, stop_on_failure: bool) -> None:
+    def execute(self, executor: _InProcess | _Workers, deadline: float, stop_on_failure: bool) -> None:
         if time.monotonic() > deadline:
             return
         for index in range(len(self.requests)):
             if not self.resolve(index):
                 self.queue(index)
         self.order = list(self.queues)
-        executor = _InProcess(self.measurer)
         while True:
             while len(self.inflight) < executor.capacity and time.monotonic() <= deadline:
                 unit = self.next_unit()
                 if unit is None:
                     break
                 self.inflight.add(unit)
+                self.measurer.measured += 1
                 request = self.requests[self.unit_request[unit]]
-                executor.submit(unit, request, self.gap(unit))
+                executor.submit(unit, (request.a, request.b, _rows(request.a_placement), _rows(request.placement),
+                                       self.gap(unit)))
             if not self.inflight:
                 return
             unit, outcome = executor.next()
@@ -350,20 +354,120 @@ class _Run:
             self.touched.clear()
 
 
+Task = tuple[str, str, Any, Any, float]  # (a, b, a's placement rows or None, b's placement rows, box gap)
+
+
+def _measure(shapes: Mapping[str, Any], task: Task) -> tuple[float, float] | str:
+    """pose.interference on one task: (distance, volume), or the kernel error's message."""
+    a, b, a_rows, b_rows, box_gap = task
+    try:
+        shape_a = shapes[a] if a_rows is None else pose.placed(shapes[a], pose.Rigid(*a_rows))
+        return pose.interference(shape_a, pose.placed(shapes[b], pose.Rigid(*b_rows)), box_gap=box_gap)
+    except Exception as error:  # noqa: BLE001 - OCP raises Standard_Failure on broken input
+        return str(error) or type(error).__name__
+
+
+def _outcome(result: tuple[float, float] | str) -> tuple[float, float] | Failure:
+    return Failure(result) if isinstance(result, str) else result
+
+
 class _InProcess:
     """Measures in this process, one unit at a time."""
 
     capacity = 1
 
-    def __init__(self, measurer: PairMeasurer) -> None:
-        self.measurer = measurer
+    def __init__(self, shapes: Mapping[str, Any]) -> None:
+        self.shapes = shapes
         self.done: deque[tuple[int, tuple[float, float] | Failure]] = deque()
 
-    def submit(self, unit: int, request: Request, box_gap: float) -> None:
-        self.done.append((unit, self.measurer._measure_one(request, box_gap)))
+    def submit(self, unit: int, task: Task) -> None:
+        self.done.append((unit, _outcome(_measure(self.shapes, task))))
 
     def next(self) -> tuple[int, tuple[float, float] | Failure]:
         return self.done.popleft()
+
+    def close(self) -> None:
+        pass
+
+
+# A worker loads this module by path (the parent may have loaded it under any main module) and
+# rebuilds the definitions from BinTools bytes, as a TopoDS_Shape does not pickle.
+_WORKER_START = """
+import importlib.util, sys
+if "cad_motion_pair_measure" not in sys.modules:
+    spec = importlib.util.spec_from_file_location("cad_motion_pair_measure", path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+sys.modules["cad_motion_pair_measure"]._start_worker(blobs)
+"""
+_WORKER_SHAPES: dict[str, Any] = {}
+
+
+def _start_worker(blobs: Mapping[str, bytes]) -> None:
+    from OCP.BinTools import BinTools
+    from OCP.TopoDS import TopoDS_Shape
+
+    for key, blob in blobs.items():
+        shape = TopoDS_Shape()
+        BinTools.Read_s(shape, io.BytesIO(blob))
+        _WORKER_SHAPES[key] = shape
+
+
+def _work(task: Task) -> tuple[float, float] | str:
+    return _measure(_WORKER_SHAPES, task)
+
+
+class _Workers:
+    """Measures in `jobs` worker processes, keeping two units per worker in flight; the pool
+    starts with the first unit, so a run that measures nothing starts none."""
+
+    def __init__(self, shapes: Mapping[str, Any], jobs: int, start_method: str) -> None:
+        self.shapes, self.jobs, self.start_method = shapes, jobs, start_method
+        self.capacity = 2 * jobs
+        self.pool: concurrent.futures.ProcessPoolExecutor | None = None
+        self.pending: dict[concurrent.futures.Future, int] = {}
+
+    def submit(self, unit: int, task: Task) -> None:
+        if self.pool is None:
+            blobs = {key: shape_bytes(shape) for key, shape in self.shapes.items()}
+            self.pool = concurrent.futures.ProcessPoolExecutor(
+                self.jobs, mp_context=multiprocessing.get_context(self.start_method), initializer=exec,
+                initargs=(_WORKER_START, {"path": str(Path(__file__).resolve()), "blobs": blobs}))
+        self.pending[self.pool.submit(_work, task)] = unit
+
+    def next(self) -> tuple[int, tuple[float, float] | Failure]:
+        done, _ = concurrent.futures.wait(self.pending, return_when=concurrent.futures.FIRST_COMPLETED)
+        future = done.pop()
+        unit = self.pending.pop(future)
+        try:
+            return unit, _outcome(future.result())
+        except concurrent.futures.process.BrokenProcessPool as error:
+            raise pose.MotionError(f"a pair measuring worker process died: {error}") from error
+
+    def close(self) -> None:
+        if self.pool is not None:
+            self.pool.shutdown(wait=True, cancel_futures=True)
+
+
+def _default_start_method() -> str:
+    """forkserver, or spawn where Python itself defaults to it (macOS, Windows); never fork: forking
+    a process whose OCCT thread pool runs can deadlock the child, and spawn and forkserver children
+    start clean."""
+    return "spawn" if sys.platform in ("darwin", "win32") else "forkserver"
+
+
+def shape_bytes(shape: Any) -> bytes:
+    """`shape` in OCCT's binary BRep format, without triangulation."""
+    from OCP.BinTools import BinTools, BinTools_FormatVersion
+
+    buffer = io.BytesIO()
+    BinTools.Write_s(shape, buffer, False, False, BinTools_FormatVersion.BinTools_FormatVersion_CURRENT)
+    return buffer.getvalue()
+
+
+def _rows(rigid: Any) -> tuple[Any, Any] | None:
+    return None if rigid is None else (rigid.rot, rigid.trans)
 
 
 def _bits(rigid: Any) -> bytes:

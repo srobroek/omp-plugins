@@ -10,7 +10,7 @@ Usage:
         [--attach REF=PARENT_REF ...] --worst-step WORST.step
         [--steps 19] [--grid 3] [--end-effector REF] [--include-pair REF:REF ...]
         [--min-clearance 0] [--pair-clearance REF:REF=MM ...] [--volume-tol 0.001]
-        [--max-poses 5000] [--time-limit 600]
+        [--max-poses 5000] [--time-limit 600] [--jobs 1]
         [--worst-criterion max_horizontal_reach|minimum_clearance|maximum_interference]
 
 Inputs and kinematics are pose.py's (same options, same occurrence chain): the
@@ -597,9 +597,11 @@ def main(argv: list[str] | None = None) -> int:
                         help="overlap volume in mm^3 that counts as a collision")
     parser.add_argument("--max-poses", type=int, default=5000, help="refuse sweeps with more poses than this")
     parser.add_argument("--time-limit", type=float, default=600.0, help="seconds before the sweep stops as incomplete")
+    parser.add_argument("--jobs", type=int, default=1,
+                        help="worker processes measuring pairs (1: this process)")
     args = parser.parse_args(argv)
-    if args.steps < 2 or args.grid == 1 or args.grid < 0:
-        print("sweep: --steps must be >= 2 and --grid 0 or >= 2", file=sys.stderr)
+    if args.steps < 2 or args.grid == 1 or args.grid < 0 or args.jobs < 1:
+        print("sweep: --steps must be >= 2, --grid 0 or >= 2, and --jobs >= 1", file=sys.stderr)
         return 2
     started = time.monotonic()
     try:
@@ -620,7 +622,7 @@ def main(argv: list[str] | None = None) -> int:
             raise pose.MotionError(f"no movable joint moves the end effector {chain.ref(effector)}")
         used = {pn: definitions[pn] for pn in {chain.pn(oid) for oid in chain.ids}}
         geometry = Geometry(chain, used)
-        measurer = pair_measure.PairMeasurer({pn: part.shape for pn, part in used.items()}, reuse=True)
+        measurer = pair_measure.PairMeasurer({pn: part.shape for pn, part in used.items()}, reuse=True, jobs=args.jobs)
         loaded = time.monotonic()
         samples = generate_poses(chain, args.steps, args.grid)
         state = sweep(chain, geometry, measurer, samples, pairs, allowed, fitted, requirements, effector,

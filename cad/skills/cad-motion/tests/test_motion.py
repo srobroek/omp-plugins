@@ -13,6 +13,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -870,7 +871,8 @@ class StepTests(unittest.TestCase):
                                                        encoding="utf-8")
         return hw
 
-    def v6_sweep(self, misphased: int | None, criterion: str) -> tuple[Path, subprocess.CompletedProcess[str], dict]:
+    def v6_sweep(self, misphased: int | None, criterion: str,
+                 *options: str) -> tuple[Path, subprocess.CompletedProcess[str], dict]:
         """The one-driver sweep of the V6 doc: 145 samples, 5 crank degrees apart, no grid, with every
         valve required to keep VALVE_GAP from its piston (v6_record.interfaces)."""
         import yaml
@@ -879,8 +881,30 @@ class StepTests(unittest.TestCase):
         (hw / "interfaces.yaml").write_text(yaml.safe_dump(v6_record.interfaces(), sort_keys=False), encoding="utf-8")
         proc, result = self.run_script("sweep.py", "--hw", str(hw), "--parts-dir", str(self.v6), "--steps", "145",
                                        "--grid", "0", "--worst-criterion", criterion,
-                                       "--worst-step", str(hw / "worst.step"))
+                                       "--worst-step", str(hw / "worst.step"), *options)
         return hw, proc, result
+
+    def test_worker_processes_report_exactly_what_one_process_does(self) -> None:
+        """The tie-sensitive minimum_clearance worst case of the V6 sweep, in one process and in three
+        workers: the same JSON, evidence and worst-case STEP."""
+        runs = [self.v6_sweep(None, "minimum_clearance", "--jobs", jobs) for jobs in ("1", "3")]
+        for hw, proc, _ in runs:
+            self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+        (one_hw, _, one), (three_hw, _, three) = runs
+
+        def comparable(result: dict, hw: Path) -> str:
+            worst = {k: v for k, v in result["worst_case"].items() if k != "step_sha256"}  # the STEP header has a time
+            kept = {**{k: v for k, v in result.items() if k != "timings_s"}, "worst_case": worst}
+            return json.dumps(kept).replace(str(hw), "HW")
+
+        self.assertEqual(comparable(one, one_hw), comparable(three, three_hw))
+        evidence = [json.loads((hw / "worst.step.json").read_text(encoding="utf-8")) for hw, _, _ in runs]
+        self.assertEqual(*(json.dumps({k: v for k, v in e.items() if k not in ("step", "inputs", "command")})
+                           for e in evidence))
+        steps = [re.sub(r"FILE_NAME\(.*?\);", "", (hw / "worst.step").read_text(encoding="utf-8"), count=1,
+                        flags=re.S) for hw, _, _ in runs]
+        self.assertTrue(steps[0])
+        self.assertEqual(*steps)
 
     def test_one_crank_sweeps_the_coupled_v6_and_finds_the_misphased_valve_at_its_tdc(self) -> None:
         hw, proc, result = self.v6_sweep(3, "maximum_interference")
@@ -1002,10 +1026,12 @@ class StepTests(unittest.TestCase):
         self.assertEqual(recorded["step"]["sha256"], hashlib.sha256(worst.read_bytes()).hexdigest())
         self.assertEqual(recorded["independent_pose"], recorded["pose"])  # no couplings: every joint is set
         self.assertEqual(result["worst_case"]["command"].count("--set"), 2)
-        proc, result = self.run_script("sweep.py", *common, "--time-limit", "0")
-        self.assertEqual(proc.returncode, 2, proc.stderr[-2000:])
-        self.assertEqual((result["status"], result["worst_case"]), ("incomplete", None))
-        self.assertFalse(worst.exists() or evidence.exists())
+        for jobs in ("1", "2"):
+            with self.subTest(jobs=jobs):
+                proc, result = self.run_script("sweep.py", *common, "--time-limit", "0", "--jobs", jobs)
+                self.assertEqual(proc.returncode, 2, proc.stderr[-2000:])
+                self.assertEqual((result["status"], result["worst_case"]), ("incomplete", None))
+                self.assertFalse(worst.exists() or evidence.exists())
 
     @unittest.skipUnless(freecad_assembly.find_freecad(None), "freecadcmd not found")
     def test_freecad_simulation_moves_within_limits(self) -> None:
