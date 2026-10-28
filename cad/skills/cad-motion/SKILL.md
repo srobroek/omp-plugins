@@ -52,11 +52,21 @@ record with couplings (exit 2). Verify coupled motion with `pose.py` and `sweep.
    → posed STEP AP242 with product names kept. A value outside [min, max] exits 1 with a
    `joint_limit` finding and writes no STEP.
 2. Sweep: `uv run --script skill://cad-flow/scripts/run.py cad-motion/scripts/sweep.py --hw hw --version vN --worst-step worst.step
-   [--steps 19] [--grid 3] [--min-clearance MM] [--pair-clearance REF:REF=MM] [--include-pair REF:REF] [--end-effector REF]`
+   [--steps 19] [--grid 3] [--min-clearance MM] [--pair-clearance REF:REF=MM] [--include-pair REF:REF] [--end-effector REF] [--jobs 1|N|auto] [--cache DIR | --no-cache]`
    → JSON: `collisions` (sample, independent and complete pose, pair, volume), `min_clearance` per
    pair with its pose, `pair_clearance` per clearance requirement, `limit_findings`,
    `reach_envelope`, `worst_case` (written to `--worst-step`, evidence in `<worst-step>.json`), and
    `timings_s`. Only independent joints are sampled; every coupled joint is derived at each sample.
+   `--jobs 1`, the default, measures in this process on OCCT's thread pool. `--jobs N` measures
+   pairs in N worker processes (forkserver; spawn on macOS), each about 110 MB; `auto` is the CPU
+   count, at most 8. Workers pay off for many small parts and on a busy host. The result is the
+   same either way.
+   Measurements persist in the pair cache, `$XDG_CACHE_HOME/cad-motion/pairs.sqlite` (else
+   `~/.cache/cad-motion`; `--cache DIR` moves it), the one cad-model `check` uses. It is keyed by
+   both parts' geometry, the exact placement, the measuring code, OCP version and platform, so a
+   repeat measures only what changed and reports the same bits (`disk_hits`). Requirements and
+   thresholds are not in the key, so changing them reuses every entry. `--no-cache` reads and
+   writes none; an unusable cache file is skipped with a note on stderr.
    `--worst-criterion` picks the worst case:
    `max_horizontal_reach` (default; collision-free poses, the end effector's cantilever arm),
    `minimum_clearance` (smallest margin: a pair's distance minus its tightest requirement), or
@@ -101,10 +111,12 @@ Exit codes for all scripts:
   design, it inherits no global running clearance. An interference fit or an insert excuses its
   pair's overlap. None of these exempts a pair from its own clearance requirement: the sweep
   measures it at every sample.
-- The sweep caches a pair measurement by the two definitions and their relative placement. When a
-  threshold lies within the most the placement difference can move a cached distance, the sweep
-  measures the pair again (`threshold_rechecks` in `timings_s`). No cached value decides a verdict
-  across a threshold.
+- The sweep reuses a pair measurement within the run when the two definitions and the exact bits of
+  their relative placement repeat (`cache_hits` in `timings_s`). That placement is composed from the
+  joints below the pair's lowest common ancestor, so a joint that moves both parts alike leaves it
+  unchanged. A reused value is the one a fresh measurement gives. A pair request whose exact lower
+  bound (box gap, or a nearby sample's distance minus the motion between them) lies beyond the
+  pair's minimum and each of its thresholds is not measured (`pruned`): no reported value depends on it.
 - FreeCAD 1.1.4 stores AngleMin/AngleMax but its solver does not enforce them; `freecad_assembly.py`
   measures every frame itself. freecadcmd exiting 139 after its completion marker is a warning.
 

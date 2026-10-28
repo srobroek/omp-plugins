@@ -7,13 +7,17 @@ The STEP tests need `uv`; the FreeCAD test also needs freecadcmd and skips witho
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import importlib.util
+import io
 import json
 import math
 import os
 from pathlib import Path
+import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -90,6 +94,21 @@ class KinematicsTests(unittest.TestCase):
         # J-001 swings TST-0002 to +Y, putting the J-002 pivot at (100, 100); J-002 turns TST-0003 to -X.
         assert_close(self, transforms["TST-0003"].apply((200.0, 0.0, 0.0)), (100.0, 100.0, 0.0))
         assert_close(self, transforms["TST-0003"].apply((350.0, 0.0, 0.0)), (-50.0, 100.0, 0.0))
+
+    def test_a_pairs_relative_placement_leaves_out_the_joints_above_its_common_ancestor(self) -> None:
+        """J-001 moves TST-0002 and TST-0003 alike, so their relative placement keeps its bits at every
+        J-001 value; the pair across J-001 follows it. Both equal T_a^-1 T_b."""
+        chain = planar_chain()
+        inner, across = ("TST-0002", "TST-0003"), ("TST-0001", "TST-0003")
+        values = [{"J-001": q, "J-002": 37.0} for q in (0.0, 13.7, -71.3)]
+        relative = [chain.relative_transforms(v, [inner, across]) for v in values]
+        self.assertEqual(len({r[inner] for r in relative}), 1)
+        self.assertEqual(len({r[across] for r in relative}), 3)
+        for v, r in zip(values, relative):
+            transforms = chain.transforms(v)
+            for a, b in (inner, across):
+                for row, expected in zip(r[(a, b)].rows(12), (transforms[a].inverse() @ transforms[b]).rows(12)):
+                    assert_close(self, row, expected)
 
     def test_prismatic_translates_along_its_axis(self) -> None:
         chain = pose.build_chain([joint("J-001", "prismatic", "TST-0001", "TST-0002", (2, 0, 0), (0, 0, 0), 0, 50)])
@@ -234,6 +253,14 @@ TOUCH_YAML = GAP_YAML.replace("[0, 15.8, 0]", "[0, 15, 0]").replace("Arms 0.8 mm
 HEAT_SET = {"id": "IF-001", "from": "arm-a", "to": "arm-b", "type": "mounting", "description": "Insert in the arm.",
             "limits": {"heat_set": [{"pair": ["@arm-a", "@arm-b"], "hole_d": 4.0, "insert": "M3 x 4",
                                      "source": "https://example.com/m3-insert"}]}}
+# The 2 mm cube TST-0302 of fixtures/nest turning about its own centre inside the 10 mm container
+# TST-0301, buried at every pose with no faces touching; the joint-connected pair is checked
+# through --include-pair.
+NEST_YAML = """subassemblies:
+  - {id: nest, title: Buried cube, parts: [TST-0301, TST-0302]}
+joints:
+  - {id: J-001, type: revolute, parent: TST-0301, child: TST-0302, axis: [0, 0, 1], origin: [5, 5, 5], min: -45, max: 45, nominal: 0}
+"""
 
 
 def clearance_interface(number: int, pair: list[str], minimum: float) -> dict:
@@ -303,7 +330,7 @@ class OccurrenceKinematicsTests(unittest.TestCase):
 
 
 class PairRequirementTests(unittest.TestCase):
-    """Clearance requirements: pair_policy's reader, sweep's options and its threshold-safe cache; needs no OCP."""
+    """Clearance requirements: pair_policy's reader and sweep's options; needs no OCP."""
 
     policy = sweep.pair_policy
 
@@ -396,40 +423,174 @@ class PairRequirementTests(unittest.TestCase):
         with self.assertRaisesRegex(sweep.pose.MotionError, "TST-0999 is not in the swept chain"):
             sweep.pair_requirements(chain_of(GAP_YAML), stray, [])
 
+
+class BroadPhaseTests(unittest.TestCase):
+    """pair_measure's broad phase on stand-in unit cubes slid along x, whose box gap is their
+    distance, so every bound is tight; needs no OCP."""
+
     @staticmethod
-    def geometry(radius: float):
-        """A Geometry over two stand-in definitions, A fixed and B (of `radius`) placed in A's frame."""
-        geometry = object.__new__(sweep.Geometry)
-        geometry.chain = mock.Mock(pn=lambda oid: oid, ref=lambda oid: oid)
-        geometry.definitions = {"A": mock.Mock(shape="a"), "B": mock.Mock(shape="b")}
-        geometry.cache, geometry.radii = {}, {"A": 1.0, "B": radius}
-        geometry.evaluations = geometry.cache_hits = geometry.rechecks = 0
-        return geometry
-
-    def measure(self, geometry, placements: list, thresholds: list, distances: list) -> list:
-        with mock.patch.object(sweep.pose, "placed", side_effect=lambda shape, rigid: shape), \
-                mock.patch.object(sweep.pose, "interference", side_effect=[(d, 0.0) for d in distances]):
-            return [geometry.pair("A", "B", placement, (threshold,))[0]
-                    for placement, threshold in zip(placements, thresholds)]
-
-    def test_a_cache_hit_is_measured_again_when_a_threshold_lies_within_its_placement_bound(self) -> None:
-        """10.0000001 and 10.0000004 share the key rounded to 1e-6; 3e-7 mm apart, a cached 1.0000002 mm
-        may be below 1.0 mm at the second placement, never below 0.5 mm."""
+    def run_requests(offsets: list[float], thresholds: tuple[float, ...] = (), prune: bool = True) -> tuple[list, int]:
+        cube = ([0.0, 0.0, 0.0], [1.0, 1.0, 1.0])
+        measure = sweep.pair_measure
+        with mock.patch.object(measure, "box_corners", side_effect=lambda shape, tolerance=False: cube):
+            measurer = measure.PairMeasurer({"A": "a", "B": "b"})
         rigid = sweep.pose.Rigid
-        at = [rigid(rigid.identity().rot, (x, 0.0, 0.0)) for x in (10.0000001, 10.0000001, 10.0000004, 10.0000004)]
-        geometry = self.geometry(radius=1.0)
-        self.assertEqual(self.measure(geometry, at, [1.0, 1.0, 0.5, 1.0], [1.0000002, 0.9999999]),
-                         [1.0000002, 1.0000002, 1.0000002, 0.9999999])
-        self.assertEqual((geometry.evaluations, geometry.cache_hits, geometry.rechecks), (2, 2, 1))
+        requests = [measure.Request("A", "B", rigid(rigid.identity().rot, (x, 0.0, 0.0)), thresholds=thresholds,
+                                    group="pair") for x in offsets]
+        with mock.patch.object(measure.pose, "placed", side_effect=lambda shape, at: at.trans[0] if shape == "b" else shape), \
+                mock.patch.object(measure.pose, "interference",
+                                  side_effect=lambda a, x, box_gap=0.0, threads=False: (max(0.0, abs(x) - 1.0), 0.0)) as kernel:
+            return measurer.measure(requests, prune=prune), kernel.call_count
 
-    def test_the_placement_bound_scales_a_rotation_by_the_moved_definitions_radius(self) -> None:
-        """A 4e-7 deg turn rounds to the same key and moves points 50 mm out by about 3.5e-7 mm."""
-        turned = sweep.pose.Rigid.rotation((0.0, 0.0, 1.0), 4e-7, (0.0, 0.0, 0.0))
-        for radius, rechecks in ((50.0, 1), (1.0, 0)):
-            with self.subTest(radius=radius):
-                geometry = self.geometry(radius)
-                self.measure(geometry, [sweep.pose.Rigid.identity(), turned], [1.0, 1.0], [1.0000002, 1.0000002])
-                self.assertEqual(geometry.rechecks, rechecks)
+    def assert_sound(self, offsets: list[float], thresholds: tuple[float, ...] = ()) -> list:
+        """Pruned and unpruned agree on every measured request; each pruned one is farther than the
+        group minimum, the gate and every threshold, and its witness holds a measured distance."""
+        full, _ = self.run_requests(offsets, thresholds, prune=False)
+        pruned, calls = self.run_requests(offsets, thresholds)
+        minimum = min(outcome[0] for outcome in full)
+        for got, want in zip(pruned, full):
+            if isinstance(got, sweep.pair_measure.Pruned):
+                self.assertGreater(want[0], max(minimum, sweep.pose.OVERLAP_GATE_MM, *thresholds))
+                self.assertIsInstance(pruned[got.witness], tuple)
+            else:
+                self.assertEqual(got, want)
+        self.assertEqual(calls, sum(1 for outcome in pruned if isinstance(outcome, tuple)))
+        return pruned
+
+    def test_requests_beyond_the_group_minimum_are_pruned_after_the_smallest_gap_is_measured(self) -> None:
+        pruned = self.assert_sound([6.0, 4.0, 3.0, 5.0, 2.5])
+        self.assertEqual(pruned, [sweep.pair_measure.Pruned(4)] * 4 + [(1.5, 0.0)])
+
+    def test_a_request_below_a_threshold_is_measured(self) -> None:
+        pruned = self.assert_sound([6.0, 4.0, 3.0, 5.0, 2.5], thresholds=(2.5,))
+        self.assertEqual([isinstance(outcome, tuple) for outcome in pruned], [False, False, True, False, True])
+
+    def test_a_threshold_just_above_a_distance_keeps_that_request_measured(self) -> None:
+        pruned = self.assert_sound([6.0, 4.0, 3.0, 5.0, 2.5], thresholds=(2.0 + 1e-7,))
+        self.assertEqual(pruned[2], (2.0, 0.0))
+
+    def test_nothing_is_pruned_within_the_slack_of_the_minimum_or_of_contact(self) -> None:
+        pruned = self.assert_sound([2.5 + 5e-7, 2.5, 6.0])
+        self.assertEqual([isinstance(outcome, tuple) for outcome in pruned], [True, True, False])
+        pruned = self.assert_sound([0.5, 1.0 + 5e-7, 0.7, 3.0])  # touching at 0.5 and 0.7, 5e-7 mm apart at 1.0000005
+        self.assertEqual([isinstance(outcome, tuple) for outcome in pruned], [True, True, True, False])
+
+    def test_bitwise_equal_placements_share_one_measurement_and_one_bit_apart_does_not(self) -> None:
+        above = math.nextafter(3.0, math.inf)
+        outcomes, calls = self.run_requests([3.0, 3.0, above, 3.0], prune=False)
+        self.assertEqual((outcomes, calls), ([(2.0, 0.0), (2.0, 0.0), (above - 1.0, 0.0), (2.0, 0.0)], 2))
+
+    def test_a_stopped_sweep_reduces_only_samples_whose_pruned_requests_are_proved_inside_them(self) -> None:
+        """One pair, one request per sample: sample 1 is pruned on sample 3's distance."""
+        samples = [sweep.PlannedSample(None, [], {}, start) for start in range(5)]
+        plan = sweep.Plan({("a", "b")}, [("a", "b")], {}, {}, samples, [])
+        pruned = sweep.pair_measure.Pruned
+        for outcomes, taken in (([(1.0, 0.0), pruned(3), (2.0, 0.0), (0.5, 0.0), None], 4),
+                                ([(1.0, 0.0), pruned(3), (2.0, 0.0), None, None], 1),
+                                ([(1.0, 0.0), pruned(0), (2.0, 0.0), (0.5, 0.0), (0.7, 0.0)], 5)):
+            with self.subTest(outcomes=outcomes):
+                self.assertEqual(sweep.measured_prefix(mock.Mock(), plan, outcomes), taken)
+
+
+class PairCacheTests(unittest.TestCase):
+    """pair_measure.PairCache under a PairMeasurer, on stand-in definitions whose BRep bytes and
+    measurement salt are patched in, and a stand-in kernel; needs no OCP."""
+
+    def setUp(self) -> None:
+        self.folder = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.folder)
+        self.geometry = {"a": b"a v1", "b": b"b v1", "c": b"c v1"}
+        self.salt = b"salt 1"
+
+    def run_requests(self, failing: frozenset = frozenset(), folder: Path | None = None) -> tuple[list, list, object]:
+        """A-B, A-C and B-C at two placements each: (outcomes, the kernel's (a, b) calls, the measurer)."""
+        measure = sweep.pair_measure
+        cube = ([0.0, 0.0, 0.0], [1.0, 1.0, 1.0])
+        cache = measure.PairCache(folder or self.folder)
+        self.addCleanup(cache.close)
+        with mock.patch.object(measure, "box_corners", side_effect=lambda shape, tolerance=False: cube):
+            measurer = measure.PairMeasurer({"A": "a", "B": "b", "C": "c"}, cache=cache)
+        rigid = sweep.pose.Rigid
+        requests = [measure.Request(a, b, rigid(rigid.identity().rot, (x, 0.0, 0.0)))
+                    for a, b in (("A", "B"), ("A", "C"), ("B", "C")) for x in (3.0, 4.5)]
+
+        def kernel(shape, moved, box_gap=0.0, threads=False):
+            if (shape, moved[0]) in failing:
+                raise RuntimeError("Standard_Failure")
+            return moved[1] / 3.1, 0.0
+
+        with mock.patch.object(measure, "shape_bytes", side_effect=lambda shape: self.geometry[shape]), \
+                mock.patch.object(measure, "measurement_salt", return_value=self.salt), \
+                mock.patch.object(measure.pose, "placed", side_effect=lambda shape, at: (shape, at.trans[0])), \
+                mock.patch.object(measure.pose, "interference", side_effect=kernel) as calls:
+            outcomes = measurer.measure(requests)
+        return outcomes, [(args[0], args[1][0]) for args, _ in calls.call_args_list], measurer
+
+    def test_a_warm_run_reads_every_measurement_back_bitwise(self) -> None:
+        cold, cold_calls, _ = self.run_requests()
+        warm, warm_calls, measurer = self.run_requests()
+        self.assertEqual((len(cold_calls), warm_calls, measurer.disk_hits), (6, [], 6))
+        self.assertEqual([[v.hex() for v in o] for o in warm], [[v.hex() for v in o] for o in cold])
+
+    def test_editing_one_definition_misses_only_its_pairs(self) -> None:
+        self.run_requests()
+        self.geometry["c"] = b"c v2"
+        _, calls, _ = self.run_requests()
+        self.assertEqual(calls, [("a", "c"), ("a", "c"), ("b", "c"), ("b", "c")])
+
+    def test_a_salt_change_misses_every_entry(self) -> None:
+        self.run_requests()
+        self.salt = b"salt 2"
+        self.assertEqual(len(self.run_requests()[1]), 6)
+
+    def test_a_failed_measurement_is_not_stored(self) -> None:
+        outcomes, _, _ = self.run_requests(failing=frozenset({("a", "b")}))
+        self.assertEqual(outcomes[:2], [sweep.pair_measure.Failure("Standard_Failure")] * 2)
+        self.assertEqual(self.run_requests()[1], [("a", "b"), ("a", "b")])
+
+    def test_a_corrupt_or_unusable_cache_measures_without_it_and_says_so(self) -> None:
+        (self.folder / "corrupt").mkdir()
+        (self.folder / "corrupt" / "pairs.sqlite").write_bytes(b"not a database " * 100)
+        (self.folder / "taken").write_text("a file where the cache directory goes", encoding="utf-8")
+        for name in ("corrupt", "taken"):
+            with self.subTest(name=name), contextlib.redirect_stderr(io.StringIO()) as err:
+                outcomes, calls, _ = self.run_requests(folder=self.folder / name)
+                self.assertEqual(len(calls), 6)
+                self.assertTrue(all(isinstance(outcome, tuple) for outcome in outcomes))
+                self.assertIn("is unusable, measuring without it", err.getvalue())
+
+    def test_past_the_size_cap_the_oldest_entries_go(self) -> None:
+        measure = sweep.pair_measure
+        keys = [hashlib.sha256(str(i).encode()).digest() for i in range(401)]
+        cache = measure.PairCache(self.folder)
+        for key in keys[:400]:
+            cache.store(key, (1.0, 0.0))
+        cache.close()
+        with contextlib.closing(sqlite3.connect(cache.path)) as connection:
+            page_size, pages, free = (connection.execute(f"PRAGMA {name}").fetchone()[0]
+                                      for name in ("page_size", "page_count", "freelist_count"))
+        capped = measure.PairCache(self.folder, max_bytes=(pages - free) * page_size // 2)
+        self.addCleanup(capped.close)
+        capped.store(keys[400], (2.0, 0.0))
+        capped.flush()
+        kept = capped.lookup(keys)
+        self.assertTrue(0 < len(kept) < 300, len(kept))
+        self.assertEqual(set(kept), set(keys[-len(kept):]))
+
+
+class JobsArgumentTests(unittest.TestCase):
+    """`--jobs`: auto is the CPU count capped at AUTO_JOBS_MAX; needs no OCP."""
+
+    def test_auto_follows_the_cpu_count_up_to_the_cap_and_a_count_must_be_positive(self) -> None:
+        measure = sweep.pair_measure
+        for cpus, jobs in ((None, 1), (1, 1), (4, 4), (32, measure.AUTO_JOBS_MAX)):
+            with self.subTest(cpus=cpus), mock.patch.object(measure.os, "cpu_count", return_value=cpus):
+                self.assertEqual(measure.jobs_argument("auto"), jobs)
+        self.assertEqual(measure.jobs_argument("3"), 3)
+        for text in ("0", "-1", "two", ""):
+            with self.subTest(text=text), self.assertRaises(sweep.argparse.ArgumentTypeError):
+                measure.jobs_argument(text)
+
 
 
 @unittest.skipUnless(shutil.which("uv"), "uv is required to build and read STEP through OCP")
@@ -458,9 +619,30 @@ class StepTests(unittest.TestCase):
         return folder
 
     def run_script(self, script: str, *args: str) -> tuple[subprocess.CompletedProcess[str], dict]:
+        """`script` with `args`; a sweep gets a pair cache of its own unless `args` name one."""
+        if script == "sweep.py" and not {"--cache", "--no-cache"} & set(args):
+            args = (*args, "--cache", tempfile.mkdtemp(dir=self.root))
         proc = subprocess.run(["uv", "run", "--quiet", "--script", str(SCRIPTS / script), *args],
                               capture_output=True, text=True, check=False, timeout=900)
         return proc, json.loads(proc.stdout) if proc.stdout.strip() else {}
+
+    def assert_same_sweeps(self, runs: list[tuple[Path, dict]]) -> None:
+        """Each (folder of its worst.step, result) reports what the first does: the JSON but its
+        timings, the evidence but its paths, and the worst-case STEP but its header time."""
+
+        def comparable(folder: Path, result: dict) -> tuple[str, str, str]:
+            worst = {k: v for k, v in result["worst_case"].items() if k != "step_sha256"}  # the STEP header has a time
+            kept = {**{k: v for k, v in result.items() if k != "timings_s"}, "worst_case": worst}
+            evidence = json.loads((folder / "worst.step.json").read_text(encoding="utf-8"))
+            step = re.sub(r"FILE_NAME\(.*?\);", "", (folder / "worst.step").read_text(encoding="utf-8"), count=1,
+                          flags=re.S)
+            self.assertTrue(step)
+            return (json.dumps(kept).replace(str(folder), "OUT"),
+                    json.dumps({k: v for k, v in evidence.items() if k not in ("step", "inputs", "command")}), step)
+
+        first, *others = [comparable(folder, result) for folder, result in runs]
+        for other in others:
+            self.assertEqual(other, first)
 
     def test_out_of_range_value_exits_1_without_a_step(self) -> None:
         out = self.root / "rejected.step"
@@ -494,6 +676,22 @@ class StepTests(unittest.TestCase):
         self.assertEqual(hit["pair"], ["TST-0001", "TST-0003"])
         self.assertAlmostEqual(hit["volume_mm3"], 5000.0, places=1)  # x 50..100 x 10 x 10 overlap
         self.assertEqual(result["pairs"]["checked"], [["TST-0001", "TST-0003"]])
+
+    def test_a_part_buried_in_a_solid_or_a_compound_part_is_a_collision(self) -> None:
+        hw = Path(tempfile.mkdtemp(dir=self.root))
+        (hw / "assembly.yaml").write_text(NEST_YAML, encoding="utf-8")
+        for container in ("solid", "compound"):
+            with self.subTest(container=container):
+                parts = self.root / "fx" / "nest" / container
+                proc, result = self.run_script("sweep.py", "--hw", str(hw), "--parts-dir", str(parts), "--steps", "3",
+                                               "--grid", "0", "--include-pair", "TST-0301:TST-0302",
+                                               "--worst-step", str(hw / "worst.step"))
+                self.assertEqual(proc.returncode, 1, proc.stderr[-2000:])
+                self.assertEqual(result["collision_pose_count"], 3, result["collisions"])
+                for collision in result["collisions"]:
+                    self.assertEqual([hit["pair"] for hit in collision["pairs"]], [["TST-0301", "TST-0302"]])
+                    self.assertAlmostEqual(collision["pairs"][0]["volume_mm3"], 8.0, places=3)
+                self.assertEqual([row["clearance_mm"] for row in result["min_clearance"]], [0.0])
 
     def test_clear_range_has_positive_clearance_and_no_collision(self) -> None:
         worst = self.root / "w2.step"
@@ -535,6 +733,23 @@ class StepTests(unittest.TestCase):
                               capture_output=True, text=True, check=False, timeout=900)
         self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
         return json.loads(proc.stdout)
+
+    def test_the_bounds_hold_and_the_broad_phase_containment_skip_and_threads_change_no_measured_value(self) -> None:
+        """fixtures/measure_probe.py over every fixture pair at seeded placements: box gap and motion
+        bound <= distance; a pair measured with its gap (no containment test past SOLID_GAP_MM) or on
+        OCCT's thread pool is bitwise unchanged; pruned and full runs agree, and each pruned request
+        lies beyond its group minimum and threshold."""
+        proc = subprocess.run(["uv", "run", "--quiet", "--script", str(HERE / "fixtures" / "measure_probe.py"),
+                               str(self.root / "fx")], capture_output=True, text=True, check=False, timeout=900)
+        self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+        report = json.loads(proc.stdout)
+        self.assertEqual((report["bound_violations"], report["mismatches"], report["thread_mismatches"],
+                          report["prune_violations"]), ([], [], [], []))
+        self.assertGreater(report["wrapped"], report["compared"] // 2, report)
+        self.assertGreater(report["pruned"], report["requests"] // 10, report)
+        self.assertEqual(report["buried"]["gap"], 0.0)
+        self.assertEqual(report["buried"]["result"][0], 0.0)
+        self.assertAlmostEqual(report["buried"]["result"][1], 8.0, places=6)
 
     def twins(self, assembly: str) -> Path:
         """A record over the twins fixture: TST-0201 assembly_zero, TST-0202 part_local."""
@@ -762,7 +977,8 @@ class StepTests(unittest.TestCase):
                                                        encoding="utf-8")
         return hw
 
-    def v6_sweep(self, misphased: int | None, criterion: str) -> tuple[Path, subprocess.CompletedProcess[str], dict]:
+    def v6_sweep(self, misphased: int | None, criterion: str,
+                 *options: str) -> tuple[Path, subprocess.CompletedProcess[str], dict]:
         """The one-driver sweep of the V6 doc: 145 samples, 5 crank degrees apart, no grid, with every
         valve required to keep VALVE_GAP from its piston (v6_record.interfaces)."""
         import yaml
@@ -771,8 +987,34 @@ class StepTests(unittest.TestCase):
         (hw / "interfaces.yaml").write_text(yaml.safe_dump(v6_record.interfaces(), sort_keys=False), encoding="utf-8")
         proc, result = self.run_script("sweep.py", "--hw", str(hw), "--parts-dir", str(self.v6), "--steps", "145",
                                        "--grid", "0", "--worst-criterion", criterion,
-                                       "--worst-step", str(hw / "worst.step"))
+                                       "--worst-step", str(hw / "worst.step"), *options)
         return hw, proc, result
+
+    def test_worker_processes_report_exactly_what_one_process_does(self) -> None:
+        """The tie-sensitive minimum_clearance worst case of the V6 sweep, in one process and in three
+        workers: the same JSON, evidence and worst-case STEP."""
+        runs = [self.v6_sweep(None, "minimum_clearance", "--jobs", jobs) for jobs in ("1", "3")]
+        for hw, proc, _ in runs:
+            self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+        self.assert_same_sweeps([(hw, result) for hw, _, result in runs])
+
+    def test_a_cold_and_a_warm_pair_cache_report_exactly_what_no_cache_does(self) -> None:
+        """The cold run fills the cache and the warm one measures nothing; all three report the same
+        JSON, evidence and worst-case STEP."""
+        hw, cache = self.hw(90), Path(tempfile.mkdtemp(dir=self.root))
+        runs = []
+        for option in (["--no-cache"], ["--cache", str(cache)], ["--cache", str(cache)]):
+            out = Path(tempfile.mkdtemp(dir=self.root))
+            proc, result = self.run_script("sweep.py", "--hw", str(hw), "--parts-dir", str(self.planar), "--steps", "5",
+                                           "--grid", "3", "--worst-criterion", "minimum_clearance",
+                                           "--worst-step", str(out / "worst.step"), *option)
+            self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+            runs.append((out, result))
+        cold, warm = runs[1][1]["timings_s"], runs[2][1]["timings_s"]
+        self.assertGreater(cold["pair_evaluations"], 0)
+        self.assertEqual((runs[0][1]["timings_s"]["disk_hits"], cold["disk_hits"]), (0, 0))
+        self.assertEqual((warm["pair_evaluations"], warm["disk_hits"]), (0, cold["pair_evaluations"]))
+        self.assert_same_sweeps(runs)
 
     def test_one_crank_sweeps_the_coupled_v6_and_finds_the_misphased_valve_at_its_tdc(self) -> None:
         hw, proc, result = self.v6_sweep(3, "maximum_interference")
@@ -894,10 +1136,12 @@ class StepTests(unittest.TestCase):
         self.assertEqual(recorded["step"]["sha256"], hashlib.sha256(worst.read_bytes()).hexdigest())
         self.assertEqual(recorded["independent_pose"], recorded["pose"])  # no couplings: every joint is set
         self.assertEqual(result["worst_case"]["command"].count("--set"), 2)
-        proc, result = self.run_script("sweep.py", *common, "--time-limit", "0")
-        self.assertEqual(proc.returncode, 2, proc.stderr[-2000:])
-        self.assertEqual((result["status"], result["worst_case"]), ("incomplete", None))
-        self.assertFalse(worst.exists() or evidence.exists())
+        for jobs in ("1", "2"):
+            with self.subTest(jobs=jobs):
+                proc, result = self.run_script("sweep.py", *common, "--time-limit", "0", "--jobs", jobs)
+                self.assertEqual(proc.returncode, 2, proc.stderr[-2000:])
+                self.assertEqual((result["status"], result["worst_case"]), ("incomplete", None))
+                self.assertFalse(worst.exists() or evidence.exists())
 
     @unittest.skipUnless(freecad_assembly.find_freecad(None), "freecadcmd not found")
     def test_freecad_simulation_moves_within_limits(self) -> None:

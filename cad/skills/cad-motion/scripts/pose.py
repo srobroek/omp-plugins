@@ -108,6 +108,11 @@ VOLUME_EPS = 1e-9
 INTERFERENCE_MM3 = 1e-3
 OVERLAP_GATE_MM = 1e-6
 FUZZY_MM = 1e-7
+# BRepExtrema_DistShapeShape's point-in-solid tolerance (its SolidTreatment, OCCT 8.0.1), which
+# `interference` applies inside compounds as well. Bounding boxes farther apart than SOLID_GAP_MM
+# (the tolerance plus as much again for rounding) leave no point within it of the other shape.
+CONTAINMENT_TOL_MM = 1e-3
+SOLID_GAP_MM = 2 * CONTAINMENT_TOL_MM
 VERSION_LABEL = re.compile(r"^v([1-9][0-9]*)$")  # a cad-model version label: v1, v2, ...
 # An explicit occurrence's STEP component and GLB node name: `<PN> <title> [@id]`.
 OCCURRENCE_TAG = re.compile(r" \[@([a-z][a-z0-9_-]*)\]$")
@@ -587,6 +592,40 @@ class Chain:
         """T_i = D_i P_i per occurrence id: the placement of its definition geometry at `values` (a full map)."""
         return {occurrence_id: motion @ self.rests[occurrence_id] for occurrence_id, motion in self.motions(values).items()}
 
+    def relative_transforms(self, values: Mapping[str, float],
+                            pairs: Iterable[tuple[str, str]]) -> dict[tuple[str, str], Rigid]:
+        """T_a^-1 T_b per occurrence pair (a, b) at `values` (a full map), composed from the pair's
+        lowest common ancestor down: (M_a P_a)^-1 (M_b P_b), with M_i the joint motions from the
+        ancestor to i. The joints above the ancestor move a and b alike and cancel, so they are left
+        out: a pair whose own joints keep their values keeps the bits of its placement, whatever the
+        rest of the chain does, and an exact measurement key finds every such repeat."""
+        incoming = {j.child: j for j in self.joints}
+        lineage: dict[str, list[Joint]] = {}
+        composed: dict[tuple[int, str], Rigid] = {}  # (ancestor depth, i) -> M_i P_i
+
+        def joints_to(oid: str) -> list[Joint]:
+            if oid not in lineage:
+                lineage[oid] = joints_to(incoming[oid].parent) + [incoming[oid]] if oid in incoming else []
+            return lineage[oid]
+
+        def from_ancestor(oid: str, depth: int) -> Rigid:
+            if (depth, oid) not in composed:
+                motion = None
+                for joint in joints_to(oid)[depth:]:
+                    step = joint.motion(values[joint.id] if joint.movable else 0.0)
+                    motion = step if motion is None else motion @ step
+                composed[(depth, oid)] = self.rests[oid] if motion is None else motion @ self.rests[oid]
+            return composed[(depth, oid)]
+
+        relative = {}
+        for a, b in pairs:
+            path_a, path_b = joints_to(a), joints_to(b)
+            depth = 0
+            while depth < min(len(path_a), len(path_b)) and path_a[depth] is path_b[depth]:
+                depth += 1
+            relative[(a, b)] = from_ancestor(a, depth).inverse() @ from_ancestor(b, depth)
+        return relative
+
 
 def build_chain(joints: Iterable[Joint], occurrences: Iterable[Any] = (),
                 rests: Mapping[str, Rigid] | None = None, couplings: Any = coupling.NONE) -> Chain:
@@ -744,21 +783,107 @@ def shape_list(shapes: Iterable[Any]) -> Any:
     return result
 
 
-def interference(shape_a: Any, shape_b: Any) -> tuple[float, float]:
+def _vertex_points(shape: Any) -> list[Any]:
+    """The located points of `shape`'s vertices."""
+    from OCP.BRep import BRep_Tool
+    from OCP.TopAbs import TopAbs_VERTEX
+    from OCP.TopExp import TopExp_Explorer
+    from OCP.TopoDS import TopoDS
+
+    points, explorer = [], TopExp_Explorer(shape, TopAbs_VERTEX)
+    cast = getattr(TopoDS, "Vertex_s", None) or TopoDS.Vertex  # OCP 7.9 static vs OCP 8 namespace function
+    while explorer.More():
+        points.append(BRep_Tool.Pnt_s(cast(explorer.Current())))
+        explorer.Next()
+    return points
+
+
+def _inside_compound(container: Any, other: Any) -> bool:
+    """Whether a vertex of `other` lies inside a solid of the COMPOUND `container`.
+
+    BRepExtrema_DistShapeShape detects containment only against a SOLID or COMPSOLID operand: its
+    SolidTreatment classifies every vertex of the other operand against that solid, at
+    CONTAINMENT_TOL_MM, and reports distance 0 for a vertex IN. Against a COMPOUND it measures the
+    boundaries alone, so a part buried in a compound part, no faces touching, reads as clear. This
+    is the same classification per solid of the compound; a solid whose bounding box holds none of
+    the vertices cannot hold one IN.
+    """
+    from OCP.Bnd import Bnd_Box
+    from OCP.BRepBndLib import BRepBndLib
+    from OCP.BRepClass3d import BRepClass3d_SolidClassifier
+    from OCP.TopAbs import TopAbs_IN, TopAbs_SOLID
+    from OCP.TopExp import TopExp_Explorer
+
+    points = _vertex_points(other)
+    explorer = TopExp_Explorer(container, TopAbs_SOLID)
+    while explorer.More():
+        solid = explorer.Current()
+        box = Bnd_Box()
+        BRepBndLib.Add_s(solid, box, False)
+        box.Enlarge(CONTAINMENT_TOL_MM)
+        candidates = [point for point in points if not box.IsOut(point)]
+        if candidates:
+            classifier = BRepClass3d_SolidClassifier(solid)
+            for point in candidates:
+                classifier.Perform(point, CONTAINMENT_TOL_MM)
+                if classifier.State() == TopAbs_IN:
+                    return True
+        explorer.Next()
+    return False
+
+
+def _contained(shape_a: Any, shape_b: Any) -> bool:
+    """Whether one shape lies inside a solid of the other where BRepExtrema does not look: inside a
+    COMPOUND operand (`_inside_compound`)."""
+    from OCP.TopAbs import TopAbs_COMPOUND
+
+    return ((shape_a.ShapeType() == TopAbs_COMPOUND and _inside_compound(shape_a, shape_b))
+            or (shape_b.ShapeType() == TopAbs_COMPOUND and _inside_compound(shape_b, shape_a)))
+
+
+def _one_member_compound(shape: Any) -> Any:
+    from OCP.BRep import BRep_Builder
+    from OCP.TopoDS import TopoDS_Compound
+
+    compound, builder = TopoDS_Compound(), BRep_Builder()
+    builder.MakeCompound(compound)
+    builder.Add(compound, shape)
+    return compound
+
+
+def interference(shape_a: Any, shape_b: Any, box_gap: float = 0.0, threads: bool = False) -> tuple[float, float]:
     """(minimum distance mm, shared volume mm^3) of two shapes in one frame.
 
-    The shared volume is the Boolean common, run non-destructively (the inputs, which posed parts
+    The distance is BRepExtrema's between the boundaries, and 0 when one shape lies inside the
+    other: BRepExtrema finds that inside a SOLID or COMPSOLID, `_contained` inside a solid of a
+    COMPOUND. The shared volume is the Boolean common, run non-destructively (the inputs, which posed parts
     share with every other pose, keep their tolerances) with fuzzy value FUZZY_MM, and measured with
     `volume_properties`; it is 0 without a Boolean when the shapes are farther apart than
     OVERLAP_GATE_MM. A shared volume above INTERFERENCE_MM3 is interference.
+
+    `box_gap` is a lower bound the caller proved on the distance between the shapes' bounding boxes
+    (0: unknown). Beyond SOLID_GAP_MM no vertex of either shape lies within CONTAINMENT_TOL_MM of the
+    other, so containment is not looked for: b goes to BRepExtrema as a one-member COMPOUND, for
+    which it skips its vertex-in-solid classification and measures the same boundary distance.
+
+    `threads` lets BRepExtrema search on OCCT's thread pool. The value does not change: on and off
+    were bitwise equal on every measured pair, the cad-motion tests among them. Worth it only in a
+    process that has the cores to itself.
     """
     from OCP.BRepAlgoAPI import BRepAlgoAPI_Common
     from OCP.BRepExtrema import BRepExtrema_DistShapeShape
 
-    extrema = BRepExtrema_DistShapeShape(shape_a, shape_b)
+    apart = box_gap > SOLID_GAP_MM
+    extrema = BRepExtrema_DistShapeShape()
+    extrema.SetMultiThread(threads)
+    extrema.LoadS1(shape_a)
+    extrema.LoadS2(_one_member_compound(shape_b) if apart else shape_b)
+    extrema.Perform()
     if not extrema.IsDone():
         raise MotionError("distance computation failed")
     distance = extrema.Value()
+    if distance > OVERLAP_GATE_MM and not apart and _contained(shape_a, shape_b):
+        distance = 0.0
     if distance > OVERLAP_GATE_MM:
         return distance, 0.0
     common = BRepAlgoAPI_Common()

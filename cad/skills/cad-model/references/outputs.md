@@ -107,7 +107,8 @@ An undeclared volume warns without blocking. Non-FDM parts are ignored.
 ## Check result (`check`)
 
 Top level: `status` pass|fail, `label`, `pose: nominal`, `baseline` (previous label or null),
-`blocking_failures`, `warnings`, `checks`, `timings_s`. Every check has `status`
+`blocking_failures`, `warnings`, `checks`, `timings_s` (`total_s`; `pair_evaluations`, the pairs
+measured, and `disk_hits`, the pairs read from the pair cache). Every check has `status`
 (pass|fail|warn) and `blocking`.
 
 | Check | Blocking | Fails when |
@@ -123,9 +124,18 @@ Top level: `status` pass|fail, `label`, `pose: nominal`, `baseline` (previous la
 | `slivers_tolerances` | no (warn) | a face is smaller than 1e-3 mm^2, or a vertex/edge/face tolerance exceeds 0.01 mm |
 
 `--pair PN:PN` restricts `interference` to the named pairs; every pair still feeds `connection`.
-Clearance and shared volume come from cad-motion's `pose.interference`, the rule `sweep.py` applies
-at every pose: BRepExtrema minimum distance, and within 1e-6 mm the non-destructive Boolean common
-(fuzzy 1e-7 mm) measured with the adaptive volume rule.
+Clearance and shared volume come from cad-motion's pair measurer (`pair_measure.py`, around
+`pose.interference`), the one `sweep.py` uses at every pose. It places part b's definition by
+T_a^-1 T_b in part a's definition frame. The distance is the BRepExtrema minimum distance, 0 when
+one part lies inside a solid of the other, a solid of a compound part included. Within 1e-6 mm,
+the shared volume is the non-destructive Boolean common (fuzzy 1e-7 mm), measured with the adaptive
+volume rule. By default (`--jobs 1`), check measures in this process on OCCT's thread pool.
+`--jobs N` measures in N worker processes, largest pairs first; `auto` is the CPU count, at most 8.
+Measurements go through cad-motion's pair cache
+(`$XDG_CACHE_HOME/cad-motion/pairs.sqlite`, else `~/.cache/cad-motion`; `--cache DIR` moves it,
+`--no-cache` skips it). The cache is keyed by both parts' geometry and the exact placement. A check
+of v2 after v1 measures only the pairs whose part or placement changed, and a hit is the value a
+measurement gives.
 
 Declared fits and inserts come from `hw/interfaces.yaml`. `declared_pairs` lists each press fit with
 its `fit`, `classification`, `interface` and YAML `source`. A fit that names feature endpoints
