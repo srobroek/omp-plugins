@@ -21,7 +21,7 @@ HERE = Path(__file__).resolve().parent
 SCRATCH = HERE.parent / "scripts" / "scratch.py"
 TEMPLATE = HERE.parents[1] / "cad-record" / "assets" / "project-template" / "hw"
 VALIDATOR = HERE.parents[1] / "cad-record" / "scripts" / "validate.py"
-LAMP_EXAMPLE = HERE.parents[1] / "examples" / "lamp-arm" / "hw"
+LAMP_EXAMPLE = HERE.parents[2] / "examples" / "lamp-arm" / "hw"
 
 
 def tree(root: Path) -> dict[str, str]:
@@ -79,8 +79,8 @@ class InitAndDeliver(ScratchCase):
         self.assertFalse((scratch_hw / "renders").exists())
         self.assertEqual((self.project / ".cad-work" / ".gitignore").read_text(encoding="utf-8"), "*\n")
         baseline = json.loads((scratch_hw.parent / "baseline.json").read_text(encoding="utf-8"))
-        self.assertEqual(baseline["parts"], [])
-        self.assertEqual(sorted(baseline["files"]), sorted(tree(TEMPLATE)))
+        self.assertEqual(baseline["parts"], ["PRT-0001"])
+        self.assertEqual(sorted(baseline["files"]), sorted(tree(self.hw)))
 
     def test_init_rejects_unsafe_units_and_malformed_part_numbers(self) -> None:
         for args in (("--unit", "../escape", "--part", "PRT-0001"), ("--unit", "ok", "--part", "bad"),
@@ -98,7 +98,8 @@ class InitAndDeliver(ScratchCase):
             stream.write("# proposed: widen IF-004 slot\n")
         code, report = self.scratch("deliver", "--hw", "hw", "--unit", "part-base_sub")
         self.assertEqual((code, report["status"]), (0, "delivered"), report)
-        self.assertEqual(tree(self.hw), before)
+        self.assertEqual(tree(self.hw), {**before, "parts/PRT-0001/model.py": hashlib.sha256(
+            b"def build(params):\n    return None\n").hexdigest()})
         (scratch_hw / "parts" / "PRT-0001" / "notes.txt").write_text("work in progress\n", encoding="utf-8")
         again = self.init("part-base_sub", "PRT-0001")
         self.assertEqual(again["status"], "exists")
@@ -116,6 +117,7 @@ class InitAndDeliver(ScratchCase):
         code, report = self.scratch("deliver", "--hw", "hw", "--unit", "part-base_sub")
         self.assertEqual((code, report["status"]), (1, "conflict"), report)
         self.assertEqual(report["changed_since_init"], [str(self.hw.resolve() / "parts" / "PRT-0001")])
+        self.assertEqual(tree(self.hw), before)
 
 
 class LampExample(ScratchCase):
@@ -128,6 +130,8 @@ class LampExample(ScratchCase):
         scratch_hw = Path(report["scratch_hw"])
         self.assertTrue((scratch_hw / "parts" / "LMP-0001" / "model.py").is_file())
         self.assertEqual(json.loads((scratch_hw.parent / "baseline.json").read_text(encoding="utf-8"))["parts"],
+                         ["LMP-0001"])
+        self.assertEqual(sorted(path.name for path in (scratch_hw / "parts").iterdir()),
                          [f"LMP-{number:04d}" for number in range(1, 12)])
 
 

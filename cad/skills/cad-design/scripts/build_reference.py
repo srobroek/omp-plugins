@@ -66,6 +66,20 @@ def reexec_in_script_env(argv: list[str]) -> int:
         return 2
 
 
+
+
+def part_titles(hw: Path) -> dict[str, str]:
+    """Read STEP product titles from each part record in the design record."""
+    import yaml
+
+    titles = {}
+    for record in sorted((hw / "parts").glob("*/part.yaml")):
+        data = yaml.safe_load(record.read_text(encoding="utf-8"))
+        if isinstance(data, dict) and isinstance(data.get("title"), str):
+            titles[record.parent.name] = data["title"]
+    return titles
+
+
 def model_number(path: Path) -> str:
     return path.parent.name if path.name == "model.py" else path.stem
 
