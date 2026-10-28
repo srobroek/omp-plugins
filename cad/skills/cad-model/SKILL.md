@@ -28,7 +28,12 @@ TRIGGER
    requires every part to declare that kernel.
 3. Check: `uv run --script skill://cad-flow/scripts/run.py cad-model/scripts/cad_model.py check vN --hw hw [--out FILE]`
    → check result JSON; press fits and heat-set inserts declared in `hw/interfaces.yaml` are allowed
-   to interfere automatically.
+   to interfere automatically. `build_volume` checks each FDM part against `hw/product.yaml`'s printer envelope.
+   It reports an axis-aligned orientation when one fits. Otherwise, it reports the oriented box axes.
+   Oversized parts block the check. An undeclared volume warns without blocking.
+   `pair_clearance` holds each clearance requirement in `hw/interfaces.yaml` (`type: clearance`,
+   `pair`, `min_clearance_mm`) at the nominal pose, joint-connected and fitted pairs included; a
+   pair below its requirement blocks the check.
    `blocking_failures` names every failed blocking check.
 4. Diff: `uv run --script skill://cad-flow/scripts/run.py cad-model/scripts/cad_model.py diff vA vB --hw hw` → per-part
    volume and bbox deltas, added/removed parts, exact shared / A-only / B-only volumes.
@@ -50,6 +55,7 @@ inserts in `hw/interfaces.yaml`; `check` classifies each fit and allows measured
 for pairs classified as interference fits and for heat-set pairs. A declared interference fit that
 measures clearance is a blocking finding.
 DEFAULT Use `--allow-interference PN:PN` only for an undeclared, intentional overlap.
+MUST Declare `build_volume` in `product.yaml` for FDM projects; a missing declaration is an advisory warning.
 NOT Put a short timeout around `run`: a cold OCP import took 170 to 320 s per fresh environment.
 NOT Hand-edit files under `hw/versions/`; rebuild under a new label.
 

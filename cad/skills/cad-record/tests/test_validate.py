@@ -53,6 +53,20 @@ class ValidateProject(unittest.TestCase):
         lines[target] = f"    {field}: {value}"
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
+    def test_template_declares_build_volume(self) -> None:
+        product = yaml.safe_load((self.hw / "product.yaml").read_text(encoding="utf-8"))
+        self.assertEqual(product["build_volume"], {"x_mm": 256, "y_mm": 256, "z_mm": 256, "margin_mm": 5})
+        result, report = self.validate()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(report["findings"], [])
+
+    def test_product_rejects_nonpositive_build_volume_axis(self) -> None:
+        path = self.hw / "product.yaml"
+        path.write_text(path.read_text(encoding="utf-8").replace("x_mm: 256", "x_mm: 0"), encoding="utf-8")
+        result, report = self.validate()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("x_mm", json.dumps(report["findings"]))
+
     def test_template_validates(self) -> None:
         result, report = self.validate()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -304,6 +318,62 @@ class ValidateProject(unittest.TestCase):
         text = path.read_text(encoding="utf-8").replace("pair: [LMP-0004, LMP-0010]", 'pair: [LMP-0004, "@ring-hub"]')
         path.write_text(text, encoding="utf-8")
         self.assertTrue(any("@ring-hub names no occurrence" in m for m in self.messages()))
+
+    def add_clearance(self, pair: str, minimum: object = 2.0, kind: str = "clearance", number: int = 6) -> None:
+        """Append a clearance requirement interface IF-00<number> to the template's interfaces.yaml."""
+        path = self.hw / "interfaces.yaml"
+        with path.open("a", encoding="utf-8") as stream:
+            stream.write(f"  - {{id: IF-00{number}, from: head, to: base_plate, type: {kind}, "
+                         f"description: The head clears the base plate., pair: {pair}, min_clearance_mm: {minimum}}}\n")
+
+    def test_a_clearance_requirement_on_two_occurrences_validates(self) -> None:
+        self.add_clearance('[LMP-0004, "@ring-base"]')
+        result, report = self.validate()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(report["findings"], [])
+
+    def test_a_clearance_requirement_rejects_an_unresolved_reference(self) -> None:
+        self.add_clearance('[LMP-0004, "@ring-tail"]', number=6)
+        self.add_clearance("[LMP-0099, LMP-0001]", number=7)
+        self.add_clearance("[LMP-0011, LMP-0001]", number=8)
+        found = self.messages()
+        self.assertTrue(any(m.startswith("interfaces/5/pair:") and "@ring-tail names no occurrence" in m for m in found), found)
+        self.assertIn("interfaces/6/pair: part LMP-0099 does not exist", found)
+        self.assertTrue(any(m.startswith("interfaces/7/pair:") and "ambiguous" in m for m in found), found)
+
+    def test_a_clearance_requirement_needs_a_positive_minimum_and_its_type(self) -> None:
+        for minimum, kind, expected in ((0, "clearance", "less than or equal to the minimum of 0"),
+                                        (-1.5, "clearance", "less than or equal to the minimum of 0"),
+                                        (2.0, "mounting", "'clearance' was expected")):
+            with self.subTest(minimum=minimum, kind=kind):
+                shutil.copy2(TEMPLATE / "hw" / "interfaces.yaml", self.hw / "interfaces.yaml")
+                self.add_clearance("[LMP-0004, LMP-0001]", minimum, kind)
+                found = self.messages()
+                self.assertTrue(any(m.startswith("interfaces/5") and expected in m for m in found), found)
+
+    def test_a_clearance_pair_without_a_minimum_is_rejected(self) -> None:
+        path = self.hw / "interfaces.yaml"
+        with path.open("a", encoding="utf-8") as stream:
+            stream.write("  - {id: IF-006, from: head, to: base, type: clearance, description: Gap., pair: [LMP-0004, LMP-0001]}\n")
+        self.assertTrue(any("'min_clearance_mm' is a dependency of 'pair'" in m for m in self.messages()))
+
+    def test_a_clearance_requirement_on_one_occurrence_is_rejected(self) -> None:
+        self.add_clearance('["@ring-base", "@ring-base"]')
+        self.assertTrue(any(m.startswith("interfaces/5/pair:") and "non-unique" in m for m in self.messages()))
+        # A PN placed once and its @id name one occurrence: make @ring-head the one, part-local LMP-0010.
+        shutil.copy2(TEMPLATE / "hw" / "interfaces.yaml", self.hw / "interfaces.yaml")
+        self.edit_assembly("  - id: ring-head\n    PN: LMP-0011", "  - id: ring-head\n    PN: LMP-0010")
+        self.edit_assembly("LMP-0009, LMP-0010]", "LMP-0009]")
+        with (self.hw / "parts" / "LMP-0010" / "part.yaml").open("a", encoding="utf-8") as part:
+            part.write("model_frame: part_local\n")
+        self.add_clearance('[LMP-0010, "@ring-head"]')
+        self.assertIn("interfaces/5/pair: LMP-0010 and @ring-head are the same occurrence", self.messages())
+
+    def test_an_occurrence_pair_takes_one_clearance_requirement(self) -> None:
+        self.add_clearance('[LMP-0004, "@ring-base"]', number=6)
+        self.add_clearance('["@ring-base", LMP-0004]', 3.0, number=7)
+        self.assertIn('interfaces/6/pair: @ring-base / LMP-0004 already has a clearance requirement at interfaces/5',
+                      self.messages())
 
     HEAD = "    min: -45\n    max: 45\n    nominal: 0\n"  # J-003, the head joint
     ELBOW = "    min: -120\n    max: 0\n    nominal: -30\n"  # J-002, the elbow joint

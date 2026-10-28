@@ -158,7 +158,7 @@ class WarmPlanTests(unittest.TestCase):
                 patch.object(preflight, "_runtime_check", side_effect=lambda uv, item: passing(item.id)), \
                 patch.object(preflight, "_chromium_check", side_effect=chromium), \
                 patch.object(preflight, "_vendor_check", side_effect=vendor), \
-                patch.object(preflight, "_timed_freecad_checks", side_effect=lambda env: [passing("freecad-command")]), \
+                patch.object(preflight, "_timed_freecad_checks", side_effect=lambda env, home: [passing("freecad-command")]), \
                 patch.object(preflight, "_beads_check", side_effect=lambda cwd, env: passing("beads")), \
                 patch.object(preflight, "_harness_check", side_effect=lambda name, *a: passing(f"harness-{name}")), \
                 patch("sys.stderr"):
@@ -275,7 +275,7 @@ class FreeCADTests(unittest.TestCase):
             checks = preflight._timed_freecad_checks({"FREECADCMD": str(missing), "PATH": str(path)})
         command = checks[0]
         self.assertEqual(command.status, "fail")
-        self.assertIn("Configured FreeCAD command is missing", command.detail)
+        self.assertIn("FreeCAD 1.1.4 freecadcmd was not found", command.detail)
         self.assertIn("Install FreeCAD 1.1.4", command.fix)
         self.assertIn("FREECADCMD", command.fix)
         self.assertEqual(checks[1].status, "fail")

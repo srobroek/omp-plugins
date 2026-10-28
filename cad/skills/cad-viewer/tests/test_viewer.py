@@ -114,6 +114,64 @@ class Fixture(unittest.TestCase):
     def tearDown(self) -> None:
         shutil.rmtree(self.tmp, ignore_errors=True)
 
+class SessionIdentity(unittest.TestCase):
+    def test_session_path_keys_project_name_and_override(self) -> None:
+        state = Path("/tmp/private-state")
+        project = Path("/tmp/project-a")
+        other_project = Path("/tmp/project-b")
+        with mock.patch.dict(os.environ, {"XDG_STATE_HOME": str(state)}, clear=True):
+            same_a = session.session_path(project)
+            same_b = session.session_path(project.resolve())
+            other = session.session_path(other_project)
+            worker_a = session.session_path(project, "worker-a")
+            worker_b = session.session_path(project, "worker-b")
+        self.assertEqual(same_a, same_b)
+        self.assertNotEqual(same_a, other)
+        self.assertNotEqual(worker_a, worker_b)
+        with mock.patch.dict(os.environ, {"XDG_STATE_HOME": str(state),
+                                          "CAD_VIEWER_SESSION": str(Path("/tmp/explicit.json")),
+                                          "PI_SESSION_ID": "harness-session"}, clear=True):
+            self.assertEqual(session.session_path(other_project, "worker"), Path("/tmp/explicit.json"))
+
+    def test_harness_session_ids_and_explicit_names_split_hosts(self) -> None:
+        project = Path("/tmp/project-a")
+        with mock.patch.dict(os.environ, {"XDG_STATE_HOME": "/tmp/private-state", "PI_SESSION_ID": "omp-a"},
+                             clear=True):
+            omp_a = session.session_path(project)
+            with mock.patch.dict(os.environ, {"PI_SESSION_ID": "omp-b"}):
+                omp_b = session.session_path(project)
+        self.assertNotEqual(omp_a, omp_b)
+        with mock.patch.dict(os.environ, {"XDG_STATE_HOME": "/tmp/private-state",
+                                          "CLAUDE_CODE_SESSION_ID": "claude-a"}, clear=True):
+            claude = session.session_path(project)
+        self.assertNotEqual(omp_a, claude)
+        with mock.patch.dict(os.environ, {"XDG_STATE_HOME": "/tmp/private-state"}, clear=True):
+            self.assertNotEqual(session.session_path(project, "worker-a"),
+                                session.session_path(project, "worker-b"))
+
+
+    def test_command_hw_and_working_directory_share_project_root(self) -> None:
+        root = Path("/tmp/project-a")
+        show = viewer.build_parser().parse_args(["show", str(root / "hw")])
+        serve = viewer.build_parser().parse_args(["serve"])
+        with mock.patch("pathlib.Path.cwd", return_value=root / "hw"):
+            self.assertEqual(viewer.project_root(show), viewer.project_root(serve))
+
+    def test_different_projects_never_resolve_to_the_same_host_record(self) -> None:
+        state = Path(tempfile.mkdtemp(prefix="cad-viewer-isolation-"))
+        try:
+            a = session.session_path(state / "project-a")
+            b = session.session_path(state / "project-b")
+            self.assertNotEqual(a, b)
+            a.parent.mkdir(parents=True)
+            b.parent.mkdir(parents=True)
+            a.write_text(json.dumps({"pid": 10101}), encoding="utf-8")
+            b.write_text(json.dumps({"pid": 20202}), encoding="utf-8")
+            self.assertEqual(session.read_session(a)["pid"], 10101)
+            self.assertEqual(session.read_session(b)["pid"], 20202)
+        finally:
+            shutil.rmtree(state, ignore_errors=True)
+
 
 class SessionLifecycle(unittest.TestCase):
     """`stop` and `serve` against real processes: stand-in ocp_viewers, never the real one."""
@@ -239,6 +297,41 @@ class StubPresenter:
 
         threading.Thread(target=run, daemon=True).start()
         return future
+
+
+class HostIdleTimeout(unittest.TestCase):
+    def test_api_commands_reset_idle_but_presenter_poll_does_not(self) -> None:
+        fake = types.ModuleType("ocp_viewer")
+        fake.set_viewer_config = lambda **_values: None
+        patcher = mock.patch.dict(sys.modules, {"ocp_viewer": fake})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        temp = Path(tempfile.mkdtemp(prefix="cad-viewer-idle-"))
+        self.addCleanup(shutil.rmtree, temp, True)
+        port = session.free_port()
+        viewer_host = host.Host(temp / "session.json", port, PORTS, idle_timeout_min=1)
+        server = host.make_server(viewer_host)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+
+        viewer_host._last_command_at = time.monotonic() - 61
+        self.assertTrue(viewer_host.idle())
+        request = urllib.request.Request(f"http://127.0.0.1:{port}/api/state",
+                                         headers={"Referer": f"http://127.0.0.1:{port}/?audience=presenter"})
+        with urllib.request.urlopen(request, timeout=5) as response:
+            self.assertEqual(response.status, 200)
+        self.assertTrue(viewer_host.idle())
+
+        request = urllib.request.Request(f"http://127.0.0.1:{port}/api/state",
+                                         headers={"Referer": f"http://127.0.0.1:{port}/?audience=user"})
+        with urllib.request.urlopen(request, timeout=5) as response:
+            self.assertEqual(response.status, 200)
+
+    def test_zero_disables_idle_expiry(self) -> None:
+        viewer_host = host.Host(Path("/nonexistent/session.json"), 1000, PORTS, idle_timeout_min=0)
+        self.assertFalse(viewer_host.idle(now=time.monotonic() + 1_000_000))
+
 
 
 class HostApi(unittest.TestCase):

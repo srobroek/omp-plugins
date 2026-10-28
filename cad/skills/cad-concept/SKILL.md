@@ -25,9 +25,10 @@ ASK which live variant passes the VARIANT gate; record nothing as chosen until t
 2. DRAFT 2-4 variants in `hw/concept/<product-id>.scene.json`, each a different answer to
    the main trade-off, with that trade-off in `params` and one-line `summary`.
 3. Run `uv run --script scripts/concept.py check <scene>` after every edit. -> exit 0, `"ok": true`.
-4. Start the preview once as a long-running process:
-   `uv run --script scripts/serve.py --scene-dir hw/concept --port 8765`. -> first stdout
-   line is `{"url": ...}`; send the user that URL. Each saved edit reloads the open viewer.
+4. Start the preview once as the harness's background job or service:
+   `uv run --script scripts/serve.py --scene-dir hw/concept`. Read the first stdout JSON line
+   and send its `url` to the user; it reports the chosen free port. Use `--port N` only when a
+   fixed port is needed. Each saved edit reloads the open viewer.
 5. Collect feedback. Drive the viewer yourself when the harness has a browser; otherwise ask
    the user which nominal variant best addresses the trade-off. Save a screenshot for each
    live variant when useful; screenshots land in `hw/concept/screenshots/`.
@@ -36,7 +37,11 @@ ASK which live variant passes the VARIANT gate; record nothing as chosen until t
    run before LAYOUT freeze. Hand the batch to `skill://cad-flow` for COMMIT.
 8. "More detail?" -> back to step 5. Otherwise ASK the VARIANT gate, set `chosen`, and run
    -> exit 0 means the manifest passed the bundled handoff JSON schema.
-9. Stop the server. Report the handoff path to `skill://cad-flow`, which opens L1 LAYOUT.
+9. MUST stop the concept server when the user is done: after the VARIANT gate passes or the
+   session ends. Stop it through the harness job or service handle. If none exists, start it with
+   `&`, keep `$!`, and run `kill <pid>`. Tell the user which viewer URL is going away.
+   The 30-minute idle timeout stops abandoned servers after inactivity. Report the handoff path
+   to `skill://cad-flow`, which opens L1 LAYOUT.
 
 | user says | operation |
 |---|---|
@@ -56,7 +61,9 @@ NOT Export a handoff before the user names the chosen variant.
 
 The viewer pins three@0.186.1 by import map with SRI digests. `serve.py` needs network on
 first load, then serves the verified modules from `~/.cache/cad-concept/vendor`
-(`$XDG_CACHE_HOME` when set) offline.
+(`$XDG_CACHE_HOME` when set) offline. `--idle-timeout MIN` defaults to 30 minutes and exits
+after that long without an HTTP request or connected live-reload client; 0 disables it. An open
+viewer tab keeps its live-reload connection open. The ready JSON reports `idle_timeout_min`.
 
 ```text
 L1 CONCEPT: {scene path} -- {live variant count} live, {retired count} retired, gate PENDING|PASSED {chosen id}

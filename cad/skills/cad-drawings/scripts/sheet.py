@@ -34,7 +34,7 @@ from feature_geometry import Face, ResolvedFeature
 from freecad_views import ViewGeometry
 from layout_check import TEXT_ASCENT, TEXT_DESCENT, Box, path_points
 from part_views import ViewPlan
-from section_hatch import CutRegion, SectionFill, fill_section, markup as fill_markup, spacing_for
+from section_hatch import CutRegion, SectionFill, fill_section, markup as fill_markup
 
 THIN = 0.25
 ARROW_LENGTH, ARROW_HALF_WIDTH = 2.5, 0.45
@@ -812,7 +812,7 @@ def layout_view(view: ViewData, presentation: Presentation, size: float, regime:
             x0, x1 = (edge - w - LANDING, edge) if side < 0 else (edge, edge + w + LANDING)
             footprint = footprint.union(Box(min(x0, edge - 2 * LANDING), top - 0.5, max(x1, edge + 2 * LANDING),
                                             bottom + 0.5))
-    section = (fill_section(view.plan.id, view.cut_regions, view.project, view.geometry.scale, spacing_for(size))
+    section = (fill_section(view.plan.id, view.cut_regions, view.project, view.geometry.scale)
                if view.plan.kind == "section" else None)
     annotations.extend(_view_furniture(view, section))
     label = _view_label(view, size, regime)

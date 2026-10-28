@@ -554,8 +554,128 @@ class OccurrenceBuildTests(unittest.TestCase):
         self.assertEqual({row["PN"]: row["qty"] for row in rows}, {BASE: "1", INSERT: "6"})
 
 
+@unittest.skipUnless(shutil.which("uv"), "uv is required for the kernel environments")
+class PairClearanceBuildTests(unittest.TestCase):
+    """The swing arm built 0.8 mm above the base, on its revolute joint, against a clearance
+    requirement on that joint-connected pair (CadQuery only)."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.hw = two_part_project(Path(cls.tmp.name), "cadquery")
+        set_arm(cls.hw, "cadquery", z0=20.8)  # the plate's underside 0.8 mm above the base top at z 20
+        cls.built = cli("run", str(cls.hw), "--label", "v1")
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls.tmp.cleanup()
+
+    def checked(self, minimum: float) -> tuple[subprocess.CompletedProcess[str], dict]:
+        self.assertEqual(self.built[0].returncode, 0, self.built[0].stderr[-3000:])
+        (self.hw / "interfaces.yaml").write_text(
+            "interfaces:\n  - {id: IF-001, from: arm, to: base, type: clearance, description: The arm clears the base.,"
+            f" pair: [{ARM_PN}, {BASE}], min_clearance_mm: {minimum}}}\n", encoding="utf-8")
+        proc, result, _ = cli("check", "v1", "--hw", str(self.hw))
+        return proc, result
+
+    def test_a_requirement_above_the_gap_blocks_and_one_below_it_passes(self) -> None:
+        proc, result = self.checked(1.0)
+        self.assertEqual(proc.returncode, 1, proc.stderr[-2000:])
+        self.assertEqual(result["blocking_failures"], ["pair_clearance"])
+        # J-001 joins the pair, so interference lists it as a joint pair; the requirement holds all the same.
+        self.assertEqual([row["pair"] for row in result["checks"]["interference"]["joint_pairs"]], [[BASE, ARM_PN]])
+        (row,) = result["checks"]["pair_clearance"]["requirements"]
+        self.assertEqual({key: row[key] for key in ("pair", "refs", "required_mm", "status", "interface", "source")},
+                         {"pair": [BASE, ARM_PN], "refs": [BASE, ARM_PN], "required_mm": 1.0, "status": "fail",
+                          "interface": "IF-001", "source": "interfaces.yaml#/interfaces/0"})
+        self.assertAlmostEqual(row["clearance_mm"], 0.8, places=6)
+
+        proc, result = self.checked(0.5)
+        self.assertEqual(proc.returncode, 0, json.dumps(result.get("checks"), indent=1)[:4000] + proc.stderr[-2000:])
+        (row,) = result["checks"]["pair_clearance"]["requirements"]
+        self.assertEqual((result["checks"]["pair_clearance"]["status"], row["status"], row["required_mm"]),
+                         ("pass", "pass", 0.5))
+        self.assertAlmostEqual(row["clearance_mm"], 0.8, places=6)
+
+
 class CheckRuleTests(unittest.TestCase):
     """check's verdicts on given measurements; needs no OCP."""
+    def test_build_volume_accepts_axis_permutation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            hw = Path(tmp)
+            (hw / "parts" / "TST-0001").mkdir(parents=True)
+            (hw / "product.yaml").write_text(
+                "build_volume: {x_mm: 35, y_mm: 10, z_mm: 5, margin_mm: 0}\n", encoding="utf-8")
+            (hw / "parts" / "TST-0001" / "part.yaml").write_text("process: fdm\n", encoding="utf-8")
+            shape = mock.Mock()
+            with mock.patch.object(occ, "bbox", return_value=((-17.5, -5.0, -2.5), (17.5, 5.0, 2.5))):
+                with mock.patch.object(occ, "oriented_bbox", side_effect=AssertionError("fallback should not run")):
+                    result = check.build_volume(hw, {"TST-0001": mock.Mock(shape=shape)})
+        self.assertEqual(result["status"], "pass")
+        row = result["parts"]["TST-0001"]
+        self.assertEqual((row["orientation"], row["method"], row["size_mm"]),
+                         ("xyz", "axis_aligned", [35.0, 10.0, 5.0]))
+
+    def test_build_volume_chooses_lowest_print_height(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            hw = Path(tmp)
+            (hw / "parts" / "TST-0001").mkdir(parents=True)
+            (hw / "product.yaml").write_text(
+                "build_volume: {x_mm: 35, y_mm: 20, z_mm: 10, margin_mm: 0}\n", encoding="utf-8")
+            (hw / "parts" / "TST-0001" / "part.yaml").write_text("process: fdm\n", encoding="utf-8")
+            with mock.patch.object(occ, "bbox", return_value=((-17.5, -5.0, -10.0), (17.5, 5.0, 10.0))):
+                with mock.patch.object(occ, "oriented_bbox", side_effect=AssertionError("AABB rotation should fit")):
+                    result = check.build_volume(hw, {"TST-0001": mock.Mock(shape=mock.Mock())})
+        row = result["parts"]["TST-0001"]
+        self.assertEqual((row["orientation"], row["size_mm"]), ("xzy", [35.0, 20.0, 10.0]))
+
+    def test_build_volume_falls_back_for_rotated_plate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            hw = Path(tmp)
+            (hw / "parts" / "TST-0001").mkdir(parents=True)
+            (hw / "product.yaml").write_text(
+                "build_volume: {x_mm: 256, y_mm: 256, z_mm: 256, margin_mm: 5}\n", encoding="utf-8")
+            (hw / "parts" / "TST-0001" / "part.yaml").write_text("process: fdm\n", encoding="utf-8")
+            shape = mock.Mock()
+            with mock.patch.object(occ, "bbox", return_value=((-171.0, -171.0, -2.5), (171.0, 171.0, 2.5))):
+                with mock.patch.object(occ, "oriented_bbox", return_value=((240.0, 240.0, 5.0),
+                                                                            ((0.707, 0.707, 0.0),
+                                                                             (-0.707, 0.707, 0.0),
+                                                                             (0.0, 0.0, 1.0)))):
+                    result = check.build_volume(hw, {"TST-0001": mock.Mock(shape=shape)})
+        row = result["parts"]["TST-0001"]
+        self.assertEqual((result["status"], row["orientation"], row["method"]), ("pass", "oriented", "oriented"))
+        self.assertEqual(row["size_mm"], [240.0, 240.0, 5.0])
+        self.assertEqual(row["axes"][2], [0.0, 0.0, 1.0])
+
+    def test_build_volume_fails_if_aabb_and_oriented_box_do_not_fit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            hw = Path(tmp)
+            (hw / "parts" / "TST-0001").mkdir(parents=True)
+            (hw / "product.yaml").write_text(
+                "build_volume: {x_mm: 256, y_mm: 256, z_mm: 256, margin_mm: 5}\n", encoding="utf-8")
+            (hw / "parts" / "TST-0001" / "part.yaml").write_text("process: fdm\n", encoding="utf-8")
+            with mock.patch.object(occ, "bbox", return_value=((-150.0, -10.0, -10.0), (150.0, 10.0, 10.0))):
+                with mock.patch.object(occ, "oriented_bbox", return_value=((300.0, 20.0, 20.0),
+                                                                            ((1.0, 0.0, 0.0),
+                                                                             (0.0, 1.0, 0.0),
+                                                                             (0.0, 0.0, 1.0)))):
+                    result = check.build_volume(hw, {"TST-0001": mock.Mock(shape=mock.Mock())})
+        self.assertEqual((result["status"], result["blocking_failures"]), ("fail", ["TST-0001"]))
+        message = result["parts"]["TST-0001"]["message"]
+        self.assertIn("TST-0001", message)
+        self.assertIn("(300.0, 20.0, 20.0)", message)
+        self.assertIn("oriented box", message)
+
+    def test_build_volume_warns_when_not_declared(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            hw = Path(tmp)
+            (hw / "parts" / "TST-0001").mkdir(parents=True)
+            (hw / "product.yaml").write_text("id: test\n", encoding="utf-8")
+            (hw / "parts" / "TST-0001" / "part.yaml").write_text("process: fdm\n", encoding="utf-8")
+            result = check.build_volume(hw, {"TST-0001": mock.Mock(shape=mock.Mock())})
+        self.assertEqual((result["status"], result["blocking"]), ("warn", False))
+        self.assertIn("TST-0001", result["parts"])
 
     def test_missing_interfaces_file_means_no_declared_fits(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -596,6 +716,51 @@ class CheckRuleTests(unittest.TestCase):
         self.assertEqual(result["status"], "fail")
         self.assertEqual(result["declared_fit_findings"][0]["type"], "declared_fit_not_realized")
         self.assertEqual(result["declared_fit_findings"][0]["source"], declared[0]["source"])
+
+    @staticmethod
+    def requirement(pair: tuple[str, str], minimum: float) -> dict:
+        return {"pair": list(pair), "min_clearance_mm": minimum, "interface": "IF-002",
+                "source": "interfaces.yaml#/interfaces/1"}
+
+    def test_a_pair_requirement_fails_above_the_measured_clearance_and_passes_at_or_below_it(self) -> None:
+        geometry = gaps({(BASE, ARM_PN): 0.8})
+        for minimum, status in ((1.0, "fail"), (0.8, "pass"), (0.5, "pass")):
+            with self.subTest(minimum=minimum):
+                result = check.pair_clearance(geometry, [self.requirement((BASE, ARM_PN), minimum)], {ARM_PN: "@arm"})
+                self.assertEqual((result["status"], result["blocking"]), (status, True))
+                self.assertEqual(result["requirements"], [
+                    {"pair": [BASE, ARM_PN], "refs": [BASE, "@arm"], "required_mm": minimum, "clearance_mm": 0.8,
+                     "status": status, "interface": "IF-002", "source": "interfaces.yaml#/interfaces/1"}])
+
+    def test_a_pair_requirement_compares_the_unrounded_clearance(self) -> None:
+        result = check.pair_clearance(gaps({(BASE, ARM_PN): 0.79996}), [self.requirement((BASE, ARM_PN), 0.8)])
+        self.assertEqual(result["status"], "fail")
+
+    def test_an_unmeasured_or_absent_pair_fails_its_requirement(self) -> None:
+        geometry = gaps({(BASE, ARM_PN): None})
+        geometry[(BASE, ARM_PN)]["error"] = "Standard_Failure"
+        result = check.pair_clearance(geometry, [self.requirement((BASE, ARM_PN), 0.5), self.requirement((BASE, PIN), 0.5)])
+        self.assertEqual(result["status"], "fail")
+        self.assertEqual([(row["status"], row.get("error")) for row in result["requirements"]],
+                         [("fail", "Standard_Failure"), ("fail", "the version has no such occurrence pair")])
+        self.assertEqual(check.pair_clearance(geometry, [])["status"], "pass")
+
+    def test_a_clearance_requirement_record_resolves_through_the_pair_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            hw = Path(tmp)
+            path = hw / "interfaces.yaml"
+            requirement = ("interfaces:\n  - {id: IF-001, from: arm, to: base, type: clearance, description: Gap.,"
+                           " pair: [%s, %s], min_clearance_mm: %s}\n")
+            path.write_text(requirement % (ARM_PN, BASE, 0.5), encoding="utf-8")
+            self.assertEqual(check.declared_clearances(hw), [{"pair": [BASE, ARM_PN], "min_clearance_mm": 0.5,
+                                                              "interface": "IF-001",
+                                                              "source": "interfaces.yaml#/interfaces/0"}])
+            path.write_text(requirement % (ARM_PN, BASE, 0), encoding="utf-8")
+            with self.assertRaisesRegex(build.UsageError, "a clearance requirement needs"):
+                check.declared_clearances(hw)
+            path.write_text(requirement % ('"@arm-a"', BASE, 0.5), encoding="utf-8")
+            with self.assertRaisesRegex(build.UsageError, "no assembly record"):
+                check.declared_clearances(hw)
 
     def test_press_fit_record_is_classified_by_cad_fits(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

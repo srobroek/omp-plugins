@@ -82,6 +82,28 @@ unsupported `KERNEL`; `type` `ContractError`, `where` null), `kernel` (the part'
 from `--kernel`; `ContractError`, `where` null), or `build` (the runner's exception `type`, `where`
 = `model.py:<line> in <function>`, null when the failure is not in model.py).
 
+`product.yaml` can declare a printer volume for FDM parts:
+
+```yaml
+build_volume:
+  x_mm: 256 # Bambu Lab X1/P1 class printer envelope
+  y_mm: 256
+  z_mm: 256
+  orientations: [xyz, xzy, yxz, yzx, zxy, zyx] # optional; defaults to all six axis permutations
+  margin_mm: 5 # optional; removed from both ends of each usable axis
+```
+
+`check.build_volume` tests the model-frame axis-aligned box under each permitted permutation.
+For example, `xzy` maps part X to printer X, part Y to printer Z, and part Z to printer Y.
+The margin reduces each usable printer axis at both ends.
+Each part row reports model-frame dimensions and its selected fit.
+
+When no axis-aligned permutation fits, the check tests the minimum-volume oriented box.
+The result reports `orientation: "oriented"`, `size_mm`, and three unit vectors in `axes`.
+The vectors are in the part frame and correspond in order to the dimensions in `size_mm`.
+If neither box fits, the result names the PN, model-frame size, printer volume, and both fit failures.
+An undeclared volume warns without blocking. Non-FDM parts are ignored.
+
 ## Check result (`check`)
 
 Top level: `status` pass|fail, `label`, `pose: nominal`, `baseline` (previous label or null),
@@ -91,9 +113,11 @@ Top level: `status` pass|fail, `label`, `pose: nominal`, `baseline` (previous la
 | Check | Blocking | Fails when |
 |---|---|---|
 | `step_readback` | yes | a STEP schema is not AP242; a product name differs from `"<PN> <title>"` in the part or assembly STEP; the top product is missing; a read-back volume differs from the kernel volume by more than 1e-6 relative; the read-back solid count differs from the kernel's |
+| `build_volume` | yes | neither the model-frame AABB permutations nor the minimum-volume oriented box fit within the printer volume after margin; missing `product.yaml.build_volume` warns without blocking |
 | `brep_validity` | yes | BRepCheck rejects the kernel's in-memory shape or the STEP read-back |
 | `solid_structure` | yes | a part has no solid, or its solid count differs from `--expect-solids` or else from the previous version; `--expect-solids` naming a PN outside the version fails (`unknown_parts`) |
 | `interference` | yes | two parts share more than 1e-3 mm^3 at the nominal pose, unless the pair is a declared interference fit or heat-set insert (below) or `--allow-interference` names an undeclared intentional overlap; a declared interference fit that measures no interference is reported in `declared_fit_findings` and fails; a pair whose measurement failed (`error`, `interference_mm3` null) fails even when allowed; `--pair` or `--allow-interference` naming a PN outside the version fails (`unknown_pairs`, `unknown_allowed`); joint-connected pairs are listed under `joint_pairs`, others under `pairs`; `min_clearance` names the closest pair |
+| `pair_clearance` | yes | a clearance requirement in `hw/interfaces.yaml` (`type: clearance`, `pair`, `min_clearance_mm`, resolved by cad-motion's `pair_policy.py`) measures below its `min_clearance_mm` at the nominal pose, compared unrounded; its pair's measurement failed (`error`); or the version has no such occurrence pair. A requirement binds its pair whatever joins it, so it also binds a joint-connected or fitted pair. Each `requirements` row has `pair` (occurrence ids), `refs`, `required_mm`, `clearance_mm`, `status` (pass/fail), `interface` and YAML `source`; with no requirement declared the check passes |
 | `connection` | yes | the two parts of a fixed joint or `--attach` are more than 0.01 mm apart (`fixed_joints`: `joint`, `pair`, `distance_mm`, `ok`); or a part is `disconnected` (nearest part > 2.0 mm away), or `floating` (0.01 to 2.0 mm) without a movable joint (revolute, prismatic) linking its rigid body to the nearest part's; `touching` is <= 0.01 mm. Fixed joints weld their parts into one rigid body, so a float to a part of the same body is never a joint clearance. Each `parts` row has `nearest`, `distance_mm`, `joint` (the movable joint between the two bodies, else null), `joint_connected` |
 | `mesh_watertight` | yes | a part's GLB triangles, welded by position, are not a closed 2-manifold (trimesh); triangles whose corners weld to fewer than three vertices (BRepMesh emits one at a sphere pole on a face boundary) are dropped first and counted in `collapsed_triangles` |
 | `slivers_tolerances` | no (warn) | a face is smaller than 1e-3 mm^2, or a vertex/edge/face tolerance exceeds 0.01 mm |

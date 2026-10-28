@@ -1,4 +1,4 @@
-"""The viewer session: one host process per user, found through a session file.
+"""The viewer session: one host process per harness session, found through a session file.
 
 `serve` starts `viewer.py host` detached and records its ports and PID; every other command
 reads the session file and talks to the host over loopback HTTP. Stdlib only.
@@ -14,12 +14,14 @@ from __future__ import annotations
 
 import contextlib
 import fcntl
+import hashlib
 import json
 import os
 import signal
 import socket
 import subprocess
 import sys
+import shlex
 import time
 import urllib.error
 import urllib.request
@@ -35,12 +37,19 @@ STOP_TIMEOUT_S = 60.0  # the host closes its browser and its viewers, each given
 KILL_GRACE_S = 10.0  # between SIGTERM and SIGKILL to a process group
 
 
-def session_path() -> Path:
+def session_path(project_root: Path | None = None, session_name: str | None = None) -> Path:
+    """Path for one project, harness session, or explicit name; CAD_VIEWER_SESSION always wins."""
     explicit = os.environ.get("CAD_VIEWER_SESSION")
     if explicit:
         return Path(explicit)
+
+    project = (project_root or Path.cwd()).expanduser().resolve()
+    harness_session = os.environ.get("PI_SESSION_ID") or os.environ.get("CLAUDE_CODE_SESSION_ID")
+    name = session_name or os.environ.get("CAD_VIEWER_SESSION_NAME")
+    identity = f"{harness_session or ''}\0{name or 'default'}\0{project}"
+    digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:24]
     base = os.environ.get("XDG_STATE_HOME") or str(Path.home() / ".local" / "state")
-    return Path(base) / "cad-viewer" / "session.json"
+    return Path(base) / "cad-viewer" / digest / "session.json"
 
 
 def free_port() -> int:
@@ -120,11 +129,14 @@ def call(session: dict[str, Any], method: str, route: str, body: dict[str, Any] 
         raise ViewerError(f"viewer host on port {session['panel_port']} did not answer {route}: {error}") from error
 
 
-def describe(session: dict[str, Any], script: Path, reused: bool) -> dict[str, Any]:
+def describe(session: dict[str, Any], reused: bool, session_name: str | None = None) -> dict[str, Any]:
+    command = "uv run --script skill://cad-flow/scripts/run.py cad-viewer/scripts/viewer.py stop"
+    if session_name:
+        command += f" --session {shlex.quote(session_name)}"
     return {"status": "running", "reused": reused, "url": session["url"], "pid": session["pid"],
             "viewer_urls": session["viewer_urls"], "ports": session["ports"], "log": session["log"],
-            "session": session["session"],
-            "stop": f"uv run --script {script} stop"}
+            "session": session["session"], "stop": command,
+            "idle_timeout_minutes": session.get("idle_timeout_minutes", 30)}
 
 
 @contextlib.contextmanager
@@ -140,7 +152,7 @@ def _exclusive(path: Path) -> Iterator[None]:
 
 
 def start(path: Path, script: Path, panel_port: int, port_a: int, port_b: int,
-          viewport: tuple[int, int]) -> tuple[dict[str, Any], bool]:
+          viewport: tuple[int, int], idle_timeout_min: int = 30) -> tuple[dict[str, Any], bool]:
     """Reuse the live session or spawn a detached host; returns (session, reused).
 
     `port_a`/`port_b` are the user's viewers (0 picks free ports); the presenter's pair always
@@ -152,14 +164,15 @@ def start(path: Path, script: Path, panel_port: int, port_a: int, port_b: int,
         existing = read_session(path)
         answer = health(existing) if existing is not None else None
         if answer is not None and answer.get("presenter"):
+            existing["idle_timeout_minutes"] = existing.get("idle_timeout_minutes", 30)
             return existing, True
         if answer is not None:
             _stop_host(existing, path)
-        return _spawn(path, script, panel_port, port_a, port_b, viewport), False
+        return _spawn(path, script, panel_port, port_a, port_b, viewport, idle_timeout_min), False
 
 
 def _spawn(path: Path, script: Path, panel_port: int, port_a: int, port_b: int,
-           viewport: tuple[int, int]) -> dict[str, Any]:
+           viewport: tuple[int, int], idle_timeout_min: int) -> dict[str, Any]:
     panel = panel_port or free_port()
     viewers = {"a": port_a, "b": port_b, "presenter_a": 0, "presenter_b": 0}
     viewers = {name: port or free_port() for name, port in viewers.items()}
@@ -172,8 +185,8 @@ def _spawn(path: Path, script: Path, panel_port: int, port_a: int, port_b: int,
     with log_path.open("w", encoding="utf-8") as log:
         process = subprocess.Popen(
             [sys.executable, str(script), "host", "--session", str(path), "--panel-port", str(panel),
-             "--ports", json.dumps(viewers),
-             "--width", str(viewport[0]), "--height", str(viewport[1])],
+             "--ports", json.dumps(viewers), "--width", str(viewport[0]), "--height", str(viewport[1]),
+             "--idle-timeout", str(idle_timeout_min)],
             stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
     deadline = time.monotonic() + START_TIMEOUT_S
     while time.monotonic() < deadline:

@@ -473,18 +473,22 @@ VIEWER = Path("skills", "cad-viewer", "scripts", "viewer.py")
 
 
 def stop_trial_processes(paths: TrialPaths, env: dict[str, str]) -> None:
-    """Stop what a trial left running once its turns are over. `viewer.py stop`, run
-    with the trial's environment, finds the trial's own viewer session and shuts its
-    host down cleanly; `stop` is the script's stdlib-only path, so the runner's own
+    """Stop what a trial left running once its turns are over. Viewer session files are
+    keyed by project and harness session, so the runner stops each one under the trial's
+    XDG_STATE_HOME by path: `viewer.py stop` with CAD_VIEWER_SESSION naming it shuts that
+    host down cleanly. `stop` is the script's stdlib-only path, so the runner's own
     interpreter runs it without building a uv environment. The sweep then ends
     whatever still names the trial root."""
     viewer = paths.plugin / VIEWER
-    if viewer.is_file():
-        try:
-            subprocess.run([sys.executable, str(viewer), "stop"], cwd=paths.work, env=env,
-                           capture_output=True, timeout=60, check=False)
-        except (OSError, subprocess.TimeoutExpired):
-            pass
+    state = Path(env.get("XDG_STATE_HOME", "")) / "cad-viewer"
+    if viewer.is_file() and state.is_dir():
+        for session_file in sorted(state.glob("*/session.json")):
+            try:
+                subprocess.run([sys.executable, str(viewer), "stop"], cwd=paths.work,
+                               env={**env, "CAD_VIEWER_SESSION": str(session_file)},
+                               capture_output=True, timeout=60, check=False)
+            except (OSError, subprocess.TimeoutExpired):
+                pass
     sweep_trial_processes(paths.root)
 
 

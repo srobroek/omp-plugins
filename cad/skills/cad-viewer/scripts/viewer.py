@@ -9,25 +9,22 @@
 # ///
 """Drive OCP CAD Viewer and the cad-viewer side panel for a cad-model hardware record.
 
-Usage:
-    uv run --script viewer.py serve [--panel-port 0] [--port-a 0] [--port-b 0] [--width 1440] [--height 900]
-    uv run --script viewer.py stop
-    uv run --script viewer.py show HW [--version vN|latest] [--check CHECK.json]
-    uv run --script viewer.py compare vA vB --hw HW [--check-a FILE] [--check-b FILE]
-    uv run --script viewer.py gallery HW [--version vN|latest]
-    uv run --script viewer.py mode single|split [--active A|B]
-    uv run --script viewer.py parts hide|iso|ghost|reset [PN|GROUP]
-    uv run --script viewer.py animate --joint J-002 --from -120 --to 0 [--steps 13] [--seconds 4] [--at 0..1]
-    uv run --script viewer.py studio [--environment studio] [--tone-mapping ACES] [--exposure 1.0] [...]
-    uv run --script viewer.py capture --view iso|front|side|top|exploded|section|current|isolate:<PN>
-        --out PNG [--joint J-002] [--zoom 4] [--crop page|viewer|canvas] [--refit|--no-refit]
+Usage (run viewer through cad-flow's shared environment):
+    uv run --script skill://cad-flow/scripts/run.py cad-viewer/scripts/viewer.py serve [--session NAME] [--idle-timeout MIN]
+    uv run --script skill://cad-flow/scripts/run.py cad-viewer/scripts/viewer.py stop [--session NAME]
+    uv run --script skill://cad-flow/scripts/run.py cad-viewer/scripts/viewer.py show HW [--version VERSION] [--check FILE] [--session NAME]
+    uv run --script skill://cad-flow/scripts/run.py cad-viewer/scripts/viewer.py compare A B --hw HW [--session NAME]
+    uv run --script skill://cad-flow/scripts/run.py cad-viewer/scripts/viewer.py gallery HW [--session NAME]
+    uv run --script skill://cad-flow/scripts/run.py cad-viewer/scripts/viewer.py mode single|split [--session NAME]
+    uv run --script skill://cad-flow/scripts/run.py cad-viewer/scripts/viewer.py parts ACTION [PN|GROUP] [--session NAME]
+    uv run --script skill://cad-flow/scripts/run.py cad-viewer/scripts/viewer.py animate --joint ID --from VALUE --to VALUE [--session NAME]
+    uv run --script skill://cad-flow/scripts/run.py cad-viewer/scripts/viewer.py studio [OPTIONS] [--session NAME]
+    uv run --script skill://cad-flow/scripts/run.py cad-viewer/scripts/viewer.py capture --view VIEW --out PNG [--session NAME]
 
-`serve` starts (or reuses) one detached host: OCP viewer servers for slot a, and slot b for the
-A/B side-by-side, each twice (one for the user's tab, one for captures), the panel page that
-embeds them, and a headless Chromium "presenter" that keeps its own copy of that page open so
-captures show exactly the state the commands left. Every other command talks to the host
-through the session file ($CAD_VIEWER_SESSION, default
-~/.local/state/cad-viewer/session.json).
+`serve` reuses one detached host per project and session. Session files use an automatic OMP or
+Claude Code session ID when available, or a `--session` / `CAD_VIEWER_SESSION_NAME` value, plus
+the project root. The project root is the directory containing `hw/`. `CAD_VIEWER_SESSION` keeps
+its legacy behavior and overrides the session-file path.
 
 stdout: one JSON object per command. Exit 0 = done; 1 = a joint value outside its limits
 (`animate`, nothing pushed) or a blank capture; 2 = usage, record, viewer, or browser error.
@@ -37,6 +34,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -65,23 +63,42 @@ def fraction_arg(text: str) -> float:
     return value
 
 
+def project_root(args: argparse.Namespace) -> Path:
+    """Resolve a command to the project directory containing its hw/ record."""
+    hardware = getattr(args, "hw", None)
+    if hardware is None:
+        cwd = Path.cwd().resolve()
+        return cwd.parent if cwd.name == "hw" else cwd
+    hw = hardware.expanduser().resolve()
+    return hw.parent if hw.name == "hw" else hw
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="viewer.py", description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
 
+    def add_session(command_parser: argparse.ArgumentParser) -> None:
+        command_parser.add_argument("--session", help="session name; overrides an automatic harness ID")
+
     serve = sub.add_parser("serve", help="start or reuse the viewer host; prints its URL, PID and stop command")
+    add_session(serve)
     for flag in ("--panel-port", "--port-a", "--port-b"):
         serve.add_argument(flag, type=int, default=0, help="0 picks a free port")
     serve.add_argument("--width", type=int, default=1440, help="presenter page width (captures)")
     serve.add_argument("--height", type=int, default=900, help="presenter page height (captures)")
-    sub.add_parser("stop", help="stop the viewer host and its OCP viewers")
+    serve.add_argument("--idle-timeout", type=int, default=30,
+                       help="stop after this many minutes without viewer API commands; 0 disables")
+    stop = sub.add_parser("stop", help="stop the viewer host and its OCP viewers")
+    add_session(stop)
 
     show = sub.add_parser("show", help="push one version; the camera is kept on later pushes")
+    add_session(show)
     show.add_argument("hw", type=Path, help="hardware record directory (hw/)")
     show.add_argument("--version", default="latest", help="vN or latest (default)")
     show.add_argument("--check", type=Path, help="cad-model check JSON for this version (panel findings)")
 
     compare = sub.add_parser("compare", help="push two versions for the A/B side-by-side with synced camera")
+    add_session(compare)
     compare.add_argument("a", help="version A label")
     compare.add_argument("b", help="version B label")
     compare.add_argument("--hw", type=Path, required=True)
@@ -89,18 +106,22 @@ def build_parser() -> argparse.ArgumentParser:
     compare.add_argument("--check-b", type=Path)
 
     gallery = sub.add_parser("gallery", help="open HW in the preview gallery; prints its URL and every file path")
+    add_session(gallery)
     gallery.add_argument("hw", type=Path, help="hardware record directory (hw/)")
     gallery.add_argument("--version", default="latest", help="vN or latest (default)")
 
     mode = sub.add_parser("mode", help="switch A/B: one version, or side-by-side")
+    add_session(mode)
     mode.add_argument("mode", choices=("single", "split"))
     mode.add_argument("--active", choices=("A", "B"), default="A")
 
     parts = sub.add_parser("parts", help="hide, isolate, ghost the rest, or reset, as the panel buttons do")
+    add_session(parts)
     parts.add_argument("action", choices=("hide", "iso", "ghost", "reset"))
     parts.add_argument("target", nargs="?", help="PN or subassembly id (hide and iso)")
 
     animate = sub.add_parser("animate", help="animation track for one joint, within its assembly.yaml limits")
+    add_session(animate)
     animate.add_argument("--joint", required=True, help="movable joint id, e.g. J-002")
     animate.add_argument("--from", dest="start", type=float, required=True, help="start value (deg or mm)")
     animate.add_argument("--to", dest="end", type=float, required=True, help="end value (deg or mm)")
@@ -109,16 +130,18 @@ def build_parser() -> argparse.ArgumentParser:
     animate.add_argument("--at", type=fraction_arg, help="hold the playback at this fraction 0..1")
 
     studio = sub.add_parser("studio", help="Studio mode for look-dev: environment, tone mapping, exposure")
+    add_session(studio)
     studio.add_argument("--environment", help="StudioEnvironment name, e.g. studio, white_studio_05, photo_studio_01")
     studio.add_argument("--tone-mapping", choices=("neutral", "ACES", "none"))
     studio.add_argument("--background", choices=("environment", "transparent", "gradient", "gradient-dark",
-                                                 "white", "grey", "darkgrey"))
+                                                   "white", "grey", "darkgrey"))
     studio.add_argument("--texture-mapping", choices=("triplanar", "parametric"))
     for flag in ("--exposure", "--env-intensity", "--env-rotation", "--shadow-intensity", "--shadow-softness",
                  "--ao-intensity"):
         studio.add_argument(flag, type=float)
 
     capture = sub.add_parser("capture", help="drive the browser, refit the camera, and write a PNG")
+    add_session(capture)
     capture.add_argument("--view", type=view_arg, required=True)
     capture.add_argument("--out", type=Path, required=True, help="PNG path; its folder is created")
     capture.add_argument("--joint", help="section plane through this joint's axis (--view section)")
@@ -134,7 +157,9 @@ def build_parser() -> argparse.ArgumentParser:
                       help='viewer ports by name: {"a": .., "b": .., "presenter_a": .., "presenter_b": ..}')
     host.add_argument("--width", type=int, required=True)
     host.add_argument("--height", type=int, required=True)
+    host.add_argument("--idle-timeout", type=int, default=30)
     return parser
+
 
 
 def request_body(args: argparse.Namespace) -> tuple[str, str, dict[str, Any]]:
@@ -182,15 +207,15 @@ def summarise(command: str, answer: dict[str, Any], base_url: str) -> dict[str, 
 
 
 def run(args: argparse.Namespace) -> int:
-    path = session.session_path()
+    path = session.session_path(project_root(args), args.session if args.command != "host" else None)
     if args.command == "host":
         from cadviewer import host
 
-        return host.run(args.session, args.panel_port, args.ports, args.width, args.height)
+        return host.run(args.session, args.panel_port, args.ports, args.width, args.height, args.idle_timeout)
     if args.command == "serve":
         data, reused = session.start(path, SCRIPT, args.panel_port, args.port_a, args.port_b,
-                                     (args.width, args.height))
-        emit(session.describe(data, SCRIPT, reused))
+                                     (args.width, args.height), args.idle_timeout)
+        emit(session.describe(data, reused, args.session or os.environ.get("CAD_VIEWER_SESSION_NAME")))
         return 0
     if args.command == "stop":
         emit(session.stop(path))
