@@ -130,7 +130,9 @@
         "presentation": {"type": "string", "enum": ["auto", "visible", "section", "detail"]},
         "axial_location_from": {"$ref": "#/$defs/reference"},
         "tolerance_policy": {"$ref": "#/$defs/policy_name"},
-        "thread": {"$ref": "#/$defs/thread"}
+        "thread": {"$ref": "#/$defs/thread"},
+        "surface_texture": {"$ref": "#/$defs/texture_requirement"},
+        "edges": {"$ref": "#/$defs/edges"}
       }
     },
     "thread": {
@@ -141,6 +143,27 @@
         "standard": {"type": "string", "minLength": 1},
         "operation": {"type": "string", "enum": ["tap", "thread_form", "roll", "cut", "vendor"]},
         "full_depth_anchor": {"$ref": "#/$defs/semantic_id"}
+      }
+    },
+    "edge_limits": {
+      "description": "ISO 13715:2017 edge size limits [lower, upper] in mm: + permits excess material (burr, passing), - requires removal (edge break, undercut); a single limit pairs with 0",
+      "type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "number"}
+    },
+    "edges": {
+      "description": "Edges of undefined shape: the external and internal edge size limits; on a feature, exceptions to the drawing's general indication",
+      "type": "object", "additionalProperties": false, "minProperties": 1,
+      "properties": {
+        "external": {"$ref": "#/$defs/edge_limits"},
+        "internal": {"$ref": "#/$defs/edge_limits"}
+      }
+    },
+    "texture_requirement": {
+      "description": "An ISO 21920-1 (ASME Y14.36) surface texture requirement: the parameter's upper limit in micrometres and whether material shall be removed",
+      "type": "object", "additionalProperties": false, "required": ["parameter", "limit_um", "process"],
+      "properties": {
+        "parameter": {"type": "string", "enum": ["Ra", "Rz"]},
+        "limit_um": {"type": "number", "exclusiveMinimum": 0},
+        "process": {"type": "string", "enum": ["any", "removal_required", "removal_prohibited"]}
       }
     },
     "geometric_tolerance": {
@@ -162,7 +185,8 @@
       "properties": {
         "id": {"$ref": "#/$defs/semantic_id"},
         "operation": {"type": "string", "enum": ["diameter", "radius", "distance", "plane_separation", "axis_distance",
-                                                 "axis_location", "angle", "depth", "width", "length", "thickness", "chamfer"]},
+                                                 "location", "axis_location", "angle", "depth", "width", "length",
+                                                 "thickness", "chamfer"]},
         "features": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/semantic_id"}},
         "datum_frame": {"type": "array", "minItems": 1, "maxItems": 3, "uniqueItems": true, "items": {"$ref": "#/$defs/datum_label"}},
         "tolerance": {"$ref": "#/$defs/tolerance"},
@@ -212,12 +236,24 @@
         },
         "dimensions": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/dimension_request"}},
         "geometric_tolerances": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/geometric_tolerance"}},
+        "edges": {
+          "description": "the general indication of the edges of undefined shape (ISO 13715:2017 §4.5.4); a detail drawing needs it",
+          "allOf": [{"$ref": "#/$defs/edges"}, {"required": ["external", "internal"]}]
+        },
+        "surface_texture": {
+          "description": "the general surface texture of the surfaces with no texture of their own (ISO 21920-1 §9.1.2), or open with the reason no value has a basis yet; a detail drawing needs it",
+          "oneOf": [
+            {"$ref": "#/$defs/texture_requirement"},
+            {"type": "object", "additionalProperties": false, "required": ["open"],
+             "properties": {"open": {"type": "string", "minLength": 1}}}
+          ]
+        },
         "notes": {
           "type": "array", "minItems": 1,
           "items": {
             "type": "object", "additionalProperties": false, "required": ["kind", "text"],
             "properties": {
-              "kind": {"type": "string", "enum": ["process", "edge", "finish", "material", "inspection", "general"]},
+              "kind": {"type": "string", "enum": ["process", "finish", "material", "inspection", "general"]},
               "text": {"type": "string", "minLength": 1},
               "reference": {"type": "string", "minLength": 1}
             }
@@ -244,6 +280,11 @@
         "manufacturer_part_number": {"type": "string", "minLength": 1},
         "supplier_part_number": {"type": "string", "minLength": 1},
         "designation": {"type": "string", "minLength": 1},
+        "standard": {
+          "description": "the product standard of a standard part, such as DIN 471 or ISO 4762; its designation states the standard with its designation items (DIN 471 - 5x0.6) and identifies the item without a manufacturer or manufacturer part number",
+          "type": "string",
+          "pattern": "^(ISO|IEC|EN|DIN|BS|JIS|ANSI|ASME|SAE|NAS|MS)( (EN|ISO|IEC))* [A-Z]?[0-9]+(\\.[0-9]+)*(-[0-9]+)*$"
+        },
         "specification": {
           "description": "the datasheet or standard that defines the item, identified by its sha256; with only a url the frozen copy is a sourcing input kept outside the record",
           "type": "object", "additionalProperties": false, "required": ["reference", "revision", "sha256"],

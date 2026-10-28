@@ -102,8 +102,128 @@ def size_text(char: Characteristic, regime: str, symbol: str = "") -> str:
     return f"{count_prefix(char.quantity, regime)}{symbol}{nominal}{suffix}"
 
 
-GDT_SYMBOLS = {"position": "⌖", "coaxiality": "◎", "perpendicularity": "⟂", "parallelism": "∥", "flatness": "⏥",
+GDT_SYMBOLS = {"position": "⌖", "coaxiality": "◎", "perpendicularity": "⊥", "parallelism": "∥", "flatness": "⏥",
                "cylindricity": "⌭", "circular_runout": "↗", "total_runout": "⌰", "profile_surface": "⌓"}
+
+
+# --- edges and surface texture ---------------------------------------------------------------------
+# Design intent from part.yaml, never measured. ISO 13715:2017 §4.2 signs an edge size: + permits excess
+# material (the burr of an external edge, the passing of an internal one) and − requires its removal (an
+# edge break, an undercut); §4.3 writes one limit when the other is zero, ± for symmetric limits, else
+# upper/lower. ASME has no edge symbol, so the same limits read as the customary burr, break and corner note.
+
+def _signed_size(value: Decimal) -> str:
+    return ("+" if value > 0 else "−") + number(abs(value))
+
+
+def edge_size(limits: Sequence[float]) -> str:
+    """An ISO 13715 edge size from its ``[lower, upper]`` limits in mm: ``−0.1/−0.3``, ``+0.3`` or ``±0.05``."""
+    lower, upper = (Decimal(str(v)) for v in limits)
+    if lower == -upper:
+        return f"±{number(upper)}"
+    if lower == 0 or upper == 0:
+        return _signed_size(upper or lower)
+    return f"{_signed_size(upper)}/{_signed_size(lower)}"
+
+
+def _asme_edges(limits: Sequence[float], internal: bool, brief: bool = False) -> str:
+    """The limits as an ASME note; ``brief`` for a feature's callout, where the general note gives the words."""
+    lower, upper = (Decimal(str(v)) for v in limits)
+    lo, up = number(abs(lower)), number(abs(upper))
+    if internal:
+        corners = "CORNERS" if brief else "INTERNAL CORNERS"
+        if lower >= 0:
+            return (f"{corners} R{up} MAX" + ("" if brief else ", NO UNDERCUT")) if lower == 0 else f"{corners} R{lo}-{up}"
+        if upper <= 0:
+            return f"{corners} UNDERCUT {lo} MAX" if upper == 0 else f"{corners} UNDERCUT {up}-{lo}"
+        return f"{corners} R{up} OR UNDERCUT {lo} MAX"
+    if upper <= 0:
+        if brief:
+            return f"BREAK EDGES {lo} MAX" if upper == 0 else f"BREAK EDGES {up}-{lo}"
+        return (f"REMOVE ALL BURRS, EDGE BREAK {lo} MAX" if upper == 0
+                else f"REMOVE ALL BURRS AND BREAK SHARP EDGES {up}-{lo}")
+    if lower >= 0:
+        burrs = f"BURRS {up} MAX" if lower == 0 else f"BURRS {lo}-{up}"
+        return burrs if brief else f"{burrs}, DO NOT BREAK EDGES"
+    return f"BURRS {up} MAX OR EDGE BREAK {lo} MAX"
+
+
+def edge_note(edges: Mapping[str, Sequence[float]], regime: str, exceptions: bool) -> str:
+    """The general indication of the edges of undefined shape (ISO 13715:2017 §4.5.4, exceptions §4.5.5)."""
+    if regime == "asme":
+        return (f"UNDEFINED EDGES: {_asme_edges(edges['external'], False)}; {_asme_edges(edges['internal'], True)}"
+                + (", EXCEPT AS SHOWN." if exceptions else "."))
+    return (f"Edges of undefined shape ISO 13715: external {edge_size(edges['external'])}, internal "
+            f"{edge_size(edges['internal'])}" + ("; exceptions as indicated." if exceptions else "."))
+
+
+def edge_lines(edges: Mapping[str, Sequence[float]], regime: str) -> list[str]:
+    """A feature's own edge sizes, an exception to the general indication, as lines of its callout."""
+    return [_asme_edges(edges[kind], kind == "internal", brief=True) if regime == "asme"
+            else f"{kind} edges {edge_size(edges[kind])}" for kind in ("external", "internal") if kind in edges]
+
+
+TAN30 = math.tan(math.radians(30.0))
+TEXTURE_TEXT_GAP = 0.6   # between the symbol's bar and the requirement under it
+TEXTURE_GAP = 1.0        # above a symbol in a callout block
+
+
+@dataclass(frozen=True)
+class TextureSymbol:
+    """A surface texture symbol (ISO 21920-1:2021 §6.2 Figure 4; ASME Y14.36-2018): two legs at 60° to the
+    surface, the bar with the requirement under it (``Ra 0.8``, §7.3 and §7.4), a line closing the legs when
+    material shall be removed and a circle when it shall not. ``others`` follows a general indication with
+    the basic symbol in parentheses for the surfaces that carry their own requirement (§9.1.2).
+
+    Legs of 1.4 and 3 lettering heights: the proportions of ISO 1302:2002 Annex A, which ISO 21920-1 replaced.
+    """
+
+    requirement: str
+    process: str              # any | removal_required | removal_prohibited
+    others: bool = False
+
+    @classmethod
+    def of(cls, texture: Mapping[str, Any]) -> TextureSymbol:
+        return cls(f"{texture['parameter']} {number(texture['limit_um'])}", texture["process"])
+
+    def _layout(self, height: float) -> tuple[float, float, float, float]:
+        """Short and long leg heights, then the requirement's and the bar's end x from the box's left edge."""
+        short, long = 1.4 * height, 3.0 * height
+        text_x = TAN30 * (short + long - TEXTURE_TEXT_GAP) + 0.5   # clear of the long leg under the bar
+        return short, long, text_x, text_x + text_width(self.requirement, height) + 0.5
+
+    def size(self, height: float) -> tuple[float, float]:
+        short, long, _, bar_end = self._layout(height)
+        others = 1.5 + 2 * (0.12 * long + 0.6) + TAN30 * (short + long) if self.others else 0.0
+        return bar_end + others, long
+
+    def markup(self, x: float, y: float, height: float) -> str:
+        """The symbol in the box whose top left corner is (x, y); its vertex is the box's lowest point."""
+        short, long, text_x, bar_end = self._layout(height)
+        vx, vy = x + TAN30 * short, y + long
+        parts = [_legs(vx, vy, short, long), _line(vx + TAN30 * long, y, x + bar_end, y),
+                 _text(self.requirement, x + text_x, y + TEXTURE_TEXT_GAP + TEXT_ASCENT * height, height)]
+        if self.process == "removal_required":
+            parts.append(_line(vx - TAN30 * short, vy - short, vx + TAN30 * short, vy - short))
+        elif self.process == "removal_prohibited":
+            parts.append(f'<circle cx="{vx:.3f}" cy="{vy - 2 * short / 3:.3f}" r="{short / 3:.3f}" fill="none" '
+                         f'stroke="#000" stroke-width="{THIN:g}"/>')
+        if self.others:
+            bulge = 0.12 * long
+            radius = (long * long / 4 + bulge * bulge) / (2 * bulge)
+            left = x + bar_end + 1.5 + bulge
+            inner = left + 0.6 + TAN30 * short
+            right = inner + TAN30 * long + 0.6
+            for edge, sweep in ((left, 0), (right, 1)):
+                parts.append(f'<path d="M {edge:.3f} {y:.3f} A {radius:.3f} {radius:.3f} 0 0 {sweep} {edge:.3f} '
+                             f'{y + long:.3f}" fill="none" stroke="#000" stroke-width="{THIN:g}"/>')
+            parts.append(_legs(inner, vy, short, long))
+        return "".join(parts)
+
+
+def _legs(vx: float, vy: float, short: float, long: float) -> str:
+    """The basic symbol: a short leg up and left, a long one up and right, both at 60° to the surface."""
+    return _line(vx - TAN30 * short, vy - short, vx, vy) + _line(vx, vy, vx + TAN30 * long, vy - long)
 
 
 # --- view data --------------------------------------------------------------------------------------
@@ -231,6 +351,7 @@ class Callout:
     anchor: tuple[float, float]
     lines: list[str]
     frames: list[list[str]] = field(default_factory=list)   # feature control frames, cells left to right
+    textures: list[TextureSymbol] = field(default_factory=list)  # surface texture symbols, under the frames
     datum: str | None = None                                # a datum feature symbol instead of a leader arrow
     datum_tag: str | None = None                            # an axis datum attached to this size callout
     characteristics: list[str] = field(default_factory=list)
@@ -398,16 +519,34 @@ def build_presentation(chars: Sequence[Characteristic], frame: DatumFrame, bindi
         cells = [GDT_SYMBOLS[tolerance["characteristic"]],
                  ("⌀" if tolerance.get("diameter_zone") else "") + number(tolerance["zone_mm"]),
                  *tolerance.get("datum_frame", [])]
-        _attach_frame(result, callouts, tolerance["features"][0], f"geometric.{tolerance['id']}", cells,
-                      binding, faces, views, callout_for)
+        target = _attach(result, callouts, tolerance["features"][0], f"geometric.{tolerance['id']}", cells[0],
+                         binding, faces, views, callout_for)
+        if target is not None:
+            target.frames.append(cells)
     for char in chars:
         if char.operation == "profile":
             cells = [GDT_SYMBOLS["profile_surface"], number(char.value), *char.details.get("datum_frame", [])]
-            _attach_frame(result, callouts, char.feature, char.id, cells, binding, faces, views, callout_for)
+            target = _attach(result, callouts, char.feature, char.id, cells[0], binding, faces, views, callout_for)
+            if target is not None:
+                target.frames.append(cells)
     for tolerance in geometric:
         key, first = f"geometric.{tolerance['id']}", profiled.get(tolerance["features"][0])
         if key not in result.placed and first in result.placed:
             result.placed[key] = result.placed[first]
+    # a feature's own surface texture symbol and edge sizes, exceptions to the sheet's general indications
+    for feature_id, intent in intents.items():
+        if feature_id not in binding:
+            continue
+        if "surface_texture" in intent:
+            target = _attach(result, callouts, feature_id, f"surface_texture.{feature_id}", "surface_texture",
+                             binding, faces, views, callout_for)
+            if target is not None:
+                target.textures.append(TextureSymbol.of(intent["surface_texture"]))
+        if "edges" in intent:
+            target = _attach(result, callouts, feature_id, f"edges.{feature_id}", "edges", binding, faces, views,
+                             callout_for)
+            if target is not None:
+                target.lines.extend(edge_lines(intent["edges"], regime))
     # datum features: an axis datum tags its feature's size callout, a plane datum gets its own symbol
     for datum in sorted(frame.datums.values(), key=lambda d: d.label):
         key = f"datum.{datum.label}"
@@ -431,22 +570,23 @@ def build_presentation(chars: Sequence[Characteristic], frame: DatumFrame, bindi
                                 candidates=[sheet for _, sheet in points])
         result.callouts.append(datum_callout)
         result.placed[key] = {"annotation": datum_callout.id, "view": plan_id, "anchor": list(datum_callout.anchor)}
-    result.callouts.extend(c for c in callouts.values() if c.lines or c.frames)
+    result.callouts.extend(c for c in callouts.values() if c.lines or c.frames or c.textures)
     return result
 
 
-def _attach_frame(result: Presentation, callouts: Mapping[tuple[str, str], Callout], feature: str, key: str,
-                  cells: list[str], binding: Mapping[str, ResolvedFeature], faces: Mapping[int, Face],
-                  views: Mapping[str, ViewData], factory: Any) -> None:
+def _attach(result: Presentation, callouts: Mapping[tuple[str, str], Callout], feature: str, key: str, operation: str,
+            binding: Mapping[str, ResolvedFeature], faces: Mapping[int, Face], views: Mapping[str, ViewData],
+            factory: Any) -> Callout | None:
+    """The feature's first callout, or a new one where the feature shows, now carrying ``key``; None if unplaced."""
     target = next((c for (f, _), c in callouts.items() if f == feature), None)
     if target is None:
         target = _new_callout(feature, binding, faces, views, factory)
     if target is None:
-        result.unplaced.append({"characteristic": key, "feature": feature, "operation": cells[0], "presentation": "auto"})
-        return
-    target.frames.append(cells)
+        result.unplaced.append({"characteristic": key, "feature": feature, "operation": operation, "presentation": "auto"})
+        return None
     target.characteristics.append(key)
     result.placed[key] = {"annotation": target.id, "view": target.view, "anchor": list(target.anchor)}
+    return target
 
 
 def _new_callout(feature: str, binding: Mapping[str, ResolvedFeature], faces: Mapping[int, Face],
@@ -602,8 +742,11 @@ def _block_size(callout: Callout, size: float) -> tuple[float, float]:
     if callout.datum_tag:
         width, height = _block_size(replace(callout, datum_tag=None), size)
         return max(width, size + 2.4), height + size + 4.0
-    width = max([text_width(line, size) for line in callout.lines] + [_frame_width(f, size) for f in callout.frames] + [0])
-    return width, pitch * len(callout.lines) + (size + 2.0) * len(callout.frames)
+    textures = [symbol.size(size) for symbol in callout.textures]
+    width = max([text_width(line, size) for line in callout.lines] + [_frame_width(f, size) for f in callout.frames]
+                + [w for w, _ in textures] + [0])
+    return width, (pitch * len(callout.lines) + (size + 2.0) * len(callout.frames)
+                   + sum(h + TEXTURE_GAP for _, h in textures))
 
 
 def layout_view(view: ViewData, presentation: Presentation, size: float, regime: str,
@@ -628,12 +771,14 @@ def layout_view(view: ViewData, presentation: Presentation, size: float, regime:
         footprint = footprint.union(Box(min(dim.origin[0], dim.target[0]) - text_width(dim.text, size),
                                         y - size - 1.5, max(dim.origin[0], dim.target[0]) + text_width(dim.text, size), y))
     right_edge = box.x1
-    for number_, dim in enumerate(columns):
-        x = box.x1 + FIRST_ROW + number_ * ROW_PITCH
+    x = box.x1 + FIRST_ROW
+    for dim in columns:
         annotations.append(_dimension_markup(dim, x, size, regime))
-        right_edge = x + size + 1.5
+        # ISO 129-1 aligns the text with the line; ASME Y14.5 reads it horizontally, right of the line
+        right_edge = x + (size + 1.5 if regime == "iso" else 1.0 + text_width(dim.text, size))
         footprint = footprint.union(Box(x - 1.0, min(dim.origin[1], dim.target[1]) - text_width(dim.text, size),
                                         right_edge, max(dim.origin[1], dim.target[1]) + text_width(dim.text, size)))
+        x = max(x + ROW_PITCH, right_edge + 2.0)
     marks: list[Box] = []
     for child in children:
         markup, boxes = (section_marks(view, child, size, regime) if child.kind == "section"
@@ -642,6 +787,7 @@ def layout_view(view: ViewData, presentation: Presentation, size: float, regime:
         marks.extend(boxes)
         for mark in boxes:
             footprint = footprint.union(mark)
+    label = _view_label(view, size, regime)
     # callout columns, left and right of the view
     mine = [c for c in presentation.callouts if c.view == view.plan.id]
     middle = (box.x0 + box.x1) / 2
@@ -652,6 +798,8 @@ def layout_view(view: ViewData, presentation: Presentation, size: float, regime:
         edge = (box.x0 - COLUMN_GAP) if side < 0 else (right_edge + COLUMN_GAP)
         reserved = [(m.y0, m.y1) for m in marks if (m.x1 < box.x0 + 1.0) == (side < 0) and
                     (m.x1 < box.x0 + 1.0 or m.x0 > box.x1 - 1.0)]
+        if label is not None and (label[1].x0 < edge if side < 0 else label[1].x1 > edge):
+            reserved.append((label[1].y0, label[1].y1))   # a label wider than the view reaches over this column
         for callout in column:
             callout.side = side
             callout.anchor = _side_anchor(callout, side, box)
@@ -675,7 +823,6 @@ def layout_view(view: ViewData, presentation: Presentation, size: float, regime:
     section = (fill_section(view.plan.id, view.cut_regions, view.project, view.geometry.scale)
                if view.plan.kind == "section" else None)
     annotations.extend(_view_furniture(view, section))
-    label = _view_label(view, size, regime)
     if label is not None:
         annotations.append(label[0])
         footprint = footprint.union(label[1])
@@ -769,10 +916,11 @@ def _dimension_markup(dim: Linear, at: float, size: float, regime: str) -> SvgAn
         parts.append(_arrow((at, oy), (at, ty)))
         parts.append(_arrow((at, ty), (at, oy)))
         width = text_width(dim.text, size)
+        along = width if regime == "iso" else (TEXT_ASCENT + TEXT_DESCENT) * size   # the text's extent along the line
         mid = (oy + ty) / 2
-        if width + 2 * ARROW_LENGTH > abs(ty - oy):
-            mid = y0 - 1.5 - width / 2
-            parts.append(_line(at, y0 - 1.5 - width, at, y0))
+        if along + 2 * ARROW_LENGTH > abs(ty - oy):
+            mid = y0 - 1.5 - along / 2
+            parts.append(_line(at, y0 - 1.5 - along, at, y0))
         if regime == "iso":
             parts.append(_text(dim.text, at - 1.0, mid, size, "middle", rotate=-90.0))
             if dim.boxed:
@@ -828,6 +976,11 @@ def _callout_markup(callout: Callout, edge: float, top: float, width: float, siz
                                 "middle"))
             x += w
         y += height
+    textures = []
+    for symbol in callout.textures:
+        w, h = symbol.size(size)
+        textures.append(symbol.markup(edge - w if side < 0 else edge, y + TEXTURE_GAP, size))
+        y += h + TEXTURE_GAP
     first_line_y = top + pitch / 2 if callout.lines else top + (size + 2.0) / 2
     landing_end = edge + LANDING if side < 0 else edge - LANDING
     landing_x = edge + 0.8 if side < 0 else edge - 0.8
@@ -849,6 +1002,8 @@ def _callout_markup(callout: Callout, edge: float, top: float, width: float, siz
     markup = "".join(parts)
     if frames:
         markup += f'<g class="fcf">{"".join(frames)}</g>'
+    if textures:
+        markup += f'<g class="texture">{"".join(textures)}</g>'
     if datum:
         markup += f'<g class="datum-label">{"".join(datum)}</g>'
     markup += f'<g class="leader-line">{"".join(leader)}</g>'

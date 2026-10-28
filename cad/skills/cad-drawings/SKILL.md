@@ -11,8 +11,8 @@ TRIGGER
 
 ## Workflow
 
-1. Give the part's `model.py` a `drawing_features(params, shape)` hook (cad-model `references/contract.md`) that names every final face by its semantic role, and give `part.yaml` a `drawing` block: datums, coordinate frame, views, per-feature intent, extra dimension requests, geometric tolerances, notes and sheet policy. LOAD `references/drawing-intent.md` for the feature kinds and fields, and `references/drawing-standards.md` for the producer-ready rows.
-   For a catalogue item, give `part.yaml` a `procurement` record and, when the item needs a sheet, a `vendor_specification` or `source_control` drawing whose `dimensions` carry the specification's limits; LOAD the vendor section of `references/drawing-intent.md`.
+1. Give the part's `model.py` a `drawing_features(params, shape)` hook (cad-model `references/contract.md`) that names every final face by its semantic role, and give `part.yaml` a `drawing` block: datums, coordinate frame, views, per-feature intent, extra dimension requests, geometric tolerances, ISO 13715 `edges`, a general `surface_texture` (ISO 21920-1), notes and sheet policy. LOAD `references/drawing-intent.md` for the feature kinds and fields, and `references/drawing-standards.md` for the producer-ready rows.
+   For a catalogue item, give `part.yaml` a `procurement` record (a standard part names its `standard` and is ordered by its designation) and, when the item needs a sheet, a `vendor_specification` or `source_control` drawing whose `dimensions` carry the specification's limits; LOAD the vendor section of `references/drawing-intent.md`.
 2. Give `product.yaml` a `drawing` policy (projection, standards, default sheet, named tolerance policies). Bind interface sizes in `interfaces.yaml`: fits as `hole`/`shaft` feature endpoints, heat-set seats with `feature`, ring grooves on `retaining_ring.feature`.
 3. Build the version: `uv run --script skill://cad-flow/scripts/run.py cad-model/scripts/cad_model.py run hw --label vN`.
 4. Run `uv run --script skill://cad-drawings/scripts/drawing.py hw [--version vN] --part PN [--part PN ...] --output-dir DIR [--timeout S]` with FreeCAD 1.1.4 installed (see Install FreeCAD). Each part's package goes to `DIR/<PN>/`.
@@ -65,6 +65,6 @@ The TechDraw templates come from the same FreeCAD, in `share/Mod/TechDraw/Templa
 MUST Inspect every PNG preview; a passing gate proves the implemented contract, not ISO or ASME conformance or engineering approval.
 MUST Take every dimension value from the model; part.yaml carries requests and tolerances, never values.
 MUST Bind each interface size to its fit or heat-set declaration; never print the modelled mid-limit as the nominal.
-MUST Treat `revision_unreleased` and `procurement_incomplete` release blockers as open until the record is released and sourced.
+MUST Treat `revision_unreleased`, `procurement_incomplete` and `surface_texture_open` release blockers as open until the record is released, sourced and its general surface texture has a basis.
 MUST Give each controlled dimension on a vendor sheet its specification's limits, or mark it `reference: true`; a bought item takes no general tolerance.
 NOT A catalogue part without `drawing` intent gets no sheet; its procurement record is still checked.

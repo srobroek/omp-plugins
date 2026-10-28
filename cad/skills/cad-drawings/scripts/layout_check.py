@@ -225,10 +225,10 @@ def _font_size(value: str | None) -> float | None:
 
 
 # Annotation group classes. Marks of a CLEAR class (dimension lines and arrows, feature control
-# frames, datum letter boxes) must stay off view geometry and off other annotations' text; marks of an
-# OVERLAY class are drawn on the views on purpose (extension, leader and centre lines, hatching,
-# cutting planes, detail boundaries) and are not checked. Text is checked in every class.
-CLEAR_CLASSES = frozenset({"dimension", "fcf", "datum-label"})
+# frames, datum letter boxes, surface texture symbols) must stay off view geometry and off other
+# annotations' text; marks of an OVERLAY class are drawn on the views on purpose (extension, leader and
+# centre lines, hatching, cutting planes, detail boundaries) and are not checked. Text is checked in every class.
+CLEAR_CLASSES = frozenset({"dimension", "fcf", "datum-label", "texture"})
 OVERLAY_CLASSES = frozenset({"extension", "leader", "leader-line", "centerline", "hatch", "section-line",
                              "detail-boundary", "datum-target"})
 

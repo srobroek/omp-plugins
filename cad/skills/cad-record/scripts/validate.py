@@ -219,6 +219,18 @@ def check_part_drawing(part: dict[str, Any], path: str, product_drawing: dict[st
         for ref in tolerance.get("datum_frame", []):
             datum(f"geometric_tolerances/{index}/datum_frame", ref)
 
+    # edges and surface texture are what a detail drawing specifies; a vendor item has them as supplied
+    indications = [("", drawing)] + [(f"features/{f}/", intent) for f, intent in drawing.get("features", {}).items()]
+    for where, owner in indications:
+        if drawing["type"] != "detail":
+            for field in ("edges", "surface_texture"):
+                if field in owner:
+                    findings.append(finding(path, f"drawing/{where}{field}: only a detail drawing specifies {field}; "
+                                                  f"a {drawing['type']} item has them as supplied"))
+        for kind, (lower, upper) in owner.get("edges", {}).items():
+            if lower >= upper:
+                findings.append(finding(path, f"drawing/{where}edges/{kind}: lower {lower} must be below upper {upper}"))
+
     defined = (product_drawing or {}).get("tolerance_policies", {})
     for where, name in policies:
         policy = defined.get(name)
@@ -243,6 +255,15 @@ def check_procurement(part: dict[str, Any], path: str, hw: Path, findings: list[
                                       "source_control sheet"))
     for field in sorted(set(procurement.get("open", {})) & set(procurement)):
         findings.append(finding(path, f"procurement/open/{field}: {field} is both set and declared open"))
+    standard = procurement.get("standard")
+    if standard is not None:
+        if mode != "catalog":
+            findings.append(finding(path, "procurement/standard: only a catalogue item is ordered by its standard "
+                                          "designation"))
+        # the designation block of a standard: its number, a dash, then the designation items (DIN 471 - 5x0.6)
+        if not re.search(rf"(?<![\w.]){re.escape(standard)}\s*[-–]\s*\S", procurement.get("designation", "")):
+            findings.append(finding(path, f"procurement/designation does not state the {standard} designation: "
+                                          f"'{standard} - ' followed by its designation items"))
     specification = procurement.get("specification")
     if specification is None or "artifact" not in specification:
         return  # a url-only specification is a sourcing input: its frozen copy is kept outside hw/

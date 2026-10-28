@@ -27,7 +27,7 @@ import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 from xml.etree import ElementTree as ET
 
 from defusedxml import ElementTree as SafeET
@@ -221,13 +221,41 @@ class SvgTable:
     rows: tuple[tuple[str, ...], ...]
 
 
+class NoteSymbol(Protocol):
+    """A graphical symbol a note carries, such as a general surface texture indication."""
+
+    def size(self, height: float) -> tuple[float, float]: ...
+
+    def markup(self, x: float, y: float, height: float) -> str: ...
+
+
 @dataclass(frozen=True)
 class SvgNote:
-    """One numbered general note."""
+    """One numbered general note; a ``symbol`` is drawn on its own row under the note's text."""
 
     id: str
     text: str
     provenance: Mapping[str, str] = field(default_factory=dict)
+    symbol: NoteSymbol | None = None
+
+
+@dataclass(frozen=True)
+class NoteLine:
+    """One row of the notes block: wrapped text with its indent, or a note's symbol."""
+
+    text: str
+    indent: float
+    symbol: NoteSymbol | None = None
+    note: str = ""
+
+    @property
+    def advance(self) -> float:
+        """Baseline to baseline: a text line's pitch, or a symbol row's height and its gap."""
+        return NOTE_LINE if self.symbol is None else self.symbol.size(NOTE_SIZE)[1] + 1.0
+
+    @property
+    def width(self) -> float:
+        return self.indent + (text_width(self.text, NOTE_SIZE) if self.symbol is None else self.symbol.size(NOTE_SIZE)[0])
 
 
 @dataclass(frozen=True)
@@ -238,7 +266,7 @@ class PageLayout:
     title_region: Box                 # title block plus the tables stacked on it
     tables: Mapping[str, Box]
     notes: Box | None
-    note_lines: tuple[tuple[str, float], ...] = ()   # wrapped note text and its indent, top to bottom
+    note_lines: tuple[NoteLine, ...] = ()   # the notes block's rows, top to bottom
 
     @property
     def obstacles(self) -> tuple[Box, ...]:
@@ -373,14 +401,19 @@ def _table_size(table: SvgTable) -> tuple[list[float], float]:
     return widths, TABLE_ROW * (1 + len(table.rows))
 
 
-def _note_lines(notes: Sequence[SvgNote], room: float) -> list[tuple[str, float]]:
-    """Each line of the notes block with its indent; continuation lines hang under the note text."""
-    lines: list[tuple[str, float]] = []
+def _note_lines(notes: Sequence[SvgNote], room: float) -> list[NoteLine]:
+    """Each row of the notes block; continuation lines and a note's symbol hang under the note text."""
+    lines: list[NoteLine] = []
     for number, note in enumerate(notes, start=1):
         prefix = f"{number}. "
         indent = text_width(prefix, NOTE_SIZE)
         for index, line in enumerate(_wrap(note.text, NOTE_SIZE, room - indent)):
-            lines.append((prefix + line, 0.0) if index == 0 else (line, indent))
+            lines.append(NoteLine(prefix + line, 0.0) if index == 0 else NoteLine(line, indent))
+        if note.symbol is not None:
+            if indent + note.symbol.size(NOTE_SIZE)[0] > room:
+                raise CompositionError("sheet_no_fit", f"note {note.id}'s symbol does not fit the {room:.1f} mm "
+                                                       f"notes column")
+            lines.append(NoteLine("", indent, note.symbol, note.id))
     return lines
 
 
@@ -388,7 +421,9 @@ def page_layout(spec: SheetSpec, tables: Sequence[SvgTable] = (), notes: Sequenc
     """Where ``compose_page`` puts the tables and notes of a page; raise CompositionError when they do not fit.
 
     Tables stack on the title block, right-aligned with it. Notes take the frame's lower left
-    corner when the title block leaves at least 60 mm beside it, else the space above the tables.
+    corner when the title block and its tables leave at least 60 mm beside them, else the space
+    above the tables. A table wider than the title block narrows that corner: ``layout_check``
+    keeps every annotation off the box round the title block and its tables.
     """
     area = spec.drawing_area()
     block = spec.regions.title_block
@@ -404,14 +439,13 @@ def page_layout(spec: SheetSpec, tables: Sequence[SvgTable] = (), notes: Sequenc
         top = box.y0
     notes_box, lines = None, []
     if notes:
-        beside = block.x0 - FRAME_CLEARANCE - area.x0
+        beside = region.x0 - FRAME_CLEARANCE - area.x0
         room = beside if beside >= 60.0 else area.x1 - area.x0
         bottom = area.y1 if beside >= 60.0 else region.y0 - FRAME_CLEARANCE
         lines = _note_lines(notes, room)
-        height = (NOTE_HEADING_SIZE * (TEXT_ASCENT + TEXT_DESCENT) + 1.0 + NOTE_LINE * len(lines)
+        height = (NOTE_HEADING_SIZE * (TEXT_ASCENT + TEXT_DESCENT) + 1.0 + sum(line.advance for line in lines)
                   + TEXT_DESCENT * NOTE_SIZE)
-        width = max(text_width(NOTES_HEADING[spec.regime], NOTE_HEADING_SIZE),
-                    *(indent + text_width(line, NOTE_SIZE) for line, indent in lines))
+        width = max(text_width(NOTES_HEADING[spec.regime], NOTE_HEADING_SIZE), *(line.width for line in lines))
         notes_box = Box(area.x0, bottom - height, area.x0 + width, bottom)
         if notes_box.y0 < area.y0:
             raise CompositionError("sheet_no_fit", f"{len(notes)} notes need {height:.1f} mm; {spec.size} has no room")
@@ -541,9 +575,15 @@ def _notes_group(regime: str, layout: PageLayout) -> ET.Element:
     baseline = box.y0 + TEXT_ASCENT * NOTE_HEADING_SIZE
     group.append(_text(NOTES_HEADING[regime], box.x0, baseline, NOTE_HEADING_SIZE, bold=True))
     baseline += TEXT_DESCENT * NOTE_HEADING_SIZE + 1.0
-    for line, indent in layout.note_lines:
-        baseline += NOTE_LINE
-        group.append(_text(line, box.x0 + indent, baseline, NOTE_SIZE))
+    for line in layout.note_lines:
+        if line.symbol is None:
+            baseline += line.advance
+            group.append(_text(line.text, box.x0 + line.indent, baseline, NOTE_SIZE))
+            continue
+        top = baseline + TEXT_DESCENT * NOTE_SIZE + 1.0
+        group.append(_markup(SvgAnnotation(f"{line.note}-symbol", "texture",
+                                           line.symbol.markup(box.x0 + line.indent, top, NOTE_SIZE))))
+        baseline += line.advance
     return group
 
 

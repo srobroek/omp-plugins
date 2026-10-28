@@ -10,7 +10,8 @@
 6. consistency: no characteristic is controlled twice with different values;
 7. visibility: every characteristic sits on a visible point of its own feature in some view;
 8. cross-part fit: each fit endpoint naming this part names one of its bound features;
-9. product notes: a detail drawing states its edge condition and finish;
+9. product notes: a detail drawing states its edges (ISO 13715), general surface texture and finish, and
+   every feature's own texture symbol or edge sizes sit on a visible point of that feature;
 10. section fill: every cut face of every section view is lined or filled solid over its projected
     area (``section_hatch``; thin faces solid).
 
@@ -92,10 +93,11 @@ def evaluate(pn: str, part: Mapping[str, Any], interfaces: Sequence[Mapping[str,
     findings += _conflicts(measured.characteristics)
     drawing = part.get("drawing") or {}
     if drawing.get("type") == "detail":
-        kinds = {note["kind"] for note in drawing.get("notes", [])}
-        for kind, what in (("edge", "edge condition (ISO 13715)"), ("finish", "surface finish or coating")):
-            if kind not in kinds:
-                findings.append(finding("drawing_intent_missing", f"drawing.notes states no {what}"))
+        if not any(note["kind"] == "finish" for note in drawing.get("notes", [])):
+            findings.append(finding("drawing_intent_missing", "drawing.notes states no surface finish or coating"))
+        for field, what in (("edges", "edge condition (ISO 13715)"), ("surface_texture", "general surface texture")):
+            if field not in drawing:
+                findings.append(finding("drawing_intent_missing", f"the drawing states no {what} in drawing.{field}"))
     rows = []
     for char in measured.characteristics:
         status = "pass"
@@ -120,6 +122,14 @@ def evaluate(pn: str, part: Mapping[str, Any], interfaces: Sequence[Mapping[str,
                                                           "datum_frame": tolerance.get("datum_frame", [])},
                      "annotation": placed and placed["annotation"], "view": placed and placed["view"],
                      "status": "pass" if placed or presentation is None else "fail"})
+    for feature, intent in (drawing.get("features") or {}).items():
+        for field in ("surface_texture", "edges"):
+            if field in intent:
+                key = f"{field}.{feature}"
+                placed = presentation.placed.get(key) if presentation is not None else None
+                rows.append({"feature": feature, "requirement": field, "characteristic": key, "tolerance": intent[field],
+                             "annotation": placed and placed["annotation"], "view": placed and placed["view"],
+                             "status": "pass" if placed or presentation is None else "fail"})
     if presentation is not None:
         for item in presentation.unplaced:
             findings.append(finding("feature_not_presentable", f"{item['characteristic']} has no visible point of "
@@ -141,4 +151,7 @@ def release_blockers(part: Mapping[str, Any]) -> list[dict[str, Any]]:
         blockers.append(finding("procurement_incomplete", "no supplier is selected"))
     for field, reason in sorted(((part.get("procurement") or {}).get("open") or {}).items()):
         blockers.append(finding("procurement_incomplete", f"{field} is open: {reason}"))
+    texture = (part.get("drawing") or {}).get("surface_texture") or {}
+    if "open" in texture:
+        blockers.append(finding("surface_texture_open", f"the general surface texture is open: {texture['open']}"))
     return blockers

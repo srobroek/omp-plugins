@@ -26,7 +26,7 @@ import freecad_runtime  # noqa: E402
 from drawing_intent import Characteristic, Measured, Tolerance  # noqa: E402
 from feature_geometry import Binding  # noqa: E402
 from layout_check import Box, SheetRegions, check_layout  # noqa: E402
-from sheet import Linear, Presentation  # noqa: E402
+from sheet import Linear, Presentation, TextureSymbol, edge_lines, edge_note, edge_size  # noqa: E402
 
 SKILLS = SCRIPTS.parents[1]
 TEMPLATE = SKILLS / "cad-record" / "assets" / "project-template" / "hw"
@@ -97,6 +97,55 @@ class RepeatedDimensions(unittest.TestCase):
                                            presentation, "0" * 64)
             self.assertEqual(sum(f["code"] == "dimension_conflict" for f in report.findings), expected, report.findings)
 
+
+class EdgeAndTextureIndications(unittest.TestCase):
+    """ISO 13715 edge sizes and their ASME notes, ISO 21920-1 symbols, and the gate's edge and texture rows."""
+
+    def test_edge_sizes_follow_the_iso_13715_signs(self) -> None:
+        sizes = [edge_size(v) for v in ([-0.3, 0.0], [0.0, 0.3], [-0.3, -0.1], [-0.05, 0.05], [-0.1, 0.2])]
+        self.assertEqual(sizes, ["−0.3", "+0.3", "−0.1/−0.3", "±0.05", "+0.2/−0.1"])
+
+    def test_general_edge_note_per_regime(self) -> None:
+        edges = {"external": [-0.3, 0.0], "internal": [0.0, 0.3]}
+        self.assertEqual(edge_note(edges, "iso", True),
+                         "Edges of undefined shape ISO 13715: external −0.3, internal +0.3; exceptions as indicated.")
+        self.assertEqual(edge_note(edges, "asme", False), "UNDEFINED EDGES: REMOVE ALL BURRS, EDGE BREAK 0.3 MAX; "
+                                                          "INTERNAL CORNERS R0.3 MAX, NO UNDERCUT.")
+        groove = {"external": [-0.02, 0.0], "internal": [0.0, 0.06]}
+        self.assertEqual(edge_lines(groove, "iso"), ["external edges −0.02", "internal edges +0.06"])
+        self.assertEqual(edge_lines({"external": [-0.3, -0.1], "internal": [0.0, 0.06]}, "asme"),
+                         ["BREAK EDGES 0.1-0.3", "CORNERS R0.06 MAX"])
+
+    def test_texture_symbol_shows_the_process_and_the_requirement(self) -> None:
+        markups = {process: TextureSymbol("Ra 0.8", process).markup(0.0, 0.0, 2.5)
+                   for process in ("any", "removal_required", "removal_prohibited")}
+        self.assertEqual(markups["removal_required"].count("<line"), markups["any"].count("<line") + 1)
+        self.assertIn("<circle", markups["removal_prohibited"])
+        self.assertTrue(all(">Ra 0.8<" in m for m in markups.values()))
+        self.assertEqual(TextureSymbol("Ra 0.8", "any").size(2.5)[1], 7.5)   # the long leg: three lettering heights
+        plain, others = TextureSymbol("Ra 1.6", "any"), TextureSymbol("Ra 1.6", "any", others=True)
+        self.assertGreater(others.size(2.5)[0], plain.size(2.5)[0])
+        self.assertEqual(others.markup(0.0, 0.0, 2.5).count("<path"), 2)     # the parentheses round the basic symbol
+
+    def test_a_texture_symbol_over_a_view_fails_layout_check(self) -> None:
+        mark = (f'<g id="callout-t" class="leader"><g class="texture">'
+                f'{TextureSymbol("Ra 1.6", "any").markup(45.0, 45.0, 2.5)}</g></g>')
+        problems = check_layout(sheet(mark), REGIONS, [])
+        self.assertTrue(any("crosses view-front geometry" in p for p in problems), problems)
+
+    def test_detail_drawing_needs_edges_and_texture_and_an_open_texture_blocks_release(self) -> None:
+        part = {"rev": "X1", "make_buy": "make", "drawing": {"type": "detail",
+                                                             "notes": [{"kind": "finish", "text": "As machined."}]}}
+
+        def missing() -> list[str]:
+            report = completeness.evaluate("TST-0001", part, [], Binding({}, {}, ()), Measured(frame=None), None, "0" * 64)
+            return [f["message"] for f in report.findings if f["code"] == "drawing_intent_missing"]
+
+        self.assertEqual(len(missing()), 2, missing())
+        part["drawing"].update(edges={"external": [-0.3, 0.0], "internal": [0.0, 0.3]},
+                               surface_texture={"open": "no basis for a value yet"})
+        self.assertEqual(missing(), [])
+        self.assertIn("surface_texture_open", [b["code"] for b in completeness.release_blockers(part)])
 
 
 @unittest.skipUnless(FREECAD_PRESENT and UV, "the gate tests need uv and FreeCAD's freecadcmd")
@@ -187,21 +236,23 @@ class PinDrawingGate(unittest.TestCase):
         sourcing = package_json["provenance"]["sourcing_inputs"]
         self.assertEqual([s["url"].startswith("https://") for s in sourcing], [True])  # the PDF stays outside hw/
 
-    def test_open_procurement_fields_block_release_and_undeclared_ones_fail(self) -> None:
+    def test_open_procurement_fields_block_release_and_a_standard_designation_orders(self) -> None:
         code, result = self.draw("v1", "insert", "LMP-0010")
         self.assertEqual((code, result["status"]), (0, "pass"), result.get("findings"))
         blockers = [b["message"] for b in result["release"]["blockers"]]
         self.assertTrue(any(m.startswith("manufacturer_part_number is open") for m in blockers), blockers)
         code, result = self.draw("v1", "ring", "LMP-0011")
         self.assertEqual((code, result["status"]), (0, "not_required"))   # a standard part needs no sheet
+        blockers = [b["message"] for b in result["release"]["blockers"]]
+        self.assertFalse(any(" is open: " in m for m in blockers), blockers)   # DIN 471 - 5x0.6 identifies it
         part = self.hw / "parts" / "LMP-0011" / "part.yaml"
         original = part.read_text(encoding="utf-8")
         try:
-            part.write_text(re.sub(r"  open:\n    manufacturer_part_number: .*\n", "", original), encoding="utf-8")
-            code, result = self.draw("v1", "ring-undeclared", "LMP-0011")
+            part.write_text(original.replace("  standard: DIN 471\n", ""), encoding="utf-8")
+            code, result = self.draw("v1", "ring-unstandard", "LMP-0011")
         finally:
             part.write_text(original, encoding="utf-8")
-        self.assertEqual((code, result["status"]), (1, "fail"))
+        self.assertEqual((code, result["status"]), (1, "fail"))   # without its standard it needs a part number
         self.assertEqual([f["code"] for f in result["findings"]], ["procurement_incomplete"])
 
 

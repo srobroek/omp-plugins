@@ -31,6 +31,7 @@ from drawing_document import (CompositionError, CoverageReport, SheetMetadata, S
                               SvgTable, compose_page, page_layout, publish_package, sheet_specs)
 from freecad_views import Circle, ViewGeometry  # noqa: E402
 from layout_check import Box, check_layout, path_points  # noqa: E402
+from sheet import TextureSymbol  # noqa: E402
 
 FREECADCMD = freecad_runtime.find_freecadcmd()
 FREECAD_PRESENT = FREECADCMD is not None and FREECADCMD.is_file()
@@ -255,6 +256,18 @@ class ComposePage(unittest.TestCase):
                                 notes=[SvgNote("n1", "Deburr all edges.")])
         problems = check_layout(on_notes.svg, on_notes.regions, on_notes.placeholders)
         self.assertTrue(any("overlaps view-plan geometry" in p for p in problems), problems)
+
+    def test_a_note_symbol_takes_its_own_row_and_passes_layout_check(self) -> None:
+        symbol = TextureSymbol("Ra 1.6", "removal_required", others=True)
+        plain = SvgNote("surface-texture", "Surface texture ISO 21920-1, unless otherwise indicated:")
+        marked = SvgNote(plain.id, plain.text, symbol=symbol)
+        grown, base = page_layout(self.spec, [], [marked]).notes, page_layout(self.spec, [], [plain]).notes
+        self.assertAlmostEqual((grown.y1 - grown.y0) - (base.y1 - base.y0), symbol.size(2.5)[1] + 1.0)
+        sheet = self.compose(notes=[marked])
+        self.assertEqual(check_layout(sheet.svg, sheet.regions, sheet.placeholders), [])
+        notes = re.search(r'<g id="general-notes".*', sheet.svg, re.S).group(0)
+        self.assertIn('class="texture"', notes)
+        self.assertIn(">Ra 1.6<", notes)
 
     def test_projection_symbol_follows_the_projection_method(self) -> None:
         def symbol_order(projection: str) -> tuple[float, float]:

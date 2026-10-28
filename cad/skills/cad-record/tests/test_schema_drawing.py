@@ -55,13 +55,17 @@ BASE = {
                   {"id": "section_aa", "kind": "section", "through": "B", "toward": "C"},
                   {"id": "slot_detail", "kind": "detail", "feature": "mount_slot", "scale": "2:1"}],
         "features": {"base_profile": {"profile": "controlled_model", "profile_tolerance_mm": 0.4},
-                     "pivot_bore": {"size": "interface", "location": "datum_coordinates"},
+                     "pivot_bore": {"size": "interface", "location": "datum_coordinates",
+                                    "surface_texture": {"parameter": "Ra", "limit_um": 1.6, "process": "removal_required"},
+                                    "edges": {"external": [-0.1, 0.0]}},
                      "mount_slot": {"size": "general", "location": "datum_coordinates", "presentation": "detail"},
                      "boss": {"size": "general", "axial_location_from": "A", "tolerance_policy": "fdm_supplier"}},
         "dimensions": [{"id": "boss_height", "operation": "distance", "features": ["boss", "bed_face"],
                         "datum_frame": ["A"], "tolerance": {"deviation_mm": [-0.2, 0.2]}},
                        {"id": "overall_height", "operation": "length", "features": ["base_profile"], "reference": True}],
-        "notes": [{"kind": "edge", "text": "Break sharp edges.", "reference": "ISO 13715"}],
+        "edges": {"external": [-0.5, 0.0], "internal": [0.0, 0.5]},
+        "surface_texture": {"open": "no published roughness for the bureau's as-printed PETG"},
+        "notes": [{"kind": "finish", "text": "As printed; the pivot bore is reamed."}],
         "manufacturing": {"build_direction": {"normal_to": "A"}, "interface_condition": "as_printed"},
         "sheet": {"sizes": ["A4", "A3"], "scale": "auto", "multi_sheet": True},
     },
@@ -227,6 +231,19 @@ class DrawingRecordAdditions(unittest.TestCase):
             "camel-case feature id": (lambda d: d["features"].update(BossTop={"size": "general"}), "drawing/features"),
             "reserved datum letter": (lambda d: d["datum_features"].update(I={"feature": "boss", "role": "axis"}),
                                       "drawing/datum_features"),
+            "edge note kind": (lambda d: d["notes"].append({"kind": "edge", "text": "Break sharp edges."}),
+                               "drawing/notes/1/kind"),
+            "inverted edge limits": (lambda d: d["edges"].update(external=[-0.1, -0.3]),
+                                     "drawing/edges/external: lower -0.1 must be below upper -0.3"),
+            "general edges without internal": (lambda d: d["edges"].pop("internal"), "drawing/edges"),
+            "feature edge limits inverted": (lambda d: d["features"]["pivot_bore"]["edges"].update(internal=[0.3, 0.0]),
+                                             "drawing/features/pivot_bore/edges/internal: lower 0.3 must be below upper 0.0"),
+            "texture without process": (lambda d: d["features"]["pivot_bore"]["surface_texture"].pop("process"),
+                                        "drawing/features/pivot_bore/surface_texture"),
+            "open feature texture": (lambda d: d["features"]["pivot_bore"].update(surface_texture={"open": "later"}),
+                                     "drawing/features/pivot_bore/surface_texture"),
+            "texture both open and set": (lambda d: d["surface_texture"].update(parameter="Ra", limit_um=6.3,
+                                                                                process="any"), "drawing/surface_texture"),
         }
         self.run_cases(cases, lambda: self.parts["TST-0001"]["drawing"])
 
@@ -258,6 +275,16 @@ class DrawingRecordAdditions(unittest.TestCase):
                                             "procurement/open/manufacturer: manufacturer is both set and declared open"),
             "open field outside the identity": (lambda p: p["procurement"].update(open={"designation": "later"}),
                                                 "procurement/open"),
+            "standard not stated in the designation": (lambda p: p["procurement"].update(standard="ISO 2338"),
+                                                       "procurement/designation does not state the ISO 2338 designation"),
+            "standard of no recognised body": (lambda p: p["procurement"].update(standard="ACME 12"),
+                                               "procurement/standard"),
+            "standard on a made-to-drawing part": (lambda p: p["procurement"].update(
+                mode="made_to_drawing", standard="ISO 2338", designation="Parallel pin ISO 2338 - 5 m6 x 20 - A2"),
+                "procurement/standard: only a catalogue item is ordered by its standard designation"),
+            "texture on a vendor sheet": (lambda p: p["drawing"].update(
+                surface_texture={"parameter": "Ra", "limit_um": 0.8, "process": "any"}),
+                "drawing/surface_texture: only a detail drawing specifies surface_texture"),
         }
         self.run_cases(cases, lambda: self.parts["TST-0002"])
 
@@ -267,6 +294,13 @@ class DrawingRecordAdditions(unittest.TestCase):
         procurement["specification"]["url"] = "https://acme.example/dp-datasheet.pdf"
         procurement.pop("supplier_part_number")
         procurement["open"] = {"supplier_part_number": "no distributor selected"}
+        self.assert_valid()
+
+    def test_standard_part_ordered_by_its_designation_validates(self) -> None:
+        procurement = self.parts["TST-0002"]["procurement"]
+        for field in ("manufacturer", "manufacturer_part_number", "supplier_part_number"):
+            procurement.pop(field)
+        procurement.update(standard="ISO 2338", designation="Parallel pin ISO 2338 - 5 m6 x 20 - A2")
         self.assert_valid()
 
     def test_made_to_drawing_needs_a_detail_drawing(self) -> None:

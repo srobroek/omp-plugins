@@ -266,10 +266,34 @@ def sheet_notes(context: drawing_contract.DrawingContext, part: drawing_contract
         notes.append(SvgNote("finish-stage", text.upper() if asme else text))
     for step in manufacturing.get("post_processing", []):
         notes.append(SvgNote(f"post-{len(notes)}", step))
+    features = (drawing.get("features") or {}).values()
+    if "edges" in drawing:
+        exceptions = any("edges" in intent for intent in features)
+        notes.append(SvgNote("edges", sheet.edge_note(drawing["edges"], regime, exceptions), {"kind": "edge"}))
+    if "surface_texture" in drawing:
+        notes.append(texture_note(drawing["surface_texture"], regime, standards,
+                                  any("surface_texture" in intent for intent in features)))
     for index, note in enumerate(drawing.get("notes", [])):
         text = note["text"].upper() if asme else note["text"]
         notes.append(SvgNote(f"note-{index + 1}", text, {"kind": note["kind"]}))
     return notes
+
+
+def texture_note(texture: Mapping[str, Any], regime: str, standards: Mapping[str, str], others: bool) -> SvgNote:
+    """The general surface texture (ISO 21920-1 §9.1.2, ASME Y14.36 §5.1) near the title block, or why it is open.
+
+    ``others``: some features carry their own requirement, so the ISO indication ends in the basic symbol
+    in parentheses.
+    """
+    asme = regime == "asme"
+    standard = standards.get("surface_texture", "ASME Y14.36" if asme else "ISO 21920-1")
+    if "open" in texture:
+        text = f"Surface texture {standard}: OPEN, {texture['open']}."
+        return SvgNote("surface-texture", text.upper() if asme else text, {"kind": "surface_texture", "open": "true"})
+    symbol = replace(sheet.TextureSymbol.of(texture), others=others and not asme)
+    text = (f"UNLESS OTHERWISE SPECIFIED, SURFACE TEXTURE PER {standard}:" if asme
+            else f"Surface texture {standard}, unless otherwise indicated:")
+    return SvgNote("surface-texture", text, {"kind": "surface_texture"}, symbol)
 
 
 def measured_policy(context: drawing_contract.DrawingContext, record: Mapping[str, Any]) -> drawing_intent.Policy | None:
@@ -297,17 +321,22 @@ def metadata(context: drawing_contract.DrawingContext, part: drawing_contract.Pa
 
 
 def procurement_findings(record: Mapping[str, Any]) -> list[dict[str, Any]]:
-    """Content failures of a catalogue item's orderable identity; a field declared ``open`` is a release blocker."""
+    """Content failures of a catalogue item's orderable identity; a field declared ``open`` is a release blocker.
+
+    A standard part is ordered by the designation of its product standard (``procurement.standard``, such as
+    DIN 471 - 5x0.6), which any conforming source satisfies; it needs no manufacturer or part number.
+    """
     procurement = record.get("procurement") or {}
     found = []
     if procurement.get("mode") == "catalog":
         declared = {**procurement.get("open", {}), **procurement}
         if not procurement.get("designation"):
             found.append(drawing_intent.finding("procurement_incomplete", "a catalogue item needs a designation"))
-        for field in ("manufacturer", "manufacturer_part_number"):
+        for field in () if procurement.get("standard") else ("manufacturer", "manufacturer_part_number"):
             if not declared.get(field):
-                found.append(drawing_intent.finding("procurement_incomplete", f"a catalogue item needs its {field} "
-                                                    f"or a procurement.open entry giving why it is open"))
+                found.append(drawing_intent.finding("procurement_incomplete", f"a catalogue item needs its {field}, "
+                                                    f"a procurement.open entry giving why it is open, or the "
+                                                    f"designation of a product standard in procurement.standard"))
         if not procurement.get("specification"):
             found.append(drawing_intent.finding("procurement_incomplete", "a catalogue item needs its specification "
                                                 "(reference, revision, sha256 and an artifact under hw/ or a url)"))
@@ -326,10 +355,13 @@ def procurement_table(record: Mapping[str, Any]) -> SvgTable:
     def cell(field: str) -> str:
         return procurement.get(field) or (f"OPEN: {open_fields[field]}" if field in open_fields else "—")
 
-    rows = [("Designation", cell("designation")), ("Manufacturer", cell("manufacturer")),
-            ("Manufacturer PN", cell("manufacturer_part_number")), ("Supplier PN", cell("supplier_part_number")),
-            ("Specification", f"{spec.get('reference', '—')} rev {spec.get('revision', '—')}"),
-            ("Spec. sha256", spec.get("sha256", "—")[:16])]
+    rows = [("Designation", cell("designation"))]
+    if "standard" in procurement:
+        rows.append(("Standard", procurement["standard"]))
+    rows += [("Manufacturer", cell("manufacturer")), ("Manufacturer PN", cell("manufacturer_part_number")),
+             ("Supplier PN", cell("supplier_part_number")),
+             ("Specification", f"{spec.get('reference', '—')} rev {spec.get('revision', '—')}"),
+             ("Spec. sha256", spec.get("sha256", "—")[:16])]
     for source in procurement.get("approved_sources", []):
         rows.append(("Approved source", f"{source['name']} {source.get('part_number', '')}".strip()))
     return SvgTable("procurement", ("Procurement", "Value"), tuple(rows))
@@ -421,11 +453,13 @@ def compose_and_publish(context: drawing_contract.DrawingContext, part: drawing_
     tables = [procurement_table(record)] if vendor else []
     if vendor:
         notes.insert(0, SvgNote("vendor", ("DIMENSIONS IN MILLIMETERS. ONLY DIMENSIONED INTERFACES ARE CONTROLLED, TO THE "
-                                        "ITEM SPECIFICATION; ENVELOPE GEOMETRY IS ILLUSTRATIVE. DO NOT MANUFACTURE TO "
-                                        "THIS SHEET." if regime == "asme" else
+                                        "ITEM SPECIFICATION; ENVELOPE GEOMETRY IS ILLUSTRATIVE, AND EDGES AND SURFACE "
+                                        "TEXTURE ARE AS SUPPLIED TO THAT SPECIFICATION. DO NOT MANUFACTURE TO THIS SHEET."
+                                        if regime == "asme" else
                                         "Dimensions in mm. Only the dimensioned interfaces are controlled, to the item's "
-                                        "specification; the envelope geometry is illustrative. Do not manufacture to "
-                                        "this sheet.")))
+                                        "specification; the envelope geometry is illustrative, and edges and surface "
+                                        "texture are as supplied to that specification. Do not manufacture to this "
+                                        "sheet.")))
     sourcing = sourcing_note(record)
     if sourcing is not None:
         notes.append(sourcing)
