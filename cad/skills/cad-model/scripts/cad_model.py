@@ -8,7 +8,7 @@ Usage:
     uv run --script skill://cad-flow/scripts/run.py cad-model/scripts/cad_model.py run <hw-dir> --label vN [--kernel auto|cadquery|build123d]
                                      [--attach REF=PARENT_REF ...]
     uv run --script skill://cad-flow/scripts/run.py cad-model/scripts/cad_model.py check vN --hw hw [--out FILE]
-       [--pair REF:REF ...] [--allow-interference REF:REF ...] [--expect-solids PN=N ...] [--jobs 1]
+       [--pair REF:REF ...] [--allow-interference REF:REF ...] [--expect-solids PN=N ...] [--jobs auto]
        [--cache DIR | --no-cache]
     uv run --script skill://cad-flow/scripts/run.py cad-model/scripts/cad_model.py diff vA vB [--hw HW] [--out FILE]
 
@@ -63,10 +63,10 @@ def _expect(text: str) -> tuple[str, int]:
     return pn, int(n)
 
 
-def _positive(text: str) -> int:
-    if not text.isdigit() or int(text) < 1:
-        raise argparse.ArgumentTypeError(f"expected a positive integer, got {text!r}")
-    return int(text)
+def _jobs(text: str) -> int:
+    from cadmodel.motion import load_pair_measure
+
+    return load_pair_measure().jobs_argument(text)
 
 
 def parser() -> argparse.ArgumentParser:
@@ -89,7 +89,8 @@ def parser() -> argparse.ArgumentParser:
     check.add_argument("--expect-solids", action="append", type=_expect, default=[], metavar="PN=N",
                        help="expected solid count; overrides the previous version as baseline")
     check.add_argument("--out", type=Path, help="also write the result JSON here")
-    check.add_argument("--jobs", type=_positive, default=1, help="worker processes measuring pairs (1: this process)")
+    check.add_argument("--jobs", type=_jobs, default="auto", metavar="N|auto",
+                       help="worker processes measuring pairs (1: this process; auto: the CPU count, at most 8)")
     caching = check.add_mutually_exclusive_group()
     caching.add_argument("--cache", type=Path, metavar="DIR",
                          help="pair measurement cache shared with cad-motion sweep.py (default: "

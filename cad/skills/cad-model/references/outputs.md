@@ -125,15 +125,17 @@ measured, and `disk_hits`, the pairs read from the pair cache). Every check has 
 
 `--pair PN:PN` restricts `interference` to the named pairs; every pair still feeds `connection`.
 Clearance and shared volume come from cad-motion's pair measurer (`pair_measure.py`, around
-`pose.interference`), the one `sweep.py` uses at every pose: part b's definition placed by
-T_a^-1 T_b in part a's definition frame, BRepExtrema minimum distance (0 when one part lies inside
-a solid of the other, a solid of a compound part included), and within 1e-6 mm the non-destructive
-Boolean common (fuzzy 1e-7 mm) measured with the adaptive volume rule. `--jobs N` measures in N
-worker processes, largest pairs first; at 1, in this process on OCCT's thread pool. Measurements
-go through cad-motion's pair cache (`$XDG_CACHE_HOME/cad-motion/pairs.sqlite`, else
-`~/.cache/cad-motion`; `--cache DIR` moves it, `--no-cache` skips it). It is keyed by both parts'
-geometry and the exact placement, so the next version measures only the pairs whose part or
-placement changed, and a hit is the value a measurement gives.
+`pose.interference`), the one `sweep.py` uses at every pose. It places part b's definition by
+T_a^-1 T_b in part a's definition frame. The distance is the BRepExtrema minimum distance, 0 when
+one part lies inside a solid of the other, a solid of a compound part included. Within 1e-6 mm,
+the shared volume is the non-destructive Boolean common (fuzzy 1e-7 mm), measured with the adaptive
+volume rule. `--jobs N` measures in N worker processes, largest pairs first; the default `auto` is
+the CPU count, at most 8. At 1, check measures in this process on OCCT's thread pool. Measurements
+go through cad-motion's pair cache
+(`$XDG_CACHE_HOME/cad-motion/pairs.sqlite`, else `~/.cache/cad-motion`; `--cache DIR` moves it,
+`--no-cache` skips it). The cache is keyed by both parts' geometry and the exact placement. A check
+of v2 after v1 measures only the pairs whose part or placement changed, and a hit is the value a
+measurement gives.
 
 Declared fits and inserts come from `hw/interfaces.yaml`. `declared_pairs` lists each press fit with
 its `fit`, `classification`, `interface` and YAML `source`. A fit that names feature endpoints

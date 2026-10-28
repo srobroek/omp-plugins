@@ -33,6 +33,7 @@ Stdlib only; OCP is imported when a shape is touched.
 
 from __future__ import annotations
 
+import argparse
 import concurrent.futures
 import concurrent.futures.process
 import functools
@@ -75,6 +76,7 @@ MEASUREMENT_VERSION = 1
 CACHE_MAX_BYTES = 256 * 2**20  # past this the oldest entries go, down to CACHE_TRIM_TO of it
 CACHE_TRIM_TO = 0.75
 CACHE_BATCH = 256  # entries per write transaction
+AUTO_JOBS_MAX = 8  # `--jobs auto`: this many worker processes at most, about 110 MB each
 
 
 @dataclass(frozen=True)
@@ -541,6 +543,15 @@ def measurement_salt() -> bytes:
     parts = [f"cad-motion pair measurement {MEASUREMENT_VERSION}", repr(constants), getattr(OCP, "__version__", "?"),
              sys.platform, platform.machine(), *(inspect.getsource(function) for function in path)]
     return hashlib.sha256("\0".join(parts).encode()).digest()
+
+
+def jobs_argument(text: str) -> int:
+    """A `--jobs` value: a positive count, or `auto`, the CPU count capped at AUTO_JOBS_MAX."""
+    if text == "auto":
+        return max(1, min(os.cpu_count() or 1, AUTO_JOBS_MAX))
+    if not text.isdigit() or int(text) < 1:
+        raise argparse.ArgumentTypeError(f"expected auto or a positive integer, got {text!r}")
+    return int(text)
 
 
 def _default_start_method() -> str:

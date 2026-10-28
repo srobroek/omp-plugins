@@ -578,6 +578,21 @@ class PairCacheTests(unittest.TestCase):
         self.assertEqual(set(kept), set(keys[-len(kept):]))
 
 
+class JobsArgumentTests(unittest.TestCase):
+    """`--jobs`: auto is the CPU count capped at AUTO_JOBS_MAX; needs no OCP."""
+
+    def test_auto_follows_the_cpu_count_up_to_the_cap_and_a_count_must_be_positive(self) -> None:
+        measure = sweep.pair_measure
+        for cpus, jobs in ((None, 1), (1, 1), (4, 4), (32, measure.AUTO_JOBS_MAX)):
+            with self.subTest(cpus=cpus), mock.patch.object(measure.os, "cpu_count", return_value=cpus):
+                self.assertEqual(measure.jobs_argument("auto"), jobs)
+        self.assertEqual(measure.jobs_argument("3"), 3)
+        for text in ("0", "-1", "two", ""):
+            with self.subTest(text=text), self.assertRaises(sweep.argparse.ArgumentTypeError):
+                measure.jobs_argument(text)
+
+
+
 @unittest.skipUnless(shutil.which("uv"), "uv is required to build and read STEP through OCP")
 class StepTests(unittest.TestCase):
     """Builds fixture STEPs with OCP, then runs the scripts as the skill does."""
