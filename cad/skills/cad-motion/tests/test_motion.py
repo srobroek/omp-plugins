@@ -408,7 +408,7 @@ class PairRequirementTests(unittest.TestCase):
     def measurer(radius: float):
         """A reusing PairMeasurer over two stand-in definitions, A fixed and B (of `radius`) placed in A's frame."""
         boxes = {"a": ([-1.0, 0.0, 0.0], [0.0, 0.0, 0.0]), "b": ([-radius, 0.0, 0.0], [0.0, 0.0, 0.0])}
-        with mock.patch.object(sweep.pair_measure, "box_corners", side_effect=boxes.__getitem__):
+        with mock.patch.object(sweep.pair_measure, "box_corners", side_effect=lambda shape, tolerance=False: boxes[shape]):
             return sweep.pair_measure.PairMeasurer({"A": "a", "B": "b"}, reuse=True)
 
     def measure(self, measurer, placements: list, thresholds: list, distances: list) -> list:
@@ -558,6 +558,19 @@ class StepTests(unittest.TestCase):
                               capture_output=True, text=True, check=False, timeout=900)
         self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
         return json.loads(proc.stdout)
+
+    def test_the_box_gap_bounds_the_distance_and_skips_only_a_containment_test_that_cannot_succeed(self) -> None:
+        """fixtures/measure_probe.py over every fixture pair at seeded placements: gap <= distance, and
+        a pair measured with its gap (no containment test past SOLID_GAP_MM) is bitwise unchanged."""
+        proc = subprocess.run(["uv", "run", "--quiet", "--script", str(HERE / "fixtures" / "measure_probe.py"),
+                               str(self.root / "fx")], capture_output=True, text=True, check=False, timeout=900)
+        self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+        report = json.loads(proc.stdout)
+        self.assertEqual((report["gap_violations"], report["mismatches"]), ([], []))
+        self.assertGreater(report["wrapped"], report["compared"] // 2, report)
+        self.assertEqual(report["buried"]["gap"], 0.0)
+        self.assertEqual(report["buried"]["result"][0], 0.0)
+        self.assertAlmostEqual(report["buried"]["result"][1], 8.0, places=6)
 
     def twins(self, assembly: str) -> Path:
         """A record over the twins fixture: TST-0201 assembly_zero, TST-0202 part_local."""

@@ -4,7 +4,9 @@ The one measuring module of both tools. A request asks for the (minimum distance
 mm^3) of two part definitions: definition `b` placed by `placement` in the frame of definition `a`
 (sweep: a at its definition frame) or of `a` placed by `a_placement` (check: both in world
 coordinates). Every measurement is pose.py's `interference` rule on the definition shapes moved by
-`pose.placed`; nothing is copied, meshed or rebuilt per request.
+`pose.placed`; nothing is copied, meshed or rebuilt per request. Each measurement is given the gap
+between the two placed bounding boxes (`box_gap`), so a pair whose boxes are apart skips the
+kernel's containment test, which cannot succeed there.
 
 With `reuse` (sweep), a measurement is reused within the run by the two definitions and the
 placement rounded to 1e-6 per matrix entry, so a joint sweep measures only the pairs that joint
@@ -76,6 +78,10 @@ class PairMeasurer:
         self.reuse = reuse
         self.radii = {key: max(math.hypot(*corner) for corner in itertools.product(*zip(*box_corners(shape))))
                       for key, shape in self.shapes.items()} if reuse else {}
+        # The corners of each definition's bounding box, enlarged by its shape tolerances: the box
+        # holds the shape, so its placed corners' axis-aligned hull holds the placed shape.
+        self.corners = {key: list(itertools.product(*zip(*box_corners(shape, tolerance=True))))
+                        for key, shape in self.shapes.items()}
         self.measured = 0  # kernel measurements
         self.reused = 0  # requests answered by an earlier measurement
         self.rechecks = 0  # reuse candidates measured again: a threshold lies within their placement bound
@@ -117,23 +123,38 @@ class PairMeasurer:
                  * self.radii[request.b] + math.dist(placement.trans, request.placement.trans))
         return not bound or all(abs(outcome[0] - threshold) > bound for threshold in request.thresholds)
 
+    def box_gap(self, request: Request) -> float:
+        """The distance between the axis-aligned hulls of the two placed bounding boxes: a lower
+        bound on the distance between the placed shapes."""
+        low_a, high_a = _hull(self.corners[request.a], request.a_placement)
+        low_b, high_b = _hull(self.corners[request.b], request.placement)
+        return math.sqrt(sum(max(0.0, low_b[k] - high_a[k], low_a[k] - high_b[k]) ** 2 for k in range(3)))
+
     def _measure_one(self, request: Request) -> Outcome:
         self.measured += 1
         shape_a = self.shapes[request.a]
         if request.a_placement is not None:
             shape_a = pose.placed(shape_a, request.a_placement)
         try:
-            return pose.interference(shape_a, pose.placed(self.shapes[request.b], request.placement))
+            return pose.interference(shape_a, pose.placed(self.shapes[request.b], request.placement),
+                                     box_gap=self.box_gap(request))
         except Exception as error:  # noqa: BLE001 - OCP raises Standard_Failure on broken input
             return Failure(str(error) or type(error).__name__)
 
 
-def box_corners(shape: Any) -> tuple[list[float], list[float]]:
-    """(min, max) corners of `shape`'s optimal bounding box from its exact geometry."""
+def _hull(corners: list[tuple[float, float, float]], rigid: Any) -> tuple[list[float], list[float]]:
+    """(min, max) of `corners` moved by `rigid` (None: not moved)."""
+    moved = corners if rigid is None else [rigid.apply(corner) for corner in corners]
+    return [min(p[k] for p in moved) for k in range(3)], [max(p[k] for p in moved) for k in range(3)]
+
+
+def box_corners(shape: Any, tolerance: bool = False) -> tuple[list[float], list[float]]:
+    """(min, max) corners of `shape`'s optimal bounding box from its exact geometry; with `tolerance`
+    enlarged by the shape's vertex, edge and face tolerances."""
     from OCP.Bnd import Bnd_Box
     from OCP.BRepBndLib import BRepBndLib
 
     box = Bnd_Box()
-    BRepBndLib.AddOptimal_s(shape, box, False, False)
+    BRepBndLib.AddOptimal_s(shape, box, False, tolerance)
     low, high = box.CornerMin(), box.CornerMax()
     return [low.X(), low.Y(), low.Z()], [high.X(), high.Y(), high.Z()]

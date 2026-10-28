@@ -109,8 +109,10 @@ INTERFERENCE_MM3 = 1e-3
 OVERLAP_GATE_MM = 1e-6
 FUZZY_MM = 1e-7
 # BRepExtrema_DistShapeShape's point-in-solid tolerance (its SolidTreatment, OCCT 8.0.1), which
-# `interference` applies inside compounds as well.
+# `interference` applies inside compounds as well. Bounding boxes farther apart than SOLID_GAP_MM
+# (the tolerance plus as much again for rounding) leave no point within it of the other shape.
 CONTAINMENT_TOL_MM = 1e-3
+SOLID_GAP_MM = 2 * CONTAINMENT_TOL_MM
 VERSION_LABEL = re.compile(r"^v([1-9][0-9]*)$")  # a cad-model version label: v1, v2, ...
 # An explicit occurrence's STEP component and GLB node name: `<PN> <title> [@id]`.
 OCCURRENCE_TAG = re.compile(r" \[@([a-z][a-z0-9_-]*)\]$")
@@ -805,7 +807,17 @@ def _contained(shape_a: Any, shape_b: Any) -> bool:
             or (shape_b.ShapeType() == TopAbs_COMPOUND and _inside_compound(shape_b, shape_a)))
 
 
-def interference(shape_a: Any, shape_b: Any) -> tuple[float, float]:
+def _one_member_compound(shape: Any) -> Any:
+    from OCP.BRep import BRep_Builder
+    from OCP.TopoDS import TopoDS_Compound
+
+    compound, builder = TopoDS_Compound(), BRep_Builder()
+    builder.MakeCompound(compound)
+    builder.Add(compound, shape)
+    return compound
+
+
+def interference(shape_a: Any, shape_b: Any, box_gap: float = 0.0) -> tuple[float, float]:
     """(minimum distance mm, shared volume mm^3) of two shapes in one frame.
 
     The distance is BRepExtrema's between the boundaries, and 0 when one shape lies inside the
@@ -814,15 +826,21 @@ def interference(shape_a: Any, shape_b: Any) -> tuple[float, float]:
     share with every other pose, keep their tolerances) with fuzzy value FUZZY_MM, and measured with
     `volume_properties`; it is 0 without a Boolean when the shapes are farther apart than
     OVERLAP_GATE_MM. A shared volume above INTERFERENCE_MM3 is interference.
+
+    `box_gap` is a lower bound the caller proved on the distance between the shapes' bounding boxes
+    (0: unknown). Beyond SOLID_GAP_MM no vertex of either shape lies within CONTAINMENT_TOL_MM of the
+    other, so containment is not looked for: b goes to BRepExtrema as a one-member COMPOUND, for
+    which it skips its vertex-in-solid classification and measures the same boundary distance.
     """
     from OCP.BRepAlgoAPI import BRepAlgoAPI_Common
     from OCP.BRepExtrema import BRepExtrema_DistShapeShape
 
-    extrema = BRepExtrema_DistShapeShape(shape_a, shape_b)
+    apart = box_gap > SOLID_GAP_MM
+    extrema = BRepExtrema_DistShapeShape(shape_a, _one_member_compound(shape_b) if apart else shape_b)
     if not extrema.IsDone():
         raise MotionError("distance computation failed")
     distance = extrema.Value()
-    if distance > OVERLAP_GATE_MM and _contained(shape_a, shape_b):
+    if distance > OVERLAP_GATE_MM and not apart and _contained(shape_a, shape_b):
         distance = 0.0
     if distance > OVERLAP_GATE_MM:
         return distance, 0.0
