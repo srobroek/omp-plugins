@@ -139,6 +139,18 @@ class MainTests(unittest.TestCase):
         self.assertNotEqual(status, 0)
         run_checks.assert_not_called()
 
+    def test_nonpassing_cad_check_prevents_all_other_setup_work(self) -> None:
+        bad_templates = setup.preflight.Check(
+            "techdraw-templates", "TechDraw templates", "fail", True, "missing templates", "install FreeCAD")
+        with patch.dict("os.environ", {"HOME": str(self.home)}, clear=True), \
+                patch.object(setup.preflight, "_timed_freecad_checks", return_value=[bad_templates]), \
+                patch.object(setup.preflight, "run_checks") as run_checks, \
+                patch.object(setup, "plan") as plan, redirect_stdout(io.StringIO()):
+            status = setup.main(["--yes"])
+        self.assertNotEqual(status, 0)
+        run_checks.assert_not_called()
+        plan.assert_not_called()
+
 
     def test_wrong_version_or_missing_templates_fail_before_setup(self) -> None:
         bad_version = setup.preflight.Check("freecad-version", "FreeCAD version", "fail", True,
