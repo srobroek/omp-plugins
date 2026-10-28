@@ -51,7 +51,8 @@ ISO2768_ANGLE = {"f": (1.0, 0.5, 1 / 3, 1 / 6, 1 / 12), "m": (1.0, 0.5, 1 / 3, 1
 SIZE_OPERATIONS = ("diameter", "radius", "width", "length", "chamfer", "across_flats", "depth", "thickness",
                    "plane_separation", "axis_distance", "distance", "extent")
 LOCATION_OPERATIONS = ("location", "axis_location", "pattern", "slot_location")
-SEPARATION_REQUESTS = ("plane_separation", "thickness", "distance")   # between two features' nearest parallel planes
+# between two features' nearest parallel planes; a width is a callout that also counts its equal pairs
+SEPARATION_REQUESTS = ("plane_separation", "thickness", "distance", "width")
 THREAD = re.compile(r"^M(?P<d>[0-9]+(?:\.[0-9]+)?)x(?P<p>[0-9]+(?:\.[0-9]+)?)-(?P<cls>[0-9][a-hA-H](?:[0-9][a-hA-H])?)$")
 
 
@@ -242,6 +243,56 @@ def cylinder_instances(faces: Sequence[Face]) -> list[Instance]:
         instances.append(Instance(base, direction, group[0].radius, tuple(f.index for f in group), t0, t1,
                                   (first_end, last_end) if first_end and last_end else None))
     return instances
+
+
+GRID_MIN_INSTANCES = 4   # fewer holes are located one by one
+
+
+def _grid_pattern(instances: Sequence[Instance], frame: DatumFrame, across: Sequence[str]) -> dict[str, Any] | None:
+    """Instances that fill one regular grid inside a circle: stated once (ISO 129-1 equally spaced features).
+
+    The grid is the shortest offset between centres and the shortest one not parallel to it, both measured from
+    the instance nearest the centroid (the reference, the only instance located from the datums). It is a grid
+    only when every centre is a grid node and every node within the farthest centre's distance is a centre, so
+    the pitch, the angle and that circle state the whole set; otherwise each instance keeps its own location.
+    """
+    if len(instances) < GRID_MIN_INSTANCES:
+        return None
+    a, b = ("xyz".index(across[0]), "xyz".index(across[1]))
+    points = [(frame.coords(i.axis_point)[a], frame.coords(i.axis_point)[b]) for i in instances]
+    cu, cv = (sum(p[0] for p in points) / len(points), sum(p[1] for p in points) / len(points))
+    reference = min(range(len(points)), key=lambda k: (round(math.hypot(points[k][0] - cu, points[k][1] - cv), 6), k))
+    ru, rv = points[reference]
+    offsets = [(u - ru, v - rv) for u, v in points]
+
+    def angle(o: tuple[float, float]) -> float:
+        return round(math.degrees(math.atan2(o[1], o[0])) % 180.0, 6)
+
+    ordered = sorted((o for o in offsets if math.hypot(*o) > EPS), key=lambda o: (round(math.hypot(*o), 6), angle(o)))
+    first = ordered[0]
+    if first[1] < -EPS or (abs(first[1]) <= EPS and first[0] < 0):
+        first = (-first[0], -first[1])
+    pitch = math.hypot(*first)
+    second = next((o for o in ordered if abs(first[0] * o[1] - first[1] * o[0]) > EPS * pitch), None)
+    if second is None:
+        return None
+    if first[0] * second[1] - first[1] * second[0] < 0:
+        second = (-second[0], -second[1])
+    det = first[0] * second[1] - first[1] * second[0]
+    for u, v in offsets:
+        i, j = round((u * second[1] - v * second[0]) / det), round((first[0] * v - first[1] * u) / det)
+        if math.hypot(i * first[0] + j * second[0] - u, i * first[1] + j * second[1] - v) > 10 * EPS:
+            return None
+    reach = max(math.hypot(*o) for o in offsets)
+    span = int(reach / min(pitch, math.hypot(*second)) * 2) + 2
+    nodes = sum(1 for i in range(-span, span + 1) for j in range(-span, span + 1)
+                if math.hypot(i * first[0] + j * second[0], i * first[1] + j * second[1]) <= reach + EPS)
+    if nodes != len(instances):
+        return None
+    turn = (math.degrees(math.atan2(second[1], second[0])) - math.degrees(math.atan2(first[1], first[0]))) % 360.0
+    return {"grid": True, "pitch": pitch, "second_pitch": math.hypot(*second), "angle_deg": turn,
+            "first_angle_deg": math.degrees(math.atan2(first[1], first[0])) % 360.0, "from_axis": across[0],
+            "within_diameter": 2 * reach, "reference": reference, "centres": [inst.axis_point for inst in instances]}
 
 
 def _datum(label: str, feature: ResolvedFeature, role: str, faces: Mapping[int, Face]) -> Datum:
@@ -618,6 +669,11 @@ class Measurer:
                 self.char(feature, "pattern", pattern["pcd"], feature.faces, quantity=len(instances),
                           axis=along, details=pattern)
                 return
+            grid = _grid_pattern(instances, frame, across)
+            if grid is not None:   # stated once by its pitch and boundary; only its reference instance is located
+                self.char(feature, "pattern", grid["pitch"], feature.faces, quantity=len(instances), axis=along,
+                          details=grid)
+                instances = [instances[grid["reference"]]]
         for number, inst in enumerate(instances):
             coords = frame.coords(inst.axis_point)
             for name in across:
@@ -1106,11 +1162,16 @@ class Measurer:
             chain = operation in SEPARATION_REQUESTS and len(features) == 2
             if chain:   # drawn from the first feature's plane nearest the second
                 details["from_faces"] = self._separation_planes(features[0], features[1])[0]
+            quantity = same[0].quantity if same else 1
+            if operation == "width" and len(features) == 2:
+                # a width callout states every opposed pair of the two features at that width: 4× width 0.6
+                pairs = self._pairs_at(features[0], features[1], value)
+                quantity, faces = len(pairs), sorted({b for _, b in pairs})
             item = Characteristic(id=request["id"], feature=request["features"][0], operation=operation, value=value,
-                                  faces=tuple(faces), quantity=same[0].quantity if same else 1, axis=axis,
+                                  faces=tuple(faces), quantity=quantity, axis=axis,
                                   tolerance=tolerance, presentation=request.get("presentation", "auto"),
                                   reference=bool(request.get("reference")), requested=True, details=details)
-            if chain and not item.reference and features[1].kind == "plane_face":
+            if chain and operation != "width" and not item.reference and features[1].kind == "plane_face":
                 # a chain dimension locates the second plane from the first, in place of its datum location
                 self.result.characteristics = [c for c in self.result.characteristics if not (
                     c.feature == features[1].id and c.operation == "location" and not c.requested)]
@@ -1214,6 +1275,13 @@ class Measurer:
                     and abs(fg.dot(fg.sub(f.point, face.point), face.normal)) < EPS]
 
         return coplanar(a, planes[0]), coplanar(b, planes[1]), value, a.normal
+
+    def _pairs_at(self, first: ResolvedFeature, second: ResolvedFeature, value: float) -> list[tuple[int, int]]:
+        """The opposed parallel plane pairs of two features ``value`` apart: each rib or web a width states."""
+        planes = [[self.faces[i] for i in f.faces if self.faces[i].support_type == "plane"] for f in (first, second)]
+        return [(a.index, b.index) for a in planes[0] for b in planes[1]
+                if fg.dot(a.normal, b.normal) < -1 + fg.DIRECTION_EPS
+                and abs(abs(fg.dot(fg.sub(b.point, a.point), a.normal)) - value) < EPS]
 
     def _geometric(self, frame: DatumFrame) -> None:
         for tolerance in self.drawing.get("geometric_tolerances", []):

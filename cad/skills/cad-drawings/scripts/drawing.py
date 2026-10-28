@@ -49,7 +49,7 @@ import feature_recognition  # noqa: E402
 import freecad_runtime  # noqa: E402
 import part_views  # noqa: E402
 import sheet  # noqa: E402
-from drawing_document import CompositionError, SheetMetadata, SvgNote, SvgTable  # noqa: E402
+from drawing_document import CompositionError, SheetMetadata, SvgAnnotation, SvgNote, SvgTable  # noqa: E402
 from freecad_views import ViewGeometry  # noqa: E402
 from layout_check import Box  # noqa: E402
 from section_hatch import CutRegion  # noqa: E402
@@ -146,7 +146,9 @@ def plan_layout(plans: Sequence[part_views.ViewPlan], probe: Mapping[str, sheet.
                 details: Mapping[str, Mapping[str, Any]], presentation_for: Any, spec: drawing_document.SheetSpec,
                 scale: float, text: float, regime: str, notes: Sequence[SvgNote], tables: Sequence[SvgTable],
                 ) -> tuple[dict[str, tuple[float, float]], dict[str, float]] | None:
-    """View centres on ``spec`` at ``scale`` when every view, its annotations and the furniture fit."""
+    """View centres, each on its own sheet's ``spec`` at ``scale``, when every sheet's views, annotations and
+    furniture fit; the notes and tables go on sheet 1. One presentation over every view assigns each
+    characteristic to one view, so a dimension appears once in the whole package."""
     scales, placed = {}, {}
     for plan in plans:
         if plan.kind == "detail":
@@ -164,15 +166,18 @@ def plan_layout(plans: Sequence[part_views.ViewPlan], probe: Mapping[str, sheet.
     footprints = {view_id: sheet.layout_view(view, presentation, text, regime,
                                              [p for p in plans if p.base == view_id]).footprint
                   for view_id, view in placed.items()}
-    try:
-        layout = drawing_document.page_layout(spec, tables, notes)
-    except CompositionError:
-        return None
-    region = Box(layout.drawing_area.x0, layout.drawing_area.y0, layout.drawing_area.x1,
-                 min(o.y0 for o in layout.obstacles) - VIEW_GAP / 2)
-    centres = arrange(plans, footprints, spec.projection, region)
-    if centres is None:
-        return None
+    centres: dict[str, tuple[float, float]] = {}
+    for number in sorted({p.sheet for p in plans}):
+        try:
+            layout = drawing_document.page_layout(spec, tables if number == 1 else [], notes if number == 1 else [])
+        except CompositionError:
+            return None
+        region = Box(layout.drawing_area.x0, layout.drawing_area.y0, layout.drawing_area.x1,
+                     min(o.y0 for o in layout.obstacles) - VIEW_GAP / 2)
+        placed_here = arrange([p for p in plans if p.sheet == number], footprints, spec.projection, region)
+        if placed_here is None:
+            return None
+        centres.update(placed_here)
     return centres, scales
 
 
@@ -522,30 +527,35 @@ def compose_and_publish(context: drawing_contract.DrawingContext, part: drawing_
     views = view_data(final, plans, {v: details[v]["radius_model"] * scales[v] for v in details})
     text = text_size(spec)
     presentation = presentation_for(views)
-    annotations = []
+    numbers = sorted({p.sheet for p in plans})
+    annotations: dict[int, list[SvgAnnotation]] = {number: [] for number in numbers}
     sections = []
     for view in views.values():
         children = [p for p in plans if p.base == view.plan.id and p.id in views]
         layout = sheet.layout_view(view, presentation, text, regime, children)
-        annotations.extend(layout.annotations)
+        annotations[view.plan.sheet].extend(layout.annotations)
         if layout.section is not None:
             sections.append(layout.section)
         lines = sheet.centre_lines(view, binding.features, faces)
         if lines is not None:
-            annotations.append(lines)
+            annotations[view.plan.sheet].append(lines)
     report = completeness.evaluate(part.pn, record, context.interfaces, binding, measured, presentation, part.step_sha256,
                                    sections, recognition=recognition, faces=faces)
     if procurement:
         report = replace(report, status="fail", findings=(*report.findings, *procurement))
+    pages = []
     try:
-        composed = drawing_document.compose_page(spec, metadata(context, part, scale, 1, 1),
-                                                 [v.geometry for v in views.values()], annotations, tables, notes)
+        for number in numbers:   # the notes and tables go on sheet 1, the title block on every sheet
+            pages.append(drawing_document.compose_page(
+                spec, metadata(context, part, scale, number, len(numbers)),
+                [v.geometry for v in views.values() if v.plan.sheet == number], annotations[number],
+                tables if number == 1 else [], notes if number == 1 else []))
     except (CompositionError, ValueError) as exc:
         return fail(getattr(exc, "code", "layout_check_failed"), str(exc), pn=part.pn), 1
-    package = drawing_document.publish_package(context, [composed], report, output_dir, freecadcmd, timeout,
+    package = drawing_document.publish_package(context, pages, report, output_dir, freecadcmd, timeout,
                                                completeness.release_blockers(record))
     summary = {"pn": part.pn, "status": package.status, "type": drawing["type"], "sheet": spec.size,
-               "scale": drawing_document.scale_text(regime, scale), "output_dir": str(output_dir),
+               "sheets": len(numbers), "scale": drawing_document.scale_text(regime, scale), "output_dir": str(output_dir),
                "views": [p.id for p in plans], "characteristics": len(measured.characteristics),
                "findings": [dict(f) for f in package.findings],
                "release": {"ready": not package.release, "blockers": [dict(r) for r in package.release]},

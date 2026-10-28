@@ -108,6 +108,8 @@
         "perpendicular_to": {"$ref": "#/$defs/reference"},
         "opposite": {"$ref": "#/$defs/semantic_id"},
         "through": {"$ref": "#/$defs/references"},
+        "normal_axis": {"description": "section: the cutting plane is normal to this frame axis and passes through the centre of the one through reference", "enum": ["x", "y", "z"]},
+        "sheet": {"description": "the sheet the view is drawn on; the principal view is on sheet 1", "type": "integer", "minimum": 1},
         "toward": {"$ref": "#/$defs/reference"},
         "feature": {"$ref": "#/$defs/semantic_id"},
         "scale": {"$ref": "#/$defs/scale"}

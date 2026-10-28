@@ -402,8 +402,10 @@ LINEAR_OPERATIONS = ("location", "axis_location", "floor_location", "plane_separ
 
 def _preferred(char: Characteristic, plans: Sequence[ViewPlan]) -> list[ViewPlan]:
     if char.operation in LINEAR_OPERATIONS:
-        # a dimension from a datum needs both ends on the sheet: projected views, then sections
-        return sorted((p for p in plans if p.kind != "detail"), key=lambda p: ("part", "section").index(p.kind))
+        # a dimension from a datum needs both ends on the sheet: projected views, then sections; presentation
+        # section puts the sections first, so interior sizes leave the principal view
+        order = ("section", "part") if char.presentation == "section" else ("part", "section")
+        return sorted((p for p in plans if p.kind != "detail"), key=lambda p: order.index(p.kind))
     wanted = {"section": ("section",), "detail": ("detail",), "visible": ("part",)}.get(char.presentation)
     ordered = [p for p in plans if wanted is None or p.kind in wanted]
     if wanted is None:  # auto: projected views first, then sections, then details
@@ -649,6 +651,18 @@ def _callout_text(char: Characteristic, regime: str) -> str | None:
         nominal, suffix = tolerance_text(char.tolerance, char.value, regime)
         count = count_prefix(char.quantity, regime)
         return f"{count}{nominal}°{suffix.replace(' ±', ' ±') + ('°' if suffix else '')}"
+    if op == "pattern" and char.details.get("grid"):   # nodes of a regular grid inside a circle about one hole
+        details = char.details
+        nominal, suffix = tolerance_text(char.tolerance, char.value, regime)
+        second = "" if abs(details["second_pitch"] - char.value) < 1e-6 else f" × {number(details['second_pitch'])}"
+        first_angle = details["first_angle_deg"]
+        directions = (f"{number(first_angle, 2)}° {'AND' if asme else 'and'} "
+                      f"{number(first_angle + details['angle_deg'], 2)}°")
+        if asme:
+            return (f"{count_prefix(char.quantity, regime)}GRID PITCH {nominal}{suffix}{second} AT {directions} TO "
+                    f"{details['from_axis'].upper()}\nCENTERS WITHIN ⌀{number(details['within_diameter'])} OF LOCATED HOLE")
+        return (f"{count_prefix(char.quantity, regime)}grid pitch {nominal}{suffix}{second} at {directions} to "
+                f"{details['from_axis']}\ncentres within ⌀{number(details['within_diameter'])} of the located hole")
     if op == "pattern":
         details = char.details
         angles = details["angles_deg"]
@@ -781,25 +795,6 @@ def layout_view(view: ViewData, presentation: Presentation, size: float, regime:
     annotations: list[SvgAnnotation] = []
     footprint = box
     pitch = size * LINE_PITCH_FACTOR
-    # parallel dimensions: horizontal ones stack above the view, vertical ones to its right
-    rows = sorted((d for d in presentation.linears if d.view == view.plan.id and d.horizontal),
-                  key=lambda d: abs(d.target[0] - d.origin[0]))
-    columns = sorted((d for d in presentation.linears if d.view == view.plan.id and not d.horizontal),
-                     key=lambda d: abs(d.target[1] - d.origin[1]))
-    for number_, dim in enumerate(rows):
-        y = box.y0 - FIRST_ROW - number_ * ROW_PITCH
-        annotations.append(_dimension_markup(dim, y, size, regime))
-        footprint = footprint.union(Box(min(dim.origin[0], dim.target[0]) - text_width(dim.text, size),
-                                        y - size - 1.5, max(dim.origin[0], dim.target[0]) + text_width(dim.text, size), y))
-    right_edge = box.x1
-    x = box.x1 + FIRST_ROW
-    for dim in columns:
-        annotations.append(_dimension_markup(dim, x, size, regime))
-        # ISO 129-1 aligns the text with the line; ASME Y14.5 reads it horizontally, right of the line
-        right_edge = x + (size + 1.5 if regime == "iso" else 1.0 + text_width(dim.text, size))
-        footprint = footprint.union(Box(x - 1.0, min(dim.origin[1], dim.target[1]) - text_width(dim.text, size),
-                                        right_edge, max(dim.origin[1], dim.target[1]) + text_width(dim.text, size)))
-        x = max(x + ROW_PITCH, right_edge + 2.0)
     marks: list[Box] = []
     for child in children:
         markup, boxes = (section_marks(view, child, size, regime) if child.kind == "section"
@@ -808,6 +803,27 @@ def layout_view(view: ViewData, presentation: Presentation, size: float, regime:
         marks.extend(boxes)
         for mark in boxes:
             footprint = footprint.union(mark)
+    # parallel dimensions: horizontal ones stack above the view, vertical ones to its right, both beyond the
+    # cutting-plane and detail letters on that side, so no dimension text lands on a letter
+    above = min([box.y0] + [m.y0 for m in marks if m.y1 < box.y0 + 1.0])
+    right_edge = max([box.x1] + [m.x1 for m in marks if m.x0 > box.x1 - 1.0])
+    rows = sorted((d for d in presentation.linears if d.view == view.plan.id and d.horizontal),
+                  key=lambda d: abs(d.target[0] - d.origin[0]))
+    columns = sorted((d for d in presentation.linears if d.view == view.plan.id and not d.horizontal),
+                     key=lambda d: abs(d.target[1] - d.origin[1]))
+    for number_, dim in enumerate(rows):
+        y = above - FIRST_ROW - number_ * ROW_PITCH
+        annotations.append(_dimension_markup(dim, y, size, regime))
+        footprint = footprint.union(Box(min(dim.origin[0], dim.target[0]) - text_width(dim.text, size),
+                                        y - size - 1.5, max(dim.origin[0], dim.target[0]) + text_width(dim.text, size), y))
+    x = right_edge + FIRST_ROW
+    for dim in columns:
+        annotations.append(_dimension_markup(dim, x, size, regime))
+        # ISO 129-1 aligns the text with the line; ASME Y14.5 reads it horizontally, right of the line
+        right_edge = x + (size + 1.5 if regime == "iso" else 1.0 + text_width(dim.text, size))
+        footprint = footprint.union(Box(x - 1.0, min(dim.origin[1], dim.target[1]) - text_width(dim.text, size),
+                                        right_edge, max(dim.origin[1], dim.target[1]) + text_width(dim.text, size)))
+        x = max(x + ROW_PITCH, right_edge + 2.0)
     label = _view_label(view, size, regime)
     # callout columns, left and right of the view
     mine = [c for c in presentation.callouts if c.view == view.plan.id]

@@ -85,6 +85,15 @@ class Recognition_(unittest.TestCase):
         self.assertEqual(sizes(recognition, "slot"), [{"width": 6.0, "radius": 3.0, "length": 20.0, "depth": 3.0,
                                                        "instances": 1}])
 
+    def test_chamfered_boss_height_runs_to_the_plane_beyond_the_chamfer(self) -> None:
+        recognition, faces = self.fixtures["chamfered_boss"]
+        boss = next(item for item in recognition.features if item.category == "boss")
+        height = next(s for s in boss.sizes if s.name == "height")
+        self.assertAlmostEqual(height.value, 10.0, places=6)
+        base, top = height.between
+        self.assertEqual([round(faces[i].point[2], 6) for i in base], [5.0])
+        self.assertEqual([round(faces[i].point[2], 6) for i in top], [15.0], "the end plane beyond the 0.5 chamfer")
+
     def test_overall_only_intent_fails_naming_each_feature(self) -> None:
         """Envelope planes located, everything else one controlled-model surface: the sheet passed before."""
         recognition, faces = self.fixtures["shell"]
