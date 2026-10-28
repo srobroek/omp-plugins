@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Regression tests for cad-render: frame-quality heuristics, material mapping, explode
-offsets, the render cache, and the renderer page's pinned module list.
+"""Regression tests for cad-render frame heuristics, cache, renderer assets and parity comparison.
 
-Run: python3 -m unittest discover -s cad/skills/cad-render/tests
-Stdlib only; the live render (Playwright, three.js) is exercised by scripts/render.py itself.
+Run: uv run --with pillow python -m unittest discover -s cad/skills/cad-render/tests
+The live render (Playwright, three.js) is exercised by scripts/render.py itself.
 """
 
 from __future__ import annotations
@@ -24,7 +23,7 @@ SKILL = Path(__file__).resolve().parent.parent
 RENDER_PY = SKILL / "scripts" / "render.py"
 MATERIALS_PY = SKILL / "scripts" / "materials.py"
 TEMPLATE_HW = SKILL.parent / "cad-record" / "assets" / "project-template" / "hw"
-
+COMPARE_PY = SKILL / "scripts" / "compare_renders.py"
 
 def load(name: str, path: Path):
     spec = importlib.util.spec_from_file_location(name, path)
@@ -37,6 +36,7 @@ def load(name: str, path: Path):
 
 render = load("cad_render", RENDER_PY)
 materials = load("cad_render_materials", MATERIALS_PY)
+compare_renders = load("cad_render_compare", COMPARE_PY)
 
 BACKDROP = (218, 219, 220)
 PRODUCT = (60, 64, 70)
@@ -470,6 +470,11 @@ class CacheKey(unittest.TestCase):
                 self.assertNotEqual(after, before)
                 before = after
 
+    def test_parity_policy_is_part_of_the_render_cache_key(self) -> None:
+        key = self.key()
+        self.assertIn("parity", key)
+        self.assertEqual(key["parity"], render.parity_policy.cache_key())
+
     def test_a_file_the_render_does_not_read_keeps_the_key(self) -> None:
         before = self.key()
         (self.hw / "bom.csv").write_text("edited\n", encoding="utf-8")
@@ -549,6 +554,7 @@ class OccurrenceScene(unittest.TestCase):
         CacheKey.write(path, {**json.loads(path.read_text(encoding="utf-8")), "schema_version": 3})
         with self.assertRaisesRegex(render.InfraError, "schema_version 3"):
             render.resolve_version(self.hw, "latest")
+
 
 
 class RendererPage(unittest.TestCase):

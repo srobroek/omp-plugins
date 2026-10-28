@@ -26,11 +26,12 @@ TRIGGER
    retry strategy, material applied per PN, three and Chromium versions, phase timings); JSON summary on stdout.
    `--jobs` uses 1-8 dedicated pages in one Chromium process (default 1). Each page loads the scene once
    and renders its assigned views serially, while pages capture concurrently. On CPU-only SwiftShader, keep
-   the default: SwiftShader already multithreads, and pace measured 11s at jobs=1, 12s at 2, and 17s at 4
-   for five 800x600 views. Use higher values when hardware and workload tests show a benefit.
-   The manifest records page-load time, each view's elapsed capture time, renderer time, and PNG encoding time.
-   Per-view PNG SHA-256 values remain the cache integrity check.
-   Each capture attempt seeds GTAO noise from the view and retry index. The floor-shadow bake key also includes visible part transforms and sampling settings.
+   the default: SwiftShader already multithreads. Pace measured 11s at jobs=1, 12s at 2, and 17s at 4
+   for five 800x600 views. Use higher values when tests on the target hardware show a benefit.
+   The manifest records page-load, view-capture, renderer, and PNG-encoding times.
+   Per-view PNG SHA-256 values verify cache integrity. Run `uv run --script skill://cad-flow/scripts/run.py cad-render/scripts/compare_renders.py DIR_A DIR_B` to compare retry/quality decisions and PNG pixels.
+   At default 1600x1200, Mac serial runs and pace serial-vs-serial / serial-vs-jobs2 runs (30 views) matched byte-for-byte. The comparator uses exact parity.
+   Each capture seeds GTAO noise from the view and retry index. The floor-shadow bake key includes visible part transforms and sampling settings.
 3. Close-ups: add `closeup-<PN>` for each part/interface to show, or `part-<PN>` for a studio view of
    one part in stable resting orientation with the other assembly parts hidden.
 4. Read every PNG before describing it. Name the material each PN shows from

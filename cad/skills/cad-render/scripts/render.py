@@ -40,6 +40,7 @@ import hashlib
 import importlib.metadata
 import importlib.util
 import inspect
+import os
 import json
 import math
 import re
@@ -57,6 +58,11 @@ from typing import Any, Callable
 from urllib.parse import unquote, urlsplit
 
 HERE = Path(__file__).resolve()
+_parity_spec = importlib.util.spec_from_file_location("cad_render_parity_policy", HERE.parent / "parity_policy.py")
+if _parity_spec is None or _parity_spec.loader is None:
+    raise RuntimeError(f"cannot load {HERE.parent / 'parity_policy.py'}")
+parity_policy = importlib.util.module_from_spec(_parity_spec)
+_parity_spec.loader.exec_module(parity_policy)
 SKILL = HERE.parent.parent
 RENDERER_DIR = SKILL / "assets" / "renderer"
 MATERIALS_PY = HERE.parent / "materials.py"
@@ -65,7 +71,8 @@ CONCEPT_SERVE = SKILL.parent / "cad-concept" / "scripts" / "serve.py"
 # The page chrome tokens (status line) are cad-concept's; renderer/tokens.css holds the scene's.
 CONCEPT_TOKENS = SKILL.parent / "cad-concept" / "assets" / "viewer" / "tokens.css"
 THREE_VERSION = "0.186.1"
-CHROMIUM_ARGS = ["--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist"]
+CHROMIUM_ARGS = ["--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist",
+                 *(["--num-raster-threads=1"] if os.environ.get("CAD_RENDER_RASTER_THREADS") == "1" else [])]
 BOOT_TIMEOUT_MS = 180_000
 VIEW_NAME = re.compile(r"^(iso|front|side|exploded|(closeup|part)-([A-Z]{2,5}-[0-9]{4}|@[a-z][a-z0-9_-]*))$")
 SIZE = re.compile(r"^([1-9][0-9]{2,3})x([1-9][0-9]{2,3})$")
@@ -592,6 +599,7 @@ def build_scene(hw: Path, version: Version, views: list[str], size: tuple[int, i
         "materials_sha256": sha256(canonical({pn: [m["rule"], m["pbr"]] for pn, m in materials.items()})),
         "renderer_sha256": renderer_sha256(),
         "image": f"{size[0]}x{size[1]}",
+        "parity": parity_policy.cache_key(),
     }
     extra = {"explode_offsets_mm": {oid: [round(c, 3) for c in offsets[oid]] for oid in occurrences if oid in offsets},
              "assembly_yaml_sha256": assembly_sha,
