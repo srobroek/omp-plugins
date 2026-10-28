@@ -19,3 +19,7 @@
 - Generate Claude Code, Kiro, and OpenCode files for every CAD agent from the canonical OMP agents, with write access only under `.cad-work/` and shell access only for `uv`.
 - Add the eval harness for cross-harness/model trials, geometry and record graders, smoke tests, and pairwise judging.
 - Add per-pair clearance requirements: an `interfaces.yaml` `type: clearance` interface names a `pair` and `min_clearance_mm`, validated by `cad-record`, held by cad-model `check` (`pair_clearance`) at the nominal pose and by cad-motion `sweep.py` at every sample, joint-connected and fitted pairs included; `--pair-clearance REF:REF=MM` adds or overrides one for a run, and a cached pair measurement near a threshold is measured again. A pair declared as a press fit, running fit or heat-set insert no longer inherits the sweep's global `--min-clearance`, and the `minimum_clearance` worst case ranks each pair against its tightest requirement.
+
+### Bug Fixes
+
+- The interference rule of cad-model `check` and cad-motion `sweep.py` reports a part buried inside a solid of a compound part (a definition that reads back as a COMPOUND, such as one fused from separate solids), no faces touching, as overlapping at distance 0. BRepExtrema detects containment only inside a SOLID or COMPSOLID operand, so such a part read as clear before.

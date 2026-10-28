@@ -234,6 +234,14 @@ TOUCH_YAML = GAP_YAML.replace("[0, 15.8, 0]", "[0, 15, 0]").replace("Arms 0.8 mm
 HEAT_SET = {"id": "IF-001", "from": "arm-a", "to": "arm-b", "type": "mounting", "description": "Insert in the arm.",
             "limits": {"heat_set": [{"pair": ["@arm-a", "@arm-b"], "hole_d": 4.0, "insert": "M3 x 4",
                                      "source": "https://example.com/m3-insert"}]}}
+# The 2 mm cube TST-0302 of fixtures/nest turning about its own centre inside the 10 mm container
+# TST-0301, buried at every pose with no faces touching; the joint-connected pair is checked
+# through --include-pair.
+NEST_YAML = """subassemblies:
+  - {id: nest, title: Buried cube, parts: [TST-0301, TST-0302]}
+joints:
+  - {id: J-001, type: revolute, parent: TST-0301, child: TST-0302, axis: [0, 0, 1], origin: [5, 5, 5], min: -45, max: 45, nominal: 0}
+"""
 
 
 def clearance_interface(number: int, pair: list[str], minimum: float) -> dict:
@@ -494,6 +502,22 @@ class StepTests(unittest.TestCase):
         self.assertEqual(hit["pair"], ["TST-0001", "TST-0003"])
         self.assertAlmostEqual(hit["volume_mm3"], 5000.0, places=1)  # x 50..100 x 10 x 10 overlap
         self.assertEqual(result["pairs"]["checked"], [["TST-0001", "TST-0003"]])
+
+    def test_a_part_buried_in_a_solid_or_a_compound_part_is_a_collision(self) -> None:
+        hw = Path(tempfile.mkdtemp(dir=self.root))
+        (hw / "assembly.yaml").write_text(NEST_YAML, encoding="utf-8")
+        for container in ("solid", "compound"):
+            with self.subTest(container=container):
+                parts = self.root / "fx" / "nest" / container
+                proc, result = self.run_script("sweep.py", "--hw", str(hw), "--parts-dir", str(parts), "--steps", "3",
+                                               "--grid", "0", "--include-pair", "TST-0301:TST-0302",
+                                               "--worst-step", str(hw / "worst.step"))
+                self.assertEqual(proc.returncode, 1, proc.stderr[-2000:])
+                self.assertEqual(result["collision_pose_count"], 3, result["collisions"])
+                for collision in result["collisions"]:
+                    self.assertEqual([hit["pair"] for hit in collision["pairs"]], [["TST-0301", "TST-0302"]])
+                    self.assertAlmostEqual(collision["pairs"][0]["volume_mm3"], 8.0, places=3)
+                self.assertEqual([row["clearance_mm"] for row in result["min_clearance"]], [0.0])
 
     def test_clear_range_has_positive_clearance_and_no_collision(self) -> None:
         worst = self.root / "w2.step"

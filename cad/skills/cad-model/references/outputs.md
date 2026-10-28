@@ -124,8 +124,9 @@ Top level: `status` pass|fail, `label`, `pose: nominal`, `baseline` (previous la
 
 `--pair PN:PN` restricts `interference` to the named pairs; every pair still feeds `connection`.
 Clearance and shared volume come from cad-motion's `pose.interference`, the rule `sweep.py` applies
-at every pose: BRepExtrema minimum distance, and within 1e-6 mm the non-destructive Boolean common
-(fuzzy 1e-7 mm) measured with the adaptive volume rule.
+at every pose: BRepExtrema minimum distance (0 when one part lies inside a solid of the other, a
+solid of a compound part included), and within 1e-6 mm the non-destructive Boolean common (fuzzy
+1e-7 mm) measured with the adaptive volume rule.
 
 Declared fits and inserts come from `hw/interfaces.yaml`. `declared_pairs` lists each press fit with
 its `fit`, `classification`, `interface` and YAML `source`. A fit that names feature endpoints

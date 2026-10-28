@@ -981,5 +981,26 @@ class HoleMetricsTests(unittest.TestCase):
         self.assertEqual(report["TST-0002"], [])
 
 
+@unittest.skipUnless(shutil.which("uv"), "uv is required for the OCP environment")
+class ContainmentTests(unittest.TestCase):
+    """A part buried in another, no faces touching, interferes whether the container reads back as
+    a SOLID or as a COMPOUND, in either argument order (fixtures/containment_probe.py)."""
+
+    def test_a_part_buried_in_a_solid_or_a_compound_part_interferes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = subprocess.run(["uv", "run", "--quiet", "--script", str(FIXTURES / "containment_probe.py"), tmp],
+                                  capture_output=True, text=True, check=False)
+        self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+        report = json.loads(proc.stdout)
+        self.assertEqual(report["shape_types"], {"TST-0301": "TopAbs_COMPOUND", "TST-0302": "TopAbs_SOLID",
+                                                 "TST-0303": "TopAbs_SOLID"})
+        for container in ("solid", "compound"):
+            for order in ("container_first", "buried_first"):
+                with self.subTest(container=container, order=order):
+                    row = report[container][order]
+                    self.assertEqual((row["clearance_mm"], row["status"]), (0.0, "fail"))
+                    self.assertAlmostEqual(row["interference_mm3"], 8.0, places=6)
+
+
 if __name__ == "__main__":
     unittest.main()

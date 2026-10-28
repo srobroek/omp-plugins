@@ -33,9 +33,11 @@ Pairs: every pair of chain occurrences, including two occurrences of one PN,
 except joint-connected parent/child pairs (fixed joints and --attach included);
 `--include-pair A:B` puts an excluded pair back. Per pose and pair: pose.py's
 `interference`, the one interference rule cad-model `check` uses too: the
-minimum distance (BRepExtrema_DistShapeShape) and, when it is within 1e-6 mm,
-the overlap volume (non-destructive BRepAlgoAPI_Common, measured with pose.py's
-adaptive `volume_properties`). Centres of mass use `volume_properties` as well.
+minimum distance (BRepExtrema_DistShapeShape; 0 when one part lies inside a
+solid of the other, a solid of a compound part included) and, when it is within
+1e-6 mm, the overlap volume (non-destructive BRepAlgoAPI_Common, measured with
+pose.py's adaptive `volume_properties`). Centres of mass use `volume_properties`
+as well.
 A pair evaluation is cached on the two definitions and their relative
 transform (entries rounded to 1e-6), so a joint sweep recomputes only the pairs
 that joint moves, and two same-PN pairs in the same relative placement share

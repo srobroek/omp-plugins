@@ -29,6 +29,11 @@ OUT_DIR/v6/         VSX-0001..VSX-0401, the coupled V6-like mechanism of
                     crankpin box per cylinder at its crank-angle-0 position);
                     and the part-local piston, rod, camshaft and valve boxes
                     v6_record.py describes.
+OUT_DIR/nest/       A 2 mm cube TST-0302 (x, y, z 4..6) buried in a 10 mm
+                    container TST-0301 (0..10), no faces touching. In solid/
+                    the container is the cube, a SOLID; in compound/ it is the
+                    cube plus a 1 mm cube at x 20..21, which reads back as a
+                    COMPOUND of two solids.
 """
 
 from __future__ import annotations
@@ -167,6 +172,25 @@ def v6_shapes() -> dict[str, object]:
     }
 
 
+def compound(*shapes):
+    from OCP.BRep import BRep_Builder
+    from OCP.TopoDS import TopoDS_Compound
+
+    result, builder = TopoDS_Compound(), BRep_Builder()
+    builder.MakeCompound(result)
+    for shape in shapes:
+        builder.Add(result, shape)
+    return result
+
+
+def nest_shapes(container_kind: str) -> dict[str, object]:
+    container = box(0, 0, 0, 10, 10, 10)
+    return {
+        "TST-0301": compound(container, box(20, 0, 0, 21, 1, 1)) if container_kind == "compound" else container,
+        "TST-0302": box(4, 4, 4, 6, 6, 6),
+    }
+
+
 def write_set(folder: Path, shapes: dict[str, object], titles: dict[str, str]) -> dict[str, object]:
     folder.mkdir(parents=True, exist_ok=True)
     parts = {pn: pose.Part(pn, f"{pn} {titles[pn]}", shape) for pn, shape in shapes.items()}
@@ -183,6 +207,8 @@ def main(out: Path) -> int:
     write_set(out / "planar", planar_shapes(), {"TST-0001": "Ground link", "TST-0002": "Middle link", "TST-0003": "Tip link"})
     write_set(out / "twins", twin_shapes(), {"TST-0201": "Ground plate", "TST-0202": "Arm"})
     write_set(out / "v6", v6_shapes(), {pn: title for pn, (title, _) in v6_record.PARTS.items()})
+    for kind in ("solid", "compound"):
+        write_set(out / "nest" / kind, nest_shapes(kind), {"TST-0301": f"Container ({kind})", "TST-0302": "Buried cube"})
     return 0
 
 
