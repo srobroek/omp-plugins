@@ -15,6 +15,7 @@ import math
 import re
 import sys
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -215,6 +216,53 @@ def load_version(hw: Path, version: str = "latest") -> Version:
         parts.append(Part(oid, pn, built.ref, node, title, material, process, colour_for(material, finish), group, path))
     return Version(hw, label, product_id, parts_dir, files, tuple(parts), tuple(groups),
                    read_json(files["metrics"]), manifest)
+
+
+# --------------------------------------------------------------------------- version list
+
+
+def latest_label(hw: Path) -> str | None:
+    """The vN `hw/versions/latest.json` names; None while it is absent, unreadable, or malformed."""
+    path = hw / "versions" / "latest.json"
+    try:
+        data = read_json(path) if path.is_file() else None
+    except ViewerError:
+        return None
+    label = data.get("label") if isinstance(data, dict) else None
+    return label if isinstance(label, str) and _cad_render_module("versions").LABEL.match(label) else None
+
+
+def version_list(hw: Path) -> list[dict[str, Any]]:
+    """Every `hw/versions/vN` folder, newest first, as the panel's version picker lists it.
+
+    `built_utc` is the manifest's `created_utc` (its modified time for a manifest without one),
+    `parts` its occurrence count (PN count for a version 1 manifest), and `error` why the version
+    cannot be shown (a missing or unreadable build file), else None. cad-model builds into a dot
+    folder and renames it when complete, so a build in progress is not listed.
+    """
+    folder = hw / "versions"
+    rule = _cad_render_module("versions").LABEL
+    labels = [p.name for p in folder.iterdir() if p.is_dir() and rule.match(p.name)] if folder.is_dir() else []
+    return [_version_entry(hw, label) for label in sorted(labels, key=lambda v: int(v[1:]), reverse=True)]
+
+
+def _version_entry(hw: Path, label: str) -> dict[str, Any]:
+    entry: dict[str, Any] = {"label": label, "built_utc": None, "parts": None, "error": None}
+    try:
+        manifest_path = version_files(hw, label).files["manifest"]
+        manifest = read_json(manifest_path)
+    except ViewerError as error:
+        entry["error"] = str(error)
+        return entry
+    if not isinstance(manifest, dict):
+        entry["error"] = f"{manifest_path}: expected a JSON object"
+        return entry
+    created = manifest.get("created_utc")
+    entry["built_utc"] = created if isinstance(created, str) else datetime.fromtimestamp(
+        manifest_path.stat().st_mtime, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    placed = manifest.get("occurrences") if isinstance(manifest.get("occurrences"), dict) else manifest.get("parts")
+    entry["parts"] = len(placed) if isinstance(placed, dict) else None
+    return entry
 
 
 # --------------------------------------------------------------------------- check findings

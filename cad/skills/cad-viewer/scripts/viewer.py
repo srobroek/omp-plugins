@@ -200,10 +200,11 @@ def summarise(command: str, answer: dict[str, Any], base_url: str) -> dict[str, 
     preview gallery URL of each shown version."""
     if "versions" not in answer or command == "gallery":
         return answer
-    versions = {k: {"label": v["label"], "parts": len(v["parts"]), "check": (v.get("check") or {}).get("status"),
+    versions = {k: {"label": v["label"], "selected": answer["selected"][k]["version"], "parts": len(v["parts"]),
+                    "check": (v.get("check") or {}).get("status"),
                     "gallery": f"{base_url}gallery?version={v['label']}"} for k, v in answer["versions"].items()}
     return {"status": "pass", "command": command, "mode": answer["mode"], "active": answer["active"],
-            "slots": answer["slots"], "view": answer["view"], "versions": versions}
+            "slots": answer["slots"], "view": answer["view"], "versions": versions, "latest": answer["latest"]}
 
 
 def run(args: argparse.Namespace) -> int:

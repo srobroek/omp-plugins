@@ -3,7 +3,8 @@
 Every viewer state change goes through ocp_viewer's Python API (`show`, `set_viewer_config`,
 `status`, `Animation`): the panel and the CLI only send requests here. Slot `a` shows the
 active version; slot `b` holds version B while the A/B side-by-side is on, and a sync thread
-copies the camera between the two.
+copies the camera between the two. Version A and B each hold `vN` or `latest`; the host's main
+loop reloads a version that follows `latest` when hw/versions/latest.json names a new build.
 
 Each slot runs one viewer per audience. ocp_viewer serves one registered browser per port (the
 last page to connect), so the user's tab and the headless presenter page that captures read
@@ -28,7 +29,7 @@ import sys
 import threading
 import time
 import traceback
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -62,7 +63,9 @@ PRESETS = {"iso": "ISO", "front": "FRONT", "side": "RIGHT", "top": "TOP"}
 # POST routes that change what the viewers show: refused while a capture runs. /api/connected
 # replays the state to one reconnecting page (a capture re-announces its own), and /api/stop
 # must always work.
-CHANGES = ("/api/show", "/api/compare", "/api/mode", "/api/parts", "/api/view", "/api/animate", "/api/studio")
+CHANGES = ("/api/show", "/api/compare", "/api/load-version", "/api/mode", "/api/parts", "/api/view", "/api/animate",
+           "/api/studio")
+MAIN_LOOP_S = 0.5  # idle check and latest.json poll
 
 
 class CaptureBusy(ViewerError):
@@ -128,6 +131,7 @@ class Loaded:
     panel: dict[str, Any]
     shown: dict[str, Any]  # PN -> Rigid the part is displayed at (manifest nominal pose)
     shapes: dict[str, Any]  # PN -> posed TopoDS_Shape
+    requested: str  # what the slot asked for: a vN, or `latest` to follow new builds
 
 
 @dataclass
@@ -182,7 +186,7 @@ def _load(hw: str, version: str, check_path: str | None) -> Loaded:
         raise ViewerError(f"{loaded.parts_dir}: no STEP for {missing}")
     # One shape per occurrence: its PN's definition at the occurrence's built placement T = D P.
     shapes = {p.id: pose.placed(parts[p.pn].shape, shown[p.id]) for p in loaded.parts}
-    return Loaded(loaded, check_path, panel, shown, shapes)
+    return Loaded(loaded, check_path, panel, shown, shapes, version)
 
 
 def port_name(slot: str, audience: str) -> str:
@@ -217,6 +221,8 @@ class Host:
         self.sync_hold = threading.Event()
         self.guard = CaptureGuard()
         self.gallery = gallery.Gallery()
+        self.follow_failures: dict[str, tuple[str, str]] = {}  # version key -> (latest label, why it did not load)
+        self._latest_build: Loaded | None = None  # the last `latest` load, reused while a capture holds the view
 
     def command_started(self) -> None:
         with self._activity_lock:
@@ -360,10 +366,17 @@ class Host:
     # ------------------------------------------------------------------ API operations
 
     def state(self) -> dict[str, Any]:
+        """`selected` is each version key's request (`latest` or vN) and the vN it shows; `latest`
+        is the vN hw/versions/latest.json names now."""
         with self.lock:
+            shown = self.versions.get("A")
             return {"mode": self.mode, "active": self.active, "view": self.view.as_json(),
                     "versions": {k: v.panel for k, v in self.versions.items()},
                     "checks": {k: v.check_path for k, v in self.versions.items()},
+                    "selected": {k: {"version": v.requested, "label": v.version.label,
+                                     "error": self.follow_failures[k][1] if k in self.follow_failures else None}
+                                 for k, v in self.versions.items()},
+                    "latest": record.latest_label(shown.version.hw) if shown else None,
                     "slots": {n: {"urls": {a: f"http://{HOST}:{v.port}/" for a, v in s.viewers.items()},
                                   "showing": s.showing} for n, s in self.slots.items()},
                     "animation": self.animation}
@@ -373,6 +386,7 @@ class Host:
         self.gallery.open(loaded.version.hw)
         with self.lock:
             self.versions = {"A": loaded}
+            self.follow_failures = {}
             self.mode, self.active = "single", "A"
             self.view = ViewState(hidden={oid for oid in self.view.hidden if oid in loaded.shapes})
             self._push_layout()
@@ -385,10 +399,86 @@ class Host:
         self.gallery.open(a.version.hw)
         with self.lock:
             self.versions = {"A": a, "B": b}
+            self.follow_failures = {}
             self.mode, self.active, self.view = "split", "A", ViewState()
             self._push_layout()
             self._copy_camera("a", "b")
         return self.state()
+
+    def load_version(self, body: dict[str, Any]) -> dict[str, Any]:
+        """Put `version` (vN or `latest`) of the shown project into version key `slot` (A or B).
+
+        The viewers showing that key get the new model and keep their camera; the view state
+        (hidden, isolated, ghost) stays, as it does when `mode` switches A and B. Choosing the vN
+        the key already shows, or `latest` while it shows that vN, keeps the loaded model and its check.
+        """
+        key = str(body.get("slot") or "").upper()
+        if key not in ("A", "B"):
+            raise ViewerError("slot must be A or B")
+        version = _text(body, "version")
+        with self.lock:
+            shown, current = self.versions.get("A"), self.versions.get(key)
+        if shown is None:
+            raise ViewerError("nothing shown yet; run `viewer.py show` first")
+        hw = shown.version.hw
+        same = current is not None and record.version_files(hw, version).label == current.version.label
+        loaded = replace(current, requested=version) if same else _load(str(hw), version, None)
+        with self.lock:
+            if self.versions.get("A") is None or self.versions["A"].version.hw != hw:
+                raise ViewerError("another project was shown during the load; choose the version again")
+            self._replace(key, loaded, push=not same)
+        return self.state()
+
+    def _replace(self, key: str, loaded: Loaded, push: bool = True) -> None:
+        """Version key `key` holds `loaded`; each slot showing the key gets its model (lock held)."""
+        self.versions[key] = loaded
+        self.follow_failures.pop(key, None)
+        if push:
+            for name, shown in self._layout().items():
+                if shown == key:
+                    self._push(self.slots[name], key)
+
+    def follow_latest(self) -> None:
+        """Reload each version key that follows `latest` once latest.json names another vN.
+
+        Called from the host's main loop. One load serves both keys. A build that does not load is
+        reported under /api/state `selected.<key>.error` and not retried until latest.json names
+        another vN. While a capture runs the push waits for the next tick, reusing the load.
+        """
+        with self.lock:
+            following = {k: v for k, v in self.versions.items() if v.requested == "latest"}
+            failed = {k: f[0] for k, f in self.follow_failures.items()}
+        if not following:
+            return
+        hw = next(iter(following.values())).version.hw
+        label = record.latest_label(hw)
+        stale = {k: v for k, v in following.items() if label not in (None, v.version.label) and failed.get(k) != label}
+        if not stale:
+            return
+        build = self._latest_build
+        if build is None or build.version.hw != hw or build.version.label != label:
+            try:
+                build = self._latest_build = _load(str(hw), "latest", None)
+            except Exception as error:  # noqa: BLE001 - reported to the panel; the host keeps serving
+                with self.lock:
+                    for k in stale:
+                        self.follow_failures[k] = (label, f"latest is {label}, which did not load: {error}")
+                return
+        try:
+            with self.guard.change(), self.lock:
+                for k, before in stale.items():
+                    if self.versions.get(k) is before:  # no show, compare, or load-version since
+                        self._replace(k, build)
+        except CaptureBusy:
+            return
+
+    def version_list(self) -> dict[str, Any]:
+        """Every built version of the shown project (else the gallery's), newest first, and the vN
+        `latest` names."""
+        with self.lock:
+            shown = self.versions.get("A")
+        hw = shown.version.hw if shown is not None else self.gallery.project()
+        return {"hw": str(hw), "latest": record.latest_label(hw), "versions": record.version_list(hw)}
 
     def set_mode(self, body: dict[str, Any]) -> dict[str, Any]:
         mode, active = body.get("mode", self.mode), body.get("active", self.active)
@@ -633,6 +723,8 @@ class Host:
             ("GET", "/api/state"): lambda q, b: self.state(),
             ("POST", "/api/show"): lambda q, b: self.show_version(b),
             ("POST", "/api/compare"): lambda q, b: self.compare(b),
+            ("GET", "/api/versions"): lambda q, b: self.version_list(),
+            ("POST", "/api/load-version"): lambda q, b: self.load_version(b),
             ("POST", "/api/mode"): lambda q, b: self.set_mode(b),
             ("POST", "/api/parts"): lambda q, b: self.parts(b),
             ("POST", "/api/view"): lambda q, b: self.apply_view(b),
@@ -722,10 +814,14 @@ class Host:
             with self._activity_lock:
                 self._last_command_at = time.monotonic()
             self.session_file.write_text(json.dumps(self.session(), indent=2), encoding="utf-8")
-            while not self.halt.wait(0.5):
+            while not self.halt.wait(MAIN_LOOP_S):
                 if self.idle():
                     self.halt.set()
                     break
+                try:
+                    self.follow_latest()
+                except Exception:  # noqa: BLE001 - a failed push must not end the host
+                    traceback.print_exc()
         finally:
             signal.signal(signal.SIGTERM, signal.SIG_IGN)
             self.halt.set()
@@ -805,9 +901,9 @@ def make_server(host: Host) -> ThreadingHTTPServer:
                 body = json.loads(self.rfile.read(length) or b"{}") if length else {}
                 if not isinstance(body, dict):
                     raise ViewerError("request body must be a JSON object")
-                # `/api/state` is polled by both the user panel and headless presenter. Their
-                # panel-page URLs differ by `audience=presenter`, so only user polls count as use.
-                user_panel = (url.path not in ("/api/state", "/api/connected")
+                # `/api/state` and `/api/versions` are read by both the user panel and the headless
+                # presenter. Their panel-page URLs differ by `audience=presenter`, so only user reads count as use.
+                user_panel = (url.path not in ("/api/state", "/api/versions", "/api/connected")
                               or body.get("audience") == "user"
                               or "audience=presenter" not in (self.headers.get("Referer") or ""))
                 if user_panel:

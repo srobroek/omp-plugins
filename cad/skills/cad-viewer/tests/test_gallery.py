@@ -283,11 +283,13 @@ class Cli(unittest.TestCase):
         self.assertEqual(self.viewer.request_body(args),
                          ("POST", "/api/gallery", {"hw": str(Path("hw").resolve()), "version": "v3"}))
 
-    def test_show_prints_the_gallery_url_of_each_version(self) -> None:
-        answer = {"mode": "single", "active": "A", "slots": {}, "view": {},
-                  "versions": {"A": {"label": "v2", "parts": [1, 2], "check": None}}}
+    def test_show_prints_the_gallery_url_and_selection_of_each_version(self) -> None:
+        answer = {"mode": "single", "active": "A", "slots": {}, "view": {}, "latest": "v2",
+                  "versions": {"A": {"label": "v2", "parts": [1, 2], "check": None}},
+                  "selected": {"A": {"version": "latest", "label": "v2", "error": None}}}
         out = self.viewer.summarise("show", answer, "http://127.0.0.1:9/")
         self.assertEqual(out["versions"]["A"]["gallery"], "http://127.0.0.1:9/gallery?version=v2")
+        self.assertEqual((out["versions"]["A"]["selected"], out["latest"]), ("latest", "v2"))
 
 
 if __name__ == "__main__":
