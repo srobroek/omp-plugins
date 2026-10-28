@@ -62,17 +62,17 @@ bd formula list
 
 ## Setup
 
-At the CAD project root, run setup before a new design:
+Run setup at the CAD project root before a new design:
 
 ```sh
 uv run --script cad/skills/cad-flow/scripts/setup.py
 ```
 
-The default is a dry run. Setup runs preflight, prints fixes, and changes nothing. Use `--yes` for user-level actions. Use `--system` with `--yes` for FreeCAD, Linux Chromium libraries, and uv's downloaded installer.
+Setup checks for FreeCAD 1.1.4 first. When the command or version check fails, setup exits nonzero before any other action. Its error shows the release URL and lookup order. Install FreeCAD manually as described in `cad/skills/cad-drawings/SKILL.md`, then rerun setup. Add `--yes` to perform the remaining user-level actions.
 
-Setup downloads the official FreeCAD 1.1.4 release asset and checks its SHA-256 digest. On Linux, it extracts FreeCAD to `~/opt/freecad-1.1.4` and links `freecadcmd` in `~/.local/bin`. Add that directory to `PATH`, or set `FREECADCMD` to the link. Setup downloads uv's official installer to a temporary file. It never pipes the download to a shell.
+Setup delegates kernel environments, the viewer, Chromium, and the three.js cache to `preflight.py --warm`. It then reruns preflight and prints a summary. Setup copies formula files to `.beads/formulas/` when a Beads workspace exists. It prints a warning otherwise. Pass `--harness opencode`, `--harness kiro`, or `--harness claude` to install harness files.
 
-Setup delegates kernel environments, the viewer, Chromium, and the three.js cache to `preflight.py --warm`. It then reruns preflight and prints a summary. When a Beads workspace exists, setup copies formula files to `.beads/formulas/`. Without one, it prints a warning. Pass `--harness opencode`, `--harness kiro`, or `--harness claude` to install harness files.
+For manual installation, place the FreeCAD 1.1.4 app bundle in `/Applications` on macOS. On Linux, verify the AppImage against the published `-SHA256.txt`, then extract it. Add `freecadcmd` to `PATH` or set `FREECADCMD`. See `cad/skills/cad-drawings/SKILL.md` for the download and checksum commands.
 
 ## Preflight
 
