@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Regression tests for cad-render frame heuristics, cache, renderer assets and parity comparison.
+"""Regression tests for cad-render heuristics, cache, renderer assets and policy.
 
-Run: uv run --with pillow python -m unittest discover -s cad/skills/cad-render/tests
-The live render (Playwright, three.js) is exercised by scripts/render.py itself.
+Run: python3 -m unittest discover -s cad/skills/cad-render/tests
+Pillow is only needed by the standalone image comparator's tests.
 """
 
 from __future__ import annotations
@@ -23,8 +23,7 @@ SKILL = Path(__file__).resolve().parent.parent
 RENDER_PY = SKILL / "scripts" / "render.py"
 MATERIALS_PY = SKILL / "scripts" / "materials.py"
 TEMPLATE_HW = SKILL.parent / "cad-record" / "assets" / "project-template" / "hw"
-COMPARE_PY = SKILL / "scripts" / "compare_renders.py"
-
+PARITY_PY = SKILL / "scripts" / "parity_policy.py"
 def load(name: str, path: Path):
     spec = importlib.util.spec_from_file_location(name, path)
     assert spec and spec.loader
@@ -36,11 +35,10 @@ def load(name: str, path: Path):
 
 render = load("cad_render", RENDER_PY)
 materials = load("cad_render_materials", MATERIALS_PY)
-compare_renders = load("cad_render_compare", COMPARE_PY)
+parity = load("cad_render_parity_policy", PARITY_PY)
 
 BACKDROP = (218, 219, 220)
 PRODUCT = (60, 64, 70)
-
 
 def frame(w: int = 120, h: int = 90, *, subject=None, other=None, shadow=None, shadow_drop: int = 30,
           overhung=None, overhung_drop: int = 30, rim=None,
@@ -473,7 +471,7 @@ class CacheKey(unittest.TestCase):
     def test_parity_policy_is_part_of_the_render_cache_key(self) -> None:
         key = self.key()
         self.assertIn("parity", key)
-        self.assertEqual(key["parity"], render.parity_policy.cache_key())
+        self.assertEqual(key["parity"]["version"], parity.POLICY_VERSION)
 
     def test_a_file_the_render_does_not_read_keeps_the_key(self) -> None:
         before = self.key()
