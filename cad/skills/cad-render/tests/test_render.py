@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""Regression tests for cad-render: frame-quality heuristics, material mapping, explode
-offsets, the render cache, and the renderer page's pinned module list.
+"""Regression tests for cad-render frame heuristics, cache, renderer assets and parity comparison.
 
-Run: python3 -m unittest discover -s cad/skills/cad-render/tests
-Stdlib only; the live render (Playwright, three.js) is exercised by scripts/render.py itself.
+Run: uv run --with pillow python -m unittest discover -s cad/skills/cad-render/tests
+The live render (Playwright, three.js) is exercised by scripts/render.py itself.
 """
 
 from __future__ import annotations
 
-import importlib.util
+import asyncio
 import base64
+import importlib.util
 import json
 import re
 import shutil
@@ -23,7 +23,7 @@ SKILL = Path(__file__).resolve().parent.parent
 RENDER_PY = SKILL / "scripts" / "render.py"
 MATERIALS_PY = SKILL / "scripts" / "materials.py"
 TEMPLATE_HW = SKILL.parent / "cad-record" / "assets" / "project-template" / "hw"
-
+COMPARE_PY = SKILL / "scripts" / "compare_renders.py"
 
 def load(name: str, path: Path):
     spec = importlib.util.spec_from_file_location(name, path)
@@ -36,6 +36,7 @@ def load(name: str, path: Path):
 
 render = load("cad_render", RENDER_PY)
 materials = load("cad_render_materials", MATERIALS_PY)
+compare_renders = load("cad_render_compare", COMPARE_PY)
 
 BACKDROP = (218, 219, 220)
 PRODUCT = (60, 64, 70)
@@ -197,7 +198,7 @@ class RetryLadder(unittest.TestCase):
             calls.append(options)
             fraction = 1.0 if options.get("ghost") else 0.1
             return self.capture_frame("closeup-LMP-0004", frame(**GOOD), fraction=fraction)
-        _, quality, attempts = render._retry_view("closeup-LMP-0004", capture)
+        _, quality, attempts = asyncio.run(render._retry_view("closeup-LMP-0004", lambda options, attempt: capture(options)))
         self.assertTrue(quality.passed)
         self.assertEqual(attempts[-1]["strategy"], "ghosted-context")
         self.assertTrue(all("metrics" in row and "camera" in row for row in attempts))
@@ -208,7 +209,7 @@ class RetryLadder(unittest.TestCase):
             attempts.append(isolated)
             rendered = frame(**GOOD)
             return self.capture_frame("closeup-LMP-0004", rendered, fraction=1.0 if isolated else 0.1)
-        _, quality, records = render._retry_view("closeup-LMP-0004", capture)
+        _, quality, records = asyncio.run(render._retry_view("closeup-LMP-0004", lambda options, attempt: capture(options)))
         self.assertTrue(quality.passed)
         self.assertEqual(records[-1]["strategy"], "isolated-part")
         self.assertEqual(records[-1]["metrics"]["visible_subject_fraction"], 1.0)
@@ -222,22 +223,22 @@ class RetryLadder(unittest.TestCase):
                                         bytes(2 if value == 1 else value for value in rendered.mask), rendered.floor)
             return self.capture_frame("closeup-LMP-0004", rendered,
                                       fraction=1.0 if options.get("isolated") else 0.1)
-        result, _, _ = render._retry_view("closeup-LMP-0004", capture)
+        result, _, _ = asyncio.run(render._retry_view("closeup-LMP-0004", lambda options, attempt: capture(options)))
         mask = base64.b64decode(result["mask"])
         self.assertTrue(hidden[-1])
         self.assertNotIn(1, mask)
 
     def test_shadowless_closeup_passes_as_warning_without_retry(self) -> None:
         rendered = frame(subject=GOOD["subject"])
-        _, quality, attempts = render._retry_view(
-            "closeup-LMP-0004", lambda options: self.capture_frame("closeup-LMP-0004", rendered))
+        _, quality, attempts = asyncio.run(render._retry_view(
+            "closeup-LMP-0004", lambda options, attempt: self.capture_frame("closeup-LMP-0004", rendered)))
         self.assertTrue(quality.passed)
         self.assertEqual(quality.warnings, ["NO_SHADOW"])
         self.assertEqual([row["strategy"] for row in attempts], ["original"])
 
     def test_empty_render_fails_after_blank_retry(self) -> None:
         rendered = frame()
-        _, quality, attempts = render._retry_view("iso", lambda options: self.capture_frame("iso", rendered))
+        _, quality, attempts = asyncio.run(render._retry_view("iso", lambda options, attempt: self.capture_frame("iso", rendered)))
         self.assertFalse(quality.passed)
         self.assertEqual(quality.failures, ["BLANK"])
         self.assertEqual([row["strategy"] for row in attempts], ["original", "blank-retry"])
@@ -245,10 +246,52 @@ class RetryLadder(unittest.TestCase):
     def test_fixed_view_reframes_clipped_subject(self) -> None:
         initial = frame(subject=(30, 20, 120, 60))
         reframed = frame(subject=(30, 20, 70, 60))
-        _, quality, attempts = render._retry_view(
-            "front", lambda options: self.capture_frame("front", reframed if options else initial))
+        _, quality, attempts = asyncio.run(render._retry_view(
+            "front", lambda options, attempt: self.capture_frame("front", reframed if options else initial)))
+
+class ParallelRetry(unittest.TestCase):
+    def test_a_view_retries_while_another_view_is_capturing(self) -> None:
+        async def exercise() -> None:
+            in_flight = peak_in_flight = 0
+            calls: list[tuple[str, dict]] = []
+
+            async def capture(name: str, options: dict) -> dict:
+                nonlocal in_flight, peak_in_flight
+                in_flight += 1
+                peak_in_flight = max(peak_in_flight, in_flight)
+                calls.append((name, options))
+                await asyncio.sleep(0.001)
+                in_flight -= 1
+                rendered = frame() if name == "front" and len([call for call in calls if call[0] == name]) == 1 else frame(**GOOD)
+                return RetryLadder.capture_frame(name, rendered)
+
+            front, iso = await asyncio.gather(
+                render._retry_view("front", lambda options, attempt: capture("front", options)),
+                render._retry_view("iso", lambda options, attempt: capture("iso", options)),
+            )
+            self.assertEqual([row["strategy"] for row in front[2]], ["original", "blank-retry"])
+            self.assertTrue(front[1].passed)
+            self.assertTrue(iso[1].passed)
+            self.assertGreater(peak_in_flight, 1)
+
+        asyncio.run(exercise())
+
+class AttemptSeed(unittest.TestCase):
+    def test_retry_attempts_receive_stable_incrementing_seeds(self) -> None:
+        seeds: list[int] = []
+        rendered = frame()
+
+        def capture(options: dict, attempt: int) -> dict:
+            seeds.append(attempt)
+            return RetryLadder.capture_frame("iso", rendered if attempt == 0 else frame(**GOOD))
+
+        _, quality, attempts = asyncio.run(render._retry_view("iso", capture))
+        self.assertEqual(seeds, [0, 1])
         self.assertTrue(quality.passed)
-        self.assertEqual([row["strategy"] for row in attempts], ["original", "reframe"])
+        self.assertEqual([row["strategy"] for row in attempts], ["original", "blank-retry"])
+
+
+
 class Materials(unittest.TestCase):
     table = materials.MaterialTable.load()
 
@@ -427,6 +470,11 @@ class CacheKey(unittest.TestCase):
                 self.assertNotEqual(after, before)
                 before = after
 
+    def test_parity_policy_is_part_of_the_render_cache_key(self) -> None:
+        key = self.key()
+        self.assertIn("parity", key)
+        self.assertEqual(key["parity"], render.parity_policy.cache_key())
+
     def test_a_file_the_render_does_not_read_keeps_the_key(self) -> None:
         before = self.key()
         (self.hw / "bom.csv").write_text("edited\n", encoding="utf-8")
@@ -508,6 +556,7 @@ class OccurrenceScene(unittest.TestCase):
             render.resolve_version(self.hw, "latest")
 
 
+
 class RendererPage(unittest.TestCase):
     def test_every_module_render_js_imports_is_pinned(self) -> None:
         html = (render.RENDERER_DIR / "index.html").read_text(encoding="utf-8")
@@ -535,6 +584,11 @@ class Cli(unittest.TestCase):
 
     def test_a_bad_size_is_a_usage_error(self) -> None:
         self.assertEqual(self.run_cli(str(TEMPLATE_HW), "--size", "huge").returncode, 2)
+
+    def test_jobs_outside_supported_range_are_rejected(self) -> None:
+        result = self.run_cli(str(TEMPLATE_HW), "--jobs", "9")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("--jobs must be between 1 and 8", json.loads(result.stdout)["error"])
 
 
 if __name__ == "__main__":
