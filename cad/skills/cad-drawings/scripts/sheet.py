@@ -359,6 +359,15 @@ def visible_anchors(faces: Sequence[Face], view: ViewData) -> list[tuple[float, 
     return [sheet for _, sheet in visible_points(faces, view)]
 
 
+SHOWN_MARGIN = 0.05   # a later view must show this much more of a feature's outline to take its dimension
+
+
+def _shown(own: Sequence[Face], view: ViewData) -> float:
+    """The share of the faces' outline points that land on the view's visible geometry."""
+    total = sum(len(candidate_points(face, view)) for face in own)
+    return len(visible_points(own, view)) / total if total else 0.0
+
+
 # --- annotation items ---------------------------------------------------------------------------------
 
 @dataclass
@@ -503,15 +512,26 @@ def build_presentation(chars: Sequence[Characteristic], frame: DatumFrame, bindi
                 same.characteristics.append(char.id)
                 result.placed[char.id] = {"annotation": same.id, "view": same.view, "anchor": list(same.target)}
                 continue
+            # the view that shows the dimensioned faces most: a face hidden in an earlier view whose projected
+            # edge only touches another visible line goes to the view that sees it; ties keep plan order, and
+            # projected views and sections keep their preferred order (presentation: section)
+            best = None
             for plan in _preferred(char, plans):
-                item = _linear(char, frame, binding, faces, views[plan.id], regime)
-                if item is not None:
-                    result.linears.append(item)
-                    result.placed[char.id] = {"annotation": item.id, "view": plan.id, "anchor": list(item.target)}
-                    if dimension_key(char) is not None:
-                        stated[dimension_key(char)] = item
-                    placed = True
+                if best is not None and plan.kind != best[1].kind:
                     break
+                item = _linear(char, frame, binding, faces, views[plan.id], regime)
+                if item is None:
+                    continue
+                shown = _shown(own, views[plan.id])
+                if best is None or shown > best[0] + SHOWN_MARGIN:
+                    best = (shown, plan, item)
+            if best is not None:
+                _, plan, item = best
+                result.linears.append(item)
+                result.placed[char.id] = {"annotation": item.id, "view": plan.id, "anchor": list(item.target)}
+                if dimension_key(char) is not None:
+                    stated[dimension_key(char)] = item
+                placed = True
         else:
             text = _callout_text(char, regime)
             if text is not None and char.reference:   # a reference dimension is bracketed (ISO 129-1, ASME Y14.5)

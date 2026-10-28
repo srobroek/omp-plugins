@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""View planning and pattern statements without FreeCAD: sheets, sections through a reference's centre,
-grids of holes stated once, and their callout text.
+"""View planning and size statements without FreeCAD: sheets, sections through a reference's centre,
+grids of holes stated once, width callouts over inclined ribs, and their callout text.
 
 Run: uv run --with pyyaml --with defusedxml --with jsonschema python -m unittest discover -s cad/skills/cad-drawings/tests -p test_view_planning.py
 """
@@ -18,7 +18,7 @@ import drawing_intent  # noqa: E402
 import part_views  # noqa: E402
 import sheet  # noqa: E402
 from drawing_intent import Characteristic, Datum, DatumFrame, Instance, IntentError  # noqa: E402
-from feature_geometry import Edge, Face, ResolvedFeature  # noqa: E402
+from feature_geometry import Binding, Edge, Face, ResolvedFeature  # noqa: E402
 
 X, Y, Z = (1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0)
 FRAME = DatumFrame((0.0, 0.0, 0.0), X, Y, Z, False, {"A": Datum("A", "bed", "plane", (0.0, 0.0, 0.0), Z)})
@@ -92,8 +92,8 @@ class GridPattern(unittest.TestCase):
 
     def test_a_missing_node_or_an_off_grid_hole_keeps_every_location(self) -> None:
         holes = hex_grid(3.0, 16.0)
-        centre = next(k for k, h in enumerate(holes) if h.axis_point[:2] == (31.0, 0.0))
-        self.assertIsNone(drawing_intent._grid_pattern(holes[:centre] + holes[centre + 1:], FRAME, ("x", "y")))
+        inner = next(k for k, h in enumerate(holes) if h.axis_point[:2] == (31.0, 0.0))
+        self.assertIsNone(drawing_intent._grid_pattern(holes[:inner] + holes[inner + 1:], FRAME, ("x", "y")))
         stray = Instance((28.0 + 1.0, 0.7, 0.0), Z, 1.0, (999,), 0.0, 4.0, None)
         self.assertIsNone(drawing_intent._grid_pattern([*holes, stray], FRAME, ("x", "y")))
         self.assertIsNone(drawing_intent._grid_pattern(holes[:3], FRAME, ("x", "y")), "three holes are located one by one")
@@ -105,6 +105,36 @@ class GridPattern(unittest.TestCase):
         self.assertIn("grid pitch 3 at 0° and 60° to x", text)
         self.assertIn(f"centres within ⌀{sheet.number(grid['within_diameter'])} of the located hole", text)
         self.assertIn("GRID PITCH 3 AT 0° AND 60° TO X", sheet._callout_text(char, "asme"))
+
+
+def plane(index: int, point, normal) -> Face:
+    return Face(index, "plane", 1.0, (*point, *point), (), (), point=tuple(point), normal=tuple(normal))
+
+
+class WidthRequest(unittest.TestCase):
+    def test_a_width_counts_every_opposed_pair_of_its_two_features_at_that_width(self) -> None:
+        """Two crush ribs 0.6 wide at 210° and 330°, on two posts: one 4× callout, no frame axis needed."""
+        faces, a, b = {}, [], []
+        for post in ((0.0, 0.0), (0.0, 12.7)):
+            for degrees in (210.0, 330.0):
+                u = (math.cos(math.radians(degrees)), math.sin(math.radians(degrees)), 0.0)
+                n = (-u[1], u[0], 0.0)
+                centre = (post[0] + u[0], post[1] + u[1], 4.0)
+                for side, group in ((0.3, a), (-0.3, b)):
+                    index = len(faces)
+                    faces[index] = plane(index, tuple(centre[k] + side * n[k] for k in range(3)),
+                                         tuple(n[k] if side > 0 else -n[k] for k in range(3)))
+                    group.append(index)
+        features = {"flanks_a": ResolvedFeature("flanks_a", "surface", tuple(a)),
+                    "flanks_b": ResolvedFeature("flanks_b", "surface", tuple(b))}
+        part = {"drawing": {"type": "detail", "dimensions": [
+            {"id": "rib_width", "operation": "width", "features": ["flanks_a", "flanks_b"]}]}}
+        measurer = drawing_intent.Measurer("TST-0001", part, {}, [], Binding(features, {}, ()), list(faces.values()))
+        measurer._requests(FRAME)
+        (char,) = measurer.result.characteristics
+        self.assertEqual((char.operation, char.quantity, char.axis), ("width", 4, None))
+        self.assertAlmostEqual(char.value, 0.6)
+        self.assertEqual(sheet._callout_text(char, "iso"), "4× width 0.6")
 
 
 if __name__ == "__main__":
