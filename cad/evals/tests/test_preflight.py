@@ -175,6 +175,21 @@ class CredentialLifetime(unittest.TestCase):
         sleep.assert_not_called()
         source.close()
 
+    def test_static_credentials_are_reexported_when_they_would_lapse_mid_trial(self):
+        now = datetime.now(timezone.utc)
+        source, exports = self.fake_source(
+            [now + timedelta(minutes=20), now + timedelta(hours=1)]
+        )
+        keys = [
+            source.get(1800, static=True).aws_env["AWS_ACCESS_KEY_ID"]
+            for _ in range(3)
+        ]
+        # 20 minutes cannot cover a 30-minute ceiling, so the second trial gets a fresh
+        # export; the hour-long one covers the third.
+        self.assertEqual(keys, ["ASIAEXAMPLE0", "ASIAEXAMPLE1", "ASIAEXAMPLE1"])
+        self.assertEqual(len(exports), 2)
+        source.close()
+
     def test_container_endpoint_refreshes_near_expiry_credentials(self):
         now = datetime.now(timezone.utc)
         source, exports = self.fake_source(
@@ -1609,6 +1624,28 @@ class RecordedStreams(unittest.TestCase):
             "skills:user-skill",
             self.isolation("opencode", paths, probe, lines)["leaks"],
         )
+
+    def test_opencode_error_event_keeps_the_provider_message(self):
+        # The OpenCode 2.1.4 shape of a rejected Bedrock token (live capture, pace,
+        # 2026-10-28), with Bedrock's expired-token wording in place of "invalid".
+        message = "The security token included in the request is expired"
+        event = {
+            "type": "error",
+            "timestamp": 1793189139415,
+            "sessionID": "ses_example",
+            "error": {
+                "type": "provider.auth",
+                "message": message,
+                "status": 403,
+                "response": {"body": json.dumps({"message": message})},
+            },
+        }
+        turn = adapters.build("opencode", {"bin": "opencode"}).parse(
+            [json.dumps(event)]
+        )
+        self.assertEqual(turn.error, f"provider.auth: {message} (HTTP 403)")
+        # The runner's one credential-refresh retry keys on this text.
+        self.assertTrue(runner._EXPIRED_CREDENTIALS.search(turn.error))
 
 
 if __name__ == "__main__":
