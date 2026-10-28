@@ -232,8 +232,8 @@ drawing:
       into: LMP-0003
       interface: IF-003
       direction: [0, -1, 0]
-      acceptance: {kind: standoff, features: [head_underside, cheek_face]}
       tools: ["Arbor press or pin punch"]
+      acceptance: {kind: standoff, features: [head_underside, cheek_face]}
     - id: ring_head
       kind: retaining_ring
       part: "@ring-head"

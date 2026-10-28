@@ -109,21 +109,6 @@ def item_geometry(assembly: Mapping[str, Any], frames: Mapping[str, str]) -> Sim
     return SimpleNamespace(occurrences=tuple(occurrences), groups=groups, joints=joints)
 
 
-def guide_measurements(version_dir: Path, operation_ids: set[str]) -> dict[str, Mapping[str, Any]]:
-    """Read measured operation evidence if a drawing package is already in the version."""
-    found: dict[str, Mapping[str, Any]] = {}
-    for path in sorted(version_dir.rglob("coverage.json")):
-        try:
-            coverage = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        for row in coverage.get("rows", []):
-            if row.get("kind") == "assembly_operation" and row.get("operation") in operation_ids:
-                if isinstance(row.get("measured"), Mapping):
-                    found[row["operation"]] = row["measured"]
-    return found
-
-
 def release_manifest(hw: Path, product_id: str, version: str) -> Path | None:
     releases = hw / "releases"
     if not releases.is_dir():
@@ -140,6 +125,57 @@ def release_manifest(hw: Path, product_id: str, version: str) -> Path | None:
                                for item in manifest.get("files", []) if isinstance(item, str))
         candidates.append((includes_version, str(manifest.get("released_at", "")), path))
     return max(candidates, default=(False, "", None), key=lambda row: (row[0], row[1], str(row[2])))[2]
+
+
+def guide_measurements(hw: Path, version_dir: Path, version: str, product_id: str,
+                       operation_ids: set[str]) -> dict[str, Mapping[str, Any]]:
+    """Use this version's drawing coverage, never recompute an assembly measurement here."""
+    reports = {(path, False) for path in version_dir.rglob("coverage.json")}
+    reports.update((path, False) for path in version_dir.rglob("package.json"))
+    releases = hw / "releases"
+    if releases.is_dir():
+        for manifest_path in releases.glob("*/manifest.json"):
+            try:
+                release = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if release.get("product_id") != product_id:
+                continue
+            has_version = any(isinstance(item, str) and
+                              re.search(rf"(?:^|/)versions/{re.escape(version)}(?:/|$)", item)
+                              for item in release.get("files", []))
+            for relative in release.get("files", []):
+                if isinstance(relative, str) and relative.endswith(("coverage.json", "package.json")):
+                    report_path = hw / relative
+                    if report_path.is_file():
+                        reports.add((report_path, has_version))
+
+    found: dict[str, Mapping[str, Any]] = {}
+    for path, release_report in sorted(reports, key=lambda report: str(report[0])):
+        try:
+            content = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if path.name == "package.json":
+            if (content.get("provenance", {}).get("version") != version or
+                    content.get("provenance", {}).get("subject") != "LMP-ASM" and release_report):
+                continue
+            coverage = content.get("coverage") or {}
+        else:
+            if release_report and not any(isinstance(item, str) and
+                    re.search(rf"(?:^|/)versions/{re.escape(version)}(?:/|$)", item)
+                    for item in content.get("files", [])):
+                continue
+            coverage = content
+        rows = coverage.get("rows", [])
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            operation = row.get("operation")
+            measured = row.get("measured")
+            if row.get("kind") == "assembly_operation" and operation in operation_ids and isinstance(measured, Mapping):
+                found[operation] = measured
+    return found
 
 
 def recorded_tools(operations: Sequence[Mapping[str, Any]]) -> list[tuple[str, str, str]]:
@@ -231,7 +267,8 @@ def make_guide(hw: Path, version: str, out: Path) -> str:
 
     operations = assembly_drawing.get("operations", []) if isinstance(assembly_drawing, Mapping) else []
     resolved = plan.sheets[0].operations if plan is not None else ()
-    measurements = guide_measurements(version_dir, {operation.operation.id for operation in resolved})
+    measurements = guide_measurements(hw, version_dir, version, str(product_id or ""),
+                                      {operation.operation.id for operation in resolved})
     steps: list[str] = []
     for number, resolved_operation in enumerate(resolved, start=1):
         operation = resolved_operation.operation
@@ -240,14 +277,18 @@ def make_guide(hw: Path, version: str, out: Path) -> str:
                                                  str(product.get("regime") or "iso"))
         except (KeyError, TypeError, ValueError) as exc:
             raise GuideError(f"cannot format assembly operation {operation.id}: {exc}") from exc
+        if operation.acceptance == "standoff" and measurements.get(operation.id, {}).get("gap") is None:
+            note = note.replace("gap not measured", f"gap not measured: run the assembly drawing for {version}")
         steps.append(f"{number}. {text(note)}")
 
     tool_rows = []
     for step_number, resolved_operation in enumerate(resolved, start=1):
         names = [*resolved_operation.operation.tools, *resolved_operation.operation.consumables]
         if names:
+            operation = resolved_operation.operation
+            relation = "onto" if operation.kind == "retaining_ring" else "into"
             tool_rows.append((step_number,
-                              f"{resolved_operation.part_item}/{resolved_operation.into_item}",
+                              f"{resolved_operation.part_item} {relation} {resolved_operation.into_item}",
                               "; ".join(names)))
     sections = [
         "## Overview\n\n" + table(("Field", "Value"), overview),
@@ -256,7 +297,7 @@ def make_guide(hw: Path, version: str, out: Path) -> str:
         "## Parts to buy\n\n" + table(("Item no.", "PN", "Designation or manufacturer PN", "Qty", "Supplier", "Order code"),
                                           buy_rows or [(None,) * 6]),
         "## Tools and consumables\n\n" + table(
-            ("Step", "Item no.", "Tool or consumable"), tool_rows or [(None, None, None)]),
+            ("Step", "Items", "Tool or consumable"), tool_rows or [(None, None, None)]),
         "## Assembly steps\n\n" + ("\n".join(steps) if steps else "not recorded"),
         "## Checks before use\n\n" + table(("Requirement", "Method", "Criteria", "Status", "Evidence"),
             [(row.get("requirement_id"), row.get("method"), row.get("criteria"), row.get("result"), row.get("evidence"))
