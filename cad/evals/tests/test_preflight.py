@@ -175,21 +175,6 @@ class CredentialLifetime(unittest.TestCase):
         sleep.assert_not_called()
         source.close()
 
-    def test_static_credentials_are_reexported_when_they_would_lapse_mid_trial(self):
-        now = datetime.now(timezone.utc)
-        source, exports = self.fake_source(
-            [now + timedelta(minutes=20), now + timedelta(hours=1)]
-        )
-        keys = [
-            source.get(1800, static=True).aws_env["AWS_ACCESS_KEY_ID"]
-            for _ in range(3)
-        ]
-        # 20 minutes cannot cover a 30-minute ceiling, so the second trial gets a fresh
-        # export; the hour-long one covers the third.
-        self.assertEqual(keys, ["ASIAEXAMPLE0", "ASIAEXAMPLE1", "ASIAEXAMPLE1"])
-        self.assertEqual(len(exports), 2)
-        source.close()
-
     def test_container_endpoint_refreshes_near_expiry_credentials(self):
         now = datetime.now(timezone.utc)
         source, exports = self.fake_source(

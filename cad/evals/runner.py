@@ -286,17 +286,12 @@ class HostSource:
         if self._expires.tzinfo is None:
             self._expires = self._expires.replace(tzinfo=timezone.utc)
 
-    def _expires_within(self, seconds: float) -> bool:
-        """Whether the exported credentials lapse within `seconds` plus the refresh margin."""
-        return (
-            self._expires is None
-            or self._expires.timestamp() - time.time()
-            <= seconds + _CRED_REFRESH_MARGIN_S
-        )
-
     def _container_credentials(self) -> dict[str, str]:
         with self._lock:
-            if self._expires_within(0):
+            if (
+                self._expires is None
+                or self._expires.timestamp() - time.time() <= _CRED_REFRESH_MARGIN_S
+            ):
                 self._export_aws()
             return {
                 "AccessKeyId": self._aws["AccessKeyId"],
@@ -317,12 +312,7 @@ class HostSource:
         refresh: bool = False,
     ) -> adapters.Host:
         with self._lock:
-            # Static keys cannot refresh inside a trial, so they must outlive its ceiling.
-            if self.profile and (
-                not self._aws
-                or refresh
-                or (static and self._expires_within(ceiling_s or 0))
-            ):
+            if self.profile and (not self._aws or refresh):
                 self._export_aws()
             aws_env = {"AWS_REGION": self.region, "AWS_DEFAULT_REGION": self.region}
             if self.profile and static:
@@ -1058,9 +1048,8 @@ def run_matrix(
     `trace_ids=None` writes traces for every case; otherwise only ids in the set are
     retained. A harness whose preflight refuses has none of its cells started; its
     reason goes to stderr and slots count as `not_started`. Profile credentials are
-    exported at run start; OpenCode and Claude Code receive static keys that outlive
-    the case ceiling, re-exported when the cached ones would not, and retry one
-    expired-token error with a fresh export.
+    exported once at run start; OpenCode and Claude Code receive static keys and retry
+    one expired-token error with a fresh export.
     """
     cfg = {
         key: matrix.raw.get(key, default)

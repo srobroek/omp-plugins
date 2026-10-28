@@ -51,10 +51,9 @@ They reach exactly as far as the profile's role, so give the runner a dedicated 
   Scope the resources to the foundation models and inference profiles in the matrix.
 - **Temporary credentials.** The runner refuses credentials with no `Expiration`, which
   are long-lived access keys, as an `auth_error` before any trial starts. It exports
-  at run start; the OMP endpoint refreshes near expiry, while OpenCode and Claude Code
-  get static keys, re-exported at trial start when the cached ones would lapse before
-  the case ceiling ends, and once more after an expired-token error. No harness waits
-  for the profile's session to renew.
+  once at run start; the OMP endpoint refreshes near expiry, while OpenCode and Claude
+  Code re-export only after an expired-token error. No harness waits for the profile's
+  session to renew.
 
 - The runner does not narrow the credentials itself. An `sts assume-role` with an inline session policy would narrow them, but it needs a second role whose trust policy admits your SSO role. That role chaining was not proven with SSO credentials, so the runner does not try it.
 
@@ -201,7 +200,7 @@ Every record above, and the smoke, probe and judge records, passes one scrub (`r
 
 ## Isolation
 
-Trials are comparable only if each harness loads the cad plugin and nothing else of the user's. Every child process gets an environment built from an allowlist (`PATH`, locale, user, uv cache locations) plus only that harness's credential transport; nothing else of the user's shell is inherited. `TMPDIR`, `TMP` and `TEMP` point at the trial's own `tmp/`, which is removed with the trial; Claude Code also gets `CLAUDE_CODE_TMPDIR`, because its own temp root is `/tmp` on macOS whatever `TMPDIR` says ([env vars](https://code.claude.com/docs/en/env-vars)). OMP receives the runner's authenticated container endpoint; OpenCode and Claude Code receive short-lived static credentials that outlive the case ceiling (and a single re-export/retry after an expired-token failure); Kiro uses its private login copy. This keeps configuration out; it does not stop an agent with a shell from reading `~/.aws` (see the residual risk under [Cases and ground truth](#cases-and-ground-truth)).
+Trials are comparable only if each harness loads the cad plugin and nothing else of the user's. Every child process gets an environment built from an allowlist (`PATH`, locale, user, uv cache locations) plus only that harness's credential transport; nothing else of the user's shell is inherited. `TMPDIR`, `TMP` and `TEMP` point at the trial's own `tmp/`, which is removed with the trial; Claude Code also gets `CLAUDE_CODE_TMPDIR`, because its own temp root is `/tmp` on macOS whatever `TMPDIR` says ([env vars](https://code.claude.com/docs/en/env-vars)). OMP receives the runner's authenticated container endpoint; OpenCode and Claude Code receive one export of short-lived credentials (and a single re-export/retry after an expired-token failure); Kiro uses its private login copy. This keeps configuration out; it does not stop an agent with a shell from reading `~/.aws` (see the residual risk under [Cases and ground truth](#cases-and-ground-truth)).
 
 Each row then records what the harness itself reported loading, and the leaks: everything that is neither the cad plugin nor in that harness's declared baseline, plus any capability cad needs that is missing. A baseline is what a harness bundles and no supported setting removes, observed in a clean run of one harness version. Each row's `inventory.baseline` lists the baseline items it loaded and the version they were declared for. A row whose harness reports another version, or no version, leaks `baseline: declared for …` until the baseline is observed again; this holds for every harness, including those that bundle nothing. An inventory the harness did not report counts as contaminated. `summary` and `judge` refuse contaminated cells unless `--allow-contaminated`.
 
