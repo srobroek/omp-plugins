@@ -75,7 +75,7 @@ PIN = {
     "finish": "none", "mass_target": 3, "make_buy": "buy", "supplier": "Acme Fasteners",
     "procurement": {"mode": "catalog", "manufacturer": "Acme", "manufacturer_part_number": "DP-5-20",
                     "supplier_part_number": "AF-1234", "designation": "ISO 2338 5 m6 x 20 A2",
-                    "specification": {"reference": "Acme DP datasheet", "revision": "C", "artifact": "specs/dp.pdf",
+                    "specification": {"reference": "Acme DP datasheet", "revision": "C", "artifact": "parts/TST-0002/sources/dp.pdf",
                                       "sha256": hashlib.sha256(DATASHEET).hexdigest()},
                     "approved_sources": [{"name": "Acme", "part_number": "DP-5-20"}],
                     "qualification_evidence": "decisions/DR-001.md", "certificates": ["EN 10204 3.1"]},
@@ -132,8 +132,8 @@ class DrawingRecordAdditions(unittest.TestCase):
     def write(self) -> None:
         (self.hw / "decisions").mkdir(parents=True, exist_ok=True)
         (self.hw / "decisions" / "DR-001.md").write_text("# DR-001\n", encoding="utf-8")
-        (self.hw / "specs").mkdir(exist_ok=True)
-        (self.hw / "specs" / "dp.pdf").write_bytes(DATASHEET)
+        (self.hw / "parts" / "TST-0002" / "sources").mkdir(parents=True, exist_ok=True)
+        (self.hw / "parts" / "TST-0002" / "sources" / "dp.pdf").write_bytes(DATASHEET)
         for name, document in self.docs.items():
             (self.hw / name).write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
         for pn, part in self.parts.items():
@@ -257,11 +257,11 @@ class DrawingRecordAdditions(unittest.TestCase):
             "made-to-drawing with a vendor sheet": (lambda p: p["procurement"].update(mode="made_to_drawing"),
                                                     "procurement/mode made_to_drawing contradicts drawing/type vendor_specification"),
             "specification hash mismatch": (lambda p: p["procurement"]["specification"].update(sha256="0" * 64),
-                                            "procurement/specification/sha256 does not match specs/dp.pdf"),
+                                            "procurement/specification/sha256 does not match parts/TST-0002/sources/dp.pdf"),
             "specification outside hw": (lambda p: p["procurement"]["specification"].update(artifact="../dp.pdf"),
                                          "procurement/specification/artifact"),
-            "specification missing": (lambda p: p["procurement"]["specification"].update(artifact="specs/none.pdf"),
-                                      "'specs/none.pdf' is not a file in hw/"),
+            "specification missing": (lambda p: p["procurement"]["specification"].update(
+                artifact="parts/TST-0002/sources/none.pdf"), "'parts/TST-0002/sources/none.pdf' is not a file in hw/"),
             "specification without revision": (lambda p: p["procurement"]["specification"].pop("revision"),
                                                "procurement/specification"),
             "no mode": (lambda p: p["procurement"].pop("mode"), "'mode' is a required property"),
@@ -287,6 +287,15 @@ class DrawingRecordAdditions(unittest.TestCase):
                 "drawing/surface_texture: only a detail drawing specifies surface_texture"),
         }
         self.run_cases(cases, lambda: self.parts["TST-0002"])
+
+    def test_specification_copy_outside_its_sources_folder_is_misplaced(self) -> None:
+        self.parts["TST-0002"]["procurement"]["specification"]["artifact"] = "specs/dp.pdf"
+        (self.hw / "specs").mkdir(parents=True)
+        (self.hw / "specs" / "dp.pdf").write_bytes(DATASHEET)
+        code, findings = self.validate()
+        self.assertEqual(code, 0, findings)  # a layout finding is a warning before design_freeze
+        self.assertIn(f"{self.hw / 'specs' / 'dp.pdf'}: hw/specs/dp.pdf is procurement evidence for TST-0002 "
+                      "outside its sources/ folder", findings)
 
     def test_url_specification_without_a_frozen_copy_validates(self) -> None:
         procurement = self.parts["TST-0002"]["procurement"]

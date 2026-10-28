@@ -38,7 +38,7 @@ DATASHEET = b"%PDF-1.4 dowel pin datasheet stand-in\n"
 PIN_PROCUREMENT = (
     "procurement:\n  mode: catalog\n  manufacturer: Misumi\n  manufacturer_part_number: MSTH4-12\n"
     "  supplier_part_number: MSTH4-12-EU\n  designation: ISO 8734 4 x 12 A1\n"
-    "  specification: {reference: Misumi MSTH datasheet, revision: '2024-03', artifact: specs/msth.pdf,\n"
+    "  specification: {reference: Misumi MSTH datasheet, revision: '2024-03', artifact: parts/PIN-0001/sources/msth.pdf,\n"
     f"                  sha256: {hashlib.sha256(DATASHEET).hexdigest()}}}\n"
 )
 
@@ -201,13 +201,13 @@ class StepRoundTripTests(unittest.TestCase):
                 "make_buy: make\nmass_target: 40\n"
             )
             parts["PIN-0001"] += PIN_PROCUREMENT
-            (hw / "specs").mkdir()
-            (hw / "specs" / "msth.pdf").write_bytes(DATASHEET)
             for pn, text in parts.items():
                 folder = hw / "parts" / pn
                 folder.mkdir(parents=True)
                 extra = "finish: deburred\n" if "finish:" not in text else ""
                 (folder / "part.yaml").write_text(f"PN: {pn}\n" + text + extra, encoding="utf-8")
+            (hw / "parts" / "PIN-0001" / "sources").mkdir()
+            (hw / "parts" / "PIN-0001" / "sources" / "msth.pdf").write_bytes(DATASHEET)
             (hw / "product.yaml").write_text(
                 "id: test-assembly\nrigor: pro\nunits: mm\nregime: iso\ngeneral_tolerance: 0.1\n"
                 "flow: {stage: layout, recheck_from: layout}\n", encoding="utf-8"

@@ -248,8 +248,10 @@ class ValidateProject(unittest.TestCase):
         validator_copy = self.project / "skill" / "scripts" / "validate.py"
         validator_copy.parent.mkdir(parents=True)
         shutil.copy2(VALIDATOR, validator_copy)
-        shutil.copy2(VALIDATOR.with_name("assembly_data.py"), validator_copy.with_name("assembly_data.py"))
+        for sibling in ("assembly_data.py", "layout.py"):
+            shutil.copy2(VALIDATOR.with_name(sibling), validator_copy.with_name(sibling))
         shutil.copytree(SKILL / "schemas", self.project / "skill" / "schemas")
+        shutil.copy2(SKILL / "layout.json", self.project / "skill" / "layout.json")
         coupling_copy = self.project / "cad-motion" / "scripts" / "coupling.py"  # the sibling skill's module
         coupling_copy.parent.mkdir(parents=True)
         shutil.copy2(SKILL.parent / "cad-motion" / "scripts" / "coupling.py", coupling_copy)

@@ -16,7 +16,16 @@ TRIGGER
 2. In `assembly.yaml` `drawing.operations`, include `tools` and `consumables` only when the record states them. Never infer tools or process settings.
 3. Generate the versioned GitBuilding index with `uv run --script skill://cad-record/scripts/build_guide.py hw --version vN --out docs`. It preserves the `<parts>` tag and uses version STEP paths.
 4. Use the DIN SPEC checklist and OKH template references to the generated parts, assembly, and verification sections.
-5. Run `uv run --script skill://cad-record/scripts/validate.py <project-dir>`. Read JSON from stdout; exit 0 means no findings, 1 means record checks failed, 2 means usage or infrastructure failed.
+5. Run `uv run --script skill://cad-record/scripts/validate.py <project-dir>`. Read JSON from stdout; exit 0 means no error findings, 1 means at least one error, 2 means usage or infrastructure failed. Warnings stay in the report and do not fail it.
+
+## Layout
+
+`layout.json` owns every path under `hw/`: who writes it, the stage it first appears at, whether it is record source or generated output, and whether it can change. [references/layout.md](references/layout.md) is the generated table. Commands resolve and publish paths through `scripts/layout.py`, described in [references/layout-api.md](references/layout-api.md).
+
+`validate.py` walks every file and folder under `hw/`, tracked, untracked or ignored, without following symlinks. Each path the layout does not accept becomes a finding with `code`, `path`, `canonical_location` and `action`; nothing is moved or deleted. A stray or misplaced path is a warning before `design_freeze` and an error from `design_freeze` on. It stays an error at every stage once `flow.frozen` is set or a release exists. Unsafe names, symlinks that leave `hw/`, and a sealed folder that gained or lost a file are errors at every stage.
+
+MUST Put each file where `references/layout.md` places it. Generated outputs come only from their writer, inside the version or bundle that seals them; never place geometry, export scripts or copies in a folder of your own, such as `hw/print/`.
+MUST Keep notes and reference material in `hw/docs/` and procurement copies in `hw/parts/<PN>/sources/`. Scratch work goes in `.cad-work/` beside `hw/`.
 
 ## Rules
 
@@ -41,6 +50,8 @@ MUST Keep BOM columns in this order: `level,PN,rev,qty,title,material,process,ma
 ## Record files
 
 - `product.yaml`: product identity, rigor, units, drawing regime, general tolerance, and workflow state.
+  - `flow.frozen`: the frozen configuration the `design_freeze` gate approved: `version`, the sha256 of its `manifest.json` (`manifest_sha256`), and the approving `decision`. `validate.py` checks the hash against `hw/versions/<version>/manifest.json`.
+  - `flow.change`: an open approved change against the frozen version: `decision`, `baseline_version` (the frozen version) and `affected_parts`.
   - Optional `drawing`: the production drawing policy with `definition: model_and_drawing`, an explicit `projection` (`first_angle` or `third_angle`), `standards`, `default_sheet` (`sizes`, `orientation`, `scale`), named `tolerance_policies`, and `general_tolerance_policy`.
   - A tolerance policy is `kind: standard` (ISO 2768-1:1989 with a class) or `kind: limits` (`linear_mm` with its source `reference`). Each names the processes it `applies_to`.
   - `general_tolerance` must state the general policy exactly: `ISO 2768-m`, or the `linear_mm` number. `standards.dimensioning` must belong to the regime.
@@ -57,16 +68,18 @@ MUST Keep BOM columns in this order: `level,PN,rev,qty,title,material,process,ma
 - `assembly.yaml`: optional top-level `occurrences` (`id` lowercase, `PN`, optional `placement`: `translation_mm` and `rotation: {axis, angle_deg}`, rotation about the part's local origin first), subassemblies listing `parts` (each PN one implicit occurrence at the identity) and/or `occurrences: ["@id", ...]` (each explicit occurrence in exactly one subassembly; a PN with explicit occurrences is never also in `parts`), and joints with travel limits. `scripts/assembly_data.py` is the shared normalizer and reference resolver.
 - `parts/<PN>/part.yaml` optional `model_frame`: `assembly_zero` (default; geometry in assembly coordinates at the zero joint pose, one identity-placed occurrence) or `part_local` (the part's own frame, placed by its occurrences).
 - `parts/<PN>/part.yaml`: part number and revision, material, process, finish, mass target in grams, make/buy, optional supplier, and optional `decisions: [DR-###, ...]` references validated against `hw/decisions/`; `model.py` is the parametric CAD source.
-  - Optional `procurement`: `mode` (`catalog` needs `make_buy: buy`; `made_to_drawing`), manufacturer and supplier part numbers, `designation`, `specification`, `open`, `approved_sources`, `qualification_evidence` and `certificates`. With open orderable identity, include its reason. `open` fields are not set elsewhere in the record.
+  - Optional `procurement`: `mode` (`catalog` needs `make_buy: buy`; `made_to_drawing`), manufacturer and supplier part numbers, `designation`, `specification`, `open`, `approved_sources`, `qualification_evidence` and `certificates`. With open orderable identity, include its reason. `open` fields are not set elsewhere in the record. Keep a frozen `specification.artifact` copy in `parts/<PN>/sources/`.
+  - Optional `manufacture`, for a custom-made part only (`make_buy: make`, or `procurement.mode: made_to_drawing`): `relationship: same` (made in its installed shape) or `different`. A different state, such as a strap printed flat, also needs `state`, `reason`, the approving `decision`, and `volume_rel_tolerance` or `volume_abs_tolerance_mm3`. Optional `mesh` overrides the STL tessellation (default 0.05 mm linear, 0.1 rad angular).
   - Optional `drawing`: `type` (`detail` for a made-to-drawing part; `vendor_specification` or `source_control` for a catalog item), `tolerance_policy`, `datum_features`, `coordinate_frame`, `views`, `features`, `dimensions` (requests without values, because every value comes from the model), structured `notes`, `manufacturing`, and `sheet`. `validate.py` checks that `datum_features` declares every datum label in use, that view and dimension ids are unique, and that each named tolerance policy exists in product.yaml and applies to the part's process.
 - `bom.csv`: hierarchical EBOM; values and fields are checked against part records.
 - `verification.csv`: requirement verification status and evidence; every requirement needs a row before release.
 - `decisions/DR-###.md`: dated rationale and consequences for design decisions.
-- `releases/<rev>/manifest.json`: immutable release file inventory (paths relative to the project root) and check outcomes. `validate.py` requires the directory and manifest revisions to match, inventory files to exist, verification results to be `pass` or `waived`, and no part to remain at an `X` prototype revision.
+- `releases/<rev>/manifest.json`: immutable release record and check outcomes. Version 1 lists project files in place; version 2 (`schema_version: 2`) seals a package of byte copies, each with its sha256 and original. `validate.py` requires the directory and manifest revisions to match, inventory files to exist, verification results to be `pass` or `waived`, and no part to remain at an `X` prototype revision.
 - `.cad/recheck.json`: staged-index recheck stamp generated by `cad-recheck/scripts/stamp.py`; its JSON records the index tree hash, stage, checks, pass status, timestamp, and tool versions.
-- `concept/<scene>.scene.json`: L0 variants and rough primitives; validate it with `cad-concept` against the bundled scene schema.
+- `concept/<product-id>.scene.json`: L0 variants and rough primitives; validate it with `cad-concept` against the bundled scene schema.
 - `concept/handoff.json`: chosen variant's flattened hierarchy, envelopes, joints, and alternatives; `validate.py` checks it against the adjacent `cad-concept` handoff schema when available, otherwise reports an informational skip.
-- `concept/screenshots/`: PNG captures and pose JSON saved by the concept viewer.
+- `concept/screenshots/<scene-sha256>/<capture-sha256>/`: concept viewer preview bundles.
+- `docs/`: free-form notes, guides and reference material. It earns no geometry, check or release credit and never holds geometry or scripts.
 - `assets/docs-templates/` contains the GitBuilding build guide, DIN SPEC 3105-1 checklist, and OKH manifest templates.
 
 ## Rules
