@@ -60,7 +60,7 @@ record with couplings (exit 2). Verify coupled motion with `pose.py` and `sweep.
    `--jobs N` measures pairs in N worker processes (forkserver; spawn on macOS), each about 110 MB;
    `--jobs 1` measures in this process on OCCT's thread pool. The result is the same either way.
    Measurements persist in the pair cache, `$XDG_CACHE_HOME/cad-motion/pairs.sqlite` (else
-   `~/.cache/cad-motion`; `--cache DIR` moves it). It is keyed by
+   `~/.cache/cad-motion`; `--cache DIR` moves it), the one cad-model `check` uses. It is keyed by
    both parts' geometry, the exact placement, the measuring code, OCP version and platform, so a
    repeat measures only what changed and reports the same bits (`disk_hits`). Requirements and
    thresholds are not in the key, so changing them reuses every entry. `--no-cache` reads and

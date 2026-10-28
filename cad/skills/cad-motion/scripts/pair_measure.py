@@ -128,6 +128,7 @@ class PairMeasurer:
         self.threads = threads
         self.cache = cache
         self.identities: dict[str, bytes] = {}  # definition key -> sha256 of its BRep bytes
+        self.faces: dict[str, int] = {}  # definition key -> face count
         # The corners of each definition's bounding box, enlarged by its shape tolerances: the box
         # holds the shape, so its placed corners' axis-aligned hull holds the placed shape.
         self.corners = {key: list(itertools.product(*zip(*box_corners(shape, tolerance=True))))
@@ -169,6 +170,13 @@ class PairMeasurer:
                 self.identities[key] = hashlib.sha256(shape_bytes(self.shapes[key])).digest()
         return hashlib.sha256(measurement_salt() + self.identities[request.a] + self.identities[request.b]
                               + _bits(request.placement)).digest()
+
+    def work(self, request: Request) -> int:
+        """The product of the two definitions' face counts: how long a measurement takes, roughly."""
+        for key in (request.a, request.b):
+            if key not in self.faces:
+                self.faces[key] = face_count(self.shapes[key])
+        return self.faces[request.a] * self.faces[request.b]
 
 
 class _Run:
@@ -267,9 +275,13 @@ class _Run:
     # -- scheduling ----------------------------------------------------------------------------
 
     def queue(self, index: int) -> None:
-        """Put an open request in its group's best-first queue, keyed by its unit's box gap."""
-        key = self.requests[index].group if self.prune else None
-        heapq.heappush(self.queues[key], (self.gap(self.unit_of[index]) if self.prune else index, index))
+        """Put an open request in its queue: its group's, keyed by its unit's box gap, when pruning;
+        else the one queue, longest first across workers and in request order in this process."""
+        request = self.requests[index]
+        if self.prune:
+            heapq.heappush(self.queues[request.group], (self.gap(self.unit_of[index]), index))
+        else:
+            heapq.heappush(self.queues[None], (-self.measurer.work(request) if self.measurer.jobs > 1 else 0, index))
 
     def next_unit(self) -> int | None:
         """The next unit to measure: groups in turn, each its open request of the smallest box gap."""
@@ -572,3 +584,14 @@ def box_corners(shape: Any, tolerance: bool = False) -> tuple[list[float], list[
     BRepBndLib.AddOptimal_s(shape, box, False, tolerance)
     low, high = box.CornerMin(), box.CornerMax()
     return [low.X(), low.Y(), low.Z()], [high.X(), high.Y(), high.Z()]
+
+
+def face_count(shape: Any) -> int:
+    from OCP.TopAbs import TopAbs_FACE
+    from OCP.TopExp import TopExp_Explorer
+
+    explorer, count = TopExp_Explorer(shape, TopAbs_FACE), 0
+    while explorer.More():
+        count += 1
+        explorer.Next()
+    return count

@@ -51,8 +51,8 @@ at = pose.Rigid.identity()
 for name, container in (("solid", "TST-0303"), ("compound", "TST-0301")):
     report[name] = {}
     for order, ids in (("container_first", ("a-container", "b-buried")), ("buried_first", ("b-container", "a-buried"))):
-        placed = {ids[0]: pose.placed(parts[container].shape, at), ids[1]: pose.placed(parts["TST-0302"].shape, at)}
-        geometry = check.pair_geometry(placed)
+        placements = {ids[0]: (container, at), ids[1]: ("TST-0302", at)}
+        geometry, _ = check.pair_geometry({pn: part.shape for pn, part in parts.items()}, placements)
         (entry,) = geometry.values()
         report[name][order] = {**entry, "status": check.interference(geometry, None, set(), set())["status"]}
 print(json.dumps(report))

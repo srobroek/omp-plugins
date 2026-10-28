@@ -26,7 +26,7 @@ TRIGGER
    → `hw/versions/vN/` and `hw/versions/latest.json`; JSON summary on stdout. `auto` runs each
    part in its declared kernel's own uv environment; `cadquery` or `build123d` additionally
    requires every part to declare that kernel.
-3. Check: `uv run --script skill://cad-flow/scripts/run.py cad-model/scripts/cad_model.py check vN --hw hw [--out FILE]`
+3. Check: `uv run --script skill://cad-flow/scripts/run.py cad-model/scripts/cad_model.py check vN --hw hw [--out FILE] [--jobs N] [--cache DIR | --no-cache]`
    → check result JSON; press fits and heat-set inserts declared in `hw/interfaces.yaml` are allowed
    to interfere automatically. `build_volume` checks each FDM part against `hw/product.yaml`'s printer envelope.
    It reports an axis-aligned orientation when one fits. Otherwise, it reports the oriented box axes.

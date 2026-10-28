@@ -604,10 +604,11 @@ class StepTests(unittest.TestCase):
         return folder
 
     def run_script(self, script: str, *args: str) -> tuple[subprocess.CompletedProcess[str], dict]:
-        """`script` with `args`, its pair cache in a fresh cache home unless `args` name one."""
-        env = {**os.environ, "XDG_CACHE_HOME": tempfile.mkdtemp(dir=self.root)}
+        """`script` with `args`; a sweep gets a pair cache of its own unless `args` name one."""
+        if script == "sweep.py" and not {"--cache", "--no-cache"} & set(args):
+            args = (*args, "--cache", tempfile.mkdtemp(dir=self.root))
         proc = subprocess.run(["uv", "run", "--quiet", "--script", str(SCRIPTS / script), *args],
-                              capture_output=True, text=True, check=False, timeout=900, env=env)
+                              capture_output=True, text=True, check=False, timeout=900)
         return proc, json.loads(proc.stdout) if proc.stdout.strip() else {}
 
     def assert_same_sweeps(self, runs: list[tuple[Path, dict]]) -> None:

@@ -112,9 +112,13 @@ def safe_project(root: Path, kernel: str) -> Path:
 
 
 def cli(*args: str) -> tuple[subprocess.CompletedProcess[str], dict, float]:
+    """cad_model.py with `args`; a check gets a pair cache of its own unless `args` name one."""
     started = time.perf_counter()
-    proc = subprocess.run(["uv", "run", "--quiet", "--script", str(CLI), *args],
-                          capture_output=True, text=True, check=False)  # no timeout: cold OCP imports take minutes
+    with tempfile.TemporaryDirectory() as cache:
+        if args[0] == "check" and not {"--cache", "--no-cache"} & set(args):
+            args = (*args, "--cache", cache)
+        proc = subprocess.run(["uv", "run", "--quiet", "--script", str(CLI), *args],
+                              capture_output=True, text=True, check=False)  # no timeout: cold OCP imports take minutes
     wall = time.perf_counter() - started
     print(f"[cad-model wall] {wall:7.1f} s  {' '.join(args[:3])}", file=sys.stderr)
     return proc, (json.loads(proc.stdout) if proc.stdout.strip() else {}), wall
@@ -395,6 +399,49 @@ class AttachedPartTests(unittest.TestCase):
                          [("spare_bracket", "contract", "ContractError", None)])
         self.assertEqual(result["findings"][0].keys(), FINDING_KEYS)
         self.assertFalse((self.hw / "versions" / "v2").exists())
+
+
+@unittest.skipUnless(shutil.which("uv"), "uv is required for the kernel environments")
+class CheckPairCacheTests(unittest.TestCase):
+    """check through cad-motion's pair cache: base, arm and attached spacer, then a v2 that changes
+    only the arm (CadQuery only)."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.hw = two_part_project(Path(cls.tmp.name), "cadquery")
+        set_arm(cls.hw, "cadquery")
+        set_model(cls.hw, "TST-0003", "cadquery", "arm.py", {**ARM, "z0": -6.0}, "Spacer plate", "PETG")
+        cls.built = [cli("run", str(cls.hw), "--label", "v1", "--attach", "TST-0003=TST-0001")]
+        set_arm(cls.hw, "cadquery", length=80.0)
+        cls.built.append(cli("run", str(cls.hw), "--label", "v2", "--attach", "TST-0003=TST-0001"))
+        cache = str(Path(cls.tmp.name) / "cache")
+        cls.checks = {name: cli("check", label, "--hw", str(cls.hw), *option)[1] for name, label, option in (
+            ("v1 no cache", "v1", ["--no-cache"]), ("v1 cold", "v1", ["--cache", cache]),
+            ("v1 warm", "v1", ["--cache", cache]), ("v2 seeded", "v2", ["--cache", cache]),
+            ("v2 no cache", "v2", ["--no-cache"]))}
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls.tmp.cleanup()
+
+    def kept(self, name: str) -> dict:
+        return {k: v for k, v in self.checks[name].items() if k != "timings_s"}
+
+    def counts(self, name: str) -> tuple[int, int]:
+        timings = self.checks[name]["timings_s"]
+        return timings["pair_evaluations"], timings["disk_hits"]
+
+    def test_a_cold_and_a_warm_cache_report_what_no_cache_does(self) -> None:
+        for proc, result, _ in self.built:
+            self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+        self.assertEqual(self.kept("v1 cold"), self.kept("v1 no cache"))
+        self.assertEqual(self.kept("v1 warm"), self.kept("v1 no cache"))
+        self.assertEqual((self.counts("v1 cold"), self.counts("v1 warm")), ((3, 0), (0, 3)))
+
+    def test_the_next_version_measures_only_the_pairs_of_its_changed_part(self) -> None:
+        self.assertEqual(self.kept("v2 seeded"), self.kept("v2 no cache"))
+        self.assertEqual(self.counts("v2 seeded"), (2, 1))
 
 
 BASE, ARM_PN, PIN = "TST-0001", "TST-0002", "TST-0003"
