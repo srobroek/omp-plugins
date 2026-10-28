@@ -436,7 +436,7 @@ class BroadPhaseTests(unittest.TestCase):
                                     group="pair") for x in offsets]
         with mock.patch.object(measure.pose, "placed", side_effect=lambda shape, at: at.trans[0] if shape == "b" else shape), \
                 mock.patch.object(measure.pose, "interference",
-                                  side_effect=lambda a, x, box_gap=0.0: (max(0.0, abs(x) - 1.0), 0.0)) as kernel:
+                                  side_effect=lambda a, x, box_gap=0.0, threads=False: (max(0.0, abs(x) - 1.0), 0.0)) as kernel:
             return measurer.measure(requests, prune=prune), kernel.call_count
 
     def assert_sound(self, offsets: list[float], thresholds: tuple[float, ...] = ()) -> list:
@@ -610,16 +610,17 @@ class StepTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
         return json.loads(proc.stdout)
 
-    def test_the_bounds_hold_and_the_broad_phase_and_containment_skip_change_no_measured_value(self) -> None:
+    def test_the_bounds_hold_and_the_broad_phase_containment_skip_and_threads_change_no_measured_value(self) -> None:
         """fixtures/measure_probe.py over every fixture pair at seeded placements: box gap and motion
-        bound <= distance; a pair measured with its gap (no containment test past SOLID_GAP_MM) is
-        bitwise unchanged; pruned and full runs agree, and each pruned request lies beyond its group
-        minimum and threshold."""
+        bound <= distance; a pair measured with its gap (no containment test past SOLID_GAP_MM) or on
+        OCCT's thread pool is bitwise unchanged; pruned and full runs agree, and each pruned request
+        lies beyond its group minimum and threshold."""
         proc = subprocess.run(["uv", "run", "--quiet", "--script", str(HERE / "fixtures" / "measure_probe.py"),
                                str(self.root / "fx")], capture_output=True, text=True, check=False, timeout=900)
         self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
         report = json.loads(proc.stdout)
-        self.assertEqual((report["bound_violations"], report["mismatches"], report["prune_violations"]), ([], [], []))
+        self.assertEqual((report["bound_violations"], report["mismatches"], report["thread_mismatches"],
+                          report["prune_violations"]), ([], [], [], []))
         self.assertGreater(report["wrapped"], report["compared"] // 2, report)
         self.assertGreater(report["pruned"], report["requests"] // 10, report)
         self.assertEqual(report["buried"]["gap"], 0.0)

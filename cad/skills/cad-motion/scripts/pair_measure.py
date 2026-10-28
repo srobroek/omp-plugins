@@ -100,12 +100,15 @@ def reading(outcome: tuple[float, float] | Pruned) -> tuple[float, float]:
 class PairMeasurer:
     """Measures requests on `shapes` (definition key -> TopoDS_Shape), in this process or, with
     `jobs` > 1, in that many worker processes (`start_method`: forkserver, spawn on macOS and
-    Windows; never fork)."""
+    Windows; never fork). With `threads`, a measurement in this process searches on OCCT's thread
+    pool; workers never do, as `jobs` of them already fill the cores."""
 
-    def __init__(self, shapes: Mapping[str, Any], jobs: int = 1, start_method: str | None = None) -> None:
+    def __init__(self, shapes: Mapping[str, Any], jobs: int = 1, start_method: str | None = None,
+                 threads: bool = True) -> None:
         self.shapes = dict(shapes)
         self.jobs = jobs
         self.start_method = start_method or _default_start_method()
+        self.threads = threads
         # The corners of each definition's bounding box, enlarged by its shape tolerances: the box
         # holds the shape, so its placed corners' axis-aligned hull holds the placed shape.
         self.corners = {key: list(itertools.product(*zip(*box_corners(shape, tolerance=True))))
@@ -120,7 +123,8 @@ class PairMeasurer:
         """One outcome per request, in request order; None for the requests the deadline left
         unanswered, and for those still open after a failure when `stop_on_failure`."""
         run = _Run(self, requests, prune)
-        executor = _InProcess(self.shapes) if self.jobs <= 1 else _Workers(self.shapes, self.jobs, self.start_method)
+        executor = (_InProcess(self.shapes, self.threads) if self.jobs <= 1
+                    else _Workers(self.shapes, self.jobs, self.start_method))
         try:
             run.execute(executor, deadline, stop_on_failure)
         finally:
@@ -288,11 +292,12 @@ class _Run:
 Task = tuple[str, str, Any, float]  # (a, b, b's placement rows, box gap)
 
 
-def _measure(shapes: Mapping[str, Any], task: Task) -> tuple[float, float] | str:
+def _measure(shapes: Mapping[str, Any], task: Task, threads: bool = False) -> tuple[float, float] | str:
     """pose.interference on one task: (distance, volume), or the kernel error's message."""
     a, b, b_rows, box_gap = task
     try:
-        return pose.interference(shapes[a], pose.placed(shapes[b], pose.Rigid(*b_rows)), box_gap=box_gap)
+        return pose.interference(shapes[a], pose.placed(shapes[b], pose.Rigid(*b_rows)), box_gap=box_gap,
+                                 threads=threads)
     except Exception as error:  # noqa: BLE001 - OCP raises Standard_Failure on broken input
         return str(error) or type(error).__name__
 
@@ -306,12 +311,12 @@ class _InProcess:
 
     capacity = 1
 
-    def __init__(self, shapes: Mapping[str, Any]) -> None:
-        self.shapes = shapes
+    def __init__(self, shapes: Mapping[str, Any], threads: bool) -> None:
+        self.shapes, self.threads = shapes, threads
         self.done: deque[tuple[int, tuple[float, float] | Failure]] = deque()
 
     def submit(self, unit: int, task: Task) -> None:
-        self.done.append((unit, _outcome(_measure(self.shapes, task))))
+        self.done.append((unit, _outcome(_measure(self.shapes, task, self.threads))))
 
     def next(self) -> tuple[int, tuple[float, float] | Failure]:
         return self.done.popleft()

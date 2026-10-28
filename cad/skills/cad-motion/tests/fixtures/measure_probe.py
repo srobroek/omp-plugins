@@ -9,7 +9,8 @@ definition placement and at seeded random rigid placements of b around a:
 - the box gap, and the motion bound from each other placement's distance, are at most the
   measured distance (`bound_violations`);
 - where the gap exceeds pose.SOLID_GAP_MM, `interference` given the gap (b measured as a one-member
-  compound, no containment test) returns the very same distance and volume (`mismatches`).
+  compound, no containment test) returns the very same distance and volume (`mismatches`);
+- `interference` on OCCT's thread pool returns the very same distance and volume (`thread_mismatches`).
 The nest compound container must still hold its buried cube at distance 0 (`buried`).
 
 Then each ordered pair of the box sets is swept along a seeded path, one group per pair, with the
@@ -18,8 +19,8 @@ the broad phase: every request the pruned run measured equals the full run's bit
 pruned one is farther than its group minimum, the gate and its threshold (`prune_violations`).
 
 Usage: uv run --script measure_probe.py FIXTURE_DIR  (build_fixtures.py's OUT_DIR)
-stdout: {"compared", "wrapped", "bound_violations", "mismatches", "buried", "requests", "pruned",
-"prune_violations"}
+stdout: {"compared", "wrapped", "bound_violations", "mismatches", "thread_mismatches", "buried", "requests",
+"pruned", "prune_violations"}
 """
 
 from __future__ import annotations
@@ -101,6 +102,9 @@ def bounds(report: dict, name: str, measurer, shapes: dict) -> None:
                 if max([gap, *motion]) > plain[0]:
                     report["bound_violations"].append({**where, "gap": gap, "motion": motion, "distance": plain[0]})
                 seen.append((plain[0], corners))
+                threaded = pose.interference(shapes[a], moved, threads=True)
+                if [v.hex() for v in threaded] != [v.hex() for v in plain]:
+                    report["thread_mismatches"].append({**where, "plain": plain, "threads": threaded})
                 if gap > pose.SOLID_GAP_MM:
                     report["wrapped"] += 1
                     given = pose.interference(shapes[a], moved, box_gap=gap)
@@ -136,8 +140,8 @@ def broad_phase(report: dict, name: str, shapes: dict) -> None:
 
 
 def main(root: Path) -> dict:
-    report = {"compared": 0, "wrapped": 0, "bound_violations": [], "mismatches": [], "requests": 0, "pruned": 0,
-              "prune_violations": []}
+    report = {"compared": 0, "wrapped": 0, "bound_violations": [], "mismatches": [], "thread_mismatches": [],
+              "requests": 0, "pruned": 0, "prune_violations": []}
     with pose.stdout_to_stderr():
         for name in SETS:
             shapes = {pn: part.shape for pn, part in pose.load_definitions(root / name, root / name).items()}

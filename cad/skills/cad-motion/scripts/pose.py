@@ -851,7 +851,7 @@ def _one_member_compound(shape: Any) -> Any:
     return compound
 
 
-def interference(shape_a: Any, shape_b: Any, box_gap: float = 0.0) -> tuple[float, float]:
+def interference(shape_a: Any, shape_b: Any, box_gap: float = 0.0, threads: bool = False) -> tuple[float, float]:
     """(minimum distance mm, shared volume mm^3) of two shapes in one frame.
 
     The distance is BRepExtrema's between the boundaries, and 0 when one shape lies inside the
@@ -865,12 +865,20 @@ def interference(shape_a: Any, shape_b: Any, box_gap: float = 0.0) -> tuple[floa
     (0: unknown). Beyond SOLID_GAP_MM no vertex of either shape lies within CONTAINMENT_TOL_MM of the
     other, so containment is not looked for: b goes to BRepExtrema as a one-member COMPOUND, for
     which it skips its vertex-in-solid classification and measures the same boundary distance.
+
+    `threads` lets BRepExtrema search on OCCT's thread pool. The value does not change: on and off
+    were bitwise equal on every measured pair, the cad-motion tests among them. Worth it only in a
+    process that has the cores to itself.
     """
     from OCP.BRepAlgoAPI import BRepAlgoAPI_Common
     from OCP.BRepExtrema import BRepExtrema_DistShapeShape
 
     apart = box_gap > SOLID_GAP_MM
-    extrema = BRepExtrema_DistShapeShape(shape_a, _one_member_compound(shape_b) if apart else shape_b)
+    extrema = BRepExtrema_DistShapeShape()
+    extrema.SetMultiThread(threads)
+    extrema.LoadS1(shape_a)
+    extrema.LoadS2(_one_member_compound(shape_b) if apart else shape_b)
+    extrema.Perform()
     if not extrema.IsDone():
         raise MotionError("distance computation failed")
     distance = extrema.Value()

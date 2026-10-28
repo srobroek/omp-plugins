@@ -179,13 +179,13 @@ def pair_geometry(placed: dict[str, Any]) -> dict[tuple[str, str], dict[str, Any
 
     `placed` maps an occurrence id to its placed shape; two occurrences of one PN are a pair like
     any other. The measurement is cad-motion's `pose.interference`, the rule `sweep.py` applies to
-    every pose.
+    every pose, on OCCT's thread pool: check measures in one process, and a few large pairs dominate.
     """
     pose = load_pose()
     found: dict[tuple[str, str], dict[str, Any]] = {}
     for a, b in itertools.combinations(sorted(placed), 2):
         try:
-            gap, shared = pose.interference(placed[a], placed[b])
+            gap, shared = pose.interference(placed[a], placed[b], threads=True)
         except Exception as error:  # noqa: BLE001 - OCP raises Standard_Failure on broken input
             found[(a, b)] = {"clearance_mm": None, "interference_mm3": None, "error": str(error) or type(error).__name__}
             continue
