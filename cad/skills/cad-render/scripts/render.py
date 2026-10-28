@@ -754,8 +754,8 @@ async def _retry_view(name: str, capture: Callable[[dict[str, Any]], Any]) -> tu
     return result, quality, attempts
 
 
-async def _open_capture_page(browser: Any, url: str, size: tuple[int, int], errors: list[str]) -> tuple[Any, dict[str, Any]]:
-    page = await browser.new_page(viewport={"width": size[0], "height": size[1]}, device_scale_factor=1)
+async def _open_capture_page(browser_context: Any, url: str, errors: list[str]) -> tuple[Any, dict[str, Any]]:
+    page = await browser_context.new_page()
     page.on("pageerror", lambda exc: errors.append(f"pageerror: {exc}"))
     page.on("console", lambda msg: errors.append(f"console: {msg.text}") if msg.type == "error" else None)
     await page.goto(url, wait_until="load")
@@ -805,12 +805,24 @@ def capture_views(url: str, views: list[str], size: tuple[int, int], jobs: int =
 
         async with async_playwright() as pw:
             browser = await pw.chromium.launch(headless=True, args=CHROMIUM_ARGS)
+            seed_script = """
+                let state = 0x6d2b79f5;
+                Math.random = () => {
+                  state = (state + 0x6d2b79f5) | 0;
+                  let value = Math.imul(state ^ (state >>> 15), 1 | state);
+                  value ^= value + Math.imul(value ^ (value >>> 7), 61 | value);
+                  return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
+                };
+            """
+            browser_context = await browser.new_context(
+                viewport={"width": size[0], "height": size[1]}, device_scale_factor=1)
             try:
+                await browser_context.add_init_script(seed_script)
                 timings["browser_start_s"] = round(time.monotonic() - started, 3)
                 worker_count = min(jobs, len(views))
                 chunks = [views[index::worker_count] for index in range(worker_count)]
                 load_started = time.monotonic()
-                pages = await collect([_open_capture_page(browser, url, size, errors) for _ in chunks])
+                pages = await collect([_open_capture_page(browser_context, url, errors) for _ in chunks])
                 timings["load_s"] = round(time.monotonic() - load_started, 3)
                 worker_results = await collect([_capture_page_views(page, chunk)
                                                 for (page, _), chunk in zip(pages, chunks)])
@@ -823,6 +835,7 @@ def capture_views(url: str, views: list[str], size: tuple[int, int], jobs: int =
                             timings[name] = group_timings[name]
                             break
             finally:
+                await browser_context.close()
                 await browser.close()
     try:
         asyncio.run(capture())
