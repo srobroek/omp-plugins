@@ -16,9 +16,9 @@ You are a CAD part designer. The cad-flow lead assigned you one unit: an L2 suba
 3. Edit only `.cad-work/<unit>/hw/parts/<PN>/part.yaml` and `model.py` for your PNs. Follow the model.py contract in `skill://cad-model/references/contract.md` and the fidelity rules of `skill://cad-design`: F2 at L2, F3 at L3. At L3, size fits with `skill://cad-fits` and set fasteners, tolerances, datums, and process rules.
 4. Check in the copy: `uv run --script skill://cad-flow/scripts/scratch.py build --hw hw --unit <unit> --kernel <kernel> --fidelity F2|F3`. It builds the scratch copy, runs cad-model check, and runs form_check on your PNs; exit 0 means pass. Fix your parts and rerun until it passes, or stop when the fix needs a change outside your PNs. At L3, give each part a drawing:
    - Run `skill://cad-drawings/scripts/drawing_draft.py` on the scratch version the build reports, with `--output-dir .cad-work/<unit>/drawing`.
-   - Review the proposed features, datums, views and direct size requests against the design intent and the standards rows.
-   - Write the `drawing_features` hook, complete the part.yaml `drawing` block and rebuild.
-   - Run `drawing.py` with the same output directory until it passes. Read every preview.
+   - Write the `drawing_features` hook from the proposed locators' `select` lines, rebuild, and draft again until the draft's `hook.findings` is empty.
+   - Review the draft's features, datums, views and direct size requests against the design intent and the standards rows, complete its `drawing` block, then merge it with `skill://cad-drawings/scripts/drawing_merge.py --draft .cad-work/<unit>/drawing/<PN>/drawing_intent.draft.yaml`.
+   - Run `drawing.py` with the same output directory until it passes. Read every preview; when dimensions crowd a view, spread them over sections and sheets, never drop one.
 5. Deliver: `uv run --script skill://cad-flow/scripts/scratch.py deliver --hw hw --unit <unit>`. It copies your PN directories into hw/parts/ and lists every other changed scratch file as a proposal. Exit 1 means another actor changed one of your part directories since init: stop and report it.
 6. Return the report.
 

@@ -14,16 +14,19 @@ and write ``DIR/<PN>/drawing_intent.draft.yaml``:
   chamfer, arc, engraving and the outline, with its faces and measured sizes (for review only: the
   record never carries values);
 - ``unrecognized``: faces no pattern matches, with the reason;
-- ``locators``: one proposed ``drawing_features`` entry per feature (kind, faces and a witness point
-  with its normal per face) for the ``model.py`` hook, each face in exactly one entry;
-- ``drawing``: a proposed ``part.yaml`` drawing block: datums on the largest outer planes, the frame,
-  orthographic views, ``size: general`` per locator, and a direct dimension request for every wall,
-  rib and shell thickness and every pocket, cutout and notch width, length and depth, so the gate's
-  ISO 129-1 functional sizes are stated directly;
+- ``locators``: before the model has a ``drawing_features`` hook, one proposed locator per feature and
+  plane (kind, faces, and per face a ``select`` line: support type, normal or axis, level or radius),
+  each face in exactly one entry, for writing the hook's PARAMS rules. Once the version carries the
+  hook, the hook's own locators with the recognised features each one holds, and ``hook`` lists what
+  its binding left unbound, ambiguous or unaccounted;
+- ``drawing``: a proposed ``part.yaml`` drawing block in those locator names: datums on the largest
+  outer planes, the frame, orthographic views, ``size: general`` per locator, and a direct dimension
+  request for every wall, rib and shell thickness and every pocket, cutout and notch width, length and
+  depth, so the gate's ISO 129-1 functional sizes are stated directly;
 - ``review``: what the agent decides before merging: design intent, tolerances, notes, sections.
 
-It never writes part.yaml or model.py. Exit 0 when every draft is written, 2 on invalid input or an
-infrastructure failure.
+It never writes part.yaml or model.py; ``drawing_merge.py`` merges the reviewed block. Exit 0 when
+every draft is written, 2 on invalid input or an infrastructure failure.
 """
 
 from __future__ import annotations
@@ -51,14 +54,47 @@ PRIORITY = ("hole", "boss", "shaft", "groove", "slot", "engraving", "arc", "cham
             "pocket", "notch", "cutout", "rib", "step", "wall", "outline")
 DIRECT = ("thickness", "width", "length", "depth")
 ORDER = {category: rank for rank, category in enumerate(PRIORITY)}
+REVIEW = "REVIEW"   # the placeholder prefix drawing_merge.py refuses to merge
 
 
-def _witness(face: fg.Face) -> dict[str, Any]:
-    sample = face.samples[len(face.samples) // 2] if face.samples else None
-    point = list(sample[:3]) if sample else list(face.point or face.axis_point or (0.0, 0.0, 0.0))
-    normal = list(fg.unit(sample[3:6])) if sample else list(face.normal or (0.0, 0.0, 1.0))
-    return {"support_type": face.support_type, "point_mm": [round(c, 6) for c in point],
-            "normal": [round(c, 6) for c in normal]}
+def _num(value: float) -> str:
+    return f"{round(value, 4):g}"
+
+
+def _where(direction: fg.Vector) -> tuple[str, str] | None:
+    """The frame axis a unit vector lies on and its sign, for an axis-aligned face."""
+    for k, name in enumerate("xyz"):
+        if abs(abs(direction[k]) - 1.0) < 1e-6:
+            return name, "+" if direction[k] > 0 else "-"
+    return None
+
+
+def _point(point: fg.Vector) -> str:
+    return "(" + ", ".join(_num(c) for c in point) + ")"
+
+
+def select(face: fg.Face) -> str:
+    """How a hook tells this face from the others: support type, normal or axis, level or radius (model mm)."""
+    if face.support_type == "plane" and face.normal is not None and face.point is not None:
+        on = _where(fg.unit(face.normal))
+        if on is not None:
+            axis, sign = on
+            return f"plane {sign}{axis} at {axis}={_num(face.point['xyz'.index(axis)])}"
+        return f"plane normal {_point(fg.unit(face.normal))} through {_point(face.point)}"
+    if face.axis_point is not None and face.axis_dir is not None:
+        on = _where(fg.unit(face.axis_dir))
+        if on is not None:
+            across = [k for k, name in enumerate("xyz") if name != on[0]]
+            axis = f"axis {on[0]} at " + " ".join(f"{'xyz'[k]}={_num(face.axis_point[k])}" for k in across)
+        else:
+            axis = f"axis {_point(fg.unit(face.axis_dir))} through {_point(face.axis_point)}"
+        size = {"cylinder": f"r={_num(face.radius or 0.0)}", "cone": f"half-angle {_num(face.semi_angle_deg or 0.0)}",
+                "torus": f"R={_num(face.major_radius or 0.0)} r={_num(face.radius or 0.0)}",
+                "sphere": f"r={_num(face.radius or 0.0)}"}.get(face.support_type, "")
+        side = "" if face.inward is None else (" inward" if face.inward else " outward")
+        return f"{face.support_type} {size}{side} {axis}".replace("  ", " ")
+    low, high = face.bbox[:3], face.bbox[3:]
+    return f"{face.support_type} in box {_point(low)}..{_point(high)}"
 
 
 def _partition(recognition: Recognition, faces: dict[int, fg.Face]) -> tuple[dict[str, Recognized], dict[int, str]]:
@@ -95,8 +131,8 @@ def _plane_features(owner: dict[int, str], faces: dict[int, fg.Face]) -> dict[in
     return named
 
 
-def draft(pn: str, recognition: Recognition, faces: dict[int, fg.Face], record: dict[str, Any],
-          product: dict[str, Any]) -> dict[str, Any]:
+def _proposed(recognition: Recognition, faces: dict[int, fg.Face]) -> tuple[dict[int, str], dict[str, dict[str, Any]]]:
+    """Without a hook: one locator per recognised feature and plane, with a select line per face."""
     chosen, owner = _partition(recognition, faces)
     names = _plane_features(owner, faces)
     locators: dict[str, dict[str, Any]] = {}
@@ -111,27 +147,50 @@ def draft(pn: str, recognition: Recognition, faces: dict[int, fg.Face], record: 
             kind = "round" if faces[index].support_type in ("cylinder", "torus") else "surface"
         else:
             kind = item.locator_kind
-        entry = locators.setdefault(name, {"kind": kind, "frame": "assembly_zero", "recognized": base, "faces": [],
-                                           "patches": []})
+        entry = locators.setdefault(name, {"kind": kind, "recognized": [base], "faces": [], "select": []})
         entry["faces"].append(index)
-        entry["patches"].append(_witness(faces[index]))
+        entry["select"].append(select(faces[index]))
     for name, entry in locators.items():   # a plane not normal to the frame cannot be located: model-define it
         if entry["kind"] == "plane_face" and len({tuple(round(c, 4) for c in faces[i].normal) for i in entry["faces"]}) > 1:
             entry["kind"] = "surface"
-    requests, seen = [], set()
+    return names, locators
+
+
+def _hooked(recognition: Recognition, binding: fg.Binding) -> tuple[dict[int, str], dict[str, dict[str, Any]]]:
+    """With a hook: its locators as bound to this STEP, and the recognised features each one holds."""
+    holders: dict[int, list[str]] = {}
+    for item in recognition.features:
+        for index in item.faces:
+            holders.setdefault(index, []).append(item.id)
+    locators = {name: {"kind": feature.kind, "recognized": sorted({r for i in feature.faces for r in holders.get(i, ())}),
+                       "faces": list(feature.faces)}
+                for name, feature in sorted(binding.features.items())}
+    return dict(binding.owner), locators
+
+
+def draft(pn: str, recognition: Recognition, faces: dict[int, fg.Face], record: dict[str, Any],
+          product: dict[str, Any], binding: fg.Binding | None = None) -> dict[str, Any]:
+    """The draft for one part: proposed locators before a hook exists, the hook's own names once it does."""
+    names, locators = _hooked(recognition, binding) if binding is not None else _proposed(recognition, faces)
+    requests, seen, ids = [], set(), set()
     for item in recognition.features:
         for size in item.sizes:
             if size.name not in DIRECT or not size.between or not size.between[0] or not size.between[1]:
                 continue
+            if size.name == "depth" and item.category in ("hole", "engraving"):
+                continue   # a floored bore and an engraving state their own depth in their callout
             first, second = names.get(size.between[0][0]), names.get(size.between[1][0])
             if first is None or second is None or first == second or frozenset((first, second)) in seen:
                 continue
             if locators[first]["kind"] == "slot" and locators[second]["kind"] == "slot":
                 continue   # the slot kind states its own width and length
             seen.add(frozenset((first, second)))
-            requests.append({"id": f"{item.id}_{size.name}", "operation": "thickness" if size.name == "thickness"
-                             else "plane_separation", "features": [first, second],
-                             "review": f"{item.category} {size.name} {size.value:g} mm"})
+            base = rid = f"{item.id}_{size.name}"
+            while rid in ids:   # a pocket's two widths, a rib's two thicknesses: one id each
+                rid = f"{base}_{sum(1 for i in ids if i == base or i.startswith(base + '_')) + 1}"
+            ids.add(rid)
+            requests.append({"id": rid, "operation": "thickness" if size.name == "thickness" else "plane_separation",
+                             "features": [first, second], "review": f"{item.category} {size.name} {size.value:g} mm"})
     planes = sorted((f for f in faces.values() if f.support_type == "plane" and names.get(f.index) in locators
                      and locators[names[f.index]]["kind"] == "plane_face"), key=lambda f: -f.area_mm2)
     datums: dict[str, dict[str, str]] = {}
@@ -141,39 +200,66 @@ def draft(pn: str, recognition: Recognition, faces: dict[int, fg.Face], record: 
                    for d in datums.values()) and names[face.index] not in {d["feature"] for d in datums.values()}:
                 datums[label] = {"feature": names[face.index], "role": "plane"}
                 break
+    frame: dict[str, Any] = {"origin": {"intersection": list(datums)}}
+    for label, datum in datums.items():   # frame axes along the model's, so locations read as the model's
+        on = _where(fg.unit(faces[locators[datum["feature"]]["faces"][0]].normal))
+        if on is None or on[0] in frame or len(frame) > 2:
+            continue
+        spec: dict[str, str] = {"normal_to": label}
+        if on[1] == "-":   # an outward normal against the model axis: point the frame toward the far side
+            k = "xyz".index(on[0])
+            spec["toward"] = names[max(planes, key=lambda f: f.point[k]).index]
+        frame[on[0]] = spec
     policy = next((name for name, p in ((product.get("drawing") or {}).get("tolerance_policies") or {}).items()
                    if record.get("process") in (p.get("applies_to") or [])), None)
     block: dict[str, Any] = {"type": "detail", **({"tolerance_policy": policy} if policy else {}),
                              "datum_features": datums,
-                             "coordinate_frame": {"origin": {"intersection": list(datums)},
-                                                  **({"z": {"normal_to": "A"}} if "A" in datums else {}),
-                                                  **({"x": {"normal_to": "B"}} if "B" in datums else {})},
+                             "coordinate_frame": frame,
                              "views": [{"id": "principal", "kind": "orthographic", "normal_to": "A"},
                                        {"id": "front", "kind": "orthographic", "normal_to": "B"}] if len(datums) >= 2 else [],
-                             "features": {name: ({"profile": "controlled_model", "profile_tolerance_mm": "REVIEW"}
+                             "features": {name: ({"profile": "controlled_model", "profile_tolerance_mm": REVIEW}
                                                  if entry["kind"] == "surface" else {"size": "general"})
                                           for name, entry in sorted(locators.items())},
-                             "dimensions": [{k: v for k, v in r.items() if k != "review"} for r in requests],
-                             "edges": "REVIEW: ISO 13715 limits for edges of undefined shape",
-                             "surface_texture": "REVIEW: general texture, or {open: reason}",
-                             "notes": [{"kind": "finish", "text": "REVIEW"}, {"kind": "process", "text": "REVIEW"}]}
-    return {"part": pn, "recognized": [{**item.to_dict(), "summary": item.describe()} for item in recognition.features],
-            "unrecognized": [dict(u) for u in recognition.unrecognized],
-            "locators": {name: {k: v for k, v in entry.items()} for name, entry in sorted(locators.items())},
-            "drawing": block,
-            "dimension_requests": requests,
-            "review": [
-                "Rename every locator to its design role and write model.py drawing_features from the witness "
-                "points: classify faces by PARAMS (support type, normal, level, radius), never by face index.",
-                "Check each recognised feature against the design intent; merge or split locators where a feature "
-                "is one manufacturing operation.",
-                "Keep each direct size request whose feature is functional; a request locates its second plane "
-                "from its first in place of that plane's datum location.",
-                "Give every size under 0.5 mm, and every fit, its own tolerance; ISO 2768-1 has none there.",
-                "Add a section view through each recess, wall or blind hole the orthographic views show hidden.",
-                "Edge fillets and edge breaks may take presentation: general_note; contour radii get their own "
-                "dimension.",
-                "Run drawing.py: list every feature left undimensioned with its reason in the report."]}
+                             **({"dimensions": [{k: v for k, v in r.items() if k != "review"} for r in requests]}
+                                if requests else {}),
+                             "edges": f"{REVIEW}: ISO 13715 limits for edges of undefined shape",
+                             "surface_texture": f"{REVIEW}: general texture, or {{open: reason}}",
+                             "notes": [{"kind": "finish", "text": REVIEW}, {"kind": "process", "text": REVIEW}]}
+    in_feature = {i: names[i] for item in recognition.features for i in item.faces if i in names}
+    proposal: dict[str, Any] = {
+        "part": pn,
+        "recognized": [{**item.to_dict(), "summary": item.describe(),
+                        "locators": sorted({in_feature.get(i, "UNBOUND") for i in item.faces})}
+                       for item in recognition.features],
+        "unrecognized": [dict(u) for u in recognition.unrecognized],
+        "locators": locators}
+    if binding is not None:
+        proposal["hook"] = {"locators": len(binding.features), "findings": [dict(f) for f in binding.findings]}
+    write_hook = ([] if binding is not None else [
+        "Write model.py drawing_features from the proposed locators: rename each to its design role, classify faces "
+        "by PARAMS (support type, normal, level, radius: each locator's select lines), never by face index, merge "
+        "coplanar planes of one function into one plane_face, rebuild, and rerun this draft for the block in the "
+        "hook's names."])
+    proposal.update({
+        "drawing": block,
+        "dimension_requests": requests,
+        "review": [
+            *write_hook,
+            "Check each recognised feature against the design intent; its locators list where its faces are bound.",
+            "Keep each direct size request whose feature is functional; a request locates its second plane "
+            "from its first in place of that plane's datum location.",
+            "Give every size under 0.5 mm, and every fit, its own tolerance; ISO 2768-1 has none there.",
+            "Add a section view through each recess, wall or blind hole the orthographic views show hidden.",
+            "Edge fillets and edge breaks may take presentation: general_note; contour radii get their own "
+            "dimension.",
+            f"Replace every {REVIEW} placeholder, then merge the block with drawing_merge.py.",
+            "Run drawing.py: list every feature left undimensioned with its reason in the report."]})
+    return proposal
+
+
+def _error(code: str, message: str) -> int:
+    print(json.dumps({"status": "error", "error": {"code": code, "message": message}}))
+    return 2
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -186,35 +272,43 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     freecadcmd = freecad_runtime.find_freecadcmd()
     if freecadcmd is None:
-        print(json.dumps({"status": "error", "error": {"code": "freecad_unavailable"}}))
-        return 2
+        return _error("freecad_unavailable", "no freecadcmd found")
+    output_root = args.output_dir.resolve()   # FreeCAD runs in its own working directory
     try:
         hw = args.hw.resolve()
         context = drawing_contract.load_context(hw, hw / "versions" / (args.version or drawing.latest_label(hw)))
     except drawing_contract.ContractError as exc:
-        print(json.dumps({"status": "error", "error": {"code": exc.code, "message": str(exc)}}))
-        return 2
+        return _error(exc.code, str(exc))
     results = []
     for pn in args.part:
-        part = context.part(pn)
-        work = args.output_dir / f".{pn}.draft-{uuid.uuid4().hex}"
+        try:
+            part = context.part(pn)
+        except drawing_contract.ContractError as exc:
+            return _error(exc.code, str(exc))
+        work = output_root / f".{pn}.draft-{uuid.uuid4().hex}"
         work.mkdir(parents=True)
         try:
-            bound = drawing.run_job(freecadcmd, {"mode": "bind", "step": str(part.step), "locators": {}}, work,
-                                    args.timeout)
+            bound = drawing.run_job(freecadcmd, {"mode": "bind", "step": str(part.step),
+                                                 "locators": part.features or {}}, work, args.timeout)
+        except drawing.DrawingError as exc:
+            return _error(exc.code, str(exc))
         finally:
             shutil.rmtree(work, ignore_errors=True)
         faces = {f["index"]: fg.Face.from_dict(f) for f in bound["faces"]}
         recognition = Recognition.from_dict(bound["recognized"])
-        proposal = draft(pn, recognition, faces, part.record, context.product)
-        out = args.output_dir / pn / "drawing_intent.draft.yaml"
+        binding = fg.resolve(part.features, bound["bound"], list(faces.values())) if part.features else None
+        proposal = draft(pn, recognition, faces, part.record, context.product, binding)
+        out = output_root / pn / "drawing_intent.draft.yaml"
         out.parent.mkdir(parents=True, exist_ok=True)
+        names = "the hook's locator names" if binding is not None else "proposed locator names"
         header = (f"# Proposed drawing intent for {pn}, from feature recognition on {part.step.name} "
-                  f"(sha256 {part.step_sha256[:16]}).\n# A proposal to review, not the record: merge the drawing "
-                  f"block into part.yaml and the locators into model.py's drawing_features hook.\n")
+                  f"(sha256 {part.step_sha256[:16]}), in {names}.\n# A proposal to review, not the record: "
+                  f"complete the drawing block, then merge it into part.yaml with drawing_merge.py.\n")
         out.write_text(header + yaml.safe_dump(proposal, sort_keys=False, width=120), encoding="utf-8")
-        results.append({"pn": pn, "draft": str(out), "recognized": [f.describe() for f in recognition.features],
-                        "unrecognized": len(recognition.unrecognized), "requests": len(proposal["dimension_requests"])})
+        results.append({"pn": pn, "draft": str(out), "hook": binding is not None,
+                        "recognized": [f.describe() for f in recognition.features],
+                        "unrecognized": len(recognition.unrecognized), "requests": len(proposal["dimension_requests"]),
+                        **({"hook_findings": len(binding.findings)} if binding is not None else {})})
     print(json.dumps({"status": "pass", "parts": results}, indent=2))
     return 0
 
