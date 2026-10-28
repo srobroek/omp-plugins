@@ -126,23 +126,26 @@ def edge_size(limits: Sequence[float]) -> str:
     return f"{_signed_size(upper)}/{_signed_size(lower)}"
 
 
-def _asme_edges(limits: Sequence[float], internal: bool) -> str:
+def _asme_edges(limits: Sequence[float], internal: bool, brief: bool = False) -> str:
+    """The limits as an ASME note; ``brief`` for a feature's callout, where the general note gives the words."""
     lower, upper = (Decimal(str(v)) for v in limits)
+    lo, up = number(abs(lower)), number(abs(upper))
     if internal:
+        corners = "CORNERS" if brief else "INTERNAL CORNERS"
         if lower >= 0:
-            return (f"INTERNAL CORNERS R{number(upper)} MAX, NO UNDERCUT" if lower == 0
-                    else f"INTERNAL CORNERS R{number(lower)}-{number(upper)}")
+            return (f"{corners} R{up} MAX" + ("" if brief else ", NO UNDERCUT")) if lower == 0 else f"{corners} R{lo}-{up}"
         if upper <= 0:
-            return (f"INTERNAL CORNERS UNDERCUT {number(-lower)} MAX" if upper == 0
-                    else f"INTERNAL CORNERS UNDERCUT {number(-upper)}-{number(-lower)}")
-        return f"INTERNAL CORNERS R{number(upper)} OR UNDERCUT {number(-lower)} MAX"
+            return f"{corners} UNDERCUT {lo} MAX" if upper == 0 else f"{corners} UNDERCUT {up}-{lo}"
+        return f"{corners} R{up} OR UNDERCUT {lo} MAX"
     if upper <= 0:
-        return (f"REMOVE ALL BURRS, EDGE BREAK {number(-lower)} MAX" if upper == 0
-                else f"REMOVE ALL BURRS AND BREAK SHARP EDGES {number(-upper)}-{number(-lower)}")
+        if brief:
+            return f"BREAK EDGES {lo} MAX" if upper == 0 else f"BREAK EDGES {up}-{lo}"
+        return (f"REMOVE ALL BURRS, EDGE BREAK {lo} MAX" if upper == 0
+                else f"REMOVE ALL BURRS AND BREAK SHARP EDGES {up}-{lo}")
     if lower >= 0:
-        return (f"BURRS {number(upper)} MAX, DO NOT BREAK EDGES" if lower == 0
-                else f"BURRS {number(lower)}-{number(upper)}, DO NOT BREAK EDGES")
-    return f"BURRS {number(upper)} MAX OR EDGE BREAK {number(-lower)} MAX"
+        burrs = f"BURRS {up} MAX" if lower == 0 else f"BURRS {lo}-{up}"
+        return burrs if brief else f"{burrs}, DO NOT BREAK EDGES"
+    return f"BURRS {up} MAX OR EDGE BREAK {lo} MAX"
 
 
 def edge_note(edges: Mapping[str, Sequence[float]], regime: str, exceptions: bool) -> str:
@@ -156,8 +159,8 @@ def edge_note(edges: Mapping[str, Sequence[float]], regime: str, exceptions: boo
 
 def edge_lines(edges: Mapping[str, Sequence[float]], regime: str) -> list[str]:
     """A feature's own edge sizes, an exception to the general indication, as lines of its callout."""
-    return [_asme_edges(edges[kind], kind == "internal") if regime == "asme" else f"{kind} edges {edge_size(edges[kind])}"
-            for kind in ("external", "internal") if kind in edges]
+    return [_asme_edges(edges[kind], kind == "internal", brief=True) if regime == "asme"
+            else f"{kind} edges {edge_size(edges[kind])}" for kind in ("external", "internal") if kind in edges]
 
 
 TAN30 = math.tan(math.radians(30.0))
@@ -768,12 +771,14 @@ def layout_view(view: ViewData, presentation: Presentation, size: float, regime:
         footprint = footprint.union(Box(min(dim.origin[0], dim.target[0]) - text_width(dim.text, size),
                                         y - size - 1.5, max(dim.origin[0], dim.target[0]) + text_width(dim.text, size), y))
     right_edge = box.x1
-    for number_, dim in enumerate(columns):
-        x = box.x1 + FIRST_ROW + number_ * ROW_PITCH
+    x = box.x1 + FIRST_ROW
+    for dim in columns:
         annotations.append(_dimension_markup(dim, x, size, regime))
-        right_edge = x + size + 1.5
+        # ISO 129-1 aligns the text with the line; ASME Y14.5 reads it horizontally, right of the line
+        right_edge = x + (size + 1.5 if regime == "iso" else 1.0 + text_width(dim.text, size))
         footprint = footprint.union(Box(x - 1.0, min(dim.origin[1], dim.target[1]) - text_width(dim.text, size),
                                         right_edge, max(dim.origin[1], dim.target[1]) + text_width(dim.text, size)))
+        x = max(x + ROW_PITCH, right_edge + 2.0)
     marks: list[Box] = []
     for child in children:
         markup, boxes = (section_marks(view, child, size, regime) if child.kind == "section"
@@ -782,6 +787,7 @@ def layout_view(view: ViewData, presentation: Presentation, size: float, regime:
         marks.extend(boxes)
         for mark in boxes:
             footprint = footprint.union(mark)
+    label = _view_label(view, size, regime)
     # callout columns, left and right of the view
     mine = [c for c in presentation.callouts if c.view == view.plan.id]
     middle = (box.x0 + box.x1) / 2
@@ -792,6 +798,8 @@ def layout_view(view: ViewData, presentation: Presentation, size: float, regime:
         edge = (box.x0 - COLUMN_GAP) if side < 0 else (right_edge + COLUMN_GAP)
         reserved = [(m.y0, m.y1) for m in marks if (m.x1 < box.x0 + 1.0) == (side < 0) and
                     (m.x1 < box.x0 + 1.0 or m.x0 > box.x1 - 1.0)]
+        if label is not None and (label[1].x0 < edge if side < 0 else label[1].x1 > edge):
+            reserved.append((label[1].y0, label[1].y1))   # a label wider than the view reaches over this column
         for callout in column:
             callout.side = side
             callout.anchor = _side_anchor(callout, side, box)
@@ -815,7 +823,6 @@ def layout_view(view: ViewData, presentation: Presentation, size: float, regime:
     section = (fill_section(view.plan.id, view.cut_regions, view.project, view.geometry.scale)
                if view.plan.kind == "section" else None)
     annotations.extend(_view_furniture(view, section))
-    label = _view_label(view, size, regime)
     if label is not None:
         annotations.append(label[0])
         footprint = footprint.union(label[1])
@@ -909,10 +916,11 @@ def _dimension_markup(dim: Linear, at: float, size: float, regime: str) -> SvgAn
         parts.append(_arrow((at, oy), (at, ty)))
         parts.append(_arrow((at, ty), (at, oy)))
         width = text_width(dim.text, size)
+        along = width if regime == "iso" else (TEXT_ASCENT + TEXT_DESCENT) * size   # the text's extent along the line
         mid = (oy + ty) / 2
-        if width + 2 * ARROW_LENGTH > abs(ty - oy):
-            mid = y0 - 1.5 - width / 2
-            parts.append(_line(at, y0 - 1.5 - width, at, y0))
+        if along + 2 * ARROW_LENGTH > abs(ty - oy):
+            mid = y0 - 1.5 - along / 2
+            parts.append(_line(at, y0 - 1.5 - along, at, y0))
         if regime == "iso":
             parts.append(_text(dim.text, at - 1.0, mid, size, "middle", rotate=-90.0))
             if dim.boxed:

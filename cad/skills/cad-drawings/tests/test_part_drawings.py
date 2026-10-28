@@ -113,7 +113,8 @@ class EdgeAndTextureIndications(unittest.TestCase):
                                                           "INTERNAL CORNERS R0.3 MAX, NO UNDERCUT.")
         groove = {"external": [-0.02, 0.0], "internal": [0.0, 0.06]}
         self.assertEqual(edge_lines(groove, "iso"), ["external edges −0.02", "internal edges +0.06"])
-        self.assertEqual(edge_lines({"external": [-0.3, -0.1]}, "asme"), ["REMOVE ALL BURRS AND BREAK SHARP EDGES 0.1-0.3"])
+        self.assertEqual(edge_lines({"external": [-0.3, -0.1], "internal": [0.0, 0.06]}, "asme"),
+                         ["BREAK EDGES 0.1-0.3", "CORNERS R0.06 MAX"])
 
     def test_texture_symbol_shows_the_process_and_the_requirement(self) -> None:
         markups = {process: TextureSymbol("Ra 0.8", process).markup(0.0, 0.0, 2.5)
