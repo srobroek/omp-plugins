@@ -52,14 +52,15 @@ record with couplings (exit 2). Verify coupled motion with `pose.py` and `sweep.
    → posed STEP AP242 with product names kept. A value outside [min, max] exits 1 with a
    `joint_limit` finding and writes no STEP.
 2. Sweep: `uv run --script skill://cad-flow/scripts/run.py cad-motion/scripts/sweep.py --hw hw --version vN --worst-step worst.step
-   [--steps 19] [--grid 3] [--min-clearance MM] [--pair-clearance REF:REF=MM] [--include-pair REF:REF] [--end-effector REF] [--jobs auto] [--cache DIR | --no-cache]`
+   [--steps 19] [--grid 3] [--min-clearance MM] [--pair-clearance REF:REF=MM] [--include-pair REF:REF] [--end-effector REF] [--jobs 1|N|auto] [--cache DIR | --no-cache]`
    → JSON: `collisions` (sample, independent and complete pose, pair, volume), `min_clearance` per
    pair with its pose, `pair_clearance` per clearance requirement, `limit_findings`,
    `reach_envelope`, `worst_case` (written to `--worst-step`, evidence in `<worst-step>.json`), and
    `timings_s`. Only independent joints are sampled; every coupled joint is derived at each sample.
-   `--jobs N` measures pairs in N worker processes (forkserver; spawn on macOS), each about 110 MB.
-   The default `auto` is the CPU count, at most 8. `--jobs 1` measures in this process on OCCT's
-   thread pool and uses the least memory. The result is the same either way.
+   `--jobs 1`, the default, measures in this process on OCCT's thread pool. `--jobs N` measures
+   pairs in N worker processes (forkserver; spawn on macOS), each about 110 MB; `auto` is the CPU
+   count, at most 8. Workers pay off for many small parts and on a busy host. The result is the
+   same either way.
    Measurements persist in the pair cache, `$XDG_CACHE_HOME/cad-motion/pairs.sqlite` (else
    `~/.cache/cad-motion`; `--cache DIR` moves it), the one cad-model `check` uses. It is keyed by
    both parts' geometry, the exact placement, the measuring code, OCP version and platform, so a

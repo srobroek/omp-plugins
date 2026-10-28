@@ -129,9 +129,9 @@ Clearance and shared volume come from cad-motion's pair measurer (`pair_measure.
 T_a^-1 T_b in part a's definition frame. The distance is the BRepExtrema minimum distance, 0 when
 one part lies inside a solid of the other, a solid of a compound part included. Within 1e-6 mm,
 the shared volume is the non-destructive Boolean common (fuzzy 1e-7 mm), measured with the adaptive
-volume rule. `--jobs N` measures in N worker processes, largest pairs first; the default `auto` is
-the CPU count, at most 8. At 1, check measures in this process on OCCT's thread pool. Measurements
-go through cad-motion's pair cache
+volume rule. By default (`--jobs 1`), check measures in this process on OCCT's thread pool.
+`--jobs N` measures in N worker processes, largest pairs first; `auto` is the CPU count, at most 8.
+Measurements go through cad-motion's pair cache
 (`$XDG_CACHE_HOME/cad-motion/pairs.sqlite`, else `~/.cache/cad-motion`; `--cache DIR` moves it,
 `--no-cache` skips it). The cache is keyed by both parts' geometry and the exact placement. A check
 of v2 after v1 measures only the pairs whose part or placement changed, and a hit is the value a

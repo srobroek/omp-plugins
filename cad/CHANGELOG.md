@@ -23,10 +23,10 @@
   - A pair whose bounding boxes are apart skips OCCT's containment test.
   - The sweep reuses a measurement only on the exact bits of a pair's placement, which it composes from the joints below the pair's lowest common ancestor.
   - The sweep skips a request when an exact lower bound (the box gap, or a nearby sample's distance minus the motion between them) lies beyond the pair's minimum and each of its thresholds.
-  - `--jobs N` measures in N worker processes, by default `auto`: the CPU count, at most 8. `--jobs 1` measures in one process on OCCT's thread pool.
+  - By default (`--jobs 1`), measurements run in one process on OCCT's thread pool. `--jobs N` measures in N worker processes; `--jobs auto` uses the CPU count, at most 8.
   - A pair cache keeps measurements across runs and tools, `$XDG_CACHE_HOME/cad-motion/pairs.sqlite` (`--cache DIR`, `--no-cache`). Its key is both parts' geometry, the exact placement, the measuring code, OCP version and platform.
 
-  On pace, the lamp template's default sweep went from 1 147 s to 33.5 s in one process, 4.7 s with a warm cache. After one part changed, it took 13.6 s instead of 45.6 s. Its check went from 39.0 s to 10.0 s.
+  On pace (32 cores, load average about 20), the lamp template's default sweep went from 1 147 s to 35 s, and to 5 s with a warm cache. After one part changed, it took 13.6 s instead of 45.6 s. Its check went from 39.0 s to 6.6 s, and to 4.0 s warm.
 - Two outputs moved once with the new measurer, at float-noise level only. Exact reuse resolves a tie between equally close samples as a separate measurement does. On the V6 fixture, 17 of 210 pairs report another tied sample at the same distance. Its `minimum_clearance` worst case is now crank 640°, the 360° repeat of crank 280°, with the same pair and 0.8788 mm. On the lamp template, 8 of 66 pairs report another tied sample. cad-model `check` now measures part b in part a's definition frame, like the sweep, so that the two share cache entries. Its reported distances and volumes moved by at most 2.6e-13.
 - Sweep `timings_s` drops `threshold_rechecks` and gains `pair_requests`, `pruned` and `disk_hits`. Check `timings_s` gains `pair_evaluations` and `disk_hits`. A sweep stopped by `--time-limit` reports only the leading samples it measured in full. Requests are measured out of sample order, so that can be fewer samples than before. A kernel exception during a sweep exits 2 with a message instead of a traceback.
 

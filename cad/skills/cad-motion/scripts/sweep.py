@@ -10,7 +10,7 @@ Usage:
         [--attach REF=PARENT_REF ...] --worst-step WORST.step
         [--steps 19] [--grid 3] [--end-effector REF] [--include-pair REF:REF ...]
         [--min-clearance 0] [--pair-clearance REF:REF=MM ...] [--volume-tol 0.001]
-        [--max-poses 5000] [--time-limit 600] [--jobs auto] [--cache DIR | --no-cache]
+        [--max-poses 5000] [--time-limit 600] [--jobs 1|N|auto] [--cache DIR | --no-cache]
         [--worst-criterion max_horizontal_reach|minimum_clearance|maximum_interference]
 
 Inputs and kinematics are pose.py's (same options, same occurrence chain): the
@@ -603,9 +603,9 @@ def main(argv: list[str] | None = None) -> int:
                         help="overlap volume in mm^3 that counts as a collision")
     parser.add_argument("--max-poses", type=int, default=5000, help="refuse sweeps with more poses than this")
     parser.add_argument("--time-limit", type=float, default=600.0, help="seconds before the sweep stops as incomplete")
-    parser.add_argument("--jobs", type=pair_measure.jobs_argument, default="auto", metavar="N|auto",
-                        help=f"worker processes measuring pairs (1: this process; auto: the CPU count, at most "
-                             f"{pair_measure.AUTO_JOBS_MAX})")
+    parser.add_argument("--jobs", type=pair_measure.jobs_argument, default="1", metavar="N|auto",
+                        help=f"worker processes measuring pairs (1, the default: this process, on OCCT's thread "
+                             f"pool; auto: the CPU count, at most {pair_measure.AUTO_JOBS_MAX})")
     caching = parser.add_mutually_exclusive_group()
     caching.add_argument("--cache", type=Path, metavar="DIR",
                          help="pair measurement cache directory (default: $XDG_CACHE_HOME/cad-motion, else "

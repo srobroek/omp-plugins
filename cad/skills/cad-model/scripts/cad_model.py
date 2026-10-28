@@ -8,7 +8,7 @@ Usage:
     uv run --script skill://cad-flow/scripts/run.py cad-model/scripts/cad_model.py run <hw-dir> --label vN [--kernel auto|cadquery|build123d]
                                      [--attach REF=PARENT_REF ...]
     uv run --script skill://cad-flow/scripts/run.py cad-model/scripts/cad_model.py check vN --hw hw [--out FILE]
-       [--pair REF:REF ...] [--allow-interference REF:REF ...] [--expect-solids PN=N ...] [--jobs auto]
+       [--pair REF:REF ...] [--allow-interference REF:REF ...] [--expect-solids PN=N ...] [--jobs 1|N|auto]
        [--cache DIR | --no-cache]
     uv run --script skill://cad-flow/scripts/run.py cad-model/scripts/cad_model.py diff vA vB [--hw HW] [--out FILE]
 
@@ -89,8 +89,9 @@ def parser() -> argparse.ArgumentParser:
     check.add_argument("--expect-solids", action="append", type=_expect, default=[], metavar="PN=N",
                        help="expected solid count; overrides the previous version as baseline")
     check.add_argument("--out", type=Path, help="also write the result JSON here")
-    check.add_argument("--jobs", type=_jobs, default="auto", metavar="N|auto",
-                       help="worker processes measuring pairs (1: this process; auto: the CPU count, at most 8)")
+    check.add_argument("--jobs", type=_jobs, default="1", metavar="N|auto",
+                       help="worker processes measuring pairs (1, the default: this process, on OCCT's thread pool; "
+                            "auto: the CPU count, at most 8)")
     caching = check.add_mutually_exclusive_group()
     caching.add_argument("--cache", type=Path, metavar="DIR",
                          help="pair measurement cache shared with cad-motion sweep.py (default: "
