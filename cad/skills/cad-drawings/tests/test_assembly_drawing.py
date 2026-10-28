@@ -167,7 +167,7 @@ class Acceptance(unittest.TestCase):
         self.assertIn("FIT 3 H7/p6", asme)          # a fit designation keeps its case
         self.assertIn("0.3 mm OFF", asme)
         unknown = assembly_sheet.operation_note(op, {}, "iso")
-        self.assertIn("stands not recorded off the plate top", unknown)
+        self.assertIn("stands off the plate top by the modelled gap; gap not measured", unknown)
         self.assertNotIn("not recorded mm", unknown)
         with_tools = assembly_check.Operation(**{**op.operation.__dict__, "tools": ("Arbor press",)})
         with_tools_op = assembly_check.ResolvedOperation(**{**op.__dict__, "operation": with_tools})

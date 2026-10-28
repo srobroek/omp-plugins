@@ -138,6 +138,7 @@ def _text(value: Any, where: str) -> str:
         raise IntentError(f"{where} must be a non-empty string")
     return str(value)
 
+
 def _recorded_names(raw: Mapping[str, Any], key: str, where: str) -> tuple[str, ...]:
     values = raw.get(key) or []
     if not isinstance(values, list) or not all(isinstance(value, str) and value.strip() for value in values):

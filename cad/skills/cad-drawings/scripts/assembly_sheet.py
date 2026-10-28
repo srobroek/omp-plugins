@@ -338,9 +338,12 @@ def operation_note(op: ResolvedOperation, measured: Mapping[str, Any], regime: s
         until = words("its ") + features[0] + words(" seats against the ") + features[1]
     elif operation.acceptance == "standoff":
         gap = measured.get("gap")
-        distance = f"{round(gap, 2):g} mm" if gap is not None else words("not recorded")
-        until = (words("its ") + features[0] + words(" stands ") + distance + words(" off the ") + features[1]
-                 + words(", as modelled"))
+        if gap is None:
+            until = (words("its ") + features[0] + words(" stands off the ") + features[1] +
+                     words(" by the modelled gap; gap not measured"))
+        else:
+            until = (words("its ") + features[0] + words(" stands ") + f"{round(gap, 2):g} mm" +
+                     words(" off the ") + features[1] + words(", as modelled"))
     elif operation.acceptance == "flush":
         until = words("its ") + features[0] + words(" is flush with the ") + features[1]
     else:
@@ -369,6 +372,7 @@ def operation_note(op: ResolvedOperation, measured: Mapping[str, Any], regime: s
                  + f"{_number(op.travel.low)}{unit}" + words(" to ") + f"{_number(op.travel.high)}{unit} "
                  + f"({op.travel.joint}).")
     return text
+
 
 def frame_note(views: Sequence[ViewRequest]) -> str | None:
     """Where the assembly frame's axes point in the sheet's first orthographic view; None without one."""
