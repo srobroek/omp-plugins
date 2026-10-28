@@ -34,6 +34,6 @@ NOT Take a worst-case pose from intuition, or claim continuous collision freedom
 
 ## Output
 
-Begin with `RESULT: PASS|FAIL|NO-RESULT`, then the unit, case, kind, and version. Give every file you mention (result JSON, STEP, case and stack YAML) as an absolute path on its own line. Then the key numbers and proposed verification.csv rows, each naming its REQ id and evidence.
+Begin with `RESULT: PASS|FAIL|NO-RESULT`, then the unit, case, kind, and version. Give every result, STEP, case, and stack file as a separate absolute-path line. Report print/make items, buy identities and OPEN reasons, assembly steps, checks, and proposed verification rows as structured lists or tables; never use inline comma prose. Each proposed verification row names its REQ id and evidence.
 CAP 120w clean · 250w with failures.
 MUST Never reprint whole JSON or file contents.

@@ -1,18 +1,30 @@
-# Lamp arm build guide
+# Build guide
 
-This is the top-level build page for the lamp-arm project. Copy the `hw/`
-project record next to this page and keep the parts inventory in sync with
-`hw/bom.csv`.
+Generate this page from the project record and built version with `uv run --script cad/skills/cad-record/scripts/build_guide.py hw --version vN --out docs`.
 
-<!-- GitBuilding parts tag: replace the path with the project's build-system parts source. -->
+<!-- The generator keeps the parts source in sync with hw/bom.csv. -->
 <parts src="../hw/bom.csv" />
 
-## Before you begin
+## Overview
 
-Review the released `hw/releases/<rev>/manifest.json`, then verify that the
-required materials and purchased hardware are available.
+Generated from the product record, release manifest, and selected version.
 
-## Assembly
+## Parts to make
 
-Follow the assembly instructions documented for the released design. Do not
-use a prototype revision as a released build instruction.
+Generated parts list with manufacturing file paths.
+
+## Parts to buy
+
+Generated procurement list, including explicitly open sourcing fields.
+
+## Tools and consumables
+
+Only items recorded in assembly operations and interfaces are listed.
+
+## Assembly steps
+
+Generated in operation order using the assembly drawing note wording.
+
+## Checks before use
+
+Generated from the verification matrix.

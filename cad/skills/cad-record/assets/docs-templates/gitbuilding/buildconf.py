@@ -8,6 +8,6 @@ options there.
 # GitBuilding reads project files and directives directly; this starter keeps
 # the project configuration explicit and local.
 project = {
-    "title": "Lamp arm",
-    "description": "Open hardware lamp-arm build guide",
+    "title": "Hardware build guide",
+    "description": "Generated project build guide",
 }

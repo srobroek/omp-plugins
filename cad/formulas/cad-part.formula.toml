@@ -288,7 +288,7 @@ title = "RELEASE: assemble and validate the package"
 type = "task"
 needs = ["design-freeze-gate"]
 labels = ["cad", "phase:release"]
-description = "Run skill://cad-record, skill://cad-bom, and skill://cad-drawings to assemble STEP AP242, drawings, EBOM, verification, and documentation. Generate drawings with `uv run --script skill://cad-flow/scripts/run.py cad-drawings/scripts/drawing.py hw/versions/vN/parts/<PN>.step --part hw/parts/<PN>/part.yaml --product hw/product.yaml --metrics hw/versions/vN/metrics.json --output-dir <dir> [--scale <ratio>]`. Include GitBuilding, DIN SPEC 3105-1, and Open Know-How docs. Validate records and evidence. Use FreeCAD 1.1.4 only. No slicer, CAM, or machine tooling. Write `hw/releases/<rev>/manifest.json`."
+description = "Run skill://cad-record, skill://cad-bom, and skill://cad-drawings to assemble STEP AP242, drawings, EBOM, verification, and documentation. Generate drawings with `uv run --script skill://cad-flow/scripts/run.py cad-drawings/scripts/drawing.py hw/versions/vN/parts/<PN>.step --part hw/parts/<PN>/part.yaml --product hw/product.yaml --metrics hw/versions/vN/metrics.json --output-dir <dir> [--scale <ratio>]`. Generate the GitBuilding guide with `uv run --script skill://cad-record/scripts/build_guide.py hw --version vN --out <docs-dir>`. Include GitBuilding, DIN SPEC 3105-1, and Open Know-How docs. Validate records and evidence. Use FreeCAD 1.1.4 only. No slicer, CAM, or machine tooling. Write `hw/releases/<rev>/manifest.json`. In the release report include print/make files, buy items with OPEN reasons, assembly steps, and checks as structured lists or tables; every referenced file gets a separate absolute-path line, never inline comma prose."
 
 [steps.metadata]
 skill_hints = "cad-record, cad-bom, cad-drawings"
@@ -299,7 +299,7 @@ title = "RELEASE gate for {{product}}"
 type = "task"
 needs = ["release-package"]
 labels = ["cad", "phase:gate"]
-description = "Present the validated manifest and all required release artifacts and obtain explicit user approval to release. An incomplete or failed verification matrix blocks approval. Only bd gate resolve closes the gate."
+description = "Present the validated manifest and print/make files, buy items including OPEN identity fields and reasons, assembly steps, and checks as structured lists or tables. Give every referenced file on its own absolute-path line. Obtain explicit user approval to release. An incomplete or failed verification matrix blocks approval. Only bd gate resolve closes the gate."
 
 [steps.gate]
 type = "human"

@@ -108,6 +108,8 @@ class Operation:
     acceptance: str            # an ACCEPTANCE kind
     features: tuple[str, ...]  # named features of part (then host) the acceptance refers to
     verify_joint: str | None   # joint whose free travel is verified afterwards
+    tools: tuple[str, ...] = ()
+    consumables: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -135,6 +137,12 @@ def _text(value: Any, where: str) -> str:
     if not isinstance(value, (str, int)) or isinstance(value, bool) or not str(value).strip():
         raise IntentError(f"{where} must be a non-empty string")
     return str(value)
+
+def _recorded_names(raw: Mapping[str, Any], key: str, where: str) -> tuple[str, ...]:
+    values = raw.get(key) or []
+    if not isinstance(values, list) or not all(isinstance(value, str) and value.strip() for value in values):
+        raise IntentError(f"{where}/{key} must be a list of non-empty strings")
+    return tuple(values)
 
 
 def read_intent(assembly: Mapping[str, Any]) -> Intent:
@@ -212,7 +220,8 @@ def _operation(raw: Mapping[str, Any], at: str) -> Operation:
     return Operation(id=_text(raw.get("id"), f"{at}/id"), kind=kind, part=_text(raw.get("part"), f"{at}/part"),
                      into=_text(raw.get("into"), f"{at}/into"), interface=_text(raw.get("interface"), f"{at}/interface"),
                      direction=direction, acceptance=acceptance["kind"], features=tuple(features),
-                     verify_joint=None if joint is None else _text(joint, f"{at}/verify_joint"))
+                     verify_joint=None if joint is None else _text(joint, f"{at}/verify_joint"),
+                     tools=_recorded_names(raw, "tools", at), consumables=_recorded_names(raw, "consumables", at))
 
 
 # --------------------------------------------------------------------------- reconciliation
