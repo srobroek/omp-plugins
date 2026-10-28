@@ -10,7 +10,7 @@ Usage:
         [--attach REF=PARENT_REF ...] --worst-step WORST.step
         [--steps 19] [--grid 3] [--end-effector REF] [--include-pair REF:REF ...]
         [--min-clearance 0] [--pair-clearance REF:REF=MM ...] [--volume-tol 0.001]
-        [--max-poses 5000] [--time-limit 600]
+        [--max-poses 5000] [--time-limit 600] [--jobs 1|N|auto] [--cache DIR | --no-cache]
         [--worst-criterion max_horizontal_reach|minimum_clearance|maximum_interference]
 
 Inputs and kinematics are pose.py's (same options, same occurrence chain): the
@@ -33,17 +33,24 @@ Pairs: every pair of chain occurrences, including two occurrences of one PN,
 except joint-connected parent/child pairs (fixed joints and --attach included);
 `--include-pair A:B` puts an excluded pair back. Per pose and pair: pose.py's
 `interference`, the one interference rule cad-model `check` uses too: the
-minimum distance (BRepExtrema_DistShapeShape) and, when it is within 1e-6 mm,
-the overlap volume (non-destructive BRepAlgoAPI_Common, measured with pose.py's
-adaptive `volume_properties`). Centres of mass use `volume_properties` as well.
-A pair evaluation is cached on the two definitions and their relative
-transform (entries rounded to 1e-6), so a joint sweep recomputes only the pairs
-that joint moves, and two same-PN pairs in the same relative placement share
-one measurement. A cached distance is reused only when it is farther from each
-clearance threshold of the pair (its requirement, `--min-clearance`) than the
-placement difference can move it (|dR|_F times the radius of the moved
-definition's bounding box about its origin, plus |dt|); otherwise the pair is
-measured again, so a cache hit never carries a verdict across a threshold.
+minimum distance (BRepExtrema_DistShapeShape; 0 when one part lies inside a
+solid of the other, a solid of a compound part included) and, when it is within
+1e-6 mm, the overlap volume (non-destructive BRepAlgoAPI_Common, measured with
+pose.py's adaptive `volume_properties`). Centres of mass use `volume_properties`
+as well.
+Every pair request of every sample is planned first, then measured by
+pair_measure.py, then reduced in sample order. A pair's placement is b's
+definition in the frame of a's, composed from the joints below the pair's
+lowest common ancestor only, and a measurement is reused within the run on the
+two definitions and the exact bits of that placement: a joint sweep measures
+only the pairs that joint moves, two same-PN pairs in the same relative
+placement share one measurement, and every value is the one an unshared
+measurement gives. A request is not measured at all when an
+exact lower bound on its distance (the gap between the placed bounding boxes,
+or a measured distance at a nearby sample minus how far b's box moves between
+the two) exceeds the pair's smallest distance so far, 1e-6 mm and each
+threshold of the pair: no reported value or verdict can depend on it (`pruned`
+in `timings_s`).
 
 Checks: a collision is an overlap volume above `--volume-tol` mm^3 (default
 pose.py's INTERFERENCE_MM3, 1e-3) on a pair whose overlap hw/interfaces.yaml
@@ -93,7 +100,16 @@ an incomplete run, an error, or a sweep with no eligible pose (`worst_case`
 null) leaves none behind.
 
 Runtime is bounded: more than `--max-poses` poses is refused up front, and a
-sweep that passes `--time-limit` seconds stops and reports `incomplete`.
+sweep that passes `--time-limit` seconds stops measuring and reports
+`incomplete`, with the findings of the leading samples it measured in full
+(`poses.evaluated`; requests are measured out of sample order, so these can be
+few).
+
+Measurements persist across runs in the pair cache (pair_measure.PairCache,
+`--cache DIR`, default `$XDG_CACHE_HOME/cad-motion`, else `~/.cache/cad-motion`),
+keyed by both definitions' geometry, the exact placement and the measuring
+code, kernel and platform, so a repeat measures only what changed and reports
+the same bits (`disk_hits` in `timings_s`). `--no-cache` reads and writes none.
 
 stdout: JSON summary with timings; pairs and parts are reported as references
 (`@id`, or the PN of a singleton). stderr: diagnostics.
@@ -130,6 +146,8 @@ def _load(name: str, path: Path) -> Any:
 pose = sys.modules.get("cad_motion_pose") or _load("cad_motion_pose", Path(__file__).with_name("pose.py"))
 pair_policy = sys.modules.get("cad_motion_pair_policy") or _load("cad_motion_pair_policy",
                                                                   Path(__file__).with_name("pair_policy.py"))
+pair_measure = sys.modules.get("cad_motion_pair_measure") or _load("cad_motion_pair_measure",
+                                                                    Path(__file__).with_name("pair_measure.py"))
 
 CRITERIA = {
     "max_horizontal_reach": "horizontal (XY) distance from the {joint} origin to the {effector} centre of mass; "
@@ -205,68 +223,24 @@ def pairs_to_check(chain: Any, include: list[str]) -> tuple[list[tuple[str, str]
 
 
 class Geometry:
-    """OCP queries on PN definition shapes, placed per occurrence; pair results cached by definitions
-    and relative placement, never reused across a clearance threshold."""
+    """OCP queries on PN definition shapes, placed per occurrence: centres of mass and posed
+    bounding boxes. Pair measurements are pair_measure.py's."""
 
     def __init__(self, chain: Any, definitions: dict[str, Any]) -> None:
         self.chain = chain
         self.definitions = definitions
-        self.cache: dict[tuple[Any, ...], tuple[Any, tuple[float, float]]] = {}  # key -> (exact placement, result)
-        self.evaluations = 0
-        self.cache_hits = 0
-        self.rechecks = 0  # cache hits measured again because a threshold lies within their placement bound
         self.centres = {pn: self._centre(part.shape) for pn, part in definitions.items()}
-        self.radii = {pn: max(math.hypot(*corner) for corner in itertools.product(*zip(*self._box(part.shape))))
-                      for pn, part in definitions.items()}
 
     @staticmethod
     def _centre(shape: Any) -> tuple[float, float, float]:
         point = pose.volume_properties(shape).CentreOfMass()
         return (point.X(), point.Y(), point.Z())
 
-    @staticmethod
-    def _box(shape: Any) -> tuple[list[float], list[float]]:
-        from OCP.Bnd import Bnd_Box
-        from OCP.BRepBndLib import BRepBndLib
-
-        box = Bnd_Box()
-        BRepBndLib.AddOptimal_s(shape, box, False, False)
-        low, high = box.CornerMin(), box.CornerMax()
-        return [low.X(), low.Y(), low.Z()], [high.X(), high.Y(), high.Z()]
-
-    def pair(self, a: str, b: str, relative: Any, thresholds: tuple[float, ...] = ()) -> tuple[float, float]:
-        """(min distance mm, overlap volume mm^3) of occurrence b placed by `relative` in a's frame.
-
-        The cache key rounds the placement, so a hit may come from a placement up to 1e-6 per matrix
-        entry away. Moving b from the cached placement to `relative` moves none of its points farther
-        than |dR|_F r + |dt| (r: b's definition radius), so the distance changes by at most that; a hit
-        whose distance lies within that bound of a clearance threshold in `thresholds` is measured again.
-        """
-        pn_a, pn_b = self.chain.pn(a), self.chain.pn(b)
-        key = (pn_a, pn_b, *(round(v, 6) for row in relative.rows(9) for v in row))
-        cached = self.cache.get(key)
-        if cached is not None:
-            placement, measured = cached
-            bound = (math.dist([v for row in placement.rot for v in row], [v for row in relative.rot for v in row])
-                     * self.radii[pn_b] + math.dist(placement.trans, relative.trans))
-            if not bound or all(abs(measured[0] - threshold) > bound for threshold in thresholds):
-                self.cache_hits += 1
-                return measured
-            self.rechecks += 1
-        self.evaluations += 1
-        try:
-            measured = pose.interference(self.definitions[pn_a].shape,
-                                         pose.placed(self.definitions[pn_b].shape, relative))
-        except pose.MotionError as error:
-            raise pose.MotionError(f"{self.chain.ref(a)} / {self.chain.ref(b)}: {error}") from error
-        self.cache.setdefault(key, (relative, measured))
-        return measured
-
     def centre(self, occurrence_id: str, rigid: Any) -> tuple[float, float, float]:
         return rigid.apply(self.centres[self.chain.pn(occurrence_id)])
 
     def bounds(self, occurrence_id: str, rigid: Any) -> tuple[list[float], list[float]]:
-        return self._box(pose.placed(self.definitions[self.chain.pn(occurrence_id)].shape, rigid))
+        return pair_measure.box_corners(pose.placed(self.definitions[self.chain.pn(occurrence_id)].shape, rigid))
 
 
 @dataclass
@@ -292,19 +266,37 @@ def rounded(values: dict[str, float]) -> dict[str, float]:
     return {k: round(v, 6) + 0.0 for k, v in values.items()}
 
 
-def sweep(chain: Any, geometry: Geometry, samples: list[Sample], pairs: list[tuple[str, str]],
-          allowed: set[tuple[str, str]], fitted: set[tuple[str, str]],
-          requirements: dict[tuple[str, str], dict[str, Any]], effector: str, reference: tuple[float, float, float],
-          volume_tol: float, criterion: str, required: float, deadline: float) -> SweepState:
-    """Evaluate every sample. `allowed` holds the sorted occurrence pairs whose overlap is declared,
-    `fitted` those declared as a fit or insert, which `required` (--min-clearance) does not bind.
+@dataclass(frozen=True)
+class PlannedSample:
+    """One sample of the plan: its joint-limit findings (then nothing is measured), or its transforms
+    and its requests, `requests[start:start + len(measured)]` of the plan."""
 
-    `requirements` (pair_requirements) are measured on their pairs at every sample whether or not the
-    pairs are checked. A pair's margin is its distance minus its tightest applicable requirement.
-    The worst sample under `criterion` has the smallest rank; a strict comparison keeps the earliest
-    on a tie.
-    """
-    state = SweepState()
+    sample: Sample
+    limits: list[dict[str, Any]]
+    transforms: dict[str, Any] | None
+    start: int
+
+
+@dataclass(frozen=True)
+class Plan:
+    """Every pair request of a sweep, in evaluation order: per sample, one request per pair in
+    `measured` (the `checked` pairs, then the requirement pairs that are not checked)."""
+
+    checked: set[tuple[str, str]]
+    measured: list[tuple[str, str]]
+    thresholds: dict[tuple[str, str], tuple[float, ...]]  # positive clearance thresholds per pair
+    tightest: dict[tuple[str, str], tuple[float, str]]  # (required mm, source) of the tightest requirement
+    samples: list[PlannedSample]
+    requests: list[Any]  # pair_measure.Request
+
+
+def plan(chain: Any, samples: list[Sample], pairs: list[tuple[str, str]], fitted: set[tuple[str, str]],
+         requirements: dict[tuple[str, str], dict[str, Any]], required: float) -> Plan:
+    """The requests of every sample: occurrence b's definition placed by T_a^-1 T_b in the frame of
+    a's, composed from the pair's lowest common ancestor (Chain.relative_transforms). `requirements`
+    (pair_requirements) are measured on their pairs at every sample whether or
+    not the pairs are checked; `fitted` pairs (sorted occurrence ids) are not held to `required`
+    (--min-clearance)."""
     checked = set(pairs)
     measured = [*pairs, *(pair for pair in requirements if pair not in checked)]
     applicable: dict[tuple[str, str], list[tuple[float, str]]] = {}  # (required mm, source), explicit first
@@ -314,23 +306,65 @@ def sweep(chain: Any, geometry: Geometry, samples: list[Sample], pairs: list[tup
             applicable[pair].append((required, "--min-clearance"))
     thresholds = {pair: tuple(value for value, _ in options if value > 0) for pair, options in applicable.items()}
     tightest = {pair: max(options, key=lambda option: option[0]) for pair, options in applicable.items() if options}
+    planned, requests = [], []
     for sample in samples:
-        if time.monotonic() > deadline:
-            break
-        state.evaluated += 1
         limits = chain.limit_findings(sample.values)
         if limits:
-            state.limits.append({"sample": sample.index, "source": sample.source,
-                                 "independent_pose": rounded(sample.settings), "findings": limits})
+            planned.append(PlannedSample(sample, limits, None, len(requests)))
             continue
         transforms = chain.transforms(sample.values)
+        planned.append(PlannedSample(sample, [], transforms, len(requests)))
+        relative = chain.relative_transforms(sample.values, measured)
+        requests += [pair_measure.Request(chain.pn(a), chain.pn(b), relative[(a, b)],
+                                          thresholds=thresholds[(a, b)], group=(a, b)) for a, b in measured]
+    return Plan(checked, measured, thresholds, tightest, planned, requests)
+
+
+def measured_prefix(chain: Any, plan: Plan, outcomes: list[Any]) -> int:
+    """How many leading samples the reduction can take: every request answered, and every pruned
+    one proved by a request inside them, so it is above the minimum of those samples too (a run
+    the deadline stopped measured out of sample order). A kernel failure is an error."""
+    width = len(plan.measured)
+    for index, outcome in enumerate(outcomes):
+        if isinstance(outcome, pair_measure.Failure):
+            a, b = plan.measured[index % width]
+            raise pose.MotionError(f"{chain.ref(a)} / {chain.ref(b)}: {outcome.message}")
+    count, proof = 0, -1  # proof: the last request a pruned request so far relies on
+    for taken, planned in enumerate(plan.samples, start=1):
+        block = outcomes[planned.start:planned.start + width] if planned.transforms is not None else []
+        if None in block:
+            break
+        proof = max([proof, *(outcome.witness for outcome in block if isinstance(outcome, pair_measure.Pruned))])
+        if proof < planned.start + len(block):
+            count = taken
+    return count
+
+
+def reduce(chain: Any, geometry: Geometry, plan: Plan, outcomes: list[Any], evaluated: int,
+           allowed: set[tuple[str, str]], requirements: dict[tuple[str, str], dict[str, Any]], effector: str,
+           reference: tuple[float, float, float], volume_tol: float, criterion: str) -> SweepState:
+    """The findings of the first `evaluated` samples of `plan` from their request `outcomes`.
+    `allowed` holds the sorted occurrence pairs whose overlap is declared.
+
+    A pair's margin is its distance minus its tightest applicable requirement. The worst sample
+    under `criterion` has the smallest rank; a strict comparison keeps the earliest on a tie.
+    """
+    state = SweepState(evaluated=evaluated)
+    width = len(plan.measured)
+    for planned in plan.samples[:evaluated]:
+        sample = planned.sample
+        if planned.limits:
+            state.limits.append({"sample": sample.index, "source": sample.source,
+                                 "independent_pose": rounded(sample.settings), "findings": planned.limits})
+            continue
+        transforms = planned.transforms
         hits = []
         # ((margin, -undeclared overlap), distance, pair, (required mm, source)) of the smallest margin
         closest: tuple[tuple[float, float], float, list[str] | None, tuple[float, str] | None] = \
             ((math.inf, 0.0), math.inf, None, None)
         overlap: tuple[float, list[str] | None] = (0.0, None)  # largest undeclared volume above volume_tol
-        for a, b in measured:
-            distance, volume = geometry.pair(a, b, transforms[a].inverse() @ transforms[b], thresholds[(a, b)])
+        for (a, b), outcome in zip(plan.measured, outcomes[planned.start:planned.start + width]):
+            distance, volume = pair_measure.reading(outcome)
             requirement = requirements.get((a, b))
             if requirement is not None:
                 seen = state.pair_clearance.setdefault((a, b), {"clearance_mm": math.inf, "overlap_mm3": 0.0,
@@ -340,7 +374,7 @@ def sweep(chain: Any, geometry: Geometry, samples: list[Sample], pairs: list[tup
                     seen.update(clearance_mm=distance, overlap_mm3=volume, sample=sample)
             refs = [chain.ref(a), chain.ref(b)]
             undeclared = 0.0
-            if (a, b) in checked:
+            if (a, b) in plan.checked:
                 best = state.clearance.get((a, b))
                 if best is None or distance < best["clearance_mm"]:
                     state.clearance[(a, b)] = {"pair": refs, "clearance_mm": distance, "pose": rounded(sample.values),
@@ -350,7 +384,7 @@ def sweep(chain: Any, geometry: Geometry, samples: list[Sample], pairs: list[tup
                     hits.append({"pair": refs, "volume_mm3": round(volume, 4)})
                     if volume > overlap[0]:
                         overlap = (volume, refs)
-            limit = tightest.get((a, b))
+            limit = plan.tightest.get((a, b))
             if limit is not None and (distance - limit[0], -undeclared) < closest[0]:
                 closest = ((distance - limit[0], -undeclared), distance, refs, limit)
         low, high = geometry.bounds(effector, transforms[effector])
@@ -382,6 +416,19 @@ def sweep(chain: Any, geometry: Geometry, samples: list[Sample], pairs: list[tup
         if state.worst is None or rank < state.worst["rank"]:
             state.worst = {"sample": sample, "rank": rank, "metric": metric, "pair": pair}
     return state
+
+
+def sweep(chain: Any, geometry: Geometry, measurer: Any, samples: list[Sample], pairs: list[tuple[str, str]],
+          allowed: set[tuple[str, str]], fitted: set[tuple[str, str]],
+          requirements: dict[tuple[str, str], dict[str, Any]], effector: str, reference: tuple[float, float, float],
+          volume_tol: float, criterion: str, required: float, deadline: float) -> SweepState:
+    """Plan every sample's requests, measure them with `measurer` (pair_measure.PairMeasurer) until
+    `deadline`, and reduce the samples measured in full. `fitted` pairs are declared as a fit or
+    insert, which `required` (--min-clearance) does not bind."""
+    planned = plan(chain, samples, pairs, fitted, requirements, required)
+    outcomes = measurer.measure(planned.requests, deadline, stop_on_failure=True, prune=True)
+    return reduce(chain, geometry, planned, outcomes, measured_prefix(chain, planned, outcomes), allowed,
+                  requirements, effector, reference, volume_tol, criterion)
 
 
 def clearance_report(clearance: dict[tuple[str, str], dict[str, Any]], required: float,
@@ -556,9 +603,17 @@ def main(argv: list[str] | None = None) -> int:
                         help="overlap volume in mm^3 that counts as a collision")
     parser.add_argument("--max-poses", type=int, default=5000, help="refuse sweeps with more poses than this")
     parser.add_argument("--time-limit", type=float, default=600.0, help="seconds before the sweep stops as incomplete")
+    parser.add_argument("--jobs", type=pair_measure.jobs_argument, default="1", metavar="N|auto",
+                        help=f"worker processes measuring pairs (1, the default: this process, on OCCT's thread "
+                             f"pool; auto: the CPU count, at most {pair_measure.AUTO_JOBS_MAX})")
+    caching = parser.add_mutually_exclusive_group()
+    caching.add_argument("--cache", type=Path, metavar="DIR",
+                         help="pair measurement cache directory (default: $XDG_CACHE_HOME/cad-motion, else "
+                              "~/.cache/cad-motion)")
+    caching.add_argument("--no-cache", action="store_true", help="measure every pair, reading and writing no cache")
     args = parser.parse_args(argv)
     if args.steps < 2 or args.grid == 1 or args.grid < 0:
-        print("sweep: --steps must be >= 2 and --grid 0 or >= 2", file=sys.stderr)
+        print("sweep: --steps must be >= 2, and --grid 0 or >= 2", file=sys.stderr)
         return 2
     started = time.monotonic()
     try:
@@ -577,11 +632,20 @@ def main(argv: list[str] | None = None) -> int:
         path = [j for j in chain.path(effector) if j.movable]
         if not path:
             raise pose.MotionError(f"no movable joint moves the end effector {chain.ref(effector)}")
-        geometry = Geometry(chain, {pn: definitions[pn] for pn in {chain.pn(oid) for oid in chain.ids}})
+        used = {pn: definitions[pn] for pn in {chain.pn(oid) for oid in chain.ids}}
+        geometry = Geometry(chain, used)
+        cache = None if args.no_cache else pair_measure.PairCache(args.cache or pair_measure.default_cache_dir())
+        measurer = pair_measure.PairMeasurer({pn: part.shape for pn, part in used.items()}, jobs=args.jobs,
+                                             cache=cache)
         loaded = time.monotonic()
         samples = generate_poses(chain, args.steps, args.grid)
-        state = sweep(chain, geometry, samples, pairs, allowed, fitted, requirements, effector, path[0].origin,
-                      args.volume_tol, args.worst_criterion, args.min_clearance, loaded + args.time_limit)
+        try:
+            state = sweep(chain, geometry, measurer, samples, pairs, allowed, fitted, requirements, effector,
+                          path[0].origin, args.volume_tol, args.worst_criterion, args.min_clearance,
+                          loaded + args.time_limit)
+        finally:
+            if cache is not None:
+                cache.close()
         swept = time.monotonic()
         complete = state.evaluated == len(samples)
         worst = None
@@ -639,8 +703,8 @@ def main(argv: list[str] | None = None) -> int:
         "timings_s": {"load": round(loaded - started, 2), "sweep": round(swept - loaded, 2),
                       "export": round(exported - swept, 2), "total": round(time.monotonic() - started, 2),
                       "per_pose_ms": round(per_pose * 1000, 1),
-                      "pair_evaluations": geometry.evaluations, "cache_hits": geometry.cache_hits,
-                      "threshold_rechecks": geometry.rechecks},
+                      "pair_requests": measurer.requested, "pair_evaluations": measurer.measured,
+                      "cache_hits": measurer.reused, "disk_hits": measurer.disk_hits, "pruned": measurer.pruned},
     }, indent=2))
     if not complete:
         print(f"sweep: stopped after {state.evaluated} of {len(samples)} poses at --time-limit {args.time_limit} s",

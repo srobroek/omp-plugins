@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from cadmodel import build, mesh, occ
-from cadmodel.motion import load_pair_policy, load_pose
+from cadmodel.motion import load_pair_measure, load_pair_policy, load_pose
 
 VERSIONS_SCRIPT = Path(__file__).resolve().parents[3] / "cad-render" / "scripts" / "versions.py"
 
@@ -174,23 +174,29 @@ def solid_structure(parts: dict[str, Any], expected: dict[str, int], baseline: d
             "unknown_parts": unknown, "parts": rows}
 
 
-def pair_geometry(placed: dict[str, Any]) -> dict[tuple[str, str], dict[str, Any]]:
+def pair_geometry(shapes: Mapping[str, Any], placements: Mapping[str, tuple[str, Any]], cache: Any = None,
+                  jobs: int = 1) -> tuple[dict[tuple[str, str], dict[str, Any]], Any]:
     """Clearance and shared volume of every occurrence pair at the built pose; `error` when OCP fails.
 
-    `placed` maps an occurrence id to its placed shape; two occurrences of one PN are a pair like
-    any other. The measurement is cad-motion's `pose.interference`, the rule `sweep.py` applies to
-    every pose.
+    `placements` maps an occurrence id to (PN, its placement), `shapes` a PN to its definition; two
+    occurrences of one PN are a pair like any other. The measurement is cad-motion's pair measurer
+    (pair_measure.py), the one `sweep.py` uses at every pose: b's definition placed by T_a^-1 T_b in
+    the frame of a's, in this process on OCCT's thread pool or in `jobs` worker processes, largest
+    pairs first, through `cache` (a pair_measure.PairCache, shared with the sweep) when given.
+    Returns the rows and the measurer, whose counters tell what was measured and what was read back.
     """
-    pose = load_pose()
+    measure = load_pair_measure()
+    pairs = list(itertools.combinations(sorted(placements), 2))
+    requests = [measure.Request(placements[a][0], placements[b][0], placements[a][1].inverse() @ placements[b][1])
+                for a, b in pairs]
+    measurer = measure.PairMeasurer({pn: shapes[pn] for pn, _ in placements.values()}, jobs=jobs, cache=cache)
     found: dict[tuple[str, str], dict[str, Any]] = {}
-    for a, b in itertools.combinations(sorted(placed), 2):
-        try:
-            gap, shared = pose.interference(placed[a], placed[b])
-        except Exception as error:  # noqa: BLE001 - OCP raises Standard_Failure on broken input
-            found[(a, b)] = {"clearance_mm": None, "interference_mm3": None, "error": str(error) or type(error).__name__}
-            continue
-        found[(a, b)] = {"clearance_mm": gap, "interference_mm3": shared}
-    return found
+    for pair, outcome in zip(pairs, measurer.measure(requests)):
+        if isinstance(outcome, measure.Failure):
+            found[pair] = {"clearance_mm": None, "interference_mm3": None, "error": outcome.message}
+        else:
+            found[pair] = {"clearance_mm": outcome[0], "interference_mm3": outcome[1]}
+    return found, measurer
 
 
 class _Unrecorded:
@@ -469,8 +475,10 @@ def mesh_watertight(folder: Path, part_map: Mapping[str, Any], ids: Iterable[str
 
 
 def check(hw: Path, label: str, named: list[tuple[str, str]] | None, allowed: Iterable[tuple[str, str]],
-          expected_solids: dict[str, int]) -> tuple[int, dict[str, Any]]:
-    """`named` and `allowed` pairs are references (`@id`, or a PN placed once) into the built version."""
+          expected_solids: dict[str, int], cache_dir: Path | None = None, jobs: int = 1) -> tuple[int, dict[str, Any]]:
+    """`named` and `allowed` pairs are references (`@id`, or a PN placed once) into the built version;
+    `cache_dir` holds the pair cache (None: no cache), and `jobs` worker processes measure the pairs
+    (1: this process)."""
     pose = load_pose()
     versions = _versions()
     started = time.perf_counter()
@@ -488,16 +496,22 @@ def check(hw: Path, label: str, named: list[tuple[str, str]] | None, allowed: It
     allowed_pairs = set(resolve_pairs(allowed, inventory, "--allow-interference"))
     parts = pose.load_definitions(hw, folder / "parts")
     step = pose.read_assembly_step(folder / "assembly.step")
-    placed = {}
+    placements = {}
     for component in step.components:
         oid = component.occurrence if component.occurrence is not None else component.pn
         if oid in occurrences:
-            placed[oid] = pose.placed(step.definitions[component.pn].shape, component.location)
+            placements[oid] = (component.pn, component.location)
     previous = build.previous_label(hw, label)
     baseline = build.read_json(hw / "versions" / previous / "metrics.json")["parts"] if previous else None
     joints = manifest["joint_pairs"]
     joint_pairs = {tuple(entry["pair"]) for entry in joints}
-    geometry = pair_geometry(placed)
+    cache = None if cache_dir is None else load_pair_measure().PairCache(cache_dir)
+    try:
+        geometry, measurer = pair_geometry({pn: part.shape for pn, part in step.definitions.items()}, placements,
+                                           cache, jobs)
+    finally:
+        if cache is not None:
+            cache.close()
     assembly = pose.load_assembly(hw)
     declared = declared_press_fits(hw, assembly)
     heat_sets = declared_heat_sets(hw, assembly)
@@ -508,7 +522,7 @@ def check(hw: Path, label: str, named: list[tuple[str, str]] | None, allowed: It
         "solid_structure": solid_structure(parts, expected_solids, baseline, previous),
         "interference": interference(geometry, named_pairs, joint_pairs, allowed_pairs, declared, heat_sets, refs),
         "pair_clearance": pair_clearance(geometry, requirements, refs),
-        "connection": connection(geometry, placed, joints),
+        "connection": connection(geometry, placements, joints),
         "build_volume": build_volume(hw, parts),
         "slivers_tolerances": slivers_and_tolerances(parts),
         "mesh_watertight": mesh_watertight(folder, part_map, occurrences),
@@ -518,5 +532,6 @@ def check(hw: Path, label: str, named: list[tuple[str, str]] | None, allowed: It
     result = {"status": "fail" if blocking else "pass", "label": label, "pose": "nominal",
               "baseline": previous, "blocking_failures": blocking, "warnings": warnings,
               "occurrences": {oid: o.pn for oid, o in occurrences.items()}, "checks": checks,
-              "timings_s": {"total_s": round(time.perf_counter() - started, 3)}}
+              "timings_s": {"total_s": round(time.perf_counter() - started, 3),
+                            "pair_evaluations": measurer.measured, "disk_hits": measurer.disk_hits}}
     return (1 if blocking else 0), result
