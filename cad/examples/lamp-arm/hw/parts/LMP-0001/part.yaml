@@ -46,6 +46,8 @@ drawing:
     engraving: {size: general}
   dimensions:
     - {id: cavity_wall_height, operation: length, features: [cavity_outer_wall]}
+    - {id: plate_thickness, operation: thickness, features: [bed_face, top_face]}
+    - {id: cavity_roof_thickness, operation: thickness, features: [top_face, cavity_roof]}
   geometric_tolerances:
     - {id: seat_perpendicularity, characteristic: perpendicularity, features: [seat], zone_mm: 0.2, diameter_zone: true, datum_frame: [A]}
   edges: {external: [-0.2, 0.0], internal: [0.0, 0.2]}

@@ -178,7 +178,7 @@ SUPPORT = {"PLANE": "plane", "CYLINDER": "cylinder", "CONE": "cone", "SPHERE": "
 KINDS = {"hub_seat": "plane_face", "hub_top": "plane_face", "hub": "shaft", "hub_bore": "bore",
          "elbow_bore": "bore", "bore_entry_chamfers": "chamfer", "clevis": "slot", "head_cheek_face": "plane_face",
          "far_cheek_face": "plane_face", "lightening_pocket": "slot", "cable_channel": "surface",
-         "outer_contour": "surface", "outline_blends": "round", "silhouette_rounds": "round"}
+         "outer_contour": "surface", "elbow_end": "shaft", "outline_blends": "round", "silhouette_rounds": "round"}
 
 
 def _witness(face: cq.Face) -> dict:
@@ -224,7 +224,7 @@ def _role(p: dict, face: cq.Face, patch: dict) -> str | None:
         axis = BRepAdaptor_Surface(face.wrapped).Cylinder().Axis().Direction()
         radii = ((p["pin_bore_d"] / 2.0, "hub_bore" if abs(axis.Z()) > 0.5 else "elbow_bore"),
                  (p["edge_fillet"], "silhouette_rounds"), (p["outline_blend"], "outline_blends"), (p["hub_r"], "hub"),
-                 (p["elbow_r"], "outer_contour"), (p["slot_w"] / 2.0, "clevis"), (pocket_w / 2.0, "lightening_pocket"),
+                 (p["elbow_r"], "elbow_end"), (p["slot_w"] / 2.0, "clevis"), (pocket_w / 2.0, "lightening_pocket"),
                  (channel_r, "cable_channel"))
         return next((name for r, name in radii if abs(radius - r) < 1e-6), None)
     return {"cone": "bore_entry_chamfers", "torus": "silhouette_rounds", "sphere": "cable_channel"}.get(kind)

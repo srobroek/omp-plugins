@@ -13,7 +13,10 @@
 9. product notes: a detail drawing states its edges (ISO 13715), general surface texture and finish, and
    every feature's own texture symbol or edge sizes sit on a visible point of that feature;
 10. section fill: every cut face of every section view is lined or filled solid over its projected
-    area (``section_hatch``; thin faces solid).
+    area (``section_hatch``; thin faces solid);
+11. recognised features: every hole, pocket, cutout, slot, groove, boss, rib, wall and step that
+    ``feature_recognition`` finds on the STEP is bound, located and sized on the sheet, not only defined
+    by a controlled-model surface (``feature_coverage``).
 
 Layout and export (stage 9 of the architecture) run in ``drawing_document.publish_package`` on the
 composed sheets. A passing report proves this implemented contract, not ISO or ASME conformance.
@@ -24,10 +27,12 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+import feature_coverage
 import section_hatch
 from drawing_document import CoverageReport
 from drawing_intent import FIT_KEYS, Characteristic, Measured, finding
-from feature_geometry import Binding
+from feature_geometry import Binding, Face
+from feature_recognition import Recognition
 from sheet import Presentation, dimension_key
 
 UNTOLERANCED = ("profile", "thread")   # controlled by their frame or designation
@@ -87,7 +92,8 @@ def _repeated_dimensions(chars: Sequence[Characteristic], presentation: Presenta
 
 def evaluate(pn: str, part: Mapping[str, Any], interfaces: Sequence[Mapping[str, Any]], binding: Binding,
              measured: Measured, presentation: Presentation | None, step_sha256: str,
-             sections: Sequence[section_hatch.SectionFill] = ()) -> CoverageReport:
+             sections: Sequence[section_hatch.SectionFill] = (), recognition: Recognition | None = None,
+             faces: Mapping[int, Face] | None = None) -> CoverageReport:
     findings: list[dict[str, Any]] = [dict(f) for f in binding.findings] + [dict(f) for f in measured.findings]
     findings += _endpoint_findings(pn, interfaces, binding)
     findings += _conflicts(measured.characteristics)
@@ -139,7 +145,14 @@ def evaluate(pn: str, part: Mapping[str, Any], interfaces: Sequence[Mapping[str,
         findings += section_hatch.findings(section)
     if measured.frame is None and not any(f["code"] == "datum_invalid" for f in findings):
         findings.append(finding("datum_invalid", "no datum frame"))
-    return CoverageReport(status="fail" if findings else "pass", rows=tuple(rows), findings=tuple(findings))
+    features: tuple[Mapping[str, Any], ...] = ()
+    if recognition is not None and faces is not None and drawing.get("type") == "detail":
+        coverage = feature_coverage.check(recognition, binding, measured, faces,
+                                          presentation.placed if presentation is not None else None)
+        features = coverage.rows
+        findings += [dict(f) for f in coverage.findings]
+    return CoverageReport(status="fail" if findings else "pass", rows=tuple(rows), findings=tuple(findings),
+                          features=features)
 
 
 def release_blockers(part: Mapping[str, Any]) -> list[dict[str, Any]]:
