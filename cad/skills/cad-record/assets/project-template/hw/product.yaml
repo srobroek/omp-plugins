@@ -22,10 +22,11 @@ drawing:
     general_tolerances: ISO 2768-1:1989
     fits: ISO 286-1:2010
     edges: ISO 13715:2017
+    surface_texture: ISO 21920-1:2021
     threads: ISO 6410-1:1993
     sheets: ISO 5457:1999
   default_sheet: {sizes: [A4, A3, A2], orientation: landscape, scale: auto}
   tolerance_policies:
     machining: {kind: standard, standard: ISO 2768-1:1989, class: m, applies_to: [cnc]}
-    fdm_bureau: {kind: limits, linear_mm: 0.2, angular_deg: 1, applies_to: [fdm], reference: "FDM bureau capability +/-0.2 mm, +/-1 deg (DR-004 proposal, pending review)"}
+    fdm_bureau: {kind: limits, linear_mm: 0.2, angular_deg: 1, applies_to: [fdm], reference: "FDM bureau capability +/-0.2 mm, +/-1 deg (DR-004)"}
   general_tolerance_policy: machining

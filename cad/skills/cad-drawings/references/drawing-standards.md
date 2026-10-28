@@ -19,13 +19,18 @@ what `drawing.py` checks; everything else needs human review of the PNG preview.
 | Functional datums and GD&T where fit or function needs them | MUST when needed | [ISO 1101](https://www.iso.org/standard/66777.html), [ISO 5459](https://www.iso.org/standard/87855.html), [ISO 8015](https://www.iso.org/standard/55979.html) | [Y14.5](https://www.asme.org/codes-standards/find-codes-standards/dimensioning-and-tolerancing) | datums resolve to bound features (`datum_invalid`); frames reference declared datums |
 | Fit classes and limits on both mating parts | MUST for fits | [ISO 286-1](https://www.iso.org/standard/45975.html), [ISO 286-2](https://www.iso.org/standard/54915.html) | Y14.5 with ASME B4.2 | endpoint binding (`fit_binding_missing`); cad-fits limits; modelled size inside them (`fit_geometry_mismatch`) |
 | Complete thread designation, depth and pilot | MUST if threaded | [ISO 6410-1](https://www.iso.org/standard/12750.html) | [Y14.6](https://www.asme.org/codes-standards/find-codes-standards/y14-6-screw-thread-representation) | designation, pilot diameter and blind full-thread depth (`thread_spec_incomplete`) |
-| Edge condition and critical surface texture | MUST where function depends on it | [ISO 13715](https://www.iso.org/standard/61328.html), [ISO 21920-1](https://www.iso.org/standard/72196.html) | [Y14.36](https://www.asme.org/codes-standards/find-codes-standards/surface-texture-symbols) | `edge` note required; texture values are not checked |
-| Purchased items orderable: designation, manufacturer, part number, specification | MUST per bought item | [ISO 7573](https://www.iso.org/standard/43883.html), [ISO 4762](https://www.iso.org/standard/34460.html) | [Y14.24](https://www.asme.org/getmedia/2d6774a6-0321-4321-9875-67deec5f0341/y14-24-2020-table-of-contents.pdf) | `procurement_incomplete` |
+| Edge condition and critical surface texture | MUST where function depends on it | [ISO 13715](https://www.iso.org/standard/61328.html), [ISO 21920-1](https://www.iso.org/standard/72196.html) | [Y14.36](https://www.asme.org/codes-standards/find-codes-standards/surface-texture-symbols) | a detail drawing states `edges` and a general `surface_texture` (`drawing_intent_missing`); each feature's own symbol or edge sizes sit on that feature (`feature_not_presentable`); values are not checked against function |
+| Purchased items orderable: designation, manufacturer, part number, specification | MUST per bought item | [ISO 7573](https://www.iso.org/standard/43883.html), [ISO 4762](https://www.iso.org/standard/34460.html) | [Y14.24](https://www.asme.org/getmedia/2d6774a6-0321-4321-9875-67deec5f0341/y14-24-2020-table-of-contents.pdf) | `procurement_incomplete`; a standard part (`procurement.standard`) is identified by its designation |
 | FDM material, tolerance, orientation and post-process stated | MUST when function depends on it | [ISO/ASTM 52903-1](https://www.iso.org/standard/67290.html) | [Y14.46](https://www.asme.org/codes-standards/find-codes-standards/y14-46-product-definition-additive-manufacturing-(1)) | FDM limits policy; an interface tighter than it needs a post-processed condition |
 | Released SVG/PDF legible and unclipped | MUST | [ISO 128-2](https://www.iso.org/standard/83355.html) | [Y14.2](https://www.asme.org/codes-standards/find-codes-standards/y14-2-line-conventions-lettering) | `layout_check`, Qt export page size and text read-back |
 
-Release readiness is separate from the gate: an `X` revision (`revision_unreleased`) or a bought part
-with no supplier blocks release, not the drawing.
+Release readiness is separate from the gate: an `X` revision (`revision_unreleased`), a bought part
+with no supplier or an open identity field (`procurement_incomplete`), or an open general surface texture
+(`surface_texture_open`) blocks release, not the drawing.
+
+The ISO 21920-1 symbol of a feature is indicated together with its size callout, under the size text and
+any feature control frames, on the callout's leader; the general one stands in the notes beside the title
+block. The ISO 13715 general indication is written out as a note with the standard's signed sizes.
 
 ## Section fills
 

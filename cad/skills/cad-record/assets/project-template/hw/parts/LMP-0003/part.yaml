@@ -40,12 +40,16 @@ drawing:
     flare_rounds: {size: general}
     sag_blends: {size: general}
     silhouette_rounds: {size: general}
+  dimensions:
+    - {id: head_clevis_width, operation: width, features: [head_clevis], tolerance: {deviation_mm: [-0.05, 0.05]}}
   geometric_tolerances:
     - {id: elbow_bore_perpendicularity, characteristic: perpendicularity, features: [elbow_bore], zone_mm: 0.1, diameter_zone: true, datum_frame: [A]}
     - {id: tip_bore_position, characteristic: position, features: [tip_bore], zone_mm: 0.1, diameter_zone: true, datum_frame: [A, B]}
+    - {id: cheek_bore_coaxiality, characteristic: coaxiality, features: [tip_bore], zone_mm: 0.01, diameter_zone: true, datum_frame: [C]}
     - {id: contour_profile, characteristic: profile_surface, features: [outer_contour, cable_channel], zone_mm: 1.0, datum_frame: [A, B, C]}
+  edges: {external: [-0.3, 0.0], internal: [0.0, 0.3]}
+  surface_texture: {open: "no standard clause or vendor specification in the record gives a roughness for the 5 H8 and 5 H7 bores or the machined surfaces; ISO 2338 and ISO 8734 control only the pin (DR-004)"}
   notes:
-    - {kind: process, text: "CNC machined from 6061-T6; ream the tip bore through both cheeks in one setup."}
+    - {kind: process, text: "CNC machined from 6061-T6; ream the tip bore through both cheeks in one pass."}
     - {kind: finish, text: "As machined, no coating; the 5 H8 and 5 H7 bores are final as machined."}
-    - {kind: edge, text: "Undefined edges burr-free; ISO 13715 edge values to be confirmed (DR-004)."}
   sheet: {sizes: [A3, A2], scale: auto}

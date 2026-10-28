@@ -102,7 +102,7 @@ def size_text(char: Characteristic, regime: str, symbol: str = "") -> str:
     return f"{count_prefix(char.quantity, regime)}{symbol}{nominal}{suffix}"
 
 
-GDT_SYMBOLS = {"position": "⌖", "coaxiality": "◎", "perpendicularity": "⟂", "parallelism": "∥", "flatness": "⏥",
+GDT_SYMBOLS = {"position": "⌖", "coaxiality": "◎", "perpendicularity": "⊥", "parallelism": "∥", "flatness": "⏥",
                "cylindricity": "⌭", "circular_runout": "↗", "total_runout": "⌰", "profile_surface": "⌓"}
 
 

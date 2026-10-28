@@ -48,4 +48,4 @@ interfaces:
     limits:
       thread: M10x1-6H
       heat_set:
-        - {pair: [LMP-0004, LMP-0010], hole_d: 11.95, hole_tol: [-0.05, 0.05], depth_min: 13.7, insert: "In-saiL QT-M10x12.7-OD12.6, thread M10x1 to order", source: "https://www.ppmcn.com/qt-m10x127-od126-product/", note: "OD 12.6 in the 11.9/12.0 hole: 0.60/0.70 diametral embedment (STK-103); 6.0 minimum wall", feature: insert_hole}
+        - {pair: [LMP-0004, LMP-0010], hole_d: 11.95, hole_tol: [-0.05, 0.05], depth_min: 13.7, insert: "In-saiL QT-M10x12.7-OD12.6, thread M10x1 to order", source: "https://www.ppmcn.com/qt-m10x127-od126-product/", note: "OD 12.60 +/-0.12 (In-saiL drawing LF646) in the 11.9/12.0 hole: 0.48/0.82 diametral embedment (STK-103); 6.0 minimum wall", feature: insert_hole}

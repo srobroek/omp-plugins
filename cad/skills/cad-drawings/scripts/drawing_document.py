@@ -421,7 +421,9 @@ def page_layout(spec: SheetSpec, tables: Sequence[SvgTable] = (), notes: Sequenc
     """Where ``compose_page`` puts the tables and notes of a page; raise CompositionError when they do not fit.
 
     Tables stack on the title block, right-aligned with it. Notes take the frame's lower left
-    corner when the title block leaves at least 60 mm beside it, else the space above the tables.
+    corner when the title block and its tables leave at least 60 mm beside them, else the space
+    above the tables. A table wider than the title block narrows that corner: ``layout_check``
+    keeps every annotation off the box round the title block and its tables.
     """
     area = spec.drawing_area()
     block = spec.regions.title_block
@@ -437,7 +439,7 @@ def page_layout(spec: SheetSpec, tables: Sequence[SvgTable] = (), notes: Sequenc
         top = box.y0
     notes_box, lines = None, []
     if notes:
-        beside = block.x0 - FRAME_CLEARANCE - area.x0
+        beside = region.x0 - FRAME_CLEARANCE - area.x0
         room = beside if beside >= 60.0 else area.x1 - area.x0
         bottom = area.y1 if beside >= 60.0 else region.y0 - FRAME_CLEARANCE
         lines = _note_lines(notes, room)

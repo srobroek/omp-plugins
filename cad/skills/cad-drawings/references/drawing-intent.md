@@ -39,13 +39,25 @@ meet a chamfer, round, taper, surface or socket face; otherwise request a `lengt
   and `opposite` as named; `section` `through` an axis or plane; `detail` of a `feature`.
 - `features`: one entry per locator: `size: general|interface`, `presentation`, `tolerance_policy`,
   `profile`, `profile_tolerance_mm`, `thread` (`designation` such as `M10x1-6H`, `standard`,
-  `operation`, `full_depth_anchor`).
-- `dimensions`: extra measured requests (`length`, `plane_separation`, `axis_distance`, ...) with an
-  explicit `tolerance` (`deviation_mm` or a named policy); below 0.5 mm ISO 2768-1 has no general value.
-  A `plane_separation` is drawn from its first feature's plane to its second's.
+  `operation`, `full_depth_anchor`), and a feature's own `surface_texture` or `edges`, which are
+  exceptions to the drawing's general ones and print in the feature's callout.
+- `dimensions`: extra measured requests (`length`, `plane_separation`, `axis_distance`, `location`, ...)
+  with an explicit `tolerance` (`deviation_mm` or a named policy); below 0.5 mm ISO 2768-1 has no general
+  value. A `plane_separation` is drawn from its first feature's plane to its second's. A `location` on a
+  plane feature replaces its datum-frame location, so a depth such as a counterbore floor's carries its
+  own limits; the deviation applies to the printed distance from the datum.
 - `geometric_tolerances`: `{id, characteristic, features, zone_mm, diameter_zone?, datum_frame?}`.
-- `notes`: `{kind: process|edge|finish|material|inspection|general, text, reference?}`; a detail drawing
-  needs an `edge` and a `finish` note. Notes never carry dimension values.
+- `edges` (detail drawings, required): the general indication of the edges of undefined shape, ISO 13715
+  limits `[lower, upper]` in mm for `external` and `internal` edges. A `+` value permits excess material
+  (a burr, a passing) and a `−` value requires removal (an edge break, an undercut); a single limit pairs
+  with 0, so `external: [-0.3, 0]` prints `−0.3`. The ISO sheet writes the sizes in a general note; the
+  ASME sheet writes the same limits as a burr, edge-break and corner note.
+- `surface_texture` (detail drawings, required): the general texture `{parameter: Ra|Rz, limit_um,
+  process: any|removal_required|removal_prohibited}`, drawn as an ISO 21920-1 (ASME Y14.36) symbol in
+  the notes, followed by the basic symbol in parentheses when features carry their own. A value with no
+  basis is `{open: reason}`: the sheet prints it as OPEN and release stays blocked (`surface_texture_open`).
+- `notes`: `{kind: process|finish|material|inspection|general, text, reference?}`; a detail drawing needs
+  a `finish` note. Notes never carry dimension values; edge values belong in `edges`.
 - `manufacturing`: `interface_condition` (an FDM interface tighter than its process policy needs
   `post_processed` or `finish_machined`), `dimensions_apply`, `post_processing`, `build_direction`.
 - `sheet`: allowed `sizes`, `orientation`, `scale` (`auto` or `n:m`).
@@ -66,8 +78,13 @@ A catalogue item (`procurement.mode: catalog`) with `drawing.type: vendor_specif
 - The procurement table prints designation, manufacturer and part numbers, specification and hash.
 
 `procurement` needs `designation`, `manufacturer`, `manufacturer_part_number` and `specification`
-(`reference`, `revision`, `sha256`, and an `artifact` under `hw/` or a `url`). A field the buyer cannot
-fill yet goes in `open` with the reason: the sheet prints it as OPEN and release stays blocked. A
+(`reference`, `revision`, `sha256`, and an `artifact` under `hw/` or a `url`). A standard part names its
+product standard in `standard` (such as `DIN 471`, from ISO, IEC, EN, DIN, BS, JIS, ANSI, ASME, SAE, NAS or
+MS) and is ordered by that standard's designation, which `designation` must state (`DIN 471 - 5x0.6`): any
+conforming source supplies it, so it needs no manufacturer or manufacturer part number. A field the buyer
+cannot fill yet goes in `open` with the reason: the sheet prints it as OPEN and release stays blocked. A
 `url` without an `artifact` makes the frozen copy a sourcing input outside the record: the sheet says
 so and `package.json` lists it under `provenance.sourcing_inputs`. A standard or catalogue part
-without `drawing` intent gets no sheet; its procurement record is still checked.
+without `drawing` intent gets no sheet; its procurement record is still checked. A vendor sheet states
+that edges and surface texture are as supplied to the specification; `edges` and `surface_texture` are
+for detail drawings only.

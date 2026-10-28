@@ -48,10 +48,11 @@ drawing:
     - {id: cavity_wall_height, operation: length, features: [cavity_outer_wall]}
   geometric_tolerances:
     - {id: seat_perpendicularity, characteristic: perpendicularity, features: [seat], zone_mm: 0.2, diameter_zone: true, datum_frame: [A]}
+  edges: {external: [-0.2, 0.0], internal: [0.0, 0.2]}
+  surface_texture: {open: "no standard or vendor specification in the record gives an as-printed PETG roughness; the print bureau's surface specification is needed (DR-004)"}
   notes:
     - {kind: process, text: "FDM, printed boss-up with datum face A on the build plate."}
-    - {kind: finish, text: "As printed; the bushing seat is drilled or reamed to its limits after printing."}
-    - {kind: edge, text: "Undefined edges deburred, no sharp edges; ISO 13715 edge values to be confirmed (DR-004)."}
+    - {kind: finish, text: "As printed, burrs and stringing removed; the bushing seat is drilled or reamed to its limits after printing."}
     - {kind: general, text: "Engrave the text LMP in Arial Bold, centred on the stated position.", reference: engraving}
     - {kind: inspection, text: "Heat-set the LMP-0008 bushing flush with the boss top after drilling (DR-004)."}
   manufacturing:

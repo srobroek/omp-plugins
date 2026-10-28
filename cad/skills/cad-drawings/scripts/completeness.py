@@ -151,4 +151,7 @@ def release_blockers(part: Mapping[str, Any]) -> list[dict[str, Any]]:
         blockers.append(finding("procurement_incomplete", "no supplier is selected"))
     for field, reason in sorted(((part.get("procurement") or {}).get("open") or {}).items()):
         blockers.append(finding("procurement_incomplete", f"{field} is open: {reason}"))
+    texture = (part.get("drawing") or {}).get("surface_texture") or {}
+    if "open" in texture:
+        blockers.append(finding("surface_texture_open", f"the general surface texture is open: {texture['open']}"))
     return blockers

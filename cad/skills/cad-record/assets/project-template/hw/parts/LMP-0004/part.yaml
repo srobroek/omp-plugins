@@ -54,14 +54,18 @@ drawing:
     flute_upper_ends: {size: general}
     shade_profile: {profile: controlled_model}
     rim_round: {size: general}
+  dimensions:
+    - {id: counterbore_depth, operation: location, features: [counterbore_floor], tolerance: {deviation_mm: [0.0, 0.1]}}
+    - {id: knuckle_width, operation: location, features: [knuckle_far_face], tolerance: {deviation_mm: [0.0, 0.2]}}
   geometric_tolerances:
     - {id: seat_perpendicularity, characteristic: perpendicularity, features: [seat], zone_mm: 0.2, diameter_zone: true, datum_frame: [A]}
     - {id: insert_hole_coaxiality, characteristic: coaxiality, features: [insert_hole], zone_mm: 0.2, diameter_zone: true, datum_frame: [C]}
     - {id: form_profile, characteristic: profile_surface, features: [neck_transition, shade_profile], zone_mm: 0.4, datum_frame: [A, B, C]}
+  edges: {external: [-0.2, 0.0], internal: [0.0, 0.2]}
+  surface_texture: {open: "no standard or vendor specification in the record gives an as-printed PETG roughness; the print bureau's surface specification is needed (DR-004)"}
   notes:
     - {kind: process, text: "FDM, printed shade-down; drill or ream the bushing seat and the insert hole to their limits after printing."}
-    - {kind: finish, text: "As printed; the bushing seat and the insert hole are post-processed."}
-    - {kind: edge, text: "Undefined edges deburred, no sharp edges; ISO 13715 edge values to be confirmed (DR-004)."}
+    - {kind: finish, text: "As printed, burrs and stringing removed; the bushing seat and the insert hole are post-processed."}
     - {kind: inspection, text: "Heat-set the LMP-0009 bushing with its head in the counterbore, and the LMP-0010 M10x1-6H insert flush with the boss face (DR-004)."}
   manufacturing:
     interface_condition: post_processed

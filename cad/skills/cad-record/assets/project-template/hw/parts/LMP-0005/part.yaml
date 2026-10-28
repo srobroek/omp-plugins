@@ -30,10 +30,10 @@ drawing:
     head: {size: general}
     socket: {size: general}
     head_underface: {size: general}
-    press_band: {size: interface}
+    press_band: {size: interface, surface_texture: {parameter: Ra, limit_um: 0.8, process: removal_required}}
     press_step: {size: general}
-    journal: {size: interface}
-    groove: {size: interface, presentation: detail}
+    journal: {size: interface, surface_texture: {parameter: Ra, limit_um: 0.8, process: removal_required}}
+    groove: {size: interface, presentation: detail, edges: {external: [-0.02, 0.0], internal: [0.0, 0.06]}}
     tip_chamfer: {size: general}
     tip_face: {size: general}
   dimensions:
@@ -42,9 +42,10 @@ drawing:
     - {id: tip_chamfer_size, operation: chamfer, features: [tip_chamfer], tolerance: {deviation_mm: [-0.1, 0.1]}}
   geometric_tolerances:
     - {id: journal_coaxiality, characteristic: coaxiality, features: [journal], zone_mm: 0.02, diameter_zone: true, datum_frame: [A]}
+  edges: {external: [-0.3, 0.0], internal: [0.0, 0.3]}
+  surface_texture: {parameter: Ra, limit_um: 1.6, process: removal_required}
   notes:
     - {kind: finish, text: "Passivated. Press band and journal ground or precision-turned to their limits."}
-    - {kind: edge, text: "Undefined edges burr-free; ISO 13715 edge values to be confirmed (DR-004)."}
     - {kind: general, text: "Groove 0.7 H13 per DIN 471 for the 5 x 0.6 retaining ring LMP-0011.", reference: groove}
   manufacturing:
     interface_condition: finish_machined
