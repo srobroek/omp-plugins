@@ -33,6 +33,6 @@ NOT Report a pass, a number, or a file the scratch build did not produce.
 
 ## Output
 
-Begin with `RESULT: DONE|BLOCKED`, then the unit and its PNs. Give every file you mention anywhere in the report as an absolute path on its own line: the delivered files, the scratch check JSON, the form JSON, each proposal's file, and at L3 each drawing PNG and PDF. Then the scratch label and its check and form status, each proposal (path, change, reason), and open questions.
+Begin with `RESULT: DONE|BLOCKED`, then the unit and its PNs. Give every file you mention anywhere in the report as an absolute path on its own line: the delivered files, the scratch check JSON, the form JSON, each proposal's file, and at L3 each drawing PNG and PDF. Report print/make files, buy items (including OPEN identities and reasons), assembly steps, and checks as structured lists or tables, never inline comma prose. Then give the scratch label and its check and form status, each proposal (path, change, reason), and open questions.
 CAP 150w clean · 300w with proposals or findings.
 MUST Never reprint code, diffs, or file contents.

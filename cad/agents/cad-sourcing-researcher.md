@@ -25,6 +25,6 @@ NOT Invent part numbers, order codes, or limits.
 
 ## Output
 
-Begin with `RESULT: DONE|BLOCKED`, then the unit and family. Per PN: proposed part.yaml values (`title`, `material`, `finish`, `mass_target`, `supplier`) and proposed interfaces.yaml limits, each with its citation; then mismatches with the record and open choices. Give every local file you mention as an absolute path on its own line.
+Begin with `RESULT: DONE|BLOCKED`, then the unit and family. Per PN, report proposed part.yaml values and interfaces.yaml limits with citations, including print/make files, purchasable identity, supplier/order codes, OPEN identity fields and reasons, assembly operations, and checks as structured lists or tables, never inline comma prose. Give every cited local file as its own absolute-path line.
 CAP 200w per PN.
 MUST Never reprint whole datasheets or file contents.

@@ -183,7 +183,7 @@ title = "Assemble and validate ECO release {{to_rev}}"
 type = "task"
 needs = ["reconcile"]
 labels = ["cad", "phase:release"]
-description = "Run skill://cad-record, skill://cad-bom, and skill://cad-drawings to update the release manifest, STEP AP242, drawings, EBOM, verification matrix, and docs for the affected revision/dependent set. For drawings use `uv run --script skill://cad-flow/scripts/run.py cad-drawings/scripts/drawing.py hw/versions/vN/parts/<PN>.step --part hw/parts/<PN>/part.yaml --product hw/product.yaml --metrics hw/versions/vN/metrics.json --output-dir <dir> [--scale <ratio>]`. Preserve unchanged artifacts. Validate the revision transition {{from_rev}} -> {{to_rev}}, ECO decision {{decision}}, and release evidence. Use FreeCAD 1.1.4 only. No slicer, CAM, or machine tooling."
+description = "Run skill://cad-record, skill://cad-bom, and skill://cad-drawings to update the release manifest, STEP AP242, drawings, EBOM, verification matrix, and docs for the affected revision/dependent set. Generate the GitBuilding guide with `uv run --script skill://cad-record/scripts/build_guide.py hw --version vN --out <docs-dir>`. For drawings use `uv run --script skill://cad-flow/scripts/run.py cad-drawings/scripts/drawing.py hw/versions/vN/parts/<PN>.step --part hw/parts/<PN>/part.yaml --product hw/product.yaml --metrics hw/versions/vN/metrics.json --output-dir <dir> [--scale <ratio>]`. Preserve unchanged artifacts. Validate the revision transition {{from_rev}} -> {{to_rev}}, ECO decision {{decision}}, and release evidence. Report print/make files, buy items with OPEN reasons, assembly steps, and checks as structured lists or tables. Give each referenced file as a separate absolute-path line, never inline comma prose. Use FreeCAD 1.1.4 only. No slicer, CAM, or machine tooling."
 
 [steps.metadata]
 skill_hints = "cad-record, cad-bom, cad-drawings"
@@ -194,7 +194,7 @@ title = "RELEASE gate: approve ECO {{decision}}"
 type = "task"
 needs = ["release-package"]
 labels = ["cad", "phase:gate"]
-description = "Present the ECO record, immediate revision bump, impact set, revised artifacts, and validation. Obtain explicit user approval to release the change; leave unresolved otherwise. Only bd gate resolve closes this human gate."
+description = "Present the ECO record, immediate revision bump, impact set, revised artifacts, plus structured lists or tables of print/make files, buy items including OPEN identities and reasons, assembly steps, and checks. Give every referenced file on its own absolute-path line. Obtain explicit user approval to release the change; leave unresolved otherwise. Only bd gate resolve closes this human gate."
 
 [steps.gate]
 type = "human"

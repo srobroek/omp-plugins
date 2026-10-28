@@ -198,6 +198,7 @@ drawing:
       into: LMP-0002
       interface: IF-001
       direction: [0, 0, -1]
+      tools: ["Arbor press or pin punch"]
       acceptance: {kind: standoff, features: [head_underside, hub_top_face]}
     - id: ring_base
       kind: retaining_ring
@@ -205,6 +206,7 @@ drawing:
       into: LMP-0005
       interface: IF-001
       direction: [0, 0, 1]
+      tools: ["External circlip pliers"]
       acceptance: {kind: engaged, features: [ring_groove]}
       verify_joint: J-001
     - id: press_elbow_pin
@@ -213,6 +215,7 @@ drawing:
       into: LMP-0002
       interface: IF-002
       direction: [0, -1, 0]
+      tools: ["Arbor press or pin punch"]
       acceptance: {kind: standoff, features: [head_underside, cheek_face]}
     - id: ring_elbow
       kind: retaining_ring
@@ -220,6 +223,7 @@ drawing:
       into: LMP-0006
       interface: IF-002
       direction: [0, 1, 0]
+      tools: ["External circlip pliers"]
       acceptance: {kind: engaged, features: [ring_groove]}
       verify_joint: J-002
     - id: press_head_pin
@@ -229,11 +233,13 @@ drawing:
       interface: IF-003
       direction: [0, -1, 0]
       acceptance: {kind: standoff, features: [head_underside, cheek_face]}
+      tools: ["Arbor press or pin punch"]
     - id: ring_head
       kind: retaining_ring
       part: "@ring-head"
       into: LMP-0007
       interface: IF-003
       direction: [0, 1, 0]
+      tools: ["External circlip pliers"]
       acceptance: {kind: engaged, features: [ring_groove]}
       verify_joint: J-003

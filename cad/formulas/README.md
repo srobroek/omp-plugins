@@ -57,4 +57,6 @@ Each L1 to L4 commit batch runs `cad-model run`, then `cad-model check`. A block
 
 Every gate is a human approval gate. Reviewers run read-only as parallel subagents. Release artifacts are STEP AP242, drawings, EBOM, verification matrix, and documentation (GitBuilding build guide, DIN SPEC 3105-1 checklist, Open Know-How manifest); no slicer, CAM, or machine tooling.
 
+Release gates and package reports MUST show print/make files, buy rows (including OPEN identity fields and reasons), assembly steps, and checks as structured lists or tables. Give every cited file as a separate absolute-path line; never inline comma prose.
+
 Run `cad/formulas/smoke-pour.sh` to copy the formula set into a temporary Beads workspace, pour each root, bond each molecule onto its fan-out step, check that every worker step names a shipped agent, and show that one approved gate makes a whole batch ready at once. It prints each formula's step, gate, and worker-step counts.

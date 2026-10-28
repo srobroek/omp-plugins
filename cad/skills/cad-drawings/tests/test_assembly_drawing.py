@@ -166,8 +166,12 @@ class Acceptance(unittest.TestCase):
         asme = assembly_sheet.operation_note(op, {"gap": 0.3}, "asme")
         self.assertIn("FIT 3 H7/p6", asme)          # a fit designation keeps its case
         self.assertIn("0.3 mm OFF", asme)
-        for word in ("force", "torque", "lubric", " N "):
-            self.assertNotIn(word, iso.lower())
+        unknown = assembly_sheet.operation_note(op, {}, "iso")
+        self.assertIn("stands not recorded off the plate top", unknown)
+        self.assertNotIn("not recorded mm", unknown)
+        with_tools = assembly_check.Operation(**{**op.operation.__dict__, "tools": ("Arbor press",)})
+        with_tools_op = assembly_check.ResolvedOperation(**{**op.__dict__, "operation": with_tools})
+        self.assertNotIn("Arbor press", assembly_sheet.operation_note(with_tools_op, {"gap": 0.3}, "iso"))
 
 
 VIEW = ViewGeometry(view_id="exploded", role="assembly", kind="part", centre_mm=(150.0, 120.0), scale=1.0,

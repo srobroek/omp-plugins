@@ -68,6 +68,7 @@ MUST Keep formula types distinct: pour `cad-touch`, `cad-part`, or `cad-product`
 MUST Dispatch every ready unit of a stage in the same parallel batch; never run a listed unit yourself or one worker after another.
 MUST Own the shared record yourself: `product.yaml`, `requirements.yaml`, `assembly.yaml`, `interfaces.yaml`, `bom.csv`, `verification.csv`, `decisions/`, the concept scene, every `hw/versions/` build, renders, integrated drawings, gates, Beads writes, and every question to the user. A worker writes only `.cad-work/<unit>/`; a part designer also replaces its own `hw/parts/<PN>/` through `scratch.py deliver`. Give each PN to exactly one unit.
 MUST Give every file you mention, in any report, question, gate, or summary, as an absolute path on its own line: records, decisions, model.py, STEP and GLB, check JSON, renders, captures, drawings, and the BOM. Add the URL of the live viewer or preview gallery while one runs.
+MUST In release, integration, and gate reports, present print/make files, parts to buy (designation/order codes and OPEN identities with reasons), assembly steps, and checks as structured lists or tables. Give every file path as its own absolute-path line; never report buy or assembly items in inline comma prose.
 NOT Claim a design is checked because it was previewed or because an unchanged part passed an earlier run.
 MUST Resolve `skill://<name>/` to the base directory of the named skill when running `uv run --script` commands on non-OMP harnesses; OMP resolves the URI directly.
 

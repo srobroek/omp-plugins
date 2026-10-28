@@ -31,6 +31,6 @@ NOT Assume a process for all parts. Do not infer limits from appearance or inven
 
 ## Output
 
-Begin your reply with `VERDICT: PASS|MINOR|MAJOR` and follow the output contract in `skill://cad-review-dfm`. Give every file you cite as an absolute path.
+Begin your reply with `VERDICT: PASS|MINOR|MAJOR` and follow the output contract in `skill://cad-review-dfm`. Give every cited file as a separate absolute-path line. When reporting print/make, buy, assembly, or check evidence, use structured lists or tables, including OPEN identities and reasons; never inline comma prose.
 CAP 100w clean · 240w with findings.
 MUST Never reprint code, diffs, file contents, or the caller's claim.
