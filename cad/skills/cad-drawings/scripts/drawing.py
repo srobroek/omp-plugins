@@ -550,9 +550,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--part", action="append", required=True, help="part number; repeat for several parts")
     parser.add_argument("--output-dir", required=True, type=Path, help="packages go to OUTPUT_DIR/<PN>/")
     parser.add_argument("--timeout", type=float, default=300.0, help="seconds per FreeCAD job")
+    parser.add_argument("--jobs", type=int, help="maximum concurrent FreeCAD jobs (default: CPU and memory bound)")
     args = parser.parse_args(argv)
-    if args.timeout <= 0:
-        parser.error("--timeout must be positive")
+    if args.jobs is not None and args.jobs < 1:
+        parser.error("--jobs must be a positive integer")
     freecadcmd = freecad_runtime.find_freecadcmd()
     if freecadcmd is None or not freecadcmd.is_file():
         print(json.dumps(fail("freecad_unavailable", "freecadcmd not found; set FREECADCMD or put freecadcmd on PATH")))
@@ -567,18 +568,31 @@ def main(argv: list[str] | None = None) -> int:
     except (OSError, KeyError, ValueError) as exc:
         print(json.dumps(fail("invalid_input", str(exc)), indent=2))
         return 2
+    output_root = args.output_dir.resolve()
+    if len(set(args.part)) != len(args.part):
+        print(json.dumps(fail("invalid_input", "--part values must be unique because each part has one output package"), indent=2))
+        return 2
+    jobs = freecad_runtime.jobs_for(args.jobs, len(args.part), freecad_runtime.FREECAD_JOB_PEAK_RSS_BYTES)
     results, status = [], 0
-    for pn in args.part:
+
+    def draw_part(pn: str) -> tuple[dict[str, Any], int]:
         try:
-            result, code = run_part(context, pn, args.output_dir.resolve() / pn, freecadcmd, args.timeout)
+            return run_part(context, pn, output_root / pn, freecadcmd, args.timeout)
         except drawing_contract.ContractError as exc:
-            result, code = fail(exc.code, str(exc), pn=pn), 2
+            return fail(exc.code, str(exc), pn=pn), 2
         except DrawingError as exc:
-            result, code = fail(exc.code, str(exc), pn=pn), exc.exit_code
-        except OSError as exc:
-            result, code = fail("io_error", str(exc), pn=pn), 2
-        results.append(result)
-        status = max(status, code)
+            return fail(exc.code, str(exc), pn=pn), exc.exit_code
+        except (OSError, ValueError, KeyError) as exc:
+            return fail("io_error", str(exc), pn=pn), 2
+
+    try:
+        with freecad_runtime.terminate_jobs_on_signal():
+            outcomes = freecad_runtime.map_jobs(args.part, jobs, draw_part)
+    except freecad_runtime.JobInterrupted as exc:
+        print(json.dumps(fail("interrupted", str(exc)), indent=2))
+        return 128 + exc.signum
+    results = [result for result, _ in outcomes]
+    status = max((code for _, code in outcomes), default=0)
     print(json.dumps({"version": label, "parts": results}, indent=2, default=str))
     return status
 

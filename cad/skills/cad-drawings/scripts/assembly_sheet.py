@@ -264,7 +264,7 @@ def balloons(view: ViewGeometry, targets: Sequence[BalloonTarget]) -> list[SvgAn
                   f'<circle cx="{ax:.4f}" cy="{ay:.4f}" r="{DOT_RADIUS}" fill="#000" stroke="none"/>'
                   f'<circle cx="{cx:.4f}" cy="{cy:.4f}" r="{BALLOON_RADIUS}" fill="none" stroke="#000" '
                   f'stroke-width="{THIN_WIDTH}"/>'
-                  f'<text x="{cx:.4f}" y="{baseline:.4f}" font-size="{BALLOON_TEXT}" font-family="sans-serif" '
+                  f'<text x="{cx:.4f}" y="{baseline:.4f}" font-size="{BALLOON_TEXT}" font-family="osifont" '
                   f'text-anchor="middle" fill="#000" stroke="none">{target.item}</text></g>')
         annotations.append(SvgAnnotation(id=f"balloon-{view.view_id}-{target.item}", kind="leader", markup=markup,
                                          provenance={"item": str(target.item), "occurrence": target.occurrence,
@@ -277,7 +277,7 @@ def label(view: ViewGeometry, text: str, ballooned: bool) -> SvgAnnotation:
     x0, _, x1, y1 = view.sheet_bounds()
     pad = BALLOON_RING if ballooned else VIEW_MARGIN
     baseline = y1 + pad + LABEL_GAP + TEXT_ASCENT * LABEL_SIZE
-    markup = (f'<text x="{(x0 + x1) / 2:.4f}" y="{baseline:.4f}" font-size="{LABEL_SIZE}" font-family="sans-serif" '
+    markup = (f'<text x="{(x0 + x1) / 2:.4f}" y="{baseline:.4f}" font-size="{LABEL_SIZE}" font-family="osifont" '
               f'text-anchor="middle" fill="#000" stroke="none">{_escape(text)}</text>')
     return SvgAnnotation(id=f"label-{view.view_id}", kind="label", markup=markup)
 
@@ -289,7 +289,7 @@ def heading(spec: SheetSpec, text: str) -> SvgAnnotation:
         raise CompositionError("sheet_no_fit", f"the sheet heading {text!r} is wider than the {spec.size} drawing area")
     baseline = area.y0 + CENTRING_MARK_INSIDE + TEXT_ASCENT * HEADING_SIZE
     markup = (f'<text x="{area.x0:.4f}" y="{baseline:.4f}" font-size="{HEADING_SIZE}" '
-              f'font-family="sans-serif" font-weight="bold" fill="#000" stroke="none">{_escape(text)}</text>')
+              f'font-family="osifont" font-weight="bold" fill="#000" stroke="none">{_escape(text)}</text>')
     return SvgAnnotation(id="sheet-heading", kind="label", markup=markup)
 
 

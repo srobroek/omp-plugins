@@ -123,10 +123,11 @@ def write_project(root: Path, regime: str = "iso", bom_pin_qty: int = 2) -> Path
     return hw
 
 
-def run_cli(hw: Path, out: Path) -> tuple[int, dict]:
-    proc = subprocess.run(scriptenv.script_command(CLI, str(hw), "--version", "v1", "--output-dir", str(out),
-                                                   "--timeout", "600"),
-                          capture_output=True, text=True, timeout=1800)
+def run_cli(hw: Path, out: Path, jobs: int | None = None) -> tuple[int, dict]:
+    command = [CLI, str(hw), "--version", "v1", "--output-dir", str(out), "--timeout", "600"]
+    if jobs is not None:
+        command += ["--jobs", str(jobs)]
+    proc = subprocess.run(scriptenv.script_command(*command), capture_output=True, text=True, timeout=1800)
     try:
         return proc.returncode, json.loads(proc.stdout)
     except json.JSONDecodeError:
@@ -165,6 +166,7 @@ class EndToEnd(unittest.TestCase):
                 for record in package["sheets"]:
                     for kind in ("svg", "pdf", "png"):
                         self.assertTrue((root / "out" / record["files"][kind]).is_file())
+                    self.assertEqual(record["export"]["pdf_fonts"], ["osifont"])
                 self.assertEqual(assembly_check.check_package(root / "out")["status"], "pass")
 
                 # Removing one balloon from the published SVG fails the package re-check.
@@ -178,6 +180,19 @@ class EndToEnd(unittest.TestCase):
                 self.assertEqual(rechecked["status"], "fail")
                 self.assertIn("item 2 has 0 balloons in view exploded_iso; expected one",
                               [f["message"] for f in rechecked["findings"]])
+
+    def test_parallel_assembly_sheets_match_sequential_report_order(self) -> None:
+        hw = write_project(self.root / "parallel")
+        sequential_status, sequential = run_cli(hw, self.root / "out-sequential", jobs=1)
+        parallel_status, parallel = run_cli(hw, self.root / "out-parallel", jobs=2)
+        self.assertEqual((sequential_status, sequential["status"]), (0, "pass"), sequential.get("findings"))
+        self.assertEqual((parallel_status, parallel["status"]), (0, "pass"), parallel.get("findings"))
+        sequential_package = json.loads((self.root / "out-sequential" / "package.json").read_text())
+        parallel_package = json.loads((self.root / "out-parallel" / "package.json").read_text())
+        self.assertEqual([row["sheet"] for row in sequential_package["sheets"]], [1, 2])
+        self.assertEqual([row["sheet"] for row in parallel_package["sheets"]], [1, 2])
+        self.assertEqual(sequential["coverage"]["rows"], parallel["coverage"]["rows"])
+
 
     def test_a_failed_run_replaces_the_earlier_package(self) -> None:
         hw = write_project(self.root)

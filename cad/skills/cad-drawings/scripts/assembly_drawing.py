@@ -35,6 +35,7 @@ import sys
 import tempfile
 import uuid
 from collections.abc import Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -244,21 +245,19 @@ def lay_out(inputs: Inputs, measured: Mapping[str, Any]) -> list[Sheet]:
 
 
 def draw(inputs: Inputs, sheets: Sequence[Sheet], freecadcmd: Path, work: Path,
-         timeout: float) -> dict[int, list[Mapping[str, Any]]]:
-    """Stage 3c: every view at its sheet's scale and position, with the sheet positions of the balloon points."""
-    pages = []
-    for sheet in sheets:
+         timeout: float, jobs: int = 1, executor: Any = None) -> dict[int, list[Mapping[str, Any]]]:
+    """Stage 3c: draw each independent sheet in its own FreeCAD process."""
+    def draw_sheet(sheet: Sheet) -> tuple[int, list[Mapping[str, Any]]]:
         template = work / f"sheet-{sheet.plan.number}-template.svg"
         template.write_text(sheet.layout.spec.page_template_svg(), encoding="utf-8")
-        pages.append({"sheet": sheet.plan.number, "template": str(template), "views": [
+        pages = [{"sheet": sheet.plan.number, "template": str(template), "views": [
             {**view_spec(v, sheet.plan), "scale": sheet.layout.scale, "position": list(sheet.layout.origins[v.id]),
              "anchors": {oid: sheet.points[(v.id, oid)] for oid in sheet.targets.get(v.id, {}).values()}}
-            for v in inputs.plan.intent.views]})
-    drawn = run_freecad(freecadcmd, techdraw_job(inputs.geometry, inputs.offsets, "draw", pages), work, timeout)
-    by_sheet: dict[int, list[Mapping[str, Any]]] = {}
-    for entry in drawn["views"]:
-        by_sheet.setdefault(entry["sheet"], []).append(entry)
-    return by_sheet
+            for v in inputs.plan.intent.views]}]
+        drawn = run_freecad(freecadcmd, techdraw_job(inputs.geometry, inputs.offsets, "draw", pages), work, timeout)
+        return sheet.plan.number, drawn["views"]
+
+    return dict(freecad_runtime.map_jobs(sheets, jobs, draw_sheet, executor))
 
 
 def compose(inputs: Inputs, sheet: Sheet, drawn: Sequence[Mapping[str, Any]]) -> tuple[ComposedSheet, dict[str, Any]]:
@@ -287,19 +286,22 @@ def compose(inputs: Inputs, sheet: Sheet, drawn: Sequence[Mapping[str, Any]]) ->
                   "operations": [op.operation.id for op in sheet.plan.operations]}
 
 
-def build(args: argparse.Namespace, freecadcmd: Path, work: Path) -> tuple[drawing_contract.DrawingContext,
-                                                                         list[ComposedSheet], CoverageReport]:
+def build(args: argparse.Namespace, freecadcmd: Path, work: Path, jobs: int = 1,
+          executor: Any = None) -> tuple[drawing_contract.DrawingContext, list[ComposedSheet], CoverageReport]:
     """Stages 1 to 4a; stage 4b, publication, follows in ``run``."""
     inputs = read_inputs(args, work)
     measured = measure(inputs, freecadcmd, work, args.timeout)
     sheets = lay_out(inputs, measured)
-    drawn = draw(inputs, sheets, freecadcmd, work, args.timeout)
-    composed, rows, findings = [], [], []
-    for sheet in sheets:
+    drawn = draw(inputs, sheets, freecadcmd, work, args.timeout, jobs, executor)
+
+    def compose_checked(sheet: Sheet) -> tuple[ComposedSheet, dict[str, Any], list[dict[str, Any]]]:
         page, record = compose(inputs, sheet, drawn[sheet.plan.number])
-        findings += assembly_check.check_sheet(page.svg, record)
-        composed.append(page)
-        rows.append(record)
+        return page, record, assembly_check.check_sheet(page.svg, record)
+
+    composed_rows = freecad_runtime.map_jobs(sheets, jobs, compose_checked, executor)
+    composed = [page for page, _, _ in composed_rows]
+    rows = [record for _, record, _ in composed_rows]
+    findings = [finding for _, _, sheet_findings in composed_rows for finding in sheet_findings]
     plan = inputs.plan
     rows += [{"kind": "assembly_operation", "operation": op.operation.id, "type": op.operation.kind,
               "interface": op.operation.interface, "items": [op.part_item, op.into_item],
@@ -329,15 +331,16 @@ def reject(output_dir: Path, findings: Sequence[Mapping[str, Any]], status: int)
     shutil.rmtree(old, ignore_errors=True)
     return result
 
-
-def run(args: argparse.Namespace, freecadcmd: Path) -> tuple[dict[str, Any], int]:
+def run(args: argparse.Namespace, freecadcmd: Path, jobs: int = 1) -> tuple[dict[str, Any], int]:
     output_dir = args.output_dir.resolve()
     with tempfile.TemporaryDirectory(prefix="cad-assembly-drawing-") as work:
         try:
-            context, sheets, report = build(args, freecadcmd, Path(work))
+            with ThreadPoolExecutor(max_workers=jobs, thread_name_prefix="cad-assembly") as executor:
+                context, sheets, report = build(args, freecadcmd, Path(work), jobs, executor)
+                package = drawing_document.publish_package(context, sheets, report, output_dir, freecadcmd, args.timeout,
+                                                           jobs=jobs, executor=executor)
         except Failure as failure:
             return reject(output_dir, failure.findings, failure.status), failure.status
-    package = drawing_document.publish_package(context, sheets, report, output_dir, freecadcmd, args.timeout)
     result = package.to_dict()
     result["files"] = [{"sheet": s["sheet"], "size": s["size"],
                         **{kind: str(output_dir / name) for kind, name in s["files"].items()}} for s in package.sheets]
@@ -350,15 +353,35 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--version", required=True, help="built cad-model version label, such as v3")
     parser.add_argument("--output-dir", required=True, type=Path, help="package folder; replaced by every run")
     parser.add_argument("--timeout", type=float, default=600.0, help="seconds for each FreeCAD job and export")
+    parser.add_argument("--jobs", type=int, help="maximum concurrent FreeCAD jobs (default: CPU and memory bound)")
     args = parser.parse_args(argv)
     if args.timeout <= 0:
         parser.error("--timeout must be positive")
+    if args.jobs is not None and args.jobs < 1:
+        parser.error("--jobs must be a positive integer")
     freecadcmd = freecad_runtime.find_freecadcmd()
     if freecadcmd is None or not freecadcmd.is_file():
         print(json.dumps({"status": "error", "findings": [assembly_check.finding(
             "freecad_unavailable", f"FreeCAD not found ({freecadcmd}); set FREECADCMD or put freecadcmd on PATH")]}))
         return 2
-    result, status = run(args, freecadcmd)
+    try:
+        context = drawing_contract.load_context(args.hw.resolve(), args.hw.resolve() / "versions" / args.version)
+        intent = assembly_check.read_intent(context.assembly)
+        item_count = 1 + len(intent.subassembly_sheets)
+    except (drawing_contract.ContractError, assembly_check.IntentError) as exc:
+        findings = [dict(f) for f in getattr(exc, "findings", ())]
+        if not findings:
+            findings = [assembly_check.finding(getattr(exc, "code", "invalid_drawing_intent"), str(exc))]
+        status = 2
+        result = reject(args.output_dir.resolve(), findings, status)
+        print(json.dumps(result, indent=2))
+        return status
+    jobs = freecad_runtime.jobs_for(args.jobs, item_count, freecad_runtime.FREECAD_JOB_PEAK_RSS_BYTES)
+    try:
+        with freecad_runtime.terminate_jobs_on_signal():
+            result, status = run(args, freecadcmd, jobs)
+    except freecad_runtime.JobInterrupted as exc:
+        result, status = {"status": "error", "findings": [assembly_check.finding("interrupted", str(exc))]}, 128 + exc.signum
     print(json.dumps(result, indent=2))
     return status
 

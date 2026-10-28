@@ -1,15 +1,7 @@
 """FreeCAD-side sheet export for sheet_export.py; freecadcmd runs this file headless.
 
-The CAD_DRAWING_JOB environment variable names a JSON job file: the drawing SVG without its text
-elements, the text runs taken out of it, the page size in mm, the preview resolution, and the PDF
-and PNG paths. FreeCAD's bundled Qt paints on the offscreen platform: QSvgRenderer draws the
-graphics and QPainter.drawText draws each run, which keeps the text as text in the PDF. One
-painting goes to a QPdfWriter page of exactly the sheet size, one to a white PNG preview.
-
-Runs in osifont, the TechDraw lettering font the templates name, or in a generic sans-serif family
-use the osifont that FreeCAD ships, so the sheet looks the same on every host.
-
-The result reports the preview size and its count of non-white pixels.
+CAD_DRAWING_JOB names JSON input and output paths; the job payload includes an SVG, vector text
+runs, and sheet dimensions. FreeCAD's bundled Qt paints that output with its shipped TechDraw font.
 """
 
 import json
@@ -20,14 +12,13 @@ import FreeCAD as App
 import numpy
 from PySide6.QtCore import QByteArray, QMarginsF, QPointF, QRectF, QSizeF
 from PySide6.QtGui import (QColor, QFont, QFontDatabase, QFontMetricsF, QGuiApplication, QImage, QPageLayout,
-                           QPageSize, QPainter, QPdfWriter, QTransform)
+                           QPageSize, QPainter, QPdfWriter, QRawFont, QTransform)
 from PySide6.QtSvg import QSvgRenderer
 
 LETTERING_FONT = os.path.join("Mod", "TechDraw", "Resources", "fonts", "osifont-lgpl3fe.ttf")
-GENERIC_FAMILIES = {"sans-serif", "sans"}
+FONT_PIXELS = 100
 ANCHOR_SHIFT = {"start": 0.0, "middle": 0.5, "end": 1.0}
-FONT_PIXELS = 100   # runs are laid out at this pixel size and scaled to their font size
-DARK_LEVEL = 245    # a preview pixel with any channel below this is not white
+DARK_LEVEL = 245
 
 
 def _lettering_family():
@@ -37,6 +28,9 @@ def _lettering_family():
         raise RuntimeError(f"cannot load the TechDraw lettering font {LETTERING_FONT}")
     return families[0]
 
+def _lettering_codepoints(lettering, codepoints):
+    raw = QRawFont.fromFont(QFont(lettering))
+    return frozenset(codepoint for codepoint in codepoints if raw.supportsCharacter(codepoint))
 
 def _paint(painter, renderer, runs, lettering, width, height):
     """Paint the sheet into the device rectangle (0, 0, width, height)."""
@@ -49,19 +43,34 @@ def _paint(painter, renderer, runs, lettering, width, height):
     page.scale(width / box.width(), height / box.height())
     page.translate(-box.x(), -box.y())
     for run in runs:
-        family = lettering if run["family"] in GENERIC_FAMILIES else run["family"]
-        font = QFont(family)
+        font = QFont(lettering)
         font.setPixelSize(FONT_PIXELS)
         font.setBold(run["bold"])
         font.setHintingPreference(QFont.HintingPreference.PreferNoHinting)
-        advance = QFontMetricsF(font).horizontalAdvance(run["text"])
+        segments = run["segments"]
+        segment_advances = [QFontMetricsF(font).horizontalAdvance(segment["text"]) if "text" in segment else
+                            run["vector_advance"] for segment in segments]
+        total_advance = sum(segment_advances)
         painter.save()
         painter.setWorldTransform(QTransform(*run["matrix"]) * page)
         painter.translate(run["x"], run["y"])
         painter.scale(run["size"] / FONT_PIXELS, run["size"] / FONT_PIXELS)
         painter.setFont(font)
         painter.setPen(QColor(run["fill"]))
-        painter.drawText(QPointF(-advance * ANCHOR_SHIFT.get(run["anchor"], 0.0), 0.0), run["text"])
+        offset = -total_advance * ANCHOR_SHIFT.get(run["anchor"], 0.0)
+        for segment, advance in zip(segments, segment_advances):
+            if "text" in segment:
+                painter.drawText(QPointF(offset, 0.0), segment["text"])
+            else:
+                markup = run["vector_markup"][segment["vector"]]
+                renderer = QSvgRenderer(QByteArray(("<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"-4 -4 8 8\">" +
+                                                    markup + "</svg>").encode("utf-8")))
+                painter.save()
+                painter.translate(offset + advance / 2.0, -FONT_PIXELS / 2.0)
+                painter.scale(FONT_PIXELS / 8.0, FONT_PIXELS / 8.0)
+                renderer.render(painter, QRectF(-4, -4, 8, 8))
+                painter.restore()
+            offset += advance
         painter.restore()
 
 
@@ -106,8 +115,12 @@ def export(job):
     if not renderer.isValid():
         raise RuntimeError("Qt cannot render the drawing SVG")
     lettering = _lettering_family()
+    supported = _lettering_codepoints(lettering, job["codepoints"])
+    if "texts" not in job:
+        return {"status": "pass", "supported_codepoints": sorted(supported)}
     _write_pdf(job, renderer, lettering)
-    return {"status": "pass", "png": _write_png(job, renderer, lettering)}
+    preview = _write_png(job, renderer, lettering)
+    return {"status": "pass", "supported_codepoints": sorted(supported), "png": preview}
 
 
 def main():

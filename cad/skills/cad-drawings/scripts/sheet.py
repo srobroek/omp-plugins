@@ -707,7 +707,7 @@ class ViewLayout:
 def _text(content: str, x: float, y: float, size: float, anchor: str = "start", rotate: float | None = None) -> str:
     transform = f' transform="rotate({rotate:.3f} {x:.3f} {y:.3f})"' if rotate is not None else ""
     anchor_attr = f' text-anchor="{anchor}"' if anchor != "start" else ""
-    return (f'<text x="{x:.3f}" y="{y:.3f}" font-size="{size:g}" font-family="sans-serif" fill="#000" '
+    return (f'<text x="{x:.3f}" y="{y:.3f}" font-size="{size:g}" font-family="osifont" fill="#000" '
             f'stroke="none"{anchor_attr}{transform}>{escape(content)}</text>')
 
 

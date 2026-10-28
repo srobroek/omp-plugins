@@ -15,7 +15,7 @@ TRIGGER
    For a catalogue item, give `part.yaml` a `procurement` record (a standard part names its `standard` and is ordered by its designation) and, when the item needs a sheet, a `vendor_specification` or `source_control` drawing whose `dimensions` carry the specification's limits; LOAD the vendor section of `references/drawing-intent.md`.
 2. Give `product.yaml` a `drawing` policy (projection, standards, default sheet, named tolerance policies). Bind interface sizes in `interfaces.yaml`: fits as `hole`/`shaft` feature endpoints, heat-set seats with `feature`, ring grooves on `retaining_ring.feature`.
 3. Build the version: `uv run --script skill://cad-flow/scripts/run.py cad-model/scripts/cad_model.py run hw --label vN`.
-4. Run `uv run --script skill://cad-drawings/scripts/drawing.py hw [--version vN] --part PN [--part PN ...] --output-dir DIR [--timeout S]` with FreeCAD 1.1.4 installed (see Install FreeCAD). Each part's package goes to `DIR/<PN>/`.
+4. Run `uv run --script skill://cad-drawings/scripts/drawing.py hw [--version vN] --part PN [--part PN ...] --output-dir DIR [--timeout S] [--jobs N]` with FreeCAD 1.1.4 installed (see Install FreeCAD). Each part's package goes to `DIR/<PN>/`. `--jobs` bounds concurrent part jobs. Without it, the tool uses CPU count, requested items, and available memory divided by its 1.5 GiB per-job RSS estimate. Each process uses isolated FreeCAD user data/temp, Qt/XDG and temporary paths. Results remain in input order; duplicate part numbers are rejected because they target the same package directory.
 5. Read the JSON summary and every PNG preview. A failing run lists findings with the architecture's failure codes and leaves `sheet-1.rejected.svg`/`.png` and `rejected.json`, never a PDF.
 6. After a human reviews the preview, record the accepted drawing checks in the project's `verification.csv`. `release.ready` stays false for an `X` revision or a bought part without a selected supplier.
 
@@ -32,8 +32,8 @@ TRIGGER
 
 LOAD references/assembly-drawings.md before writing the `drawing` block of `assembly.yaml`.
 
-1. Run `uv run --script skill://cad-flow/scripts/run.py cad-drawings/scripts/assembly_drawing.py hw --version vN --output-dir <dir>`. It produces checked sheets for the top assembly and each `assembly.drawing.subassembly_sheets` group, with assembled and exploded views, item balloons, a parts list from `bom.csv`, and assembly notes.
-2. Re-check a published package with `uv run --script skill://cad-drawings/scripts/assembly_check.py <dir>`.
+1. Run `uv run --script skill://cad-flow/scripts/run.py cad-drawings/scripts/assembly_drawing.py hw --version vN --output-dir <dir> [--jobs N]`. It produces checked sheets for the top assembly and each `assembly.drawing.subassembly_sheets` group, with assembled and exploded views, item balloons, a parts list from `bom.csv`, and assembly notes. `--jobs` uses the same bounded worker policy for independent sheets and their exports; report ordering remains sheet order.
+2. Re-check a published package with `uv run --script skill://cad-flow/scripts/run.py cad-drawings/scripts/assembly_check.py <dir>`. SIGINT/SIGTERM terminates every active FreeCAD process group.
 
 ## Install FreeCAD
 
@@ -58,7 +58,7 @@ The TechDraw templates come from the same FreeCAD, in `share/Mod/TechDraw/Templa
 
 ## Outputs
 
-`DIR/<PN>/`: `sheet-1.svg`, `sheet-1.pdf` (page at sheet size, selectable osifont text), `sheet-1.png` (144 dpi preview), `coverage.json` and, written last, `package.json` with provenance hashes, export evidence and `release` blockers. Exit 0 every drawing passed, 1 a content check failed, 2 invalid input or infrastructure failure.
+`DIR/<PN>/` contains `sheet-1.svg`, `sheet-1.pdf`, `sheet-1.png` (144 dpi), `coverage.json`, and `package.json` with provenance hashes and release blockers. The PDF uses selectable Osifont text. Registered missing symbols render as vectors; unregistered glyphs fail export. Exit 0 means every drawing passed, 1 means a content check failed, and 2 means invalid input or infrastructure failure.
 
 ## Rules
 

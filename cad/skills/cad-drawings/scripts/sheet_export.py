@@ -1,11 +1,8 @@
-"""Export a checked drawing SVG to a sheet-sized PDF and a PNG preview, then check both.
+"""Export a checked drawing SVG to a sheet-sized PDF and PNG preview.
 
-FreeCAD's bundled Qt does the painting (``export_job.py`` in freecadcmd). QtSvg draws SVG text as
-outlines, which would leave the PDF without a text layer, so the SVG is split first: QSvgRenderer
-paints the text-free graphics and export_job.py draws every text chunk with QPainter.drawText,
-which embeds the font. The same painting fills the PNG preview. This module then reads the PDF
-back and requires one page of the sheet's size whose text holds every required value, and a
-preview that is not blank.
+FreeCAD's bundled Qt renders graphics and PDF text. Osifont provides standard drawing lettering.
+Symbols missing from it use explicit vector paths; all other unsupported glyphs fail instead of
+falling back to the host's fonts and producing platform-dependent PDFs.
 """
 
 from __future__ import annotations
@@ -33,6 +30,16 @@ TSPAN = f"{{{SVG_NS}}}tspan"
 # Text properties a text chunk inherits from its ancestors.
 TEXT_PROPERTIES = ("font-size", "font-family", "font-weight", "text-anchor", "fill")
 _NUMBER = re.compile(r"[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?")
+OSIFONT_CODEPOINTS = frozenset(range(0x20, 0x7f))
+VECTOR_SYMBOLS = {
+    "⟂": '<path d="M -3 -3 H 3 M 0 -3 V 3" fill="none" stroke="currentColor" stroke-width="1"/>',
+    "⊥": '<path d="M -3 -3 H 3 M 0 -3 V 3" fill="none" stroke="currentColor" stroke-width="1"/>',
+    "∥": '<path d="M -1.5 3 L 1.5 -3 M 0 3 L 3 -3" fill="none" stroke="currentColor" stroke-width="1"/>',
+    "−": '<path d="M -3 0 H 3" fill="none" stroke="currentColor" stroke-width="1"/>',
+    "×": '<path d="M -3 -3 L 3 3 M -3 3 L 3 -3" fill="none" stroke="currentColor" stroke-width="1"/>',
+    "·": '<circle cx="0" cy="-1" r="1" fill="currentColor"/>',
+}
+VECTOR_ADVANCE = 70.0
 
 
 class ExportError(Exception):
@@ -109,12 +116,9 @@ def _chunks(text: ET.Element, properties: dict[str, str]) -> Iterator[_Chunk]:
             yield _Chunk(chunk.x, chunk.y, chunk.style, " ".join(chunk.content.split()))
 
 
-def split_text(root: ET.Element) -> list[dict[str, Any]]:
-    """Remove every text element from the SVG tree and return its chunks as text runs for export_job.py.
-
-    A run carries its content, baseline origin, anchor, font size in user units, font family,
-    weight, fill colour and the SVG transform from user space to the root's viewBox.
-    """
+def split_text(root: ET.Element, supported_codepoints: frozenset[int] | None = None) -> list[dict[str, Any]]:
+    """Split SVG text into font runs and registered vector glyphs; reject unhandled characters."""
+    supported = OSIFONT_CODEPOINTS if supported_codepoints is None else supported_codepoints
     runs: list[dict[str, Any]] = []
 
     def walk(element: ET.Element, transform: str, inherited: dict[str, str]) -> None:
@@ -134,19 +138,32 @@ def split_text(root: ET.Element) -> list[dict[str, Any]]:
                 if size is None:
                     raise ExportError("export_failed", f"SVG text {chunk.content!r} has no font size")
                 weight = style.get("font-weight", "normal")
-                runs.append({"text": chunk.content, "x": chunk.x, "y": chunk.y, "anchor": style.get("text-anchor", "start"),
-                             "size": size, "family": style.get("font-family", "sans-serif").split(",")[0].strip().strip("'\""),
+                segments = []
+                pending = []
+                for character in chunk.content:
+                    if character in VECTOR_SYMBOLS:
+                        if pending:
+                            segments.append({"text": "".join(pending)})
+                            pending.clear()
+                        segments.append({"vector": character})
+                    elif ord(character) in supported:
+                        pending.append(character)
+                    else:
+                        raise ExportError("unsupported_glyph",
+                                          f"SVG text contains unsupported glyph {character!r} (U+{ord(character):04X})")
+                if pending:
+                    segments.append({"text": "".join(pending)})
+
+                runs.append({"segments": segments, "vector_advance": VECTOR_ADVANCE, "vector_markup": VECTOR_SYMBOLS,
+                             "x": chunk.x, "y": chunk.y, "anchor": style.get("text-anchor", "start"),
+                             "size": size, "family": "osifont",
                              "bold": weight == "bold" or (weight.isdigit() and int(weight) >= 600),
                              "fill": style.get("fill", "#000000"), "matrix": list(matrix)})
 
     walk(root, "", {})
     return runs
-
-
 @dataclass(frozen=True)
 class PdfContent:
-    """What a PDF written by Qt's QPdfWriter holds: page sizes in points, embedded fonts and text."""
-
     page_sizes_pt: list[tuple[float, float]]
     fonts: list[str]
     text: str
@@ -236,11 +253,18 @@ def export_sheet(freecadcmd: Path, svg: Path, pdf: Path, png: Path, required_tex
     except Exception as exc:
         raise ExportError("export_failed", f"invalid or unsafe SVG output: {exc}") from exc
     width, height = sheet_size_mm(root)
-    runs = split_text(root)
-    job = {"svg_markup": ET.tostring(root, encoding="unicode"), "texts": runs, "page_mm": [width, height],
-           "dpi": PREVIEW_DPI, "pdf": str(pdf), "png": str(png)}
+    codepoints = frozenset(map(ord, "".join("".join(element.itertext()) for element in root.iter(TEXT))))
+    job: dict[str, Any] = {"svg_markup": ET.tostring(root, encoding="unicode"), "page_mm": [width, height],
+                           "codepoints": sorted(codepoints), "vector_symbols": VECTOR_SYMBOLS,
+                           "vector_advance": VECTOR_ADVANCE}
     for stale in (pdf, png):
         stale.unlink(missing_ok=True)
+    result, message = freecad_runtime.run_job(freecadcmd, EXPORT_JOB, job, svg.parent, timeout)
+    if result is None:
+        raise ExportError("export_failed", message)
+    job["texts"] = split_text(root, frozenset(result["supported_codepoints"]))
+    job["svg_markup"] = ET.tostring(root, encoding="unicode")
+    job.update(dpi=PREVIEW_DPI, pdf=str(pdf), png=str(png))
     result, message = freecad_runtime.run_job(freecadcmd, EXPORT_JOB, job, svg.parent, timeout)
     if result is None:
         raise ExportError("export_failed", message)
@@ -255,7 +279,9 @@ def export_sheet(freecadcmd: Path, svg: Path, pdf: Path, png: Path, required_tex
                                               for got, want in zip(content.page_sizes_pt[0], expected)):
         raise ExportError("export_failed", f"PDF pages {content.page_sizes_pt} pt do not match one "
                                            f"{expected[0]:.1f} x {expected[1]:.1f} pt sheet")
-    missing = [value for value in required_text if " ".join(value.split()) not in content.text]
+    missing = [value for value in required_text
+               if " ".join("".join(character for character in value if character not in VECTOR_SYMBOLS).split())
+               not in content.text]
     if missing:
         raise ExportError("empty_drawing", f"PDF text layer missing required fields: {missing}")
     return {"png": result["png"], "page_mm": [width, height], "pdf_fonts": content.fonts}
