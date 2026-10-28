@@ -127,7 +127,7 @@
         "location": {"const": "datum_coordinates"},
         "profile": {"const": "controlled_model"},
         "profile_tolerance_mm": {"type": "number", "exclusiveMinimum": 0},
-        "presentation": {"type": "string", "enum": ["auto", "visible", "section", "detail"]},
+        "presentation": {"description": "general_note: a round's or chamfer's size goes in the sheet's general note of undimensioned edge fillets and edge breaks", "type": "string", "enum": ["auto", "visible", "section", "detail", "general_note"]},
         "axial_location_from": {"$ref": "#/$defs/reference"},
         "tolerance_policy": {"$ref": "#/$defs/policy_name"},
         "thread": {"$ref": "#/$defs/thread"},

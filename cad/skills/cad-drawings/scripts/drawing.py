@@ -8,10 +8,13 @@
 Usage: drawing.py HW [--version vN] --part PN [--part PN ...] --output-dir DIR [--timeout S]
 
 For each part: verify the record and the version (``drawing_contract``), bind the model's
-``drawing_features`` locators to the part STEP in FreeCAD, measure every required characteristic
-in the datum frame (``drawing_intent``), plan and project the views (``part_views``,
-``techdraw_job.py``), place dimensions and callouts (``sheet``), run the completeness gate
-(``completeness``) and publish ``DIR/<PN>/`` through ``drawing_document.publish_package``.
+``drawing_features`` locators to the part STEP in FreeCAD and recognise its manufacturing features
+(``feature_recognition``), measure every required characteristic in the datum frame
+(``drawing_intent``), plan and project the views (``part_views``, ``techdraw_job.py``), place
+dimensions and callouts (``sheet``), run the completeness gate (``completeness``, with
+``feature_coverage`` for the recognised features) and publish ``DIR/<PN>/`` through
+``drawing_document.publish_package``. A part with no drawing intent or no ``drawing_features`` hook
+gets no sheet: it fails with one finding per recognised feature it leaves undimensioned.
 
 A catalogue part with a ``vendor_specification`` or ``source_control`` drawing gets a specification
 sheet: its procurement identity, the critical interface dimensions measured from the vendor
@@ -40,11 +43,13 @@ import completeness  # noqa: E402
 import drawing_contract  # noqa: E402
 import drawing_document  # noqa: E402
 import drawing_intent  # noqa: E402
+import feature_coverage  # noqa: E402
 import feature_geometry as fg  # noqa: E402
+import feature_recognition  # noqa: E402
 import freecad_runtime  # noqa: E402
 import part_views  # noqa: E402
 import sheet  # noqa: E402
-from drawing_document import CompositionError, CoverageReport, SheetMetadata, SvgNote, SvgTable  # noqa: E402
+from drawing_document import CompositionError, SheetMetadata, SvgNote, SvgTable  # noqa: E402
 from freecad_views import ViewGeometry  # noqa: E402
 from layout_check import Box  # noqa: E402
 from section_hatch import CutRegion  # noqa: E402
@@ -270,6 +275,9 @@ def sheet_notes(context: drawing_contract.DrawingContext, part: drawing_contract
     if "edges" in drawing:
         exceptions = any("edges" in intent for intent in features)
         notes.append(SvgNote("edges", sheet.edge_note(drawing["edges"], regime, exceptions), {"kind": "edge"}))
+    general = [c for c in measured.characteristics if c.presentation == sheet.GENERAL_NOTE]
+    if general:   # edge fillets and edge breaks the drawing states once, for every face they apply to
+        notes.append(SvgNote(sheet.GENERAL_NOTE_ID, sheet.general_edges_note(general, regime), {"kind": "general_edges"}))
     if "surface_texture" in drawing:
         notes.append(texture_note(drawing["surface_texture"], regime, standards,
                                   any("surface_texture" in intent for intent in features)))
@@ -385,20 +393,24 @@ def run_part(context: drawing_contract.DrawingContext, pn: str, output_dir: Path
     drawing = record.get("drawing")
     regime = context.product["regime"]
     procurement = procurement_findings(record)
-    if not drawing:
-        if (record.get("procurement") or {}).get("mode") == "catalog":
-            status = "fail" if procurement else "not_required"
-            blockers = completeness.release_blockers(record)
-            return {"pn": pn, "status": status, "findings": procurement,
-                    "release": {"ready": not blockers, "blockers": blockers}}, 1 if procurement else 0
-        return fail("drawing_intent_missing", f"{pn} has no part.yaml drawing intent", pn=pn), 1
-    if part.features is None:
-        return fail("drawing_intent_missing", f"{pn}'s model.py defines no drawing_features hook", pn=pn), 1
-    vendor = drawing["type"] in drawing_intent.VENDOR_TYPES
+    if not drawing and (record.get("procurement") or {}).get("mode") == "catalog":
+        status = "fail" if procurement else "not_required"
+        blockers = completeness.release_blockers(record)
+        return {"pn": pn, "status": status, "findings": procurement,
+                "release": {"ready": not blockers, "blockers": blockers}}, 1 if procurement else 0
     work = output_dir.parent / f".{output_dir.name}.work-{uuid.uuid4().hex}"
     work.mkdir(parents=True)
     try:
-        bound = run_job(freecadcmd, {"mode": "bind", "step": str(part.step), "locators": part.features}, work, timeout)
+        bound = run_job(freecadcmd, {"mode": "bind", "step": str(part.step), "locators": part.features or {}},
+                        work, timeout)
+        recognition = feature_recognition.Recognition.from_dict(bound["recognized"])
+        missing = ("part.yaml has no drawing intent" if not drawing else
+                   "model.py defines no drawing_features hook" if part.features is None else None)
+        if missing is not None:   # never a sheet, and never silence: name what the drawing must dimension
+            return fail("drawing_intent_missing", f"{pn}: {missing}; run drawing_draft.py for a proposal",
+                        pn=pn, findings=feature_coverage.undimensioned(recognition, missing),
+                        recognized=[item.describe() for item in recognition.features]), 1
+        vendor = drawing["type"] in drawing_intent.VENDOR_TYPES
         faces = [fg.Face.from_dict(f) for f in bound["faces"]]
         face_map = {f.index: f for f in faces}
         binding = fg.resolve(part.features, bound["bound"], faces)
@@ -407,11 +419,12 @@ def run_part(context: drawing_contract.DrawingContext, pn: str, output_dir: Path
                                  tuple(f for f in binding.findings if f["code"] != "geometry_unaccounted"))
         measured = drawing_intent.measure(pn, record, context.product, context.interfaces, binding, faces)
         if measured.frame is None:
-            report = completeness.evaluate(pn, record, context.interfaces, binding, measured, None, part.step_sha256)
+            report = completeness.evaluate(pn, record, context.interfaces, binding, measured, None, part.step_sha256,
+                                           recognition=recognition, faces=face_map)
             return {"pn": pn, "status": "fail", "coverage": report.to_dict()}, 1
         plans = part_views.plan_views(drawing, measured.frame, binding.features, face_map)
         return compose_and_publish(context, part, drawing, regime, binding, face_map, measured, plans, procurement,
-                                   vendor, output_dir, freecadcmd, timeout, work)
+                                   vendor, output_dir, freecadcmd, timeout, work, recognition)
     except drawing_intent.IntentError as exc:
         return fail(exc.code, str(exc), pn=pn), 1
     finally:
@@ -422,7 +435,8 @@ def compose_and_publish(context: drawing_contract.DrawingContext, part: drawing_
                         drawing: Mapping[str, Any], regime: str, binding: fg.Binding, faces: Mapping[int, fg.Face],
                         measured: drawing_intent.Measured, plans: list[part_views.ViewPlan],
                         procurement: list[dict[str, Any]], vendor: bool, output_dir: Path, freecadcmd: Path,
-                        timeout: float, work: Path) -> tuple[dict[str, Any], int]:
+                        timeout: float, work: Path,
+                        recognition: feature_recognition.Recognition) -> tuple[dict[str, Any], int]:
     record = part.record
     sizes = (drawing.get("sheet") or {}).get("sizes") or \
         ((context.product.get("drawing") or {}).get("default_sheet") or {}).get("sizes") or \
@@ -487,7 +501,8 @@ def compose_and_publish(context: drawing_contract.DrawingContext, part: drawing_
             break
     chosen = chosen or fallback
     if chosen is None:
-        coverage = completeness.evaluate(part.pn, record, context.interfaces, binding, measured, None, part.step_sha256)
+        coverage = completeness.evaluate(part.pn, record, context.interfaces, binding, measured, None, part.step_sha256,
+                                         recognition=recognition, faces=faces)
         return {"pn": part.pn, "status": "fail", "error": {"code": "sheet_no_fit", "message":
                 f"no allowed sheet {sizes} and scale fits the views and annotations"},
                 "coverage": coverage.to_dict()}, 1
@@ -519,9 +534,9 @@ def compose_and_publish(context: drawing_contract.DrawingContext, part: drawing_
         if lines is not None:
             annotations.append(lines)
     report = completeness.evaluate(part.pn, record, context.interfaces, binding, measured, presentation, part.step_sha256,
-                                   sections)
+                                   sections, recognition=recognition, faces=faces)
     if procurement:
-        report = CoverageReport("fail", report.rows, (*report.findings, *procurement))
+        report = replace(report, status="fail", findings=(*report.findings, *procurement))
     try:
         composed = drawing_document.compose_page(spec, metadata(context, part, scale, 1, 1),
                                                  [v.geometry for v in views.values()], annotations, tables, notes)

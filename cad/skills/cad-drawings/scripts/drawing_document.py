@@ -291,18 +291,21 @@ class ComposedSheet:
 
 @dataclass(frozen=True)
 class CoverageReport:
-    """The completeness gate's verdict for a package: rows of feature -> requirement -> annotation, and findings."""
+    """The completeness gate's verdict for a package: rows of feature -> requirement -> annotation, the recognised
+    manufacturing features' size rows (``feature_coverage``), and findings."""
 
     status: str                                   # "pass" or "fail"
     rows: tuple[Mapping[str, Any], ...] = ()
     findings: tuple[Mapping[str, Any], ...] = ()  # each with a failure ``code`` and ``message``
+    features: tuple[Mapping[str, Any], ...] = ()  # recognised feature -> size -> stating characteristic
 
     def __post_init__(self) -> None:
         if self.status not in ("pass", "fail") or (self.status == "pass") == bool(self.findings):
             raise ValueError("a coverage report passes exactly when it has no findings")
 
     def to_dict(self) -> dict[str, Any]:
-        return {"status": self.status, "rows": [dict(r) for r in self.rows], "findings": [dict(f) for f in self.findings]}
+        return {"status": self.status, "rows": [dict(r) for r in self.rows], "findings": [dict(f) for f in self.findings],
+                "features": [dict(r) for r in self.features]}
 
 
 @dataclass(frozen=True)

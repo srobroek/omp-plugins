@@ -163,6 +163,23 @@ def edge_lines(edges: Mapping[str, Sequence[float]], regime: str) -> list[str]:
             else f"{kind} edges {edge_size(edges[kind])}" for kind in ("external", "internal") if kind in edges]
 
 
+GENERAL_NOTE = "general_note"        # a feature presentation: its rounds or chamfers go in one sheet note
+GENERAL_NOTE_ID = "general-edges"
+
+
+def general_edges_note(chars: Sequence[Characteristic], regime: str) -> str:
+    """The undimensioned edge fillets and edge breaks, each size stated once in a general note."""
+    radii = sorted({size_text(replace(c, quantity=1), regime, "R") for c in chars if c.operation == "radius"})
+    chamfers = sorted({_callout_text(replace(c, quantity=1), regime) for c in chars if c.operation == "chamfer"})
+    if regime == "asme":
+        parts = ([f"FILLETS AND ROUNDS {', '.join(radii)}"] if radii else []) + \
+                ([f"EDGE CHAMFERS {', '.join(chamfers)}"] if chamfers else [])
+        return "UNLESS OTHERWISE SPECIFIED: " + "; ".join(parts) + "."
+    parts = ([f"fillets and rounds {', '.join(radii)}"] if radii else []) + \
+            ([f"edge chamfers {', '.join(chamfers)}"] if chamfers else [])
+    return "Unless otherwise indicated: " + "; ".join(parts) + "."
+
+
 TAN30 = math.tan(math.radians(30.0))
 TEXTURE_TEXT_GAP = 0.6   # between the symbol's bar and the requirement under it
 TEXTURE_GAP = 1.0        # above a symbol in a callout block
@@ -475,6 +492,9 @@ def build_presentation(chars: Sequence[Characteristic], frame: DatumFrame, bindi
     for char in chars:
         own = [faces[i] for i in char.faces]
         placed = False
+        if char.presentation == GENERAL_NOTE and char.operation in ("radius", "chamfer"):
+            result.placed[char.id] = {"annotation": GENERAL_NOTE_ID, "view": None, "anchor": None}
+            continue
         if char.operation in LINEAR_OPERATIONS:
             same = stated.get(dimension_key(char))
             if same is not None:   # features on one centre line or plane share the dimension that locates it
@@ -669,7 +689,8 @@ def _linear(char: Characteristic, frame: DatumFrame, binding: Mapping[str, Resol
         return None
     origin = _datum_reference(char.axis, frame, binding, faces, view)
     if char.operation in ("plane_separation", "thickness", "distance") and len(char.details.get("features", ())) == 2:
-        start = visible_anchors([faces[i] for i in binding[char.details["features"][0]].faces], view)
+        start_faces = char.details.get("from_faces") or binding[char.details["features"][0]].faces
+        start = visible_anchors([faces[i] for i in start_faces], view)
         origin = start[0] if start else None   # between two planes: from the first one, not the datum
     if origin is None:
         return None

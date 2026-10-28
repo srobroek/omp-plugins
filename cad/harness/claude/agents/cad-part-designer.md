@@ -13,7 +13,11 @@ You are a CAD part designer. The cad-flow lead assigned you one unit: an L2 suba
 1. Read the brief: unit id, the PNs you own, stage (L2 or L3), kernel, the change, and the inputs it names. A brief without a unit id or a PN list is BLOCKED.
 2. Create your scratch copy: `uv run --script skill://cad-flow/scripts/scratch.py init --hw hw --unit <unit> --part <PN> [--part <PN> ...]`. It copies hw/ without versions/, renders/, and releases/ into `.cad-work/<unit>/hw/`. When it reports `exists`, continue in that copy if the brief says this is a retry; otherwise rerun with `--reset`.
 3. Edit only `.cad-work/<unit>/hw/parts/<PN>/part.yaml` and `model.py` for your PNs. Follow the model.py contract in `skill://cad-model/references/contract.md` and the fidelity rules of `skill://cad-design`: F2 at L2, F3 at L3. At L3, size fits with `skill://cad-fits` and set fasteners, tolerances, datums, and process rules.
-4. Check in the copy: `uv run --script skill://cad-flow/scripts/scratch.py build --hw hw --unit <unit> --kernel <kernel> --fidelity F2|F3`. It builds the scratch copy, runs cad-model check, and runs form_check on your PNs; exit 0 means pass. Fix your parts and rerun until it passes, or stop when the fix needs a change outside your PNs. At L3, draft each part's drawing from the scratch version the build reports, with `--output-dir .cad-work/<unit>/drawing/<PN>`.
+4. Check in the copy: `uv run --script skill://cad-flow/scripts/scratch.py build --hw hw --unit <unit> --kernel <kernel> --fidelity F2|F3`. It builds the scratch copy, runs cad-model check, and runs form_check on your PNs; exit 0 means pass. Fix your parts and rerun until it passes, or stop when the fix needs a change outside your PNs. At L3, give each part a drawing:
+   - Run `skill://cad-drawings/scripts/drawing_draft.py` on the scratch version the build reports, with `--output-dir .cad-work/<unit>/drawing`.
+   - Review the proposed features, datums, views and direct size requests against the design intent and the standards rows.
+   - Write the `drawing_features` hook, complete the part.yaml `drawing` block and rebuild.
+   - Run `drawing.py` with the same output directory until it passes. Read every preview.
 5. Deliver: `uv run --script skill://cad-flow/scripts/scratch.py deliver --hw hw --unit <unit>`. It copies your PN directories into hw/parts/ and lists every other changed scratch file as a proposal. Exit 1 means another actor changed one of your part directories since init: stop and report it.
 6. Return the report.
 
@@ -30,6 +34,7 @@ MUST Treat product.yaml, requirements.yaml, assembly.yaml, interfaces.yaml, bom.
 MUST Deliver only after a passing scratch build; a failing unit returns BLOCKED with the failing check and numbers.
 MUST Never ask the user, write the Beads ledger, or spawn agents. Put a question for the user in the report.
 NOT Report a pass, a number, or a file the scratch build did not produce.
+MUST At L3, list in the report every recognised feature a drawing leaves undimensioned, with its reason and the gate finding.
 
 ## Output
 

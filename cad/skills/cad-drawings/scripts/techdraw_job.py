@@ -2,8 +2,9 @@
 
 The CAD_DRAWING_JOB environment variable names a JSON job file. Every mode reads one part STEP:
 
-- ``bind``: every face's plain geometry (``feature_geometry.extract_faces``) and the faces each
-  drawing_features patch binds (``feature_geometry.bind_patches``).
+- ``bind``: every face's plain geometry (``feature_geometry.extract_faces``), the faces each
+  drawing_features patch binds (``feature_geometry.bind_patches``), and the manufacturing features
+  recognised on those faces with a material probe on the solid (``feature_recognition``).
 - ``views``: a TechDraw page of the sheet's size with the requested part, section and detail views
   at their scales and sheet positions. Each view is serialised with ``freecad_views.serialize_view``
   together with the affine map from model millimetres to sheet millimetres (``project_anchor`` of
@@ -27,6 +28,7 @@ with open(os.environ["CAD_DRAWING_JOB"], encoding="utf-8") as handle:
     JOB = json.load(handle)
 sys.path.insert(0, JOB["scripts"])
 import feature_geometry  # noqa: E402
+import feature_recognition  # noqa: E402
 import freecad_views  # noqa: E402
 
 CUT_DEFLECTION_MM = 0.01
@@ -79,9 +81,11 @@ def bind(job):
     shape = Part.read(job["step"])
     if shape.isNull() or not shape.Faces:
         raise RuntimeError("STEP has no faces")
-    return {"status": "pass", "faces": feature_geometry.extract_faces(shape),
-            "bound": feature_geometry.bind_patches(shape, job["locators"]),
-            "volume_mm3": shape.Volume}
+    faces = feature_geometry.extract_faces(shape)
+    recognition = feature_recognition.recognize([feature_geometry.Face.from_dict(f) for f in faces],
+                                                feature_recognition.SolidProbe(shape))
+    return {"status": "pass", "faces": faces, "bound": feature_geometry.bind_patches(shape, job["locators"]),
+            "recognized": recognition.to_dict(), "volume_mm3": shape.Volume}
 
 
 def views(job):

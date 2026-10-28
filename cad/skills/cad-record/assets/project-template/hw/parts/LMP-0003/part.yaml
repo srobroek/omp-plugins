@@ -37,11 +37,17 @@ drawing:
     lightening_pocket: {size: general}
     cable_channel: {profile: controlled_model}
     outer_contour: {profile: controlled_model}
+    elbow_end: {size: general}
+    tip_end: {size: general}
     flare_rounds: {size: general}
     sag_blends: {size: general}
     silhouette_rounds: {size: general}
   dimensions:
     - {id: head_clevis_width, operation: width, features: [head_clevis], tolerance: {deviation_mm: [-0.05, 0.05]}}
+    - {id: far_cheek_thickness, operation: thickness, features: [head_clevis, far_cheek_face]}
+    - {id: head_cheek_thickness, operation: thickness, features: [head_clevis, head_cheek_face]}
+    - {id: head_width, operation: plane_separation, features: [far_cheek_face, head_cheek_face], reference: true}
+    - {id: cable_channel_radius, operation: radius, features: [cable_channel]}
   geometric_tolerances:
     - {id: elbow_bore_perpendicularity, characteristic: perpendicularity, features: [elbow_bore], zone_mm: 0.1, diameter_zone: true, datum_frame: [A]}
     - {id: tip_bore_position, characteristic: position, features: [tip_bore], zone_mm: 0.1, diameter_zone: true, datum_frame: [A, B]}
