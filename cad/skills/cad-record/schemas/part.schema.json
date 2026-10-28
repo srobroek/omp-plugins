@@ -21,6 +21,36 @@
       "type": "string", "enum": ["assembly_zero", "part_local"]
     },
     "procurement": {"$ref": "drawing.schema.json#/$defs/procurement"},
-    "drawing": {"$ref": "drawing.schema.json#/$defs/part_drawing"}
+    "drawing": {"$ref": "drawing.schema.json#/$defs/part_drawing"},
+    "manufacture": {
+      "description": "How a custom-made part is manufactured relative to its installed definition (cad-record layout.json manufacturing). Absent: relationship same, compared to 1e-9 relative volume, default mesh.",
+      "type": "object", "additionalProperties": false,
+      "required": ["relationship"],
+      "properties": {
+        "relationship": {"description": "same: made in its installed shape; different: model.py build_manufacture(params) defines the manufacturing state", "enum": ["same", "different"]},
+        "state": {"description": "name of the manufacturing state, such as flat", "type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+        "reason": {"description": "why the states differ, such as elastic_bending", "type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+        "decision": {"description": "the decision record approving the difference", "type": "string", "pattern": "^DR-[0-9]{3}$"},
+        "volume_rel_tolerance": {"description": "allowed |V_manufactured - V_installed| / V_installed", "type": "number", "exclusiveMinimum": 0, "maximum": 1},
+        "volume_abs_tolerance_mm3": {"description": "absolute floor of the allowed volume difference", "type": "number", "exclusiveMinimum": 0},
+        "mesh": {
+          "description": "FDM part.stl tessellation, overriding the layout default (0.05 mm, 0.1 rad)",
+          "type": "object", "additionalProperties": false, "minProperties": 1,
+          "properties": {
+            "linear_deflection_mm": {"type": "number", "exclusiveMinimum": 0},
+            "angular_deflection_rad": {"type": "number", "exclusiveMinimum": 0, "maximum": 3.141592653589793}
+          }
+        }
+      },
+      "if": {"properties": {"relationship": {"const": "different"}}},
+      "then": {
+        "required": ["state", "reason", "decision"],
+        "anyOf": [{"required": ["volume_rel_tolerance"]}, {"required": ["volume_abs_tolerance_mm3"]}]
+      },
+      "else": {
+        "not": {"anyOf": [{"required": ["state"]}, {"required": ["reason"]}, {"required": ["decision"]},
+                          {"required": ["volume_rel_tolerance"]}, {"required": ["volume_abs_tolerance_mm3"]}]}
+      }
+    }
   }
 }

@@ -148,7 +148,7 @@ def load_context(hw: Path, version_dir: Path) -> DrawingContext:
     hw, version_dir = hw.resolve(), version_dir.resolve()
     if version_dir.parent != hw / "versions":
         raise ContractError("source_mismatch", f"{version_dir} is not a version folder of {hw}/versions")
-    failures = tuple(f for f in _validator().validate_project(hw) if f.get("severity") != "info")
+    failures = tuple(_validator().blocking(_validator().validate_project(hw)))
     if failures:
         raise ContractError("invalid_drawing_intent", f"the design record has {len(failures)} validation findings",
                             failures)

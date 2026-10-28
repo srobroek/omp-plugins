@@ -12,8 +12,10 @@ import functools
 import hashlib
 import importlib.util
 import json
+import posixpath
 import re
 import sys
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -25,20 +27,21 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import assembly_data  # noqa: E402 - the sibling module, beside this script in the skill
 
 
-def _load_coupling() -> Any:
-    """cad-motion's kernel-free coupling laws, the one reader of joint couplings, profiles and mechanisms."""
-    path = Path(__file__).resolve().parents[2] / "cad-motion" / "scripts" / "coupling.py"
-    name = "cad_motion_coupling"
+def _load_module(name: str, path: Path) -> Any:
+    """A standard-library module loaded once by path and registered in sys.modules, where dataclasses look it up."""
     if name not in sys.modules:
         spec = importlib.util.spec_from_file_location(name, path)
         if spec is None or spec.loader is None:
-            raise ImportError(f"cad-motion coupling.py not found at {path}")
+            raise ImportError(f"{path.name} not found at {path}")
         sys.modules[name] = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(sys.modules[name])
     return sys.modules[name]
 
 
-coupling = _load_coupling()
+# cad-motion's kernel-free coupling laws, the one reader of joint couplings, profiles and mechanisms.
+coupling = _load_module("cad_motion_coupling", Path(__file__).resolve().parents[2] / "cad-motion" / "scripts" / "coupling.py")
+# The canonical hw/ layout (layout.json beside schemas/), the one reader of where record and output files live.
+layout = _load_module("cad_record_layout", Path(__file__).resolve().parent / "layout.py")
 
 SCHEMAS = Path(__file__).resolve().parent.parent / "schemas"
 BOM_COLUMNS = ["level", "PN", "rev", "qty", "title", "material", "process", "make_buy", "supplier", "mass"]
@@ -52,8 +55,25 @@ CSV_COLUMNS = {
 DATUM_LABEL = re.compile(r"[A-HJ-NPR-Z]{1,2}")
 
 
-def finding(path: str, message: str, *, severity: str = "error") -> dict[str, str]:
-    return {"path": path, "message": message, "severity": severity}
+NONBLOCKING = frozenset({"warning", "info"})
+
+
+def finding(path: str, message: str, *, severity: str = "error", code: str | None = None,
+            canonical_location: str | None = None, action: str | None = None) -> dict[str, Any]:
+    """One report item; a layout finding also carries its stable `code`, `canonical_location` and `action`."""
+    item: dict[str, Any] = {"path": path, "message": message, "severity": severity}
+    if code is not None:
+        item.update(code=code, canonical_location=canonical_location, action=action)
+    return item
+
+
+def blocking(findings: Iterable[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    """The findings that fail validation: errors, and any severity this validator does not define.
+
+    Warnings and info stay in the report and never fail it. validate.py's exit code and cad-drawings
+    drawing_contract both decide through this one function.
+    """
+    return [item for item in findings if item.get("severity") not in NONBLOCKING]
 
 
 def load_yaml(path: Path, findings: list[dict[str, str]]) -> Any:
@@ -440,6 +460,81 @@ def check_couplings(assembly: dict[str, Any], path: str, findings: list[dict[str
     findings.extend(finding(path, problem) for problem in couplings.range_problems(limits, nominal, units))
 
 
+def check_manufacture(part: dict[str, Any], path: str, hw: Path, findings: list[dict[str, str]]) -> None:
+    """part.yaml `manufacture` belongs to a custom-made part only, and its approving decision exists."""
+    manufacture = part.get("manufacture")
+    if manufacture is None:
+        return
+    if not layout.custom_made(part):
+        findings.append(finding(path, "manufacture: only a custom-made part (make_buy: make, or procurement/mode: "
+                                      "made_to_drawing) has a manufacturing state"))
+    decision = manufacture.get("decision")
+    if decision is not None and not (hw / "decisions" / f"{decision}.md").is_file():
+        findings.append(finding(path, f"manufacture/decision {decision} does not exist at decisions/{decision}.md"))
+
+
+def check_flow(product: dict[str, Any], path: str, hw: Path, part_records: dict[str, Any],
+               findings: list[dict[str, str]]) -> None:
+    """The frozen anchor names a built version by its exact manifest, and an open change starts from it."""
+    flow = product["flow"]
+    frozen, change = flow.get("frozen"), flow.get("change")
+    for where, item in (("frozen", frozen), ("change", change)):
+        if item is not None and not (hw / "decisions" / f"{item['decision']}.md").is_file():
+            findings.append(finding(path, f"flow/{where}/decision {item['decision']} does not exist at "
+                                          f"decisions/{item['decision']}.md"))
+    if frozen is not None:
+        manifest = layout.version_dir(hw, frozen["version"]) / "manifest.json"
+        if not manifest.is_file():
+            findings.append(finding(path, f"flow/frozen/version {frozen['version']} is not a built version"))
+        elif hashlib.sha256(manifest.read_bytes()).hexdigest() != frozen["manifest_sha256"]:
+            findings.append(finding(path, f"flow/frozen/manifest_sha256 is not the sha256 of "
+                                          f"versions/{frozen['version']}/manifest.json"))
+    if change is not None:
+        if frozen is not None and change["baseline_version"] != frozen["version"]:
+            findings.append(finding(path, f"flow/change/baseline_version {change['baseline_version']} is not the "
+                                          f"frozen version {frozen['version']}"))
+        for pn in change["affected_parts"]:
+            if pn not in part_records:
+                findings.append(finding(path, f"flow/change/affected_parts: {pn} has no parts/{pn}/part.yaml"))
+
+
+@functools.cache
+def stages() -> tuple[str, ...]:
+    """The workflow stages in order, as product.schema.json defines them."""
+    schema = json.loads((SCHEMAS / "product.schema.json").read_text(encoding="utf-8"))
+    return tuple(schema["$defs"]["stage"]["enum"])
+
+
+def layout_strict(product: Any, hw: Path) -> bool:
+    """Whether stage-graded layout findings are errors: from design_freeze on, at every stage once a
+    frozen anchor (flow.frozen, or a release manifest) exists, and when the stage is missing or unknown."""
+    flow = product.get("flow") if isinstance(product, dict) else None
+    flow = flow if isinstance(flow, dict) else {}
+    if flow.get("frozen") is not None or any((hw / "releases").glob("*/manifest.json")):
+        return True
+    stage = flow.get("stage")
+    return stage not in stages() or stages().index(stage) >= stages().index("design_freeze")
+
+
+def check_layout(hw: Path, product: Any, part_records: dict[str, Any], findings: list[dict[str, str]]) -> None:
+    """Every file and directory under hw/, tracked, untracked or ignored, against cad-record layout.json."""
+    references = {}
+    for pn, (part, _) in part_records.items():
+        artifact = ((part.get("procurement") or {}).get("specification") or {}).get("artifact")
+        if isinstance(artifact, str):
+            references[posixpath.normpath(f"{layout.HW}/{artifact}")] = pn
+    strict = layout_strict(product, hw)
+    report = layout.audit(hw, references)
+    for problem in report.problems:
+        severity = problem.severity if problem.severity != "stage" else "error" if strict else "warning"
+        findings.append(finding(str(layout.locate(hw, problem.path)), problem.message, severity=severity,
+                                code=problem.code, canonical_location=problem.canonical_location,
+                                action=problem.action))
+    for manifest in report.bundles:
+        path = layout.locate(hw, manifest)
+        validate_document(load_json(path, findings), "bundle-manifest.schema.json", str(path), findings)
+
+
 def bom_totals(bom: list[dict[str, str]], levels: list[int | None]) -> dict[str, int]:
     """Assembled quantity per PN: each row's qty times the qty of every parent row above it."""
     totals: dict[str, int] = {}
@@ -520,6 +615,7 @@ def validate_project(project_dir: Path) -> list[dict[str, str]]:
                     findings.append(finding(str(part_path), f"decision {decision} does not exist at decisions/{decision}.md"))
             check_part_drawing(part, str(part_path), product_drawing, findings)
             check_procurement(part, str(part_path), hw, findings)
+            check_manufacture(part, str(part_path), hw, findings)
             part_records[pn] = (part, str(part_path))
         if not part_records:
             findings.append(finding(str(parts_dir), "no part records found"))
@@ -643,7 +739,10 @@ def validate_project(project_dir: Path) -> list[dict[str, str]]:
                 findings.append(finding(str(path), "release directory name does not match manifest rev"))
             project_root = hw.parent if hw == project_dir else project_dir
             root = project_root.resolve()
-            for file_name in manifest.get("files", []):
+            # version 1 lists project files in place; version 2 copies them and names each one's original
+            in_place = (manifest["files"] if "schema_version" not in manifest
+                        else [item["original"] for item in manifest["files"].values()])
+            for file_name in in_place:
                 candidate = root / file_name
                 try:
                     candidate.resolve().relative_to(root)
@@ -662,6 +761,9 @@ def validate_project(project_dir: Path) -> list[dict[str, str]]:
             for pn, (part, part_path) in part_records.items():
                 if isinstance(part.get("rev"), str) and part["rev"].startswith("X"):
                     findings.append(finding(part_path, f"release cannot include prototype revision {part['rev']} for {pn}"))
+    if valid.get("product.yaml"):
+        check_flow(documents["product.yaml"], str(hw / "product.yaml"), hw, part_records, findings)
+    check_layout(hw, documents.get("product.yaml"), part_records, findings)
     return findings
 
 
@@ -673,7 +775,7 @@ def main() -> int:
         print(json.dumps({"ok": False, "findings": [finding(str(args.project_dir), "project directory does not exist")]}))
         return 2
     findings = validate_project(args.project_dir)
-    failures = [item for item in findings if item.get("severity") != "info"]
+    failures = blocking(findings)
     print(json.dumps({"ok": not failures, "findings": findings}, indent=2))
     return 1 if failures else 0
 
