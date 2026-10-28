@@ -17,6 +17,24 @@ const statusEl = document.getElementById("status");
 const canvas = document.getElementById("render");
 
 // Studio set-up. Directions are in the GLB frame: metres, +Y up.
+function seedRandom(seed) {
+  let state = seed >>> 0;
+  Math.random = () => {
+    state = (state + 0x6d2b79f5) | 0;
+    let value = Math.imul(state ^ (state >>> 15), 1 | state);
+    value ^= value + Math.imul(value ^ (value >>> 7), 61 | value);
+    return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function viewSeed(name, attempt) {
+  let hash = 2166136261;
+  for (const char of `${name}:${attempt}`) {
+    hash ^= char.codePointAt(0);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
 const STUDIO = {
   fovDeg: 28,
   margin: 0.08, // fraction of each half-frame left empty around the subject and its shadow
@@ -573,9 +591,17 @@ async function boot() {
     ground.updateMatrixWorld();
     zones.band.value = radius * STUDIO.contactBand;
     zones.overhang.value = radius * STUDIO.overhangHeight;
-    if (bakedPose !== pose) {
+    const visibleGeometry = [...parts.values()]
+      .filter((part) => part.nodes.some((node) => node.visible))
+      .flatMap((part) => part.nodes.map((node) => {
+        node.updateWorldMatrix(true, true);
+        return `${node.uuid}:${node.matrixWorld.elements.join(",")}:${node.visible}`;
+      }))
+      .sort().join("|");
+    const bakeKey = `${pose}:${visibleGeometry}:${centre.toArray().join(",")}:${radius}:${STUDIO.groundSamples}:${STUDIO.groundMapSize}:${STUDIO.groundShadowMapSize}:${STUDIO.groundConeDeg}:${STUDIO.groundExtent}`;
+    if (bakedPose !== bakeKey) {
       bakeFloor(centre, radius);
-      bakedPose = pose;
+      bakedPose = bakeKey;
     }
     return radius;
   }
@@ -650,11 +676,17 @@ async function boot() {
       root.updateMatrixWorld(true);
     }
   }
-
-  async function capture(name, options = {}) {
+  async function capture(name, options = {}, attempt = 0) {
     const view = scene.views.find((v) => v.name === name);
     if (!view) throw new Error(`unknown view ${name}`);
-    const started = performance.now();
+    seedRandom(viewSeed(name, attempt));
+    gtao.pdNoiseTexture.dispose();
+    gtao.pdNoiseTexture = gtao._generateNoise();
+    gtao.pdMaterial.uniforms.tNoise.value = gtao.pdNoiseTexture;
+    renderer.setRenderTarget(null);
+    renderer.shadowMap.type = THREE.VSMShadowMap;
+    renderer.autoClear = true;
+    renderer.setClearColor(0x000000, 0);
     applyExplode(view.explode);
     const subject = new Set(view.subject ?? [...parts.keys()]);
     const isolated = view.isolated || options.isolated === true;
@@ -665,6 +697,7 @@ async function boot() {
       }
     }
     if (isolated) restOnFloor(view.subject[0]);
+    const started = performance.now();
     const subjectMeshes = [...subject].flatMap((id) => {
       if (!parts.has(id)) throw new Error(`view ${name}: unknown occurrence ${id}`);
       return parts.get(id).meshes;
@@ -727,7 +760,7 @@ async function boot() {
 
   setStatus("ready", "Ready");
   return {
-    capture,
+     capture,
     info: {
       three: THREE.REVISION,
       parts: [...parts.keys()],
@@ -753,5 +786,5 @@ const ready = boot().catch((error) => {
 });
 window.cadRender = {
   ready: ready.then((api) => api.info),
-  capture: async (name, options) => (await ready).capture(name, options),
+  capture: async (name, options, attempt) => (await ready).capture(name, options, attempt),
 };

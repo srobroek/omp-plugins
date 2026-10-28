@@ -697,21 +697,24 @@ def _frame_from_capture(result: dict[str, Any]) -> Frame:
     return Frame(result["width"], result["height"], *(pixels(key) for key in ("rgba", "mask", "floor")))
 
 
-async def _capture_attempt(page: Any, name: str, options: dict[str, Any]) -> dict[str, Any]:
-    return await page.evaluate("({name, options}) => window.cadRender.capture(name, options)",
-                               {"name": name, "options": options})
+async def _capture_attempt(page: Any, name: str, options: dict[str, Any], attempt: int) -> dict[str, Any]:
+    return await page.evaluate("({name, options, attempt}) => window.cadRender.capture(name, options, attempt)",
+                               {"name": name, "options": options, "attempt": attempt})
 
 
-async def _retry_view(name: str, capture: Callable[[dict[str, Any]], Any]) -> tuple[dict[str, Any], Quality, list[dict[str, Any]]]:
+async def _retry_view(name: str, capture: Callable[[dict[str, Any], int], Any]) -> tuple[dict[str, Any], Quality, list[dict[str, Any]]]:
     attempts: list[dict[str, Any]] = []
     capture_wall_ms = render_ms = encode_ms = 0.0
     closeup = view_kind(name) == "closeup"
     isolated = view_kind(name) == "part"
 
+    attempt_index = 0
+
     async def attempt(strategy: str, options: dict[str, Any] | None = None) -> tuple[dict[str, Any], Quality]:
-        nonlocal capture_wall_ms, render_ms, encode_ms
+        nonlocal capture_wall_ms, render_ms, encode_ms, attempt_index
         started = time.monotonic()
-        captured = capture(options or {})
+        captured = capture(options or {}, attempt_index)
+        attempt_index += 1
         result = await captured if inspect.isawaitable(captured) else captured
         capture_wall_ms += (time.monotonic() - started) * 1000
         render_ms += float(result.get("render_ms", 0))
@@ -771,7 +774,7 @@ async def _capture_page_views(page: Any, names: list[str]) -> tuple[dict[str, An
     timings: dict[str, float] = {}
     for name in names:
         t0 = time.monotonic()
-        result, quality, _ = await _retry_view(name, lambda options: _capture_attempt(page, name, options))
+        result, quality, _ = await _retry_view(name, lambda options, attempt: _capture_attempt(page, name, options, attempt))
         result["_quality"] = quality
         results[name] = result
         timings[name] = round(time.monotonic() - t0, 3)
@@ -793,6 +796,7 @@ def capture_views(url: str, views: list[str], size: tuple[int, int], jobs: int =
 
     async def capture() -> None:
         nonlocal info
+
         async def collect(awaitables: list[Any]) -> list[Any]:
             tasks = [asyncio.create_task(awaitable) for awaitable in awaitables]
             try:
@@ -805,19 +809,9 @@ def capture_views(url: str, views: list[str], size: tuple[int, int], jobs: int =
 
         async with async_playwright() as pw:
             browser = await pw.chromium.launch(headless=True, args=CHROMIUM_ARGS)
-            seed_script = """
-                let state = 0x6d2b79f5;
-                Math.random = () => {
-                  state = (state + 0x6d2b79f5) | 0;
-                  let value = Math.imul(state ^ (state >>> 15), 1 | state);
-                  value ^= value + Math.imul(value ^ (value >>> 7), 61 | value);
-                  return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
-                };
-            """
             browser_context = await browser.new_context(
                 viewport={"width": size[0], "height": size[1]}, device_scale_factor=1)
             try:
-                await browser_context.add_init_script(seed_script)
                 timings["browser_start_s"] = round(time.monotonic() - started, 3)
                 worker_count = min(jobs, len(views))
                 chunks = [views[index::worker_count] for index in range(worker_count)]

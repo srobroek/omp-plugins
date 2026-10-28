@@ -28,6 +28,7 @@ TRIGGER
    renders its assigned views serially, while pages capture concurrently. Use `--jobs 1` for the serial baseline.
    The manifest records page-load time, each view's elapsed capture time, renderer time, and PNG encoding time;
    per-view PNG SHA-256 values remain the cache integrity check.
+   Each capture attempt seeds GTAO noise from the view and retry index. The floor-shadow bake key also includes visible part transforms and its sampling settings.
 3. Close-ups: add `closeup-<PN>` for each part/interface to show, or `part-<PN>` for a studio view of
    one part in stable resting orientation with the other assembly parts hidden.
 4. Read every PNG before describing it. Name the material each PN shows from
