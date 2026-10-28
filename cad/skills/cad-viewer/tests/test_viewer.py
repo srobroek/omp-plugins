@@ -299,6 +299,20 @@ class StubPresenter:
         return future
 
 
+def api_request(port: int, method: str, route: str, body: dict | None = None,
+                headers: dict[str, str] | None = None) -> tuple[int, dict]:
+    """(status, JSON answer) of one request to a host's API on 127.0.0.1:`port`."""
+    data = None if body is None else json.dumps(body).encode()
+    req = urllib.request.Request(f"http://127.0.0.1:{port}{route}", data=data, method=method,
+                                 headers={"Content-Type": "application/json", **(headers or {})})
+    try:
+        with urllib.request.urlopen(req, timeout=5) as response:
+            return response.status, json.loads(response.read())
+    except urllib.error.HTTPError as error:
+        with error:
+            return error.code, json.loads(error.read() or b"{}")
+
+
 class HostIdleTimeout(unittest.TestCase):
     def test_api_commands_reset_idle_but_presenter_poll_does_not(self) -> None:
         fake = types.ModuleType("ocp_viewer")
@@ -321,6 +335,9 @@ class HostIdleTimeout(unittest.TestCase):
                                          headers={"Referer": f"http://127.0.0.1:{port}/?audience=presenter"})
         with urllib.request.urlopen(request, timeout=5) as response:
             self.assertEqual(response.status, 200)
+        self.assertTrue(viewer_host.idle())
+        presenter = {"Referer": f"http://127.0.0.1:{port}/?audience=presenter"}
+        api_request(port, "GET", "/api/versions", headers=presenter)  # the presenter panel's version list
         self.assertTrue(viewer_host.idle())
 
         request = urllib.request.Request(f"http://127.0.0.1:{port}/api/state",
@@ -357,15 +374,7 @@ class HostApi(unittest.TestCase):
 
     def request(self, method: str, route: str, body: dict | None = None,
                 headers: dict[str, str] | None = None) -> tuple[int, dict]:
-        data = None if body is None else json.dumps(body).encode()
-        req = urllib.request.Request(f"http://127.0.0.1:{self.port}{route}", data=data, method=method,
-                                     headers={"Content-Type": "application/json", **(headers or {})})
-        try:
-            with urllib.request.urlopen(req, timeout=5) as response:
-                return response.status, json.loads(response.read())
-        except urllib.error.HTTPError as error:
-            with error:
-                return error.code, json.loads(error.read() or b"{}")
+        return api_request(self.port, method, route, body, headers)
 
     def test_a_change_during_a_capture_is_refused_and_state_still_answers(self) -> None:
         started, release = threading.Event(), threading.Event()
@@ -692,6 +701,163 @@ class PixelHelpers(unittest.TestCase):
         self.assertEqual(capture.free_area((800, 600), [toolbar, (0, 40, 300, 120)]),
                          (margin, 120 + margin, 800 - margin, 600 - margin))
         self.assertEqual(capture.free_area((800, 600), []), (margin, margin, 800 - margin, 600 - margin))
+
+
+class VersionList(Fixture):
+    def test_every_version_folder_newest_first_with_build_time_and_part_count(self) -> None:
+        for label in ("v1", "v2", "v10"):
+            make_version(self.hw, label)
+        manifest = self.hw / "versions" / "v2" / "manifest.json"
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        manifest.write_text(json.dumps({**data, "created_utc": "2026-10-28T09:15:00Z"}), encoding="utf-8")
+        (self.hw / "versions" / "v3").mkdir()  # a version folder without its build files
+        (self.hw / "versions" / ".v11-partial").mkdir()  # a build in progress
+        listed = record.version_list(self.hw)
+        self.assertEqual([entry["label"] for entry in listed], ["v10", "v3", "v2", "v1"])
+        self.assertEqual(listed[2], {"label": "v2", "built_utc": "2026-10-28T09:15:00Z",
+                                     "parts": len(data["occurrences"]), "error": None})
+        self.assertRegex(listed[0]["built_utc"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")  # the manifest's mtime
+        self.assertEqual((listed[1]["built_utc"], listed[1]["parts"]), (None, None))
+        self.assertIn("v3", listed[1]["error"])
+        self.assertEqual(record.latest_label(self.hw), "v10")
+
+    def test_latest_label_is_none_without_a_readable_latest_json(self) -> None:
+        self.assertIsNone(record.latest_label(self.hw))
+        make_version(self.hw, "v1")
+        latest = self.hw / "versions" / "latest.json"
+        for text in ("{", '{"label": "newest"}', "[]"):
+            with self.subTest(text=text):
+                latest.write_text(text, encoding="utf-8")
+                self.assertIsNone(record.latest_label(self.hw))
+
+    def test_show_follows_latest_unless_a_version_is_named(self) -> None:
+        for argv, version in ((["show", str(self.hw)], "latest"), (["show", str(self.hw), "--version", "v2"], "v2")):
+            with self.subTest(argv=argv):
+                self.assertEqual(viewer.request_body(viewer.build_parser().parse_args(argv))[2]["version"], version)
+
+
+class HostVersions(Fixture):
+    """load-version, the selection /api/state reports, and keys on `latest` following new builds:
+    real version folders, a loader without STEP shapes, and a push stand-in that records each model."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        for label in ("v1", "v2", "v3"):
+            make_version(self.hw, label)
+        self.loads: list[str] = []
+        self.pushes: list[tuple[str, str]] = []
+        self.failing: set[str] = set()
+
+        def load(hw: str, version: str, check: str | None) -> host.Loaded:
+            loaded = record.load_version(Path(hw), version)
+            self.loads.append(loaded.label)
+            if loaded.label in self.failing:
+                raise ViewerError(f"{loaded.parts_dir}: no STEP for ['LMP-0001']")
+            return host.Loaded(loaded, check, record.panel_model(loaded, None), {},
+                               {p.id: p.id for p in loaded.parts}, version)
+
+        def push(viewer_host: host.Host, slot: host.Slot, key: str, *_args, **_config) -> None:
+            slot.showing = key
+            self.pushes.append((slot.name, viewer_host.versions[key].version.label))
+
+        for patcher in (mock.patch.object(host, "_load", load), mock.patch.object(host.Host, "_push", push)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.host = host.Host(self.tmp / "session.json", session.free_port(), PORTS)
+        server = host.make_server(self.host)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+
+    def request(self, method: str, route: str, body: dict | None = None) -> tuple[int, dict]:
+        return api_request(self.host.panel_port, method, route, body)
+
+    def selected(self) -> dict[str, tuple[str, str]]:
+        state = self.request("GET", "/api/state")[1]
+        return {key: (entry["version"], entry["label"]) for key, entry in state["selected"].items()}
+
+    def test_the_versions_route_lists_the_shown_project(self) -> None:
+        self.assertEqual(self.request("GET", "/api/versions")[0], 400)  # nothing shown or opened yet
+        self.host.show_version({"hw": str(self.hw)})
+        status, answer = self.request("GET", "/api/versions")
+        self.assertEqual(status, 200)
+        self.assertEqual((answer["hw"], answer["latest"]), (str(self.hw.resolve()), "v3"))
+        self.assertEqual([entry["label"] for entry in answer["versions"]], ["v3", "v2", "v1"])
+
+    def test_load_version_switches_the_key_and_state_reports_request_and_label(self) -> None:
+        self.assertEqual(self.request("POST", "/api/show", {"hw": str(self.hw), "version": "latest"})[0], 200)
+        self.assertEqual(self.selected(), {"A": ("latest", "v3")})
+        status, answer = self.request("POST", "/api/load-version", {"slot": "A", "version": "v1"})
+        self.assertEqual(status, 200)
+        self.assertEqual(answer["selected"]["A"], {"version": "v1", "label": "v1", "error": None})
+        self.assertEqual(answer["versions"]["A"]["label"], "v1")
+        self.assertEqual(self.request("POST", "/api/load-version", {"slot": "a", "version": "v3"})[0], 200)
+        self.assertEqual(self.pushes, [("a", "v3"), ("a", "v1"), ("a", "v3")])
+        # latest names the vN already shown: the model and its check stay, only the request changes
+        loads = len(self.loads)
+        self.assertEqual(self.request("POST", "/api/load-version", {"slot": "A", "version": "latest"})[0], 200)
+        self.assertEqual((len(self.loads), len(self.pushes)), (loads, 3))
+        self.assertEqual(self.selected(), {"A": ("latest", "v3")})
+
+    def test_a_refused_load_leaves_the_key_as_it_was(self) -> None:
+        self.assertEqual(self.request("POST", "/api/load-version", {"slot": "A", "version": "v1"})[0], 400)
+        self.host.show_version({"hw": str(self.hw), "version": "v2"})
+        self.failing.add("v1")
+        for body, error in (({"slot": "C", "version": "v1"}, "slot must be A or B"),
+                            ({"slot": "A", "version": "v9"}, "v9"), ({"slot": "A", "version": "v1"}, "no STEP")):
+            with self.subTest(body=body):
+                status, answer = self.request("POST", "/api/load-version", body)
+                self.assertEqual(status, 400)
+                self.assertIn(error, answer["error"])
+        self.assertEqual(self.selected(), {"A": ("v2", "v2")})
+        self.assertEqual(self.pushes, [("a", "v2")])
+
+    def test_split_keys_load_independently(self) -> None:
+        self.host.compare({"hw": str(self.hw), "a": "v1", "b": "v2"})
+        self.request("POST", "/api/load-version", {"slot": "B", "version": "latest"})
+        self.assertEqual(self.pushes[-1], ("b", "v3"))
+        self.request("POST", "/api/load-version", {"slot": "A", "version": "v2"})
+        self.assertEqual(self.pushes[-1], ("a", "v2"))
+        self.assertEqual(self.selected(), {"A": ("v2", "v2"), "B": ("latest", "v3")})
+
+    def test_a_key_on_latest_follows_a_new_build_and_a_pinned_key_stays(self) -> None:
+        self.host.compare({"hw": str(self.hw), "a": "latest", "b": "v2"})
+        self.host.follow_latest()
+        self.assertEqual(len(self.pushes), 2)  # latest.json still names v3
+        make_version(self.hw, "v4")
+        self.host.follow_latest()
+        self.assertEqual(self.pushes[-1], ("a", "v4"))
+        self.assertEqual(self.selected(), {"A": ("latest", "v4"), "B": ("v2", "v2")})
+        self.assertEqual(self.request("GET", "/api/state")[1]["latest"], "v4")
+        self.host.follow_latest()
+        self.assertEqual(len(self.pushes), 3)
+
+    def test_a_build_that_does_not_load_is_reported_and_not_retried_until_the_next(self) -> None:
+        self.host.show_version({"hw": str(self.hw)})
+        self.failing.add("v4")
+        make_version(self.hw, "v4")
+        self.host.follow_latest()
+        self.host.follow_latest()
+        self.assertEqual(self.loads.count("v4"), 1)
+        selected = self.request("GET", "/api/state")[1]["selected"]["A"]
+        self.assertEqual((selected["version"], selected["label"]), ("latest", "v3"))
+        self.assertIn("latest is v4, which did not load", selected["error"])
+        make_version(self.hw, "v5")
+        self.host.follow_latest()
+        self.assertEqual(self.selected(), {"A": ("latest", "v5")})
+        self.assertIsNone(self.request("GET", "/api/state")[1]["selected"]["A"]["error"])
+
+    def test_a_capture_holds_the_new_build_until_it_is_done(self) -> None:
+        self.host.show_version({"hw": str(self.hw)})
+        make_version(self.hw, "v4")
+        self.host.guard.begin_capture()
+        self.host.follow_latest()
+        self.assertEqual(self.selected(), {"A": ("latest", "v3")})
+        self.assertEqual(self.request("POST", "/api/load-version", {"slot": "A", "version": "v1"})[0], 409)
+        self.host.guard.end_capture()
+        self.host.follow_latest()
+        self.assertEqual(self.selected(), {"A": ("latest", "v4")})
+        self.assertEqual(self.loads.count("v4"), 1)
 
 
 if __name__ == "__main__":

@@ -225,6 +225,74 @@ h2 {
   font-size: var(--text-sm);
 }
 
+/* version pickers: one labelled select per shown version key (cad-concept's .scene-picker field) */
+.fields {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.field {
+  display: grid;
+  gap: var(--space-1);
+  font-size: var(--text-sm);
+}
+
+.field[hidden],
+.field-note[hidden] {
+  display: none;
+}
+
+.field-label {
+  color: var(--color-fg-muted);
+  font-weight: var(--weight-medium);
+}
+
+.field-select {
+  width: 100%;
+  min-height: var(--target-min);
+  padding: 0 var(--space-2);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-1);
+  background-color: var(--color-surface-raised);
+  color: var(--color-fg);
+  font: inherit;
+  cursor: pointer;
+  transition: border-color var(--duration-fast) var(--ease-standard);
+}
+
+.field-select:hover:not(:disabled) {
+  border-color: var(--color-fg-muted);
+}
+
+.field-select:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.field-select[aria-busy="true"] {
+  cursor: progress;
+}
+
+.field-select[aria-invalid="true"] {
+  border-color: var(--color-danger);
+}
+
+.field-select:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.field-note {
+  margin: 0;
+  color: var(--color-fg-muted);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+
+.field-note[data-tone="error"] {
+  color: var(--color-danger);
+}
+
 /* check summary */
 .check-line {
   display: flex;
