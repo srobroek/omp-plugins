@@ -187,7 +187,8 @@ SUPPORT = {"PLANE": "plane", "CYLINDER": "cylinder", "CONE": "cone", "SPHERE": "
 KINDS = {"tongue_seating_face": "plane_face", "tongue_far_face": "plane_face", "elbow_bore": "bore",
          "tip_bore": "bore", "bore_entry_chamfers": "chamfer", "head_clevis": "slot", "head_cheek_face": "plane_face",
          "far_cheek_face": "plane_face", "lightening_pocket": "slot", "cable_channel": "surface",
-         "outer_contour": "surface", "flare_rounds": "round", "sag_blends": "round", "silhouette_rounds": "round"}
+         "outer_contour": "surface", "elbow_end": "shaft", "tip_end": "shaft", "flare_rounds": "round",
+         "sag_blends": "round", "silhouette_rounds": "round"}
 
 
 def _witness(face: cq.Face) -> dict:
@@ -229,10 +230,14 @@ def _role(p: dict, face: cq.Face, patch: dict) -> str | None:
     if kind in ("plane", "bspline"):  # flare and sagging runs, blends of curved edges
         return "outer_contour"
     if kind == "cylinder":
-        radius = BRepAdaptor_Surface(face.wrapped).Cylinder().Radius()
+        surface = BRepAdaptor_Surface(face.wrapped).Cylinder()
+        radius = surface.Radius()
+        if abs(radius - p["end_r"]) < 1e-6:  # the contour's end radii, one round each bore axis
+            ex, tx = p["elbow_origin"][0], p["tip_origin"][0]
+            return "elbow_end" if abs(surface.Location().X() - ex) < abs(surface.Location().X() - tx) else "tip_end"
         radii = ((p["elbow_bore_d"] / 2.0, "elbow_bore"), (p["tip_bore_d"] / 2.0, "tip_bore"),
                  (p["edge_fillet"], "silhouette_rounds"), (p["flare_fillet"], "flare_rounds"),
-                 (p["sag_blend"], "sag_blends"), (p["end_r"], "outer_contour"), (p["slot_w"] / 2.0, "head_clevis"),
+                 (p["sag_blend"], "sag_blends"), (p["slot_w"] / 2.0, "head_clevis"),
                  (pocket_w / 2.0, "lightening_pocket"), (channel_r, "cable_channel"))
         return next((name for r, name in radii if abs(radius - r) < 1e-6), None)
     return {"cone": "bore_entry_chamfers", "torus": "silhouette_rounds", "sphere": "cable_channel"}.get(kind)

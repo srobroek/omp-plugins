@@ -18,7 +18,7 @@ drawing with `geometry_unaccounted`.
 | `shaft` | outward cylinders | diameter, axis location |
 | `slot` | two opposed walls, one or two end radii, optional floor | width, length (closed), centre location or pattern, depth from a planar entry or floor elevation |
 | `groove` | root cylinder, two walls | root diameter, width, axial location |
-| `chamfer` | cones | size × angle per distinct size |
+| `chamfer` | cones and narrow bevel planes | size × angle per distinct size |
 | `round` | tori, small cylinders, spheres | radius per distinct size (B-spline blends belong in a `surface`) |
 | `taper` | cones | angle |
 | `socket` | flats and one floor; `relations.entry: [face feature]` | across flats, depth |
@@ -40,12 +40,17 @@ meet a chamfer, round, taper, surface or socket face; otherwise request a `lengt
 - `features`: one entry per locator: `size: general|interface`, `presentation`, `tolerance_policy`,
   `profile`, `profile_tolerance_mm`, `thread` (`designation` such as `M10x1-6H`, `standard`,
   `operation`, `full_depth_anchor`), and a feature's own `surface_texture` or `edges`, which are
-  exceptions to the drawing's general ones and print in the feature's callout.
+  exceptions to the drawing's general ones and print in the feature's callout. A `round` or `chamfer`
+  that is an edge fillet or edge break may take `presentation: general_note`: its size prints once in
+  the general note of undimensioned fillets and edge chamfers. A contour radius gets its own callout.
 - `dimensions`: extra measured requests (`length`, `plane_separation`, `axis_distance`, `location`, ...)
   with an explicit `tolerance` (`deviation_mm` or a named policy); below 0.5 mm ISO 2768-1 has no general
-  value. A `plane_separation` is drawn from its first feature's plane to its second's. A `location` on a
-  plane feature replaces its datum-frame location, so a depth such as a counterbore floor's carries its
-  own limits; the deviation applies to the printed distance from the datum.
+  value. A `plane_separation` or `thickness` is drawn from its first feature's plane to its second's,
+  at the pair of parallel planes nearest each other (a slot's wall facing the other feature). Unless it
+  is `reference: true`, it locates a second `plane_face` feature from the first in place of that
+  plane's datum location, so a wall thickness is a chain dimension, never a redundant third one. A
+  `location` on a plane feature replaces its datum-frame location, so a depth such as a counterbore
+  floor's carries its own limits; the deviation applies to the printed distance from the datum.
 - `geometric_tolerances`: `{id, characteristic, features, zone_mm, diameter_zone?, datum_frame?}`.
 - `edges` (detail drawings, required): the general indication of the edges of undefined shape, ISO 13715
   limits `[lower, upper]` in mm for `external` and `internal` edges. A `+` value permits excess material
@@ -65,6 +70,26 @@ meet a chamfer, round, taper, surface or socket face; otherwise request a `lengt
 `interfaces.yaml` binds interface sizes: `press_fit`, `running_fit`, `locating_fit` with `hole` and
 `shaft` endpoints `{PN, feature, region?}`; `heat_set[].feature` for the host seat; and
 `retaining_ring.feature` with `groove_d` such as `4.8 h10` for the shaft groove.
+
+## Recognised features
+
+`feature_recognition` finds the manufacturing features on the STEP without the locators, and the gate
+(`feature_coverage`) checks the sheet against them, so intent that names only the envelope fails:
+
+| Category | Stated directly | Located |
+|---|---|---|
+| `hole` | diameter | axis; a blind depth directly or both ends from one datum frame |
+| `boss`, `shaft`, `groove` | diameter; groove width | axis; a boss height directly or baseline |
+| `pocket`, `notch`, `slot`, `cutout` | width, length, depth (a slot through its kind) | its walls |
+| `rib`, `wall` | thickness (two opposed parallel planes with material between, thin against their extent) | its faces |
+| `step` | | height, directly or baseline |
+| `arc` | contour radius | its axis |
+| `round`, `chamfer` | size, in a callout or the general note | |
+
+A prismatic feature (planes normal to a frame axis, cylinders and cones on one) may not sit only in a
+controlled-model `surface`. Inclined planes, spheres, tori and B-spline faces may; an inclined face's
+angle is then the model's. `drawing_draft.py` proposes locators and the direct size requests from the
+same recognition; faces that match no pattern are listed with the reason.
 
 ## Vendor specification and source control sheets
 

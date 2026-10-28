@@ -51,6 +51,7 @@ ISO2768_ANGLE = {"f": (1.0, 0.5, 1 / 3, 1 / 6, 1 / 12), "m": (1.0, 0.5, 1 / 3, 1
 SIZE_OPERATIONS = ("diameter", "radius", "width", "length", "chamfer", "across_flats", "depth", "thickness",
                    "plane_separation", "axis_distance", "distance", "extent")
 LOCATION_OPERATIONS = ("location", "axis_location", "pattern", "slot_location")
+SEPARATION_REQUESTS = ("plane_separation", "thickness", "distance")   # between two features' nearest parallel planes
 THREAD = re.compile(r"^M(?P<d>[0-9]+(?:\.[0-9]+)?)x(?P<p>[0-9]+(?:\.[0-9]+)?)-(?P<cls>[0-9][a-hA-H](?:[0-9][a-hA-H])?)$")
 
 
@@ -545,6 +546,9 @@ class Measurer:
                                  f"part.yaml drawing.features", feature=feature_id))
                 continue
             handler = getattr(self, f"_{feature.kind}", None)
+            if self.intents[feature_id].get("presentation") == "general_note" and feature.kind not in ("round", "chamfer"):
+                self.add(finding("invalid_drawing_intent", f"feature {feature_id}: only edge fillets and edge breaks "
+                                 f"(round, chamfer) may go in the general note", feature=feature_id))
             if handler is None:
                 self.add(finding("invalid_drawing_intent", f"feature {feature_id} kind {feature.kind!r} is not one of "
                                  f"{', '.join(DIMENSIONED_KINDS)}", feature=feature_id))
@@ -927,6 +931,8 @@ class Measurer:
                 ts = [fg.dot(fg.sub(p, face.axis_point), fg.unit(face.axis_dir)) for p in face.boundary_points()]
                 rs = [fg.axis_distance(p, face.axis_point, face.axis_dir) for p in face.boundary_points()]
                 axial, radial = max(ts) - min(ts), max(rs) - min(rs)
+            elif face.support_type == "plane":
+                axial, radial = self._bevel_legs(face)
             else:
                 raise IntentError("invalid_drawing_intent", f"a chamfer binds a {face.support_type} face")
             key = (round(axial, 4), round(math.degrees(math.atan2(radial, axial)), 3))
@@ -934,6 +940,23 @@ class Measurer:
         for number, ((axial, angle), indices) in enumerate(sorted(sizes.items())):
             self.char(feature, "chamfer", axial, indices, quantity=len(indices),
                       suffix=str(number) if len(sizes) > 1 else "", details={"angle_deg": angle})
+
+    def _bevel_legs(self, face: Face) -> tuple[float, float]:
+        """A plane chamfer's legs: its extent along the normals of the two faces it joins along its long edges."""
+        lengths: dict[int, float] = {}
+        for edge in face.edges:
+            other = self.faces.get(edge.neighbour) if edge.neighbour is not None else None
+            if other is not None and other.support_type == "plane" and not fg.parallel(other.normal, face.normal):
+                lengths[other.index] = lengths.get(other.index, 0.0) + fg.norm(fg.sub(edge.points[-1], edge.points[0]))
+        joined = sorted(lengths, key=lambda i: (-lengths[i], i))[:2]
+        if len(joined) < 2 or fg.parallel(self.faces[joined[0]].normal, self.faces[joined[1]].normal):
+            raise IntentError("invalid_drawing_intent", f"plane chamfer face {face.index} does not join two faces")
+        points = list(face.boundary_points())
+        legs = []
+        for index in sorted(joined):
+            values = [fg.dot(p, fg.unit(self.faces[index].normal)) for p in points]
+            legs.append(max(values) - min(values))
+        return legs[0], legs[1]
 
     def _round(self, feature: ResolvedFeature, frame: DatumFrame) -> None:
         sizes: dict[float, list[int]] = {}
@@ -1078,32 +1101,36 @@ class Measurer:
                 self.result.characteristics.remove(existing)
             if tolerance is None and not request.get("reference"):
                 tolerance = same[0].tolerance if same else self.general(request["features"][0], operation, value)
+            details = {**(same[0].details if same else {}), "features": request["features"],
+                       "datum_frame": request.get("datum_frame", [])}
+            chain = operation in SEPARATION_REQUESTS and len(features) == 2
+            if chain:   # drawn from the first feature's plane nearest the second
+                details["from_faces"] = self._separation_planes(features[0], features[1])[0]
             item = Characteristic(id=request["id"], feature=request["features"][0], operation=operation, value=value,
                                   faces=tuple(faces), quantity=same[0].quantity if same else 1, axis=axis,
                                   tolerance=tolerance, presentation=request.get("presentation", "auto"),
-                                  reference=bool(request.get("reference")), requested=True,
-                                  details={**(same[0].details if same else {}), "features": request["features"],
-                                           "datum_frame": request.get("datum_frame", [])})
+                                  reference=bool(request.get("reference")), requested=True, details=details)
+            if chain and not item.reference and features[1].kind == "plane_face":
+                # a chain dimension locates the second plane from the first, in place of its datum location
+                self.result.characteristics = [c for c in self.result.characteristics if not (
+                    c.feature == features[1].id and c.operation == "location" and not c.requested)]
             self.result.characteristics.append(item)
 
     def _measure_request(self, request: Mapping[str, Any], features: Sequence[ResolvedFeature],
                          frame: DatumFrame) -> tuple[float, list[int], str | None]:
         operation = request["operation"]
         faces = [i for f in features for i in f.faces]
-        if operation in ("plane_separation", "thickness", "distance") and len(features) == 2:
-            a, b = (self._plane_of(f) for f in features)
-            if not fg.parallel(a.normal, b.normal):
-                raise IntentError("measurement_failed", "the two planes are not parallel")
-            value = abs(fg.dot(fg.sub(b.point, a.point), a.normal))
-            axis = frame.axis_of(a.normal)
+        if operation in SEPARATION_REQUESTS and len(features) == 2:
+            start, target, value, normal = self._separation_planes(features[0], features[1])
+            axis = frame.axis_of(normal)
             if axis:
-                coords = [frame.coords(p.point)["xyz".index(axis[0])] for p in (a, b)]
+                coords = [frame.coords(self.faces[side[0]].point)["xyz".index(axis[0])] for side in (start, target)]
                 located = self.result.located[axis[0]]
                 if any(abs(c - l) < EPS for c in coords for l in located):
                     for c in coords:
                         self.locate(axis[0], c)
             # measured from the first feature: the characteristic's faces are the second plane's, its target
-            return value, list(features[1].faces), axis[0] if axis else None
+            return value, target, axis[0] if axis else None
         if operation == "axis_distance" and len(features) == 2:
             a, b = (cylinder_instances([self.faces[i] for i in f.faces])[0] for f in features)
             if not fg.parallel(a.axis_dir, b.axis_dir):
@@ -1166,6 +1193,27 @@ class Measurer:
         if not planes:
             raise IntentError("measurement_failed", f"{feature.id} has no plane face")
         return planes[0]
+
+    def _separation_planes(self, first: ResolvedFeature, second: ResolvedFeature
+                           ) -> tuple[list[int], list[int], float, Vector]:
+        """The nearest pair of parallel planes of two features: their coplanar faces, the gap and the normal.
+
+        A feature with several parallel planes, such as a slot's two walls, is measured at the wall that
+        faces the other feature, never at whichever plane happens to come first."""
+        planes = [[self.faces[i] for i in f.faces if self.faces[i].support_type == "plane"] for f in (first, second)]
+        if not planes[0] or not planes[1]:
+            raise IntentError("measurement_failed", f"{(first if not planes[0] else second).id} has no plane face")
+        pairs = [(abs(fg.dot(fg.sub(b.point, a.point), a.normal)), a, b) for a in planes[0] for b in planes[1]
+                 if fg.parallel(a.normal, b.normal)]
+        if not pairs:
+            raise IntentError("measurement_failed", "the two planes are not parallel")
+        value, a, b = min(pairs, key=lambda p: (p[0] < EPS, p[0]))
+
+        def coplanar(face: Face, own: Sequence[Face]) -> list[int]:
+            return [f.index for f in own if fg.parallel(f.normal, face.normal)
+                    and abs(fg.dot(fg.sub(f.point, face.point), face.normal)) < EPS]
+
+        return coplanar(a, planes[0]), coplanar(b, planes[1]), value, a.normal
 
     def _geometric(self, frame: DatumFrame) -> None:
         for tolerance in self.drawing.get("geometric_tolerances", []):

@@ -57,6 +57,9 @@ drawing:
   dimensions:
     - {id: counterbore_depth, operation: location, features: [counterbore_floor], tolerance: {deviation_mm: [0.0, 0.1]}}
     - {id: knuckle_width, operation: location, features: [knuckle_far_face], tolerance: {deviation_mm: [0.0, 0.2]}}
+    - {id: cap_inner_depth, operation: length, features: [cap_inner_wall]}
+    - {id: cable_entry_depth, operation: length, features: [cable_entry]}
+    - {id: insert_floor_thickness, operation: thickness, features: [insert_hole, cap_top]}
   geometric_tolerances:
     - {id: seat_perpendicularity, characteristic: perpendicularity, features: [seat], zone_mm: 0.2, diameter_zone: true, datum_frame: [A]}
     - {id: insert_hole_coaxiality, characteristic: coaxiality, features: [insert_hole], zone_mm: 0.2, diameter_zone: true, datum_frame: [C]}
