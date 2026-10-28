@@ -38,11 +38,20 @@ Session identity:
    The timeout defaults to 30 minutes. Pass `0` to disable it.
    Viewer commands and user-panel requests reset the clock. The Referer separates user and presenter polls.
    Output shows the `url`, `pid`, `ports`, timeout, and stop command.
-2. After each cad-model `run` and `check --out FILE`: `show hw [--version vN] --check FILE`.
+2. After each cad-model `run` and `check --out FILE`: `show hw [--version vN|latest] --check FILE`.
    The first push fits the camera; later pushes keep it. The panel lists parts and groups
    (Hide, Iso, Ghost rest), per-part findings from the check JSON, and metrics.json numbers.
+   `--version latest`, the default, makes A follow `hw/versions/latest.json`, which the host
+   checks every 0.5 s: a new build loads and the open tab updates without a reload. A `vN` pins A.
 3. At a gate or for "what changed": `compare vA vB --hw hw --check-a FA --check-b FB` -> A and
-   B side by side, cameras synced both ways. `mode single --active A|B` flips one viewer.
+   B side by side, cameras synced both ways. Either side may be `latest`. `mode single --active A|B`
+   flips one viewer.
+   The panel's Versions section shows a labeled select for each shown version (A, plus B side by side).
+   It lists `latest (vN)`, then every `hw/versions/vN` newest first with build time and part count.
+   Picking one loads it into that slot and keeps the camera and view state. `show` and `compare`
+   update the selects. When a version cannot load, such as a missing part STEP, the error shows
+   under its select and the slot keeps its model. Command output reports `versions.<A|B>.selected`
+   (`latest` or vN) beside `label`, and `latest` (the vN latest.json names).
 4. `parts hide|iso|ghost|reset [PN|subassembly]` does what the panel buttons do.
 5. `animate --joint J-00x --from V --to V [--at 0..1]` -> keyframes from cad-motion's chain.
    A value outside the joint's assembly.yaml [min, max], or one that puts a coupled joint outside

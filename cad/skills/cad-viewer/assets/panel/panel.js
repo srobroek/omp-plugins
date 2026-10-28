@@ -17,6 +17,13 @@ let lastJson = "";
 let busy = false;
 let refused = false; // the last action's error stays in the status line until the next action
 const connectErrors = {}; // slot -> why its viewer did not get the model; kept until it does
+const KEYS = ["A", "B"];
+let versionList = null; // GET /api/versions, fetched again when the project or `latest` changes
+let versionListFor = "";
+let versionListError = null;
+const wanted = {}; // version key -> the version picked while another request ran
+const pickErrors = {}; // version key -> { message, selection } of the last pick that did not load
+let loading = null; // { key, version } while a load-version request runs
 
 async function api(route, body) {
   const options = body === undefined ? {} : {
@@ -60,21 +67,24 @@ function focusVersion() {
 
 // ------------------------------------------------------------------------------- actions
 
-async function act(button, route, body) {
-  if (busy) return;
+async function act(button, route, body, pending = "Updating the viewer…") {
+  if (busy) return null;
   busy = true;
   refused = false;
   button?.setAttribute("aria-busy", "true");
-  setStatus("Updating the viewer…");
+  setStatus(pending);
   try {
     accept(await api(route, body));
     showStatus();
+    return null;
   } catch (error) {
     refused = true;
     setStatus(`Viewer host refused: ${error.message}`, "error");
+    return error;
   } finally {
     button?.removeAttribute("aria-busy");
     busy = false;
+    setTimeout(loadWanted); // a version picked during this request
   }
 }
 
@@ -84,12 +94,18 @@ function partAction(action, target) {
 
 // ------------------------------------------------------------------------------- render
 
+// "latest v3" for a key that follows new builds, else its vN
+function shownName(key) {
+  const selected = state.selected[key];
+  return selected.version === "latest" ? `latest ${selected.label}` : selected.label;
+}
+
 function statusLine() {
   const version = focusVersion();
   if (!version) return "Nothing shown yet. Run viewer.py show <hw>.";
   const shown = state.mode === "split"
-    ? `A ${state.versions.A.label} and B ${state.versions.B.label} side by side, camera synced`
-    : `${version.label} shown`;
+    ? `A ${shownName("A")} and B ${shownName("B")} side by side, camera synced`
+    : `${shownName(state.versions[state.active] ? state.active : "A")} shown`;
   const anim = state.animation ? ` · animating ${state.animation.joint}` : "";
   return `${shown}${anim}`;
 }
@@ -120,10 +136,112 @@ function renderBar() {
   $("figure-b").hidden = !split;
   $("caption-a").hidden = !split;
   if (split) {
-    $("caption-a").textContent = `A · ${state.versions.A.label}`;
-    $("caption-b").textContent = `B · ${state.versions.B.label}`;
+    $("caption-a").textContent = `A · ${shownName("A")}`;
+    $("caption-b").textContent = `B · ${shownName("B")}`;
     loadFrame("b");
   }
+}
+
+// ------------------------------------------------------------------------------- version pickers
+
+const optionSignatures = {}; // version key -> the options its select lists, rebuilt only on change
+
+const selectionKey = (selected) => (selected ? `${selected.version}|${selected.label}` : "");
+
+const builtAt = (iso) => (iso
+  ? new Date(iso).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23" })
+  : "build time not recorded");
+
+function versionText(entry) {
+  if (entry.error) return `${entry.label} · incomplete build`;
+  const parts = entry.parts === null ? "" : ` · ${entry.parts} part${entry.parts === 1 ? "" : "s"}`;
+  return `${entry.label} · ${builtAt(entry.built_utc)}${parts}`;
+}
+
+// [value, text] per option: latest (vN), then every built version, newest first
+function versionOptions(selected) {
+  if (!selected) return [["", "Nothing shown"]];
+  const latest = versionList?.latest ?? state.latest;
+  const options = [["latest", latest ? `latest (${latest})` : "latest"]];
+  for (const entry of versionList?.versions ?? []) options.push([entry.label, versionText(entry)]);
+  if (!options.some(([value]) => value === selected.label)) options.push([selected.label, selected.label]);
+  return options;
+}
+
+function versionNote(key, selected) {
+  if (loading?.key === key) return { text: `Loading ${loading.version}…` };
+  if (key in wanted) return { text: `Loads ${wanted[key]} when the current update finishes.` };
+  const failed = pickErrors[key];
+  if (failed && failed.selection === selectionKey(selected)) return { text: failed.message, tone: "error" };
+  if (selected?.error) return { text: selected.error, tone: "error" };
+  if (versionListError) return { text: `Version list unavailable: ${versionListError}`, tone: "error" };
+  if (selected?.version !== "latest") return { text: "" };
+  return { text: state.latest && state.latest !== selected.label ? `Loading new build ${state.latest}…` : "Follows new builds." };
+}
+
+function renderVersions() {
+  const shown = state?.versions.A;
+  const visible = !shown ? ["A"] : state.mode === "split" ? KEYS : [state.versions[state.active] ? state.active : "A"];
+  for (const key of KEYS) {
+    const selected = state?.selected?.[key];
+    const select = $(`version-${key}`);
+    const note = $(`version-${key}-note`);
+    $(`field-${key}`).hidden = !visible.includes(key);
+    const options = versionOptions(selected);
+    const signature = JSON.stringify(options);
+    if (optionSignatures[key] !== signature) {
+      optionSignatures[key] = signature;
+      select.replaceChildren(...options.map(([value, text]) => el("option", { value, text })));
+    }
+    select.disabled = !selected;
+    select.value = wanted[key] ?? (loading?.key === key ? loading.version : selected?.version) ?? "";
+    const { text, tone } = versionNote(key, selected);
+    note.textContent = text;
+    note.hidden = !text;
+    note.dataset.tone = tone ?? "";
+    if (tone === "error") select.setAttribute("aria-invalid", "true");
+    else select.removeAttribute("aria-invalid");
+  }
+}
+
+async function refreshVersions() {
+  const shown = state.versions.A;
+  const wantedList = shown ? `${shown.hw}|${state.latest}` : "";
+  if (wantedList === versionListFor) return;
+  versionListFor = wantedList;
+  try {
+    versionList = shown ? await api("/api/versions") : null;
+    versionListError = null;
+  } catch (error) {
+    versionList = null;
+    versionListError = error.message;
+    versionListFor = ""; // asked again on the next poll
+  }
+  renderVersions();
+}
+
+// One load-version at a time; a pick made meanwhile replaces any earlier pick for its key.
+async function loadWanted() {
+  const key = KEYS.find((k) => k in wanted);
+  if (busy || !key) return;
+  const version = wanted[key];
+  delete wanted[key];
+  const job = { key, version };
+  loading = job;
+  renderVersions();
+  const error = await act($(`version-${key}`), "/api/load-version", { slot: key, version },
+    `Loading ${version} into ${key}…`);
+  if (loading === job) loading = null;
+  if (error) pickErrors[key] = { message: `${version} did not load: ${error.message}`, selection: selectionKey(state.selected[key]) };
+  else delete pickErrors[key];
+  renderVersions();
+}
+
+function pickVersion(event) {
+  const key = event.currentTarget.id.slice("version-".length);
+  wanted[key] = event.currentTarget.value;
+  renderVersions();
+  loadWanted();
 }
 
 function renderCheck(version) {
@@ -247,6 +365,7 @@ function renderHoles(box, version) {
 function render() {
   const focused = document.activeElement?.dataset?.key;
   renderBar();
+  renderVersions();
   const version = focusVersion();
   renderCheck(version);
   renderParts(version);
@@ -262,6 +381,7 @@ function accept(next) {
     lastJson = json;
     render();
   }
+  refreshVersions();
 }
 
 async function refresh() {
@@ -322,6 +442,7 @@ async function start() {
     act(e.currentTarget, "/api/mode", { mode: state.mode === "split" ? "single" : "split", active: state.active }));
   $("ghost").addEventListener("click", partAction("ghost"));
   $("reset").addEventListener("click", partAction("reset"));
+  for (const key of KEYS) $(`version-${key}`).addEventListener("change", pickVersion);
   await refresh();
   if (state) {
     loadFrame("a");
