@@ -6,6 +6,7 @@
 
 - Scope cad-viewer hosts by project and harness or named session; add idle shutdown and per-session stop instructions.
 - Add runtime preflight for CAD tools, kernel environments, drawing templates, and harness installation.
+- Add `cad-flow/scripts/setup.py`, which runs the user-level setup steps preflight reports missing. It requires FreeCAD 1.1.4 before it continues; the user installs FreeCAD from the official release and verifies its published checksum.
 - Add `cad-record` for design records, `cad-concept` for three.js concept exploration, `cad-model` for CadQuery/build123d builds and checks, and `cad-design` for the F0–F3 fidelity ladder and form checks.
 - Add `cad-motion` for kinematic poses/sweeps, `cad-render` for automated PBR images, and `cad-viewer` for interactive OCP inspection and Studio look-dev.
 - Add `cad-recheck` for batch-boundary/dependent rechecks, `cad-fits` for fits and stack-ups, and `cad-bom` for EBOM roll-up.

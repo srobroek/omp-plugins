@@ -43,10 +43,12 @@ LOAD references/assembly-drawings.md before writing the `drawing` block of `asse
 2. `freecadcmd` or `FreeCADCmd` on `PATH`
 3. `/Applications/FreeCAD.app/Contents/Resources/bin/freecadcmd`
 
+The TechDraw templates come from the same FreeCAD, in `share/Mod/TechDraw/Templates` next to the resolved `bin/freecadcmd`. Name the bundle's own `freecadcmd` or a symlink to it. A wrapper script, such as the AppImage's `AppRun`, hides the templates.
 - macOS: install `FreeCAD_1.1.4-macOS-arm64-py311.dmg` (or `-x86_64-`) from the [FreeCAD 1.1.4 release](https://github.com/FreeCAD/FreeCAD/releases/tag/1.1.4) into `/Applications`.
-- Linux x86_64 or aarch64: download `FreeCAD_1.1.4-Linux-x86_64-py311.AppImage` (or `-aarch64-`) and its `-SHA256.txt` from the same release. Compare the checksums. Extract the AppImage, which needs no FUSE, and link its `freecadcmd` onto `PATH`:
-
+- Linux x86_64 or aarch64: download the matching `FreeCAD_1.1.4-Linux-<architecture>-py311.AppImage` and its published `-SHA256.txt` from the [FreeCAD 1.1.4 release](https://github.com/FreeCAD/FreeCAD/releases/tag/1.1.4). Compare the AppImage's SHA-256 digest with the published checksum before extracting it. Extraction needs no FUSE. Link `freecadcmd` onto `PATH`:
   ```sh
+  # From the directory containing the downloaded AppImage and checksum file:
+  sha256sum --check FreeCAD_1.1.4-Linux-x86_64-py311.AppImage-SHA256.txt
   chmod +x FreeCAD_1.1.4-Linux-x86_64-py311.AppImage
   ./FreeCAD_1.1.4-Linux-x86_64-py311.AppImage --appimage-extract   # writes ./squashfs-root
   ln -sfn "$PWD/squashfs-root/usr/bin/freecadcmd" ~/.local/bin/freecadcmd
