@@ -80,17 +80,18 @@ def build_manufacture(params: dict):
   declaration, a declaration without a hook, and a hook that is not callable each fail the part with
   a `ContractError`. A `different` declaration also needs `state`, `reason`, `decision` and a
   positive volume tolerance; one without them is refused before any kernel runs.
-- It receives its own private copy of the same `PARAMS` that `build` gets, returns a shape as `build`
-  does, writes no files, and cannot change the PN, revision or material: part.yaml stays their
-  authority, and the STEP product keeps the name `"<PN> <title>"`.
+- It receives its own private copy of the same `PARAMS` that `build` gets and returns a shape as
+  `build` does. It writes no files.
+- It cannot change the PN, revision or material: part.yaml stays their authority, and the STEP
+  product keeps the name `"<PN> <title>"`.
 - Share construction between `build` and `build_manufacture` through private helpers of the
   model.py, so both states follow one set of parameters.
 - Model the state in any frame and orientation: `run` sets an FDM part on the printer bed itself
   (one proper rotation, no mirror) and keeps a CNC part in its model frame.
-- The run fails, writing no version, when the state's kernel volume differs from the installed one
-  by more than the declared tolerance, when its solid count differs, or when it is not a valid
-  B-rep. Equal volume does not prove the same holes, walls or material: the state's rationale stays a
-  reviewed engineering decision.
+- The run fails and writes no version when the state differs from the installed definition. That
+  is a kernel volume difference beyond the declared tolerance, another solid count, or an invalid
+  B-rep. Equal volume does not prove the same holes, walls or material, so the state's rationale
+  stays a reviewed engineering decision.
 
 ## Kernel environments
 

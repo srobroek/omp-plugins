@@ -83,13 +83,16 @@ command checks every file of the newest version against its manifest first and r
 `manufacturing` per custom-made PN (`status`, `complete`, `path`, `process`, `state`),
 `timings_s` (`<kernel>_import_s`, `<kernel>_runner_wall_s`, `manufacturing_s`, `glb_s`, `total_s`).
 On exit 1: `findings`, one per failed part: `pn`, `check`, `type`, `message`, `where`, plus
-`runners` timings when the kernels ran. `check` is `contract` (a model folder not named by its PN,
-or a missing or unsupported `KERNEL`; `type` `ContractError`, `where` null), `kernel` (the part's
-`KERNEL` differs from `--kernel`; `ContractError`, `where` null), `build` (the runner's exception
-`type`, `where` = `model.py:<line> in <function>`, null when the failure is not in model.py), or
-`manufacture`: a refused part.yaml `manufacture` declaration (`ContractError`, before any kernel
-runs), or a failed manufacturing check (`ManufactureError`; the message names each failed check
-and condition, and `manufacturing.<PN>` carries the part's rows).
+`runners` timings when the kernels ran. `check` is one of:
+
+- `contract`: a model folder not named by its PN, or a missing or unsupported `KERNEL`
+  (`type` `ContractError`, `where` null)
+- `kernel`: the part's `KERNEL` differs from `--kernel` (`ContractError`, `where` null)
+- `build`: the runner's exception `type`, with `where` = `model.py:<line> in <function>`, null when
+  the failure is not in model.py
+- `manufacture`: a refused part.yaml `manufacture` declaration (`ContractError`, before any kernel
+  runs), or a failed manufacturing check (`ManufactureError`). The message names each failed
+  check and condition, and `manufacturing.<PN>` carries the part's rows.
 
 `product.yaml` can declare a printer volume for FDM parts:
 
@@ -142,18 +145,26 @@ reserves size; it never lifts the part. Without a declared volume, or without a 
 its native +Z (with a declared volume it is still centred; without one its box corner sits at the
 origin) and is incomplete. A CNC or made-to-drawing part keeps its model frame (identity).
 
-The manifest entry `manufacturing.<PN>`: `PN`, `rev`, `title`, `product`, `material`, `process`,
-`finish`; `eligibility` (`make_buy`, `procurement_mode`); `state` (`relationship`, `name`, `reason`,
-`decision`, `source`: `build_manufacture` or `installed definition`); `tolerance` (`volume_rel`,
-`volume_abs_mm3`, `allowed_mm3` = max(absolute floor, relative x installed volume), from cad-record
-`manufacture_policy`: 1e-9 relative for a part made as installed, the declared values otherwise);
-`installed` (`step`, `sha256`, the kernel volume and solids); `native` (the manufacturing state's
-kernel volume, solids, validity and errors); `units` mm, `up` +Z; `build_volume` (FDM: size, margin,
-usable size, orientations); `mesh` (FDM: format and deflections); `placement` (`method`
-axis_aligned|oriented|native|identity, `orientation`, `bed` centred|origin|null, `transform` as 3x4
-rows, unrounded, and `determinant`); `path`, `outputs`, `files` (sha256 of every output, the sidecar
-included), `status`, `complete` and `blocking_failures`. A custom-made PN without a model.py gets
-`path: null`, `status: warn`, `complete: false` and a `message`.
+The manifest entry `manufacturing.<PN>` holds:
+
+- identity: `PN`, `rev`, `title`, `product`, `material`, `process`, `finish`, and `eligibility`
+  (`make_buy`, `procurement_mode`)
+- `state`: `relationship`, `name`, `reason`, `decision`, and `source` (`build_manufacture` or
+  `installed definition`)
+- `tolerance`: `volume_rel`, `volume_abs_mm3` and `allowed_mm3`, the larger of the absolute floor
+  and the relative share of the installed volume. cad-record `manufacture_policy` gives 1e-9
+  relative for a part made as installed, and the declared values otherwise.
+- `installed` (`step`, `sha256`, the kernel volume and solids) and `native` (the manufacturing
+  state's kernel volume, solids, validity and errors)
+- `units` mm, `up` +Z, `build_volume` (FDM: size, margin, usable size, orientations) and `mesh`
+  (FDM: format and deflections)
+- `placement`: `method` (axis_aligned, oriented, native or identity), `orientation`, `bed`
+  (centred, origin or null), `transform` (3x4 rows, unrounded) and `determinant`
+- `path`, `outputs`, `files` (sha256 of every output, the sidecar included), `status`, `complete`
+  and `blocking_failures`
+
+A custom-made PN without a model.py gets `path: null`, `status: warn`, `complete: false` and a
+`message`.
 
 Each part row has `status` (pass|warn|fail), `complete`, `blocking_failures` and `checks`; each
 check has `status`, `blocking` and `failed`, the conditions that do not hold:
@@ -164,8 +175,8 @@ check has `status`, `blocking` and `failed`, the conditions that do not hold:
 | `record` | `PN`, `rev`, `material`, `process` or `finish` differs from the version's part.yaml snapshot |
 | `native` | the manufacturing state is not a valid B-rep (BRepCheck in the kernel), has no solid, or has no positive volume |
 | `identity` | the manufacturing state's kernel volume differs from the installed one by more than `allowed_mm3`, compared unrounded, or their solid counts differ. Equal volume is not proof of the same holes, walls or material |
-| `step` | `part.step` is not AP242, does not declare millimetres only, holds anything but one product `"<PN> <title>"` at identity, is an invalid B-rep, has another solid count than the state, or its read-back volume differs from the state's kernel volume by more than 1e-6 relative |
-| `mesh` | FDM: `part.stl` is not binary, holds a non-finite coordinate or a degenerate triangle (area <= 1e-12 mm^2 after welding by position and dropping collapsed triangles), is not watertight, is not consistently wound, has non-positive signed volume (inward), has another shell count than the STEP, differs from the STEP volume by more than area x (deflection + float32 rounding), or has a box face farther than the deflection inside the STEP's. Nothing is repaired, so a crack stays open |
+| `step` | `part.step` is not AP242 or does not declare millimetres only. It holds anything but one product `"<PN> <title>"` at identity. It is an invalid B-rep, or has another solid count than the state. Its read-back volume differs from the state's kernel volume by more than 1e-6 relative |
+| `mesh` | FDM: `part.stl` is not binary, or holds a non-finite coordinate. After welding by position and dropping collapsed triangles, a triangle has an area of 1e-12 mm^2 or less. It is not watertight, not consistently wound, or has non-positive signed volume (inward). It has another shell count than the STEP. Its volume differs from the STEP's by more than area x (deflection + float32 rounding), or a box face sits farther than the deflection inside the STEP's. Nothing is repaired, so a crack stays open |
 | `placement` | the transform is not a proper rotation (orthonormal, determinant +1 within 1e-9); an FDM part does not touch Z 0 within 1e-6 mm; a CNC part is not at identity. An FDM part outside the reserved extents of the declared volume (X and Y: margin to size - margin; Z: 0 to size - 2 margin), or without a declared volume, warns and is incomplete |
 
 Any failed check fails the run (exit 1): no version, no new `latest.json`. A part is `complete` when
@@ -231,8 +242,9 @@ on those Booleans the part is `error`, its exact volumes are null and `error` ca
 message; whether it changed is unknown.
 
 `manufacturing` compares the manifest manufacturing entries apart from the definitions, so a
-change to the manufacturing state alone shows: `changed` (PNs not unchanged) and `parts.<PN>`
-with `status` (unchanged|changed|added|removed), `changed` (the aspects: `state`, `tolerance`,
-`output_policy` for the mesh deflections or build volume, `geometry` for the state's kernel volume
-or solids, `placement`), `relationship_a`/`_b` and `volume_a_mm3`/`_b`. With a version built
-before manufacturing outputs it is `available: false`.
+change to the manufacturing state alone shows. It has `changed`, the PNs that changed, were added
+or were removed, and `parts.<PN>` with `status` (unchanged, changed, added or removed) and
+`changed`, the aspects that differ: `state`, `tolerance`, `output_policy` (mesh deflections or
+build volume), `geometry` (the state's kernel volume or solids) and `placement`. Each row also has
+`relationship_a`/`_b` and `volume_a_mm3`/`_b`. When a version was built before manufacturing
+outputs, it is `available: false`.
