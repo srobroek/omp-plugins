@@ -10,7 +10,7 @@ Usage:
         [--attach REF=PARENT_REF ...] --worst-step WORST.step
         [--steps 19] [--grid 3] [--end-effector REF] [--include-pair REF:REF ...]
         [--min-clearance 0] [--pair-clearance REF:REF=MM ...] [--volume-tol 0.001]
-        [--max-poses 5000] [--time-limit 600] [--jobs 1]
+        [--max-poses 5000] [--time-limit 600] [--jobs 1] [--cache DIR | --no-cache]
         [--worst-criterion max_horizontal_reach|minimum_clearance|maximum_interference]
 
 Inputs and kinematics are pose.py's (same options, same occurrence chain): the
@@ -104,6 +104,12 @@ sweep that passes `--time-limit` seconds stops measuring and reports
 `incomplete`, with the findings of the leading samples it measured in full
 (`poses.evaluated`; requests are measured out of sample order, so these can be
 few).
+
+Measurements persist across runs in the pair cache (pair_measure.PairCache,
+`--cache DIR`, default `$XDG_CACHE_HOME/cad-motion`, else `~/.cache/cad-motion`),
+keyed by both definitions' geometry, the exact placement and the measuring
+code, kernel and platform, so a repeat measures only what changed and reports
+the same bits (`disk_hits` in `timings_s`). `--no-cache` reads and writes none.
 
 stdout: JSON summary with timings; pairs and parts are reported as references
 (`@id`, or the PN of a singleton). stderr: diagnostics.
@@ -599,6 +605,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--time-limit", type=float, default=600.0, help="seconds before the sweep stops as incomplete")
     parser.add_argument("--jobs", type=int, default=1,
                         help="worker processes measuring pairs (1: this process)")
+    caching = parser.add_mutually_exclusive_group()
+    caching.add_argument("--cache", type=Path, metavar="DIR",
+                         help="pair measurement cache directory (default: $XDG_CACHE_HOME/cad-motion, else "
+                              "~/.cache/cad-motion)")
+    caching.add_argument("--no-cache", action="store_true", help="measure every pair, reading and writing no cache")
     args = parser.parse_args(argv)
     if args.steps < 2 or args.grid == 1 or args.grid < 0 or args.jobs < 1:
         print("sweep: --steps must be >= 2, --grid 0 or >= 2, and --jobs >= 1", file=sys.stderr)
@@ -622,12 +633,18 @@ def main(argv: list[str] | None = None) -> int:
             raise pose.MotionError(f"no movable joint moves the end effector {chain.ref(effector)}")
         used = {pn: definitions[pn] for pn in {chain.pn(oid) for oid in chain.ids}}
         geometry = Geometry(chain, used)
-        measurer = pair_measure.PairMeasurer({pn: part.shape for pn, part in used.items()}, jobs=args.jobs)
+        cache = None if args.no_cache else pair_measure.PairCache(args.cache or pair_measure.default_cache_dir())
+        measurer = pair_measure.PairMeasurer({pn: part.shape for pn, part in used.items()}, jobs=args.jobs,
+                                             cache=cache)
         loaded = time.monotonic()
         samples = generate_poses(chain, args.steps, args.grid)
-        state = sweep(chain, geometry, measurer, samples, pairs, allowed, fitted, requirements, effector,
-                      path[0].origin, args.volume_tol, args.worst_criterion, args.min_clearance,
-                      loaded + args.time_limit)
+        try:
+            state = sweep(chain, geometry, measurer, samples, pairs, allowed, fitted, requirements, effector,
+                          path[0].origin, args.volume_tol, args.worst_criterion, args.min_clearance,
+                          loaded + args.time_limit)
+        finally:
+            if cache is not None:
+                cache.close()
         swept = time.monotonic()
         complete = state.evaluated == len(samples)
         worst = None
@@ -686,7 +703,7 @@ def main(argv: list[str] | None = None) -> int:
                       "export": round(exported - swept, 2), "total": round(time.monotonic() - started, 2),
                       "per_pose_ms": round(per_pose * 1000, 1),
                       "pair_requests": measurer.requested, "pair_evaluations": measurer.measured,
-                      "cache_hits": measurer.reused, "pruned": measurer.pruned},
+                      "cache_hits": measurer.reused, "disk_hits": measurer.disk_hits, "pruned": measurer.pruned},
     }, indent=2))
     if not complete:
         print(f"sweep: stopped after {state.evaluated} of {len(samples)} poses at --time-limit {args.time_limit} s",

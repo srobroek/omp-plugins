@@ -7,14 +7,17 @@ The STEP tests need `uv`; the FreeCAD test also needs freecadcmd and skips witho
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import importlib.util
+import io
 import json
 import math
 import os
 from pathlib import Path
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -489,6 +492,91 @@ class BroadPhaseTests(unittest.TestCase):
                 self.assertEqual(sweep.measured_prefix(mock.Mock(), plan, outcomes), taken)
 
 
+class PairCacheTests(unittest.TestCase):
+    """pair_measure.PairCache under a PairMeasurer, on stand-in definitions whose BRep bytes and
+    measurement salt are patched in, and a stand-in kernel; needs no OCP."""
+
+    def setUp(self) -> None:
+        self.folder = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.folder)
+        self.geometry = {"a": b"a v1", "b": b"b v1", "c": b"c v1"}
+        self.salt = b"salt 1"
+
+    def run_requests(self, failing: frozenset = frozenset(), folder: Path | None = None) -> tuple[list, list, object]:
+        """A-B, A-C and B-C at two placements each: (outcomes, the kernel's (a, b) calls, the measurer)."""
+        measure = sweep.pair_measure
+        cube = ([0.0, 0.0, 0.0], [1.0, 1.0, 1.0])
+        cache = measure.PairCache(folder or self.folder)
+        self.addCleanup(cache.close)
+        with mock.patch.object(measure, "box_corners", side_effect=lambda shape, tolerance=False: cube):
+            measurer = measure.PairMeasurer({"A": "a", "B": "b", "C": "c"}, cache=cache)
+        rigid = sweep.pose.Rigid
+        requests = [measure.Request(a, b, rigid(rigid.identity().rot, (x, 0.0, 0.0)))
+                    for a, b in (("A", "B"), ("A", "C"), ("B", "C")) for x in (3.0, 4.5)]
+
+        def kernel(shape, moved, box_gap=0.0, threads=False):
+            if (shape, moved[0]) in failing:
+                raise RuntimeError("Standard_Failure")
+            return moved[1] / 3.1, 0.0
+
+        with mock.patch.object(measure, "shape_bytes", side_effect=lambda shape: self.geometry[shape]), \
+                mock.patch.object(measure, "measurement_salt", return_value=self.salt), \
+                mock.patch.object(measure.pose, "placed", side_effect=lambda shape, at: (shape, at.trans[0])), \
+                mock.patch.object(measure.pose, "interference", side_effect=kernel) as calls:
+            outcomes = measurer.measure(requests)
+        return outcomes, [(args[0], args[1][0]) for args, _ in calls.call_args_list], measurer
+
+    def test_a_warm_run_reads_every_measurement_back_bitwise(self) -> None:
+        cold, cold_calls, _ = self.run_requests()
+        warm, warm_calls, measurer = self.run_requests()
+        self.assertEqual((len(cold_calls), warm_calls, measurer.disk_hits), (6, [], 6))
+        self.assertEqual([[v.hex() for v in o] for o in warm], [[v.hex() for v in o] for o in cold])
+
+    def test_editing_one_definition_misses_only_its_pairs(self) -> None:
+        self.run_requests()
+        self.geometry["c"] = b"c v2"
+        _, calls, _ = self.run_requests()
+        self.assertEqual(calls, [("a", "c"), ("a", "c"), ("b", "c"), ("b", "c")])
+
+    def test_a_salt_change_misses_every_entry(self) -> None:
+        self.run_requests()
+        self.salt = b"salt 2"
+        self.assertEqual(len(self.run_requests()[1]), 6)
+
+    def test_a_failed_measurement_is_not_stored(self) -> None:
+        outcomes, _, _ = self.run_requests(failing=frozenset({("a", "b")}))
+        self.assertEqual(outcomes[:2], [sweep.pair_measure.Failure("Standard_Failure")] * 2)
+        self.assertEqual(self.run_requests()[1], [("a", "b"), ("a", "b")])
+
+    def test_a_corrupt_or_unusable_cache_measures_without_it_and_says_so(self) -> None:
+        (self.folder / "corrupt").mkdir()
+        (self.folder / "corrupt" / "pairs.sqlite").write_bytes(b"not a database " * 100)
+        (self.folder / "taken").write_text("a file where the cache directory goes", encoding="utf-8")
+        for name in ("corrupt", "taken"):
+            with self.subTest(name=name), contextlib.redirect_stderr(io.StringIO()) as err:
+                outcomes, calls, _ = self.run_requests(folder=self.folder / name)
+                self.assertEqual(len(calls), 6)
+                self.assertTrue(all(isinstance(outcome, tuple) for outcome in outcomes))
+                self.assertIn("is unusable, measuring without it", err.getvalue())
+
+    def test_past_the_size_cap_the_oldest_entries_go(self) -> None:
+        measure = sweep.pair_measure
+        keys = [hashlib.sha256(str(i).encode()).digest() for i in range(401)]
+        cache = measure.PairCache(self.folder)
+        for key in keys[:400]:
+            cache.store(key, (1.0, 0.0))
+        cache.close()
+        with contextlib.closing(sqlite3.connect(cache.path)) as connection:
+            page_size, pages, free = (connection.execute(f"PRAGMA {name}").fetchone()[0]
+                                      for name in ("page_size", "page_count", "freelist_count"))
+        capped = measure.PairCache(self.folder, max_bytes=(pages - free) * page_size // 2)
+        self.addCleanup(capped.close)
+        capped.store(keys[400], (2.0, 0.0))
+        capped.flush()
+        kept = capped.lookup(keys)
+        self.assertTrue(0 < len(kept) < 300, len(kept))
+        self.assertEqual(set(kept), set(keys[-len(kept):]))
+
 
 @unittest.skipUnless(shutil.which("uv"), "uv is required to build and read STEP through OCP")
 class StepTests(unittest.TestCase):
@@ -516,9 +604,29 @@ class StepTests(unittest.TestCase):
         return folder
 
     def run_script(self, script: str, *args: str) -> tuple[subprocess.CompletedProcess[str], dict]:
+        """`script` with `args`, its pair cache in a fresh cache home unless `args` name one."""
+        env = {**os.environ, "XDG_CACHE_HOME": tempfile.mkdtemp(dir=self.root)}
         proc = subprocess.run(["uv", "run", "--quiet", "--script", str(SCRIPTS / script), *args],
-                              capture_output=True, text=True, check=False, timeout=900)
+                              capture_output=True, text=True, check=False, timeout=900, env=env)
         return proc, json.loads(proc.stdout) if proc.stdout.strip() else {}
+
+    def assert_same_sweeps(self, runs: list[tuple[Path, dict]]) -> None:
+        """Each (folder of its worst.step, result) reports what the first does: the JSON but its
+        timings, the evidence but its paths, and the worst-case STEP but its header time."""
+
+        def comparable(folder: Path, result: dict) -> tuple[str, str, str]:
+            worst = {k: v for k, v in result["worst_case"].items() if k != "step_sha256"}  # the STEP header has a time
+            kept = {**{k: v for k, v in result.items() if k != "timings_s"}, "worst_case": worst}
+            evidence = json.loads((folder / "worst.step.json").read_text(encoding="utf-8"))
+            step = re.sub(r"FILE_NAME\(.*?\);", "", (folder / "worst.step").read_text(encoding="utf-8"), count=1,
+                          flags=re.S)
+            self.assertTrue(step)
+            return (json.dumps(kept).replace(str(folder), "OUT"),
+                    json.dumps({k: v for k, v in evidence.items() if k not in ("step", "inputs", "command")}), step)
+
+        first, *others = [comparable(folder, result) for folder, result in runs]
+        for other in others:
+            self.assertEqual(other, first)
 
     def test_out_of_range_value_exits_1_without_a_step(self) -> None:
         out = self.root / "rejected.step"
@@ -872,21 +980,25 @@ class StepTests(unittest.TestCase):
         runs = [self.v6_sweep(None, "minimum_clearance", "--jobs", jobs) for jobs in ("1", "3")]
         for hw, proc, _ in runs:
             self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
-        (one_hw, _, one), (three_hw, _, three) = runs
+        self.assert_same_sweeps([(hw, result) for hw, _, result in runs])
 
-        def comparable(result: dict, hw: Path) -> str:
-            worst = {k: v for k, v in result["worst_case"].items() if k != "step_sha256"}  # the STEP header has a time
-            kept = {**{k: v for k, v in result.items() if k != "timings_s"}, "worst_case": worst}
-            return json.dumps(kept).replace(str(hw), "HW")
-
-        self.assertEqual(comparable(one, one_hw), comparable(three, three_hw))
-        evidence = [json.loads((hw / "worst.step.json").read_text(encoding="utf-8")) for hw, _, _ in runs]
-        self.assertEqual(*(json.dumps({k: v for k, v in e.items() if k not in ("step", "inputs", "command")})
-                           for e in evidence))
-        steps = [re.sub(r"FILE_NAME\(.*?\);", "", (hw / "worst.step").read_text(encoding="utf-8"), count=1,
-                        flags=re.S) for hw, _, _ in runs]
-        self.assertTrue(steps[0])
-        self.assertEqual(*steps)
+    def test_a_cold_and_a_warm_pair_cache_report_exactly_what_no_cache_does(self) -> None:
+        """The cold run fills the cache and the warm one measures nothing; all three report the same
+        JSON, evidence and worst-case STEP."""
+        hw, cache = self.hw(90), Path(tempfile.mkdtemp(dir=self.root))
+        runs = []
+        for option in (["--no-cache"], ["--cache", str(cache)], ["--cache", str(cache)]):
+            out = Path(tempfile.mkdtemp(dir=self.root))
+            proc, result = self.run_script("sweep.py", "--hw", str(hw), "--parts-dir", str(self.planar), "--steps", "5",
+                                           "--grid", "3", "--worst-criterion", "minimum_clearance",
+                                           "--worst-step", str(out / "worst.step"), *option)
+            self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+            runs.append((out, result))
+        cold, warm = runs[1][1]["timings_s"], runs[2][1]["timings_s"]
+        self.assertGreater(cold["pair_evaluations"], 0)
+        self.assertEqual((runs[0][1]["timings_s"]["disk_hits"], cold["disk_hits"]), (0, 0))
+        self.assertEqual((warm["pair_evaluations"], warm["disk_hits"]), (0, cold["pair_evaluations"]))
+        self.assert_same_sweeps(runs)
 
     def test_one_crank_sweeps_the_coupled_v6_and_finds_the_misphased_valve_at_its_tdc(self) -> None:
         hw, proc, result = self.v6_sweep(3, "maximum_interference")

@@ -21,6 +21,11 @@ displacement is affine in the point, so its maximum over the box is at a corner,
 Requests are measured best first: each group's smallest box gap first, the groups in turn, so a
 group's minimum is usually its first measurement.
 
+With a `PairCache`, measurements persist across runs and tools in SQLite, keyed by content: the
+two definitions' BRep bytes, the placement's bits and a salt naming the measuring code, kernel and
+platform (`measurement_salt`). A hit is the value the measurement returns, so the cache is on by
+default; an edit to a part, the rule or the kernel only makes old entries unreachable.
+
 `measure` returns one outcome per request, in request order: `(distance, volume)`, `Pruned`, a
 `Failure` (the kernel raised; its message), or None when the deadline stopped the run first.
 Stdlib only; OCP is imported when a shape is touched.
@@ -30,12 +35,18 @@ from __future__ import annotations
 
 import concurrent.futures
 import concurrent.futures.process
+import functools
+import hashlib
 import heapq
 import importlib.util
+import inspect
 import io
 import itertools
 import math
 import multiprocessing
+import os
+import platform
+import sqlite3
 import struct
 import sys
 import time
@@ -59,6 +70,11 @@ pose = sys.modules.get("cad_motion_pose") or _load("cad_motion_pose", Path(__fil
 
 SLACK_MM = 1e-6  # under every lower bound: 10x the kernel's confusion tolerance, for rounding in the bounds
 MOTION_WINDOW = 6  # a known distance bounds the requests this many places either side in its group
+# Bump when what a measurement returns changes in a way the salt's sources and versions do not show.
+MEASUREMENT_VERSION = 1
+CACHE_MAX_BYTES = 256 * 2**20  # past this the oldest entries go, down to CACHE_TRIM_TO of it
+CACHE_TRIM_TO = 0.75
+CACHE_BATCH = 256  # entries per write transaction
 
 
 @dataclass(frozen=True)
@@ -101,14 +117,17 @@ class PairMeasurer:
     """Measures requests on `shapes` (definition key -> TopoDS_Shape), in this process or, with
     `jobs` > 1, in that many worker processes (`start_method`: forkserver, spawn on macOS and
     Windows; never fork). With `threads`, a measurement in this process searches on OCCT's thread
-    pool; workers never do, as `jobs` of them already fill the cores."""
+    pool; workers never do, as `jobs` of them already fill the cores. With `cache`, a request is
+    first looked up there, and this process alone writes each new measurement to it."""
 
     def __init__(self, shapes: Mapping[str, Any], jobs: int = 1, start_method: str | None = None,
-                 threads: bool = True) -> None:
+                 threads: bool = True, cache: PairCache | None = None) -> None:
         self.shapes = dict(shapes)
         self.jobs = jobs
         self.start_method = start_method or _default_start_method()
         self.threads = threads
+        self.cache = cache
+        self.identities: dict[str, bytes] = {}  # definition key -> sha256 of its BRep bytes
         # The corners of each definition's bounding box, enlarged by its shape tolerances: the box
         # holds the shape, so its placed corners' axis-aligned hull holds the placed shape.
         self.corners = {key: list(itertools.product(*zip(*box_corners(shape, tolerance=True))))
@@ -117,6 +136,7 @@ class PairMeasurer:
         self.measured = 0  # kernel measurements
         self.reused = 0  # requests answered by a measurement taken for an earlier request
         self.pruned = 0  # requests the broad phase answered without a measurement
+        self.disk_hits = 0  # measurements read from the cache
 
     def measure(self, requests: Sequence[Request], deadline: float = math.inf, stop_on_failure: bool = False,
                 prune: bool = False) -> list[Outcome | None]:
@@ -129,6 +149,8 @@ class PairMeasurer:
             run.execute(executor, deadline, stop_on_failure)
         finally:
             executor.close()
+            if self.cache is not None:
+                self.cache.flush()
         return run.outcomes
 
     def moved_corners(self, request: Request) -> tuple[list[tuple[float, float, float]], list[tuple[float, float, float]]]:
@@ -139,6 +161,14 @@ class PairMeasurer:
         """The distance between the axis-aligned hulls of the two placed bounding boxes: a lower
         bound on the distance between the placed shapes."""
         return _hull_gap(*self.moved_corners(request))
+
+    def cache_key(self, request: Request) -> bytes:
+        """sha256 of the salt, both definitions' BRep bytes and the placement's 12 doubles."""
+        for key in (request.a, request.b):
+            if key not in self.identities:
+                self.identities[key] = hashlib.sha256(shape_bytes(self.shapes[key])).digest()
+        return hashlib.sha256(measurement_salt() + self.identities[request.a] + self.identities[request.b]
+                              + _bits(request.placement)).digest()
 
 
 class _Run:
@@ -262,8 +292,18 @@ class _Run:
     def execute(self, executor: _InProcess | _Workers, deadline: float, stop_on_failure: bool) -> None:
         if time.monotonic() > deadline:
             return
+        cache, keys = self.measurer.cache, {}
+        if cache is not None:
+            keys = {unit: self.measurer.cache_key(self.requests[index]) for unit, index in self.unit_request.items()}
+            stored = cache.lookup(list(keys.values()))
+            for unit, key in keys.items():
+                if key in stored:
+                    self.measurer.disk_hits += 1
+                    self.learn(unit, stored[key])
+            self.touched.clear()
         for index in range(len(self.requests)):
-            self.queue(index)
+            if self.outcomes[index] is None:
+                self.queue(index)
         self.order = list(self.queues)
         while True:
             while len(self.inflight) < executor.capacity and time.monotonic() <= deadline:
@@ -279,6 +319,8 @@ class _Run:
                 return
             unit, outcome = executor.next()
             self.inflight.discard(unit)
+            if cache is not None and isinstance(outcome, tuple):
+                cache.store(keys[unit], outcome)
             self.learn(unit, outcome)
             if isinstance(outcome, Failure) and stop_on_failure:
                 return
@@ -383,6 +425,110 @@ class _Workers:
     def close(self) -> None:
         if self.pool is not None:
             self.pool.shutdown(wait=True, cancel_futures=True)
+
+
+class PairCache:
+    """Measurements kept across runs in `directory`/pairs.sqlite: key -> (distance, volume) as two
+    little-endian doubles, so a hit returns the measured bits. Keys are content addresses
+    (`PairMeasurer.cache_key`), so a changed definition, rule or kernel only stops finding the old
+    entries; failures are never stored. Writes go in batches with INSERT OR IGNORE in WAL mode, so
+    concurrent runs share the file. Past `max_bytes` of live pages the oldest entries are deleted
+    down to CACHE_TRIM_TO of it. Any SQLite or file error turns the cache off for the rest of the
+    run with a note on stderr, and the run measures what it would have read."""
+
+    def __init__(self, directory: Path, max_bytes: int = CACHE_MAX_BYTES) -> None:
+        self.path = directory / "pairs.sqlite"
+        self.max_bytes = max_bytes
+        self.pending: list[tuple[bytes, bytes]] = []
+        self.connection: sqlite3.Connection | None = None
+        try:
+            directory.mkdir(parents=True, exist_ok=True)
+            self.connection = sqlite3.connect(self.path, timeout=60.0)
+            self.connection.execute("PRAGMA journal_mode=WAL")
+            self.connection.execute("PRAGMA synchronous=NORMAL")
+            with self.connection:
+                self.connection.execute("CREATE TABLE IF NOT EXISTS pairs (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                                        "key BLOB NOT NULL UNIQUE, value BLOB NOT NULL)")
+        except (sqlite3.Error, OSError) as error:
+            self._off(error)
+
+    def lookup(self, keys: Sequence[bytes]) -> dict[bytes, tuple[float, float]]:
+        """The stored (distance, volume) of each key found."""
+        if self.connection is None:
+            return {}
+        found: dict[bytes, tuple[float, float]] = {}
+        try:
+            for start in range(0, len(keys), 500):
+                chunk = keys[start:start + 500]
+                rows = self.connection.execute(
+                    f"SELECT key, value FROM pairs WHERE key IN ({', '.join('?' * len(chunk))})", chunk)
+                found.update((bytes(key), struct.unpack("<2d", value)) for key, value in rows)
+        except (sqlite3.Error, struct.error, TypeError) as error:
+            self._off(error)
+            return {}
+        return found
+
+    def store(self, key: bytes, outcome: tuple[float, float]) -> None:
+        if self.connection is not None:
+            self.pending.append((key, struct.pack("<2d", *outcome)))
+            if len(self.pending) >= CACHE_BATCH:
+                self.flush()
+
+    def flush(self) -> None:
+        """Write the pending entries, then hold the size cap."""
+        if self.connection is None or not self.pending:
+            return
+        try:
+            with self.connection:
+                self.connection.executemany("INSERT OR IGNORE INTO pairs (key, value) VALUES (?, ?)", self.pending)
+            self.pending.clear()
+            page_size, pages, free = (self.connection.execute(f"PRAGMA {name}").fetchone()[0]
+                                      for name in ("page_size", "page_count", "freelist_count"))
+            live = (pages - free) * page_size
+            if live > self.max_bytes:
+                rows = self.connection.execute("SELECT COUNT(*) FROM pairs").fetchone()[0]
+                with self.connection:
+                    self.connection.execute("DELETE FROM pairs WHERE id NOT IN (SELECT id FROM pairs ORDER BY id DESC "
+                                            "LIMIT ?)", (int(rows * CACHE_TRIM_TO * self.max_bytes / live),))
+        except sqlite3.Error as error:
+            self._off(error)
+
+    def close(self) -> None:
+        """Write the pending entries and close the file."""
+        self.flush()
+        if self.connection is not None:
+            self.connection.close()
+            self.connection = None
+
+    def _off(self, error: BaseException) -> None:
+        print(f"pair cache {self.path} is unusable, measuring without it: {error}", file=sys.stderr)
+        if self.connection is not None:
+            try:
+                self.connection.close()
+            except sqlite3.Error:
+                pass
+        self.connection = None
+        self.pending.clear()
+
+
+def default_cache_dir() -> Path:
+    """`$XDG_CACHE_HOME/cad-motion`, else `~/.cache/cad-motion`: the cache home of cad-concept and cad-flow."""
+    return Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "cad-motion"
+
+
+@functools.cache
+def measurement_salt() -> bytes:
+    """What a measurement's value depends on besides its two shapes and the placement: the
+    MEASUREMENT_VERSION, the source of every function on the measuring path, the rule's constants,
+    the OCP/OCCT version, and the platform, as the Mac and Linux libm may round differently."""
+    import OCP
+
+    path = (_measure, pose.placed, pose.to_trsf, pose.interference, pose._contained, pose._inside_compound,
+            pose._vertex_points, pose._one_member_compound, pose.shape_list, pose.volume_properties)
+    constants = (pose.OVERLAP_GATE_MM, pose.FUZZY_MM, pose.VOLUME_EPS, pose.CONTAINMENT_TOL_MM, pose.SOLID_GAP_MM)
+    parts = [f"cad-motion pair measurement {MEASUREMENT_VERSION}", repr(constants), getattr(OCP, "__version__", "?"),
+             sys.platform, platform.machine(), *(inspect.getsource(function) for function in path)]
+    return hashlib.sha256("\0".join(parts).encode()).digest()
 
 
 def _default_start_method() -> str:
