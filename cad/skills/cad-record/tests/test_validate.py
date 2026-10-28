@@ -16,7 +16,8 @@ from pathlib import Path
 SKILL = Path(__file__).resolve().parents[1]
 CONCEPT = SKILL.parent / "cad-concept"
 TEMPLATE = SKILL / "assets" / "project-template"
-EXAMPLE = SKILL.parent.parent / "examples" / "lamp-arm" / "hw"
+LAMP_EXAMPLE = SKILL.parent.parent / "examples" / "lamp-arm"
+EXAMPLE = LAMP_EXAMPLE / "hw"
 VALIDATOR = SKILL / "scripts" / "validate.py"
 
 
@@ -25,8 +26,8 @@ class ValidateProject(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory(prefix="cad-record-test-")
         self.addCleanup(self.temporary.cleanup)
         self.project = Path(self.temporary.name) / "project"
-        shutil.copytree(EXAMPLE.parent, self.project)
         self.hw = self.project / "hw"
+        shutil.copytree(EXAMPLE, self.hw)
         self.part_path = self.hw / "parts" / "LMP-0001" / "part.yaml"
 
     def set_part(self, pn: str = "LMP-0001", rev: str = "X1") -> None:

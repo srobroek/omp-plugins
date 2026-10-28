@@ -16,6 +16,7 @@ import yaml
 SKILL = Path(__file__).resolve().parents[1]
 SCRIPT = SKILL / "scripts" / "build_guide.py"
 TEMPLATE = SKILL / "assets" / "project-template"
+LAMP_EXAMPLE = SKILL.parent.parent / "examples" / "lamp-arm"
 
 
 class BuildGuide(unittest.TestCase):
@@ -24,7 +25,7 @@ class BuildGuide(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         self.hw = self.root / "hw"
-        shutil.copytree(TEMPLATE / "hw", self.hw)
+        shutil.copytree(LAMP_EXAMPLE / "hw", self.hw)
         self.out = self.root / "docs"
         self.make_version(self.hw, "v1")
 
@@ -52,7 +53,7 @@ class BuildGuide(unittest.TestCase):
         return (self.out / "index.md").read_text(encoding="utf-8")
 
     def test_lamp_record_builds_structured_lists_with_exact_tool_records(self) -> None:
-        guide = self.generate()
+        guide = self.generate(self.hw)
         self.assertIn('<parts src="../hw/bom.csv" />', guide)
         for heading in ("Overview", "Parts to make", "Parts to buy", "Tools and consumables",
                         "Assembly steps", "Checks before use"):
@@ -108,7 +109,7 @@ class BuildGuide(unittest.TestCase):
         part = yaml.safe_load(part_path.read_text(encoding="utf-8"))
         part["procurement"]["open"] = {"supplier_part_number": "Supplier has not assigned its order code"}
         part_path.write_text(yaml.safe_dump(part, sort_keys=False), encoding="utf-8")
-        guide = self.generate()
+        guide = self.generate(self.hw)
         self.assertIn("OPEN — supplier_part_number: Supplier has not assigned its order code", guide)
 
     def test_missing_version_manifest_fails_without_output(self) -> None:

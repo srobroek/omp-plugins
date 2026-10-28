@@ -2,8 +2,8 @@
 """cad-flow scratch workspace tests: a worker's copy, build, and delivery never touch the lead's records.
 
 Run: python3 -m unittest discover -s cad/skills/cad-flow/tests -v
-The init and deliver tests are stdlib-only. The build test needs `uv`; it builds the checkout's
-lamp example (seven CadQuery parts) in a scratch copy, so a cold uv cache adds minutes.
+The init and deliver tests are stdlib-only. The build test needs `uv`; it builds a copy of the
+checkout's lamp example (seven CadQuery parts) in a scratch workspace, so a cold uv cache adds minutes.
 """
 
 from __future__ import annotations
@@ -20,7 +20,8 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 SCRATCH = HERE.parent / "scripts" / "scratch.py"
 TEMPLATE = HERE.parents[1] / "cad-record" / "assets" / "project-template" / "hw"
-LAMP_EXAMPLE = HERE.parents[2] / "examples" / "lamp-arm" / "hw"
+VALIDATOR = HERE.parents[1] / "cad-record" / "scripts" / "validate.py"
+LAMP_EXAMPLE = HERE.parents[1] / "examples" / "lamp-arm" / "hw"
 
 
 def tree(root: Path) -> dict[str, str]:
@@ -34,19 +35,22 @@ class ScratchCase(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory(prefix="cad-scratch-test-")
         self.addCleanup(temporary.cleanup)
         self.project = Path(temporary.name)
+        self.hw = self.project / "hw"
+
+    def use_generic_template(self) -> None:
         shutil.copytree(TEMPLATE, self.hw)
         part = self.hw / "parts" / "PRT-0001"
         part.mkdir(parents=True)
         (part / "part.yaml").write_text(
             "PN: PRT-0001\nrev: X1\ntitle: Placeholder part\nmaterial: Placeholder material\n"
             "process: cnc\nfinish: As machined\nmass_target: null\nmake_buy: make\n", encoding="utf-8")
-        (part / "model.py").write_text('PARAMS = {"radius": 80.0}\ndef build(params):\n    return params\n', encoding="utf-8")
-        # A lead-built version and render the worker must never see or change.
-        (self.hw / "versions" / "v7").mkdir(parents=True)
-        (self.hw / "versions" / "v7" / "manifest.json").write_text('{"label": "v7"}\n', encoding="utf-8")
-        (self.hw / "versions" / "latest.json").write_text('{"label": "v7"}\n', encoding="utf-8")
-        (self.hw / "renders" / "v7").mkdir(parents=True)
-        (self.hw / "renders" / "v7" / "iso.png").write_bytes(b"png")
+        result = subprocess.run([sys.executable, str(VALIDATOR), str(self.project)],
+                                capture_output=True, text=True, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(json.loads(result.stdout), {"ok": True, "findings": []})
+
+    def use_lamp_example(self) -> None:
+        shutil.copytree(LAMP_EXAMPLE, self.hw)
 
     def scratch(self, *args: str, python: bool = True, timeout: int = 60) -> tuple[int, dict]:
         argv = [sys.executable, str(SCRATCH)] if python else ["uv", "run", "--quiet", "--script", str(SCRATCH)]
@@ -63,6 +67,10 @@ class ScratchCase(unittest.TestCase):
 
 
 class InitAndDeliver(ScratchCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.use_generic_template()
+
     def test_init_copies_the_generic_record_without_versions_or_renders(self) -> None:
         report = self.init("part-base_sub", "PRT-0001")
         scratch_hw = Path(report["scratch_hw"])
@@ -74,16 +82,8 @@ class InitAndDeliver(ScratchCase):
         self.assertEqual(baseline["parts"], [])
         self.assertEqual(sorted(baseline["files"]), sorted(tree(TEMPLATE)))
 
-    def test_lamp_example_copies_as_a_separate_scratch_project(self) -> None:
-        shutil.copytree(LAMP_EXAMPLE, self.hw, dirs_exist_ok=True)
-        report = self.init("part-base_sub", "LMP-0001")
-        scratch_hw = Path(report["scratch_hw"])
-        self.assertTrue((scratch_hw / "parts" / "LMP-0001" / "model.py").is_file())
-        self.assertEqual(json.loads((scratch_hw.parent / "baseline.json").read_text(encoding="utf-8"))["parts"],
-                         [f"LMP-{number:04d}" for number in range(1, 12)])
-
     def test_init_rejects_unsafe_units_and_malformed_part_numbers(self) -> None:
-        for args in (("--unit", "../escape", "--part", "LMP-0001"), ("--unit", "ok", "--part", "lmp-1"),
+        for args in (("--unit", "../escape", "--part", "PRT-0001"), ("--unit", "ok", "--part", "bad"),
                      ("--unit", "ok")):
             with self.subTest(args=args):
                 code, report = self.scratch("init", "--hw", "hw", *args)
@@ -99,44 +99,56 @@ class InitAndDeliver(ScratchCase):
         code, report = self.scratch("deliver", "--hw", "hw", "--unit", "part-base_sub")
         self.assertEqual((code, report["status"]), (0, "delivered"), report)
         self.assertEqual(tree(self.hw), before)
-        (scratch_hw / "parts" / "LMP-0001" / "notes.txt").write_text("work in progress\n", encoding="utf-8")
-        again = self.init("part-base_sub", "LMP-0001")
+        (scratch_hw / "parts" / "PRT-0001" / "notes.txt").write_text("work in progress\n", encoding="utf-8")
+        again = self.init("part-base_sub", "PRT-0001")
         self.assertEqual(again["status"], "exists")
-        self.assertTrue((scratch_hw / "parts" / "LMP-0001" / "notes.txt").is_file())
-        code, reset = self.scratch("init", "--hw", "hw", "--unit", "part-base_sub", "--part", "LMP-0001", "--reset")
+        self.assertTrue((scratch_hw / "parts" / "PRT-0001" / "notes.txt").is_file())
+        code, reset = self.scratch("init", "--hw", "hw", "--unit", "part-base_sub", "--part", "PRT-0001", "--reset")
         self.assertEqual((code, reset["status"]), (0, "created"))
-        self.assertFalse((scratch_hw / "parts" / "LMP-0001" / "notes.txt").exists())
+        self.assertFalse((scratch_hw / "parts" / "PRT-0001" / "notes.txt").exists())
 
     def test_deliver_refuses_a_part_changed_since_init_and_writes_nothing(self) -> None:
-        scratch_hw = Path(self.init("part-base_sub", "LMP-0001")["scratch_hw"])
-        (scratch_hw / "parts" / "LMP-0001" / "model.py").write_text("# scratch rewrite\n", encoding="utf-8")
-        record = self.hw / "parts" / "LMP-0001" / "part.yaml"
-        record.write_text(record.read_text(encoding="utf-8").replace("mass_target: 313", "mass_target: 300"), encoding="utf-8")
+        scratch_hw = Path(self.init("part-base_sub", "PRT-0001")["scratch_hw"])
+        (scratch_hw / "parts" / "PRT-0001" / "model.py").write_text("# scratch rewrite\n", encoding="utf-8")
+        record = self.hw / "parts" / "PRT-0001" / "part.yaml"
+        record.write_text(record.read_text(encoding="utf-8").replace("mass_target: null", "mass_target: 10"), encoding="utf-8")
         before = tree(self.hw)
         code, report = self.scratch("deliver", "--hw", "hw", "--unit", "part-base_sub")
         self.assertEqual((code, report["status"]), (1, "conflict"), report)
-        self.assertEqual(report["changed_since_init"], [str(self.hw.resolve() / "parts" / "LMP-0001")])
-        self.assertEqual(tree(self.hw), before)
+        self.assertEqual(report["changed_since_init"], [str(self.hw.resolve() / "parts" / "PRT-0001")])
+
+
+class LampExample(ScratchCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.use_lamp_example()
+
+    def test_lamp_example_copies_as_a_separate_scratch_project(self) -> None:
+        report = self.init("part-base_sub", "LMP-0001")
+        scratch_hw = Path(report["scratch_hw"])
+        self.assertTrue((scratch_hw / "parts" / "LMP-0001" / "model.py").is_file())
+        self.assertEqual(json.loads((scratch_hw.parent / "baseline.json").read_text(encoding="utf-8"))["parts"],
+                         [f"LMP-{number:04d}" for number in range(1, 12)])
 
 
 @unittest.skipIf(shutil.which("uv") is None, "uv is not on PATH")
-class Build(ScratchCase):
+class Build(LampExample):
     def test_build_checks_the_scratch_copy_and_never_touches_hw_versions(self) -> None:
         before = tree(self.hw)
         self.init("part-base_sub", "LMP-0001")
         code, report = self.scratch("build", "--hw", "hw", "--unit", "part-base_sub", "--fidelity", "F2",
                                     "--kernel", "cadquery", python=False, timeout=1800)
         self.assertEqual((code, report["status"]), (0, "pass"), json.dumps(report, indent=2))
-        self.assertEqual(report["label"], "v1")  # the scratch copy starts without the lead's versions
+        self.assertEqual(report["label"], "v1")
         scratch_hw = (self.project / ".cad-work" / "part-base_sub" / "hw").resolve()
         self.assertEqual(Path(report["version_dir"]), scratch_hw / "versions" / "v1")
         self.assertTrue((scratch_hw / "versions" / "v1" / "parts" / "LMP-0001.step").is_file())
         self.assertEqual(report["check"]["exit"], 0)
         self.assertTrue(Path(report["check"]["json"]).is_file() and Path(report["form"]["json"]).is_file())
         for tool in ("run", "check", "form"):
-            self.assertTrue(Path(report[tool]["log"]).is_file(), tool)  # diagnostics go to logs, not the caller
+            self.assertTrue(Path(report[tool]["log"]).is_file(), tool)
         self.assertEqual(report["form"]["own_findings"], [])
-        self.assertEqual(tree(self.hw), before)  # hw/versions, hw/renders, and every record unchanged
+        self.assertEqual(tree(self.hw), before)
 
 
 if __name__ == "__main__":
