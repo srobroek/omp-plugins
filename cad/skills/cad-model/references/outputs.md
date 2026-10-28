@@ -3,8 +3,10 @@
 ## Version layout (`run`)
 
 `hw/versions/vN/`, written to a hidden partial folder and renamed when complete; a failed run
-leaves nothing. Labels increase: `run` refuses an existing label and any label at or below the
-newest built version.
+leaves nothing, and `latest.json` keeps naming the previous version. Labels increase: `run` refuses
+an existing label and any label at or below the newest built version. Paths follow the cad-record
+layout (`skill://cad-record/references/layout.md`); `run` refuses to seal a file the layout does not
+admit.
 
 | File | Content |
 |---|---|
@@ -14,7 +16,9 @@ newest built version.
 | `part-map.json` | `schema_version: 2`; `occurrences.<id>`: `PN`, `ref`, `nodes`, `node_indices`, `meshes`, matched on the exact instance name (authoritative for selection and motion); `parts.<PN>`: `product`, `occurrences`, and the aggregated `nodes`, `node_indices`, `meshes` |
 | `metrics.json` | `schema_version: 2`; `parts.<PN>` (definition level, in its `model_frame`): `model_frame`, `volume_mm3`, `area_mm2`, `bbox_mm` {min, max, size}, `centre_of_volume_mm`, `solids`, `shells`, `faces`, `holes`, `material`, `density_g_cm3`, `mass_g` (unit mass), `mass_target_g`; `occurrences.<id>`: `PN`, `transform`, `bbox_mm` of the placed geometry, `centre_of_volume_mm` and `holes` carried by the placement; `totals` over occurrences (quantity-weighted), with `quantity` per PN, `parts_without_density` and `occurrences_without_density` |
 | `drawing-features.json` | only when a model defines `drawing_features`: `label`, `units`, `frames.<PN>` (its `model_frame`), and `parts.<PN>` = that model's locators in that frame (semantic ID → locator, `references/contract.md`); parts without the hook are absent |
-| `manifest.json` | `schema_version: 2`. Per PN, `parts.<PN>`: `kernel`, `model_frame`, `occurrences`, `model`, `source_sha256`, `record_sha256` (part.yaml), `params` and the kernel's volume, solids and validity. Per occurrence, `occurrences.<id>`: `PN`, `ref`, `explicit`, `group` and `rest` (P). `pose` holds `values` (independent joints at nominal, coupled joints derived from them; a derived value outside its limits fails the run) and, per occurrence, `transforms` (T) and `motions` (D). `joints` lists each joint with occurrence-id `parent` and `child` (a coupled joint's `nominal` is null); `joint_pairs` lists their sorted pairs with `joint` id and `type` (an `--attach` joint is fixed, id `attach:<REF>`). Also: `ground`, `tools`, `glb`, `drawing_features` and the `files` sha256 map. |
+| `record/` | byte copies of the records the version was built from: `product.yaml`, `assembly.yaml`, `interfaces.yaml` when present, and `parts/<PN>/part.yaml` of every part record. `run` reads them once, before the kernels, and refuses to seal if any record or `model.py` changed during the run |
+| `manufacturing/<PN>/` | every custom-made PN (below): `part.step`, `part.stl` for an FDM part, and `manufacturing.json` |
+| `manifest.json` | `schema_version: 2`. Per PN, `parts.<PN>`: `kernel`, `model_frame`, `occurrences`, `model`, `source_sha256`, `record_sha256` (part.yaml), `params` and the kernel's volume, solids and validity. Per occurrence, `occurrences.<id>`: `PN`, `ref`, `explicit`, `group` and `rest` (P). `pose` holds `values` (independent joints at nominal, coupled joints derived from them; a derived value outside its limits fails the run) and, per occurrence, `transforms` (T) and `motions` (D). `joints` lists each joint with occurrence-id `parent` and `child` (a coupled joint's `nominal` is null); `joint_pairs` lists their sorted pairs with `joint` id and `type` (an `--attach` joint is fixed, id `attach:<REF>`). `record` maps each snapshot path to its sha256; `manufacturing.<PN>` is each custom-made PN's manufacturing entry (below). Also: `ground`, `tools`, `glb`, `drawing_features` and the `files` sha256 map of every file but itself. |
 
 A file without `schema_version` is a version 1 version, written before occurrences: it reads as one
 occurrence per PN whose id is the PN (cad-render `scripts/versions.py`, `built_occurrences`, the
@@ -66,21 +70,26 @@ Mass is solid-material mass: `volume_mm3 * density / 1000`, density from `assets
 {"label": "v3", "assembly_step": "versions/v3/assembly.step",
  "parts": {"LMP-0001": "versions/v3/parts/LMP-0001.step"},
  "glb": "versions/v3/assembly.glb", "metrics": "versions/v3/metrics.json",
- "part_map": "versions/v3/part-map.json", "manifest": "versions/v3/manifest.json"}
+ "part_map": "versions/v3/part-map.json", "manifest": "versions/v3/manifest.json",
+ "manufacturing": {"LMP-0001": "versions/v3/manufacturing/LMP-0001"}}
 ```
 
 With a `drawing-features.json` it also has `"drawing_features": "versions/v3/drawing-features.json"`.
-
-Graders, renderers, and viewers resolve the current files through it. A GLB node belongs to a
-part when its name starts with the PN.
+When `run` sealed a version but could not write `latest.json`, it exits 2, keeps the version and
+names the command that points the pointer at it: `cad_model.py latest <hw> --label vN`. That
+command checks every file of the newest version against its manifest first and rebuilds nothing.
 
 `run` stdout: `status`, `label`, `version_dir`, per-part `kernel`/`volume_mm3`/`solids`/`mass_g`,
-`timings_s` (`<kernel>_import_s`, `<kernel>_runner_wall_s`, `glb_s`, `total_s`). On exit 1:
-`findings`, one per failed part: `pn`, `check`, `type`, `message`, `where`, plus `runners` timings
-when the kernels ran. `check` is `contract` (a model folder not named by its PN, or a missing or
-unsupported `KERNEL`; `type` `ContractError`, `where` null), `kernel` (the part's `KERNEL` differs
-from `--kernel`; `ContractError`, `where` null), or `build` (the runner's exception `type`, `where`
-= `model.py:<line> in <function>`, null when the failure is not in model.py).
+`manufacturing` per custom-made PN (`status`, `complete`, `path`, `process`, `state`),
+`timings_s` (`<kernel>_import_s`, `<kernel>_runner_wall_s`, `manufacturing_s`, `glb_s`, `total_s`).
+On exit 1: `findings`, one per failed part: `pn`, `check`, `type`, `message`, `where`, plus
+`runners` timings when the kernels ran. `check` is `contract` (a model folder not named by its PN,
+or a missing or unsupported `KERNEL`; `type` `ContractError`, `where` null), `kernel` (the part's
+`KERNEL` differs from `--kernel`; `ContractError`, `where` null), `build` (the runner's exception
+`type`, `where` = `model.py:<line> in <function>`, null when the failure is not in model.py), or
+`manufacture`: a refused part.yaml `manufacture` declaration (`ContractError`, before any kernel
+runs), or a failed manufacturing check (`ManufactureError`; the message names each failed check
+and condition, and `manufacturing.<PN>` carries the part's rows).
 
 `product.yaml` can declare a printer volume for FDM parts:
 
@@ -93,16 +102,76 @@ build_volume:
   margin_mm: 5 # optional; removed from both ends of each usable axis
 ```
 
-`check.build_volume` tests the model-frame axis-aligned box under each permitted permutation.
-For example, `xzy` maps part X to printer X, part Y to printer Z, and part Z to printer Y.
-The margin reduces each usable printer axis at both ends.
-Each part row reports model-frame dimensions and its selected fit.
+`cadmodel/orientation.py` is the one owner of build orientation, for `run` and `check`. It tests the
+part's axis-aligned box under each permitted permutation. A permutation names which part axis each
+printer axis takes: `xzy` maps part X to printer X, part Y to printer Z and part Z to printer Y.
+Alone that can be a mirror, so the printer X row is reversed whenever the plain permutation has
+determinant -1; every rotation is proper. `xyz` wins when it fits, else the lowest print height,
+then the largest XY clearance, then the name. The margin reduces each usable printer axis at both
+ends.
 
-When no axis-aligned permutation fits, the check tests the minimum-volume oriented box.
-The result reports `orientation: "oriented"`, `size_mm`, and three unit vectors in `axes`.
-The vectors are in the part frame and correspond in order to the dimensions in `size_mm`.
-If neither box fits, the result names the PN, model-frame size, printer volume, and both fit failures.
-An undeclared volume warns without blocking. Non-FDM parts are ignored.
+When no permutation fits, it tries the minimum-volume oriented box. Its axes, each signed so that
+its largest component is positive, go to the printer axes in every order under the same
+preference. Every candidate is rotated and its box measured again; only a measured fit counts.
+
+`check.build_volume` fits each FDM part in the state it is printed in: the manufacturing STEP of a
+version with manufacturing outputs (already on the bed, so `xyz` fits), else the definition. It
+reads the printer and the process from the version's record snapshot. Each row reports
+`orientation`, `method`, `size_mm`, `model_frame_size_mm` (the size of the shape fitted),
+`rotation` (rows: the printer axes in part coordinates) and `determinant`; an oriented fit also
+repeats `rotation` as `axes`. If neither box fits, the row names the PN, size, printer volume, and
+both fit failures. An undeclared volume warns without blocking. Non-FDM parts are ignored.
+
+## Manufacturing outputs
+
+A part is custom-made when part.yaml has `make_buy: make` or `procurement.mode: made_to_drawing`
+(cad-record `layout.custom_made`); a catalogue buy has no manufacturing output. `run` writes
+`manufacturing/<PN>/` for each custom-made PN, once per PN however many occurrences place it:
+
+| File | Content |
+|---|---|
+| `part.step` | AP242, exact B-rep, millimetres, one product `"<PN> <title>"` (the state is metadata, never a second PN) with its geometry in the bed frame, not placed by a location |
+| `part.stl` | FDM only: binary STL in millimetres, tessellated from `part.step` with absolute deflections, 0.05 mm and 0.1 rad unless part.yaml `manufacture.mesh` declares others. STL carries no units; `manufacturing.json` states them |
+| `manufacturing.json` | the manifest entry below, `files` (sha256 of `part.step` and `part.stl`), and the check rows `run` measured |
+
+The state is the installed definition, or the `build_manufacture(params)` shape of a part whose
+part.yaml declares `manufacture.relationship: different` (`references/contract.md`). An FDM part is
+placed on the printer bed of `product.yaml` `build_volume` (above): turned by one proper rotation
+from `cadmodel/orientation.py`, its box centred in X and Y, its lowest point at Z 0. The margin
+reserves size; it never lifts the part. Without a declared volume, or without a fit, the part keeps
+its native +Z (with a declared volume it is still centred; without one its box corner sits at the
+origin) and is incomplete. A CNC or made-to-drawing part keeps its model frame (identity).
+
+The manifest entry `manufacturing.<PN>`: `PN`, `rev`, `title`, `product`, `material`, `process`,
+`finish`; `eligibility` (`make_buy`, `procurement_mode`); `state` (`relationship`, `name`, `reason`,
+`decision`, `source`: `build_manufacture` or `installed definition`); `tolerance` (`volume_rel`,
+`volume_abs_mm3`, `allowed_mm3` = max(absolute floor, relative x installed volume), from cad-record
+`manufacture_policy`: 1e-9 relative for a part made as installed, the declared values otherwise);
+`installed` (`step`, `sha256`, the kernel volume and solids); `native` (the manufacturing state's
+kernel volume, solids, validity and errors); `units` mm, `up` +Z; `build_volume` (FDM: size, margin,
+usable size, orientations); `mesh` (FDM: format and deflections); `placement` (`method`
+axis_aligned|oriented|native|identity, `orientation`, `bed` centred|origin|null, `transform` as 3x4
+rows, unrounded, and `determinant`); `path`, `outputs`, `files` (sha256 of every output, the sidecar
+included), `status`, `complete` and `blocking_failures`. A custom-made PN without a model.py gets
+`path: null`, `status: warn`, `complete: false` and a `message`.
+
+Each part row has `status` (pass|warn|fail), `complete`, `blocking_failures` and `checks`; each
+check has `status`, `blocking` and `failed`, the conditions that do not hold:
+
+| Check | Fails when |
+|---|---|
+| `outputs` | a file the layout requires for the process is missing, another file is present, or a file's sha256 differs from the manifest (`check` only) |
+| `record` | `PN`, `rev`, `material`, `process` or `finish` differs from the version's part.yaml snapshot |
+| `native` | the manufacturing state is not a valid B-rep (BRepCheck in the kernel), has no solid, or has no positive volume |
+| `identity` | the manufacturing state's kernel volume differs from the installed one by more than `allowed_mm3`, compared unrounded, or their solid counts differ. Equal volume is not proof of the same holes, walls or material |
+| `step` | `part.step` is not AP242, does not declare millimetres only, holds anything but one product `"<PN> <title>"` at identity, is an invalid B-rep, has another solid count than the state, or its read-back volume differs from the state's kernel volume by more than 1e-6 relative |
+| `mesh` | FDM: `part.stl` is not binary, holds a non-finite coordinate or a degenerate triangle (area <= 1e-12 mm^2 after welding by position and dropping collapsed triangles), is not watertight, is not consistently wound, has non-positive signed volume (inward), has another shell count than the STEP, differs from the STEP volume by more than area x (deflection + float32 rounding), or has a box face farther than the deflection inside the STEP's. Nothing is repaired, so a crack stays open |
+| `placement` | the transform is not a proper rotation (orthonormal, determinant +1 within 1e-9); an FDM part does not touch Z 0 within 1e-6 mm; a CNC part is not at identity. An FDM part outside the reserved extents of the declared volume (X and Y: margin to size - margin; Z: 0 to size - 2 margin), or without a declared volume, warns and is incomplete |
+
+Any failed check fails the run (exit 1): no version, no new `latest.json`. A part is `complete` when
+every check passes; incompleteness (no build volume, no fit, no model) warns without blocking.
+cad-model does not resolve `drawing.manufacturing.build_direction` datums; cad-drawings compares the
+declared direction with `placement.transform`.
 
 ## Check result (`check`)
 
@@ -114,7 +183,9 @@ measured, and `disk_hits`, the pairs read from the pair cache). Every check has 
 | Check | Blocking | Fails when |
 |---|---|---|
 | `step_readback` | yes | a STEP schema is not AP242; a product name differs from `"<PN> <title>"` in the part or assembly STEP; the top product is missing; a read-back volume differs from the kernel volume by more than 1e-6 relative; the read-back solid count differs from the kernel's |
-| `build_volume` | yes | neither the model-frame AABB permutations nor the minimum-volume oriented box fit within the printer volume after margin; missing `product.yaml.build_volume` warns without blocking |
+| `build_volume` | yes | neither the AABB permutations nor the minimum-volume oriented box of the printed shape fit within the printer volume after margin; missing `build_volume` warns without blocking |
+| `artifact_integrity` | yes | a file of the version is missing, changed, unlisted in the manifest `files`, a link or special file (`problems`; cad-record `layout.verify`) |
+| `manufacturing` | yes | a custom-made PN of the record snapshot has no manufacturing entry, a manufacturing entry or folder belongs to no custom-made PN, or a part row fails (`parts.<PN>`, the rows above, judged again on the sealed files). `complete` is true when every part is complete; an incomplete part warns. A version built before manufacturing outputs warns, `blocking: false` |
 | `brep_validity` | yes | BRepCheck rejects the kernel's in-memory shape or the STEP read-back |
 | `solid_structure` | yes | a part has no solid, or its solid count differs from `--expect-solids` or else from the previous version; `--expect-solids` naming a PN outside the version fails (`unknown_parts`) |
 | `interference` | yes | two parts share more than 1e-3 mm^3 at the nominal pose, unless the pair is a declared interference fit or heat-set insert (below) or `--allow-interference` names an undeclared intentional overlap; a declared interference fit that measures no interference is reported in `declared_fit_findings` and fails; a pair whose measurement failed (`error`, `interference_mm3` null) fails even when allowed; `--pair` or `--allow-interference` naming a PN outside the version fails (`unknown_pairs`, `unknown_allowed`); joint-connected pairs are listed under `joint_pairs`, others under `pairs`; `min_clearance` names the closest pair |
@@ -158,3 +229,10 @@ Boolean volumes `shared_mm3`, `a_only_mm3`, `b_only_mm3` of the zero-pose part s
 `unchanged` when both exclusive volumes are within 1e-6 relative of zero. When the kernel fails
 on those Booleans the part is `error`, its exact volumes are null and `error` carries the
 message; whether it changed is unknown.
+
+`manufacturing` compares the manifest manufacturing entries apart from the definitions, so a
+change to the manufacturing state alone shows: `changed` (PNs not unchanged) and `parts.<PN>`
+with `status` (unchanged|changed|added|removed), `changed` (the aspects: `state`, `tolerance`,
+`output_policy` for the mesh deflections or build volume, `geometry` for the state's kernel volume
+or solids, `placement`), `relationship_a`/`_b` and `volume_a_mm3`/`_b`. With a version built
+before manufacturing outputs it is `available: false`.

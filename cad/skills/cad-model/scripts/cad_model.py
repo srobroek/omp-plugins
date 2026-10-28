@@ -11,6 +11,7 @@ Usage:
        [--pair REF:REF ...] [--allow-interference REF:REF ...] [--expect-solids PN=N ...] [--jobs 1|N|auto]
        [--cache DIR | --no-cache]
     uv run --script skill://cad-flow/scripts/run.py cad-model/scripts/cad_model.py diff vA vB [--hw HW] [--out FILE]
+    uv run --script skill://cad-flow/scripts/run.py cad-model/scripts/cad_model.py latest <hw-dir> --label vN
 
 A REF is a PN placed once, or `@id` for one occurrence of hw/assembly.yaml.
 
@@ -26,14 +27,22 @@ run   executes every hw/parts/<PN>/model.py in its declared kernel's own uv envi
                           per occurrence: placement, placed bbox, centre and holes; totals by quantity
         manifest.json     per PN: kernel, model frame, model path, source and record sha256, params,
                           kernel volume; occurrences with rest placements; tool versions; pose
-                          (values, placements, motions); joints and joint pairs; file hashes
+                          (values, placements, motions); joints and joint pairs; the record
+                          snapshot; the manufacturing entry of each custom-made PN; file hashes
+        record/           the product, interface, assembly and part records the version was built from
+        manufacturing/<PN>/  every custom-made PN: part.step (AP242, mm), part.stl (FDM: binary, mm)
+                          and manufacturing.json, in the state model.py build_manufacture defines
+                          (else the installed definition), placed on the printer bed for FDM
       and hw/versions/latest.json pointing at that version (paths relative to hw/). Labels
-      increase: an existing label or one below the newest built version is refused.
+      increase: an existing label or one below the newest built version is refused. A part whose
+      manufacturing output fails a blocking check fails the run: no version, latest unchanged.
 check runs the geometry checks on a built version; diff compares two built versions.
+latest points hw/versions/latest.json at the newest built version after `run` sealed it but could
+      not write the pointer; it verifies the version against its manifest first and rebuilds nothing.
 
 stdout: one JSON document. stderr: diagnostics.
-Exit codes: 0 pass, 1 a part model failed (run) or a blocking check failed (check),
-2 usage or infrastructure error.
+Exit codes: 0 pass, 1 a part model or a manufacturing output failed (run) or a blocking check failed
+(check), 2 usage or infrastructure error.
 """
 
 from __future__ import annotations
@@ -102,6 +111,9 @@ def parser() -> argparse.ArgumentParser:
     diff.add_argument("b")
     diff.add_argument("--hw", type=Path, default=Path("hw"))
     diff.add_argument("--out", type=Path, help="also write the result JSON here")
+    latest = sub.add_parser("latest", help="point hw/versions/latest.json at the newest sealed version")
+    latest.add_argument("hw", type=Path, help="hardware design record directory (hw/)")
+    latest.add_argument("--label", required=True, help="the sealed version label the pointer write failed for")
     return root
 
 
@@ -120,10 +132,12 @@ def main(argv: list[str] | None = None) -> int:
                 cache_dir = None if args.no_cache else (args.cache or load_pair_measure().default_cache_dir())
                 code, result = check(args.hw, args.label, args.pair, args.allow_interference, dict(args.expect_solids),
                                      cache_dir, args.jobs)
-            else:
+            elif args.command == "diff":
                 from cadmodel.diff import diff
 
                 code, result = diff(args.hw, args.a, args.b)
+            else:
+                code, result = build.reconcile_latest(args.hw, args.label)
     except (build.UsageError, pose.MotionError, OSError) as error:
         print(f"cad_model {args.command}: {error}", file=sys.stderr)
         return 2

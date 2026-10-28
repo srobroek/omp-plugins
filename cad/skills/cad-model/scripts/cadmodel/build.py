@@ -1,4 +1,9 @@
-"""`run`: build every part model into hw/versions/<label>/ and point hw/versions/latest.json at it."""
+"""`run`: build every part model into hw/versions/<label>/ and point hw/versions/latest.json at it.
+
+A version holds the installed definitions, the assembly, its record snapshot (record/) and the
+manufacturing outputs of every custom-made part (manufacturing/<PN>/, cadmodel.manufacture). It is
+sealed only when every part builds and every manufacturing output passes its blocking checks.
+"""
 
 from __future__ import annotations
 
@@ -19,7 +24,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
-from cadmodel import holes, mesh, occ, scriptenv
+from cadmodel import holes, manufacture, mesh, occ, orientation, record, scriptenv
 from cadmodel.motion import load_pose
 
 SCRIPTS = Path(__file__).resolve().parents[1]
@@ -85,10 +90,33 @@ def declared_kernel(model: Path) -> str | None:
     return None
 
 
-def discover(hw: Path) -> tuple[list[PartSource], list[dict[str, Any]]]:
-    """Every hw/parts/<PN>/model.py, plus a contract finding per model folder not named by a PN."""
+def part_folders(hw: Path) -> list[str]:
+    """The PN-named folders of hw/parts/ that hold a part.yaml: the part records of the design."""
+    root = hw / "parts"
+    if not root.is_dir():
+        return []
+    return sorted(p.name for p in root.iterdir() if p.is_dir() and is_pn(p.name) and (p / "part.yaml").is_file())
+
+
+def parse_records(files: Mapping[str, bytes]) -> dict[str, dict[str, Any]]:
+    """The part records of a record snapshot (`record.snapshot`), parsed from its bytes, keyed by PN."""
     import yaml
 
+    records = {}
+    for name, data in files.items():
+        if name.startswith("parts/") and name.endswith("/part.yaml"):
+            try:
+                parsed = yaml.safe_load(data.decode("utf-8"))
+            except (UnicodeDecodeError, yaml.YAMLError) as error:
+                raise UsageError(f"hw/{name}: {error}") from error
+            if not isinstance(parsed, dict):
+                raise UsageError(f"hw/{name} is not a mapping")
+            records[name.split("/")[1]] = parsed
+    return records
+
+
+def discover(hw: Path, records: Mapping[str, Mapping[str, Any]]) -> tuple[list[PartSource], list[dict[str, Any]]]:
+    """Every hw/parts/<PN>/model.py with its part record, plus a contract finding per model folder not named by a PN."""
     parts, findings = [], []
     for model in sorted((hw / "parts").glob("*/model.py")):
         pn = model.parent.name
@@ -96,17 +124,16 @@ def discover(hw: Path) -> tuple[list[PartSource], list[dict[str, Any]]]:
             findings.append(finding(pn, "contract", f"hw/parts/{pn}/ holds a model.py but {pn!r} is not a part "
                                                     "number like LMP-0001; name the folder by its PN"))
             continue
-        try:
-            record = yaml.safe_load((model.parent / "part.yaml").read_text(encoding="utf-8"))
-        except (OSError, yaml.YAMLError) as error:
-            raise UsageError(f"{model.parent}/part.yaml: {error}") from error
-        if not isinstance(record, dict) or not isinstance(record.get("title"), str):
+        part = records.get(pn)
+        if part is None:
+            raise UsageError(f"{model.parent}/part.yaml is missing")
+        if not isinstance(part.get("title"), str):
             raise UsageError(f"{model.parent}/part.yaml has no title")
-        target = record.get("mass_target")
-        parts.append(PartSource(pn, record["title"], record.get("material"),
+        target = part.get("mass_target")
+        parts.append(PartSource(pn, part["title"], part.get("material"),
                                 float(target) if isinstance(target, (int, float)) else None,
                                 model.resolve(), declared_kernel(model),
-                                str(record.get("model_frame", "assembly_zero"))))
+                                str(part.get("model_frame", "assembly_zero"))))
     if not parts and not findings:
         raise UsageError(f"no hw/parts/<PN>/model.py under {hw}")
     return parts, findings
@@ -260,7 +287,26 @@ def occurrence_metrics(pn: str, shape: Any, rigid: Any, part: Mapping[str, Any])
 def write_json(path: Path, data: Any) -> None:
     tmp = path.with_name(f".{path.name}.tmp")
     tmp.write_text(json.dumps(data, indent=2, sort_keys=False) + "\n", encoding="utf-8")
-    os.replace(tmp, path)
+    try:
+        os.replace(tmp, path)
+    except OSError:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
+def digest(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def build_volume_of(files: Mapping[str, bytes]) -> orientation.BuildVolume | None:
+    """The printer volume product.yaml declares in a record snapshot, or None."""
+    import yaml
+
+    try:
+        product = yaml.safe_load(files["product.yaml"].decode("utf-8")) if "product.yaml" in files else {}
+        return orientation.BuildVolume.declared(product)
+    except (UnicodeDecodeError, yaml.YAMLError, ValueError) as error:
+        raise UsageError(f"hw/product.yaml: {error}") from error
 
 
 def run(hw: Path, label: str, kernel: str, attach: Iterable[str]) -> tuple[int, dict[str, Any]]:
@@ -276,21 +322,33 @@ def run(hw: Path, label: str, kernel: str, attach: Iterable[str]) -> tuple[int, 
     newest = max(built_numbers(hw), default=0)
     if number <= newest:
         raise UsageError(f"{label} is not after the newest version v{newest}; labels increase, pick v{newest + 1}")
-    sources, findings = discover(hw)
+    files = record.snapshot(hw, part_folders(hw))  # the record this version is built from, read once
+    records = parse_records(files)
+    sources, findings = discover(hw, records)
+    model_sha = {p.pn: sha256(p.model) for p in sources}
     by_pn = {p.pn: p for p in sources}
     assembly = pose.load_assembly(hw)
     attached = pose.attach_joints(attach, assembly)
     groups, kernel_findings = select_kernels(sources, kernel)
-    findings += kernel_findings
+    plans, refused = manufacture.plan(records)
+    findings += kernel_findings + [finding(pn, "manufacture", message) for pn, message in refused]
+    volume = build_volume_of(files)
     if findings:
         return 1, {"status": "fail", "label": label, "findings": findings}
 
+    layout = record.load_layout()
+    record_dir = layout.resolve(hw, "version.record", V=label).relative_to(layout.version_dir(hw, label)).as_posix()
+    states_of = {pn: p.policy.relationship for pn, p in plans.items()}
     work = versions / f".{label}.partial-{os.getpid()}"
     shutil.rmtree(work, ignore_errors=True)
     (work / "parts").mkdir(parents=True)
+    states = Path(tempfile.mkdtemp(prefix="cad-model-states-"))  # build_manufacture shapes, read back by make
     try:
         results = run_kernels({k: [{"pn": p.pn, "name": p.product, "model_frame": p.model_frame, "model": str(p.model),
-                                    "step": str(work / "parts" / f"{p.pn}.step")} for p in members]
+                                    "step": str(work / "parts" / f"{p.pn}.step"), "manufacture": states_of.get(p.pn),
+                                    "manufacture_step": (str(states / f"{p.pn}.step")
+                                                         if states_of.get(p.pn) == "different" else None)}
+                                   for p in members]
                                for k, members in groups.items()})
         timings["kernels_s"] = round(time.perf_counter() - started, 3)
         failed = [finding(pn, "build", res["error"]["message"], res["error"]["type"], res["error"]["where"])
@@ -309,6 +367,16 @@ def run(hw: Path, label: str, kernel: str, attach: Iterable[str]) -> tuple[int, 
             raise pose.MotionError("the nominal pose is outside the joint limits: "
                                    + "; ".join(f["message"] for f in limits))
         transforms, motions = chain.transforms(values), chain.motions(values)
+        mark = time.perf_counter()
+        made, rows = manufacture.make(work, hw, label, plans, {pn: p.product for pn, p in by_pn.items()}, parts,
+                                      {pn: res for pn, (_, res) in built.items()}, pose.load_definitions(hw, states),
+                                      volume)
+        timings["manufacturing_s"] = round(time.perf_counter() - mark, 3)
+        unmade = {pn: row for pn, row in rows.items() if row["status"] == "fail"}
+        if unmade:
+            return 1, {"status": "fail", "label": label, "manufacturing": unmade,
+                       "findings": [finding(pn, "manufacture", manufacture.failure_message(row), "ManufactureError")
+                                    for pn, row in unmade.items()]}
         top = f"{pose.product_id(hw)} {label}"
         pose.write_assembly_step(work / "assembly.step", top, parts, [chain.inventory.get(i) for i in chain.ids],
                                  transforms)
@@ -355,7 +423,7 @@ def run(hw: Path, label: str, kernel: str, attach: Iterable[str]) -> tuple[int, 
             "product_id": pose.product_id(hw),
             "top_product": top,
             "kernel_option": kernel,
-            "assembly_yaml_sha256": sha256(hw / "assembly.yaml"),
+            "assembly_yaml_sha256": digest(files["assembly.yaml"]),
             "attach": list(attach),
             "occurrences": {oid: {"PN": chain.pn(oid), "ref": chain.ref(oid),
                                   "explicit": chain.inventory.get(oid).explicit, "group": group_of.get(oid),
@@ -378,8 +446,8 @@ def run(hw: Path, label: str, kernel: str, attach: Iterable[str]) -> tuple[int, 
                 "occurrences": [oid for oid in chain.ids if chain.pn(oid) == pn],
                 "kernel": built[pn][0],
                 "model": str(by_pn[pn].model.relative_to(hw)),
-                "source_sha256": sha256(by_pn[pn].model),
-                "record_sha256": sha256(by_pn[pn].model.parent / "part.yaml"),
+                "source_sha256": model_sha[pn],
+                "record_sha256": digest(files[f"parts/{pn}/part.yaml"]),
                 "params": built[pn][1]["params"],
                 "kernel_volume_mm3": built[pn][1]["kernel_volume_mm3"],
                 "kernel_solids": built[pn][1]["kernel_solids"],
@@ -390,29 +458,77 @@ def run(hw: Path, label: str, kernel: str, attach: Iterable[str]) -> tuple[int, 
         }
         if features:
             manifest["drawing_features"] = FEATURES_FILE
-        manifest["files"] = {str(p.relative_to(work)): sha256(p) for p in sorted(work.rglob("*")) if p.is_file()}
+        manifest["record"] = {f"{record_dir}/{name}": sha
+                              for name, sha in record.write_snapshot(work / record_dir, files).items()}
+        manifest["manufacturing"] = made
+        if record.snapshot(hw, part_folders(hw)) != files or {p.pn: sha256(p.model) for p in sources} != model_sha:
+            raise UsageError("hw/ records or part models changed while the version was built; nothing was written, "
+                             "run again")
+        manifest["files"] = {p.relative_to(work).as_posix(): sha256(p) for p in sorted(work.rglob("*")) if p.is_file()}
+        stray = [name for name in manifest["files"] if layout.classify(f"hw/versions/{label}/{name}") is None]
+        if stray:
+            raise UsageError(f"run staged files outside the cad-record layout: {stray}")
         write_json(work / "manifest.json", manifest)
         os.replace(work, final)
     finally:
         shutil.rmtree(work, ignore_errors=True)
+        shutil.rmtree(states, ignore_errors=True)
 
-    rel = f"versions/{label}"
-    latest = {"label": label, "assembly_step": f"{rel}/assembly.step",
-              "parts": {pn: f"{rel}/parts/{pn}.step" for pn in sorted(parts)},
-              "glb": f"{rel}/assembly.glb", "metrics": f"{rel}/metrics.json",
-              "part_map": f"{rel}/part-map.json", "manifest": f"{rel}/manifest.json"}
-    if features:
-        latest["drawing_features"] = f"{rel}/{FEATURES_FILE}"
-    write_json(versions / "latest.json", latest)
+    try:
+        point_latest(hw, label, manifest)
+    except OSError as error:
+        raise UsageError(f"{label} is sealed at {final} and kept, but hw/versions/latest.json could not be written "
+                         f"({error}); point it at {label} without rebuilding: cad_model.py latest {hw} --label {label}"
+                         ) from error
     timings["total_s"] = round(time.perf_counter() - started, 3)
     return 0, {
         "status": "pass", "label": label, "version_dir": str(final),
         "parts": {pn: {"kernel": built[pn][0], "volume_mm3": metrics[pn]["volume_mm3"], "solids": metrics[pn]["solids"],
                        "mass_g": metrics[pn]["mass_g"], "quantity": quantity[pn]} for pn in sorted(parts)},
+        "manufacturing": {pn: {"status": entry["status"], "complete": entry["complete"], "path": entry["path"],
+                               "process": entry.get("process"), "state": entry.get("state", {}).get("relationship")}
+                          for pn, entry in made.items()},
         "latest": str(versions / "latest.json"),
         "timings_s": {**timings, **{f"{k}_import_s": r["import_s"] for k, r in results.items()},
                       **{f"{k}_runner_wall_s": r["wall_s"] for k, r in results.items()}},
     }
+
+
+def latest_pointer(label: str, manifest: Mapping[str, Any]) -> dict[str, Any]:
+    """hw/versions/latest.json for a sealed version, from its manifest; paths relative to hw/."""
+    rel = f"versions/{label}"
+    latest = {"label": label, "assembly_step": f"{rel}/assembly.step",
+              "parts": {pn: f"{rel}/{info['step']}" for pn, info in sorted(manifest["parts"].items())},
+              "glb": f"{rel}/assembly.glb", "metrics": f"{rel}/metrics.json",
+              "part_map": f"{rel}/part-map.json", "manifest": f"{rel}/manifest.json"}
+    if manifest.get("drawing_features"):
+        latest["drawing_features"] = f"{rel}/{manifest['drawing_features']}"
+    made = {pn: f"{rel}/{entry['path']}" for pn, entry in sorted((manifest.get("manufacturing") or {}).items())
+            if entry.get("path")}
+    if made:
+        latest["manufacturing"] = made
+    return latest
+
+
+def point_latest(hw: Path, label: str, manifest: Mapping[str, Any]) -> None:
+    write_json(hw / "versions" / "latest.json", latest_pointer(label, manifest))
+
+
+def reconcile_latest(hw: Path, label: str) -> tuple[int, dict[str, Any]]:
+    """Point latest.json at the newest built version after a pointer write failed, without rebuilding:
+    the version must verify byte for byte against its manifest first."""
+    hw = hw.resolve()
+    folder = version_dir(hw, label)
+    newest = max(built_numbers(hw))
+    if label_number(label) != newest:
+        raise UsageError(f"{label} is not the newest built version v{newest}; latest.json names the newest version")
+    problems = record.load_layout().verify(folder)
+    if problems:
+        raise UsageError(f"{folder} does not verify against its manifest, so latest.json is unchanged: {problems}")
+    manifest = read_json(folder / "manifest.json")
+    point_latest(hw, label, manifest)
+    return 0, {"status": "pass", "label": label, "latest": str(hw / "versions" / "latest.json"),
+               "verified_files": len(manifest["files"])}
 
 
 def version_dir(hw: Path, label: str) -> Path:

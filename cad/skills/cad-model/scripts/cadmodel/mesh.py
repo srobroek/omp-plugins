@@ -1,4 +1,5 @@
-"""Binary glTF from the assembly STEP, the occurrence -> mesh-node map, and mesh watertightness."""
+"""Binary glTF from the assembly STEP, the occurrence -> mesh-node map, mesh watertightness, and the binary
+STL of a manufactured part with its read-back report."""
 
 from __future__ import annotations
 
@@ -11,8 +12,11 @@ from typing import Any, Mapping
 from cadmodel import occ
 from cadmodel.motion import load_pose
 
-# Tessellation: chord deviation relative to the assembly diagonal, clamped; angular deflection in rad.
+# Preview tessellation: chord deviation relative to the assembly diagonal, clamped; angular deflection in rad.
+# A manufacturing STL takes the absolute deflections of its part's manufacturing policy instead.
 LINEAR_RELATIVE, LINEAR_MIN_MM, LINEAR_MAX_MM, ANGULAR_RAD = 5e-4, 0.01, 0.2, 0.25
+DEGENERATE_MM2 = 1e-12  # a welded triangle with no more area than this bounds nothing
+STL_HEADER, STL_RECORD = 84, 50  # binary STL: 80-byte header and uint32 count, then 50 bytes per triangle
 MATCH = ("a node belongs to the occurrence whose instance name it carries: `<PN> <title>` for a part placed "
          "once without an id, `<PN> <title> [@id]` for an explicit occurrence")
 
@@ -143,14 +147,9 @@ def part_map(glb: Path, chain: Any, products: Mapping[str, str]) -> dict[str, An
 
 
 def watertight(glb: Path, nodes: Mapping[str, str]) -> dict[str, dict[str, Any]]:
-    """Per occurrence (`nodes`: id -> GLB node name): whether its triangles, welded by position,
-    form a closed 2-manifold. Each occurrence is judged alone, never welded to another instance.
-
-    A triangle whose corners weld to fewer than three vertices is dropped first: it has no area
-    and bounds nothing. BRepMesh emits one wherever a face boundary meets a sphere pole (a ball-end
-    channel end). Dropping it removes one degenerate edge and two coincident uses of a real edge,
-    so it cannot close a hole: a gap still leaves edges that only one remaining triangle uses.
-    """
+    """Per occurrence (`nodes`: id -> GLB node name): whether its triangles, welded by position
+    (`welded`), form a closed 2-manifold. Each occurrence is judged alone, never welded to another
+    instance."""
     import trimesh
 
     scene = trimesh.load(str(glb), force="scene", process=False)
@@ -165,13 +164,80 @@ def watertight(glb: Path, nodes: Mapping[str, str]) -> dict[str, dict[str, Any]]
         if not meshes:
             report[oid] = {"watertight": False, "triangles": 0, "reason": "no mesh node for this occurrence in the GLB"}
             continue
-        mesh = trimesh.util.concatenate(meshes)
-        mesh.merge_vertices(merge_tex=True, merge_norm=True)
-        faces = mesh.faces
-        collapsed = (faces[:, 0] == faces[:, 1]) | (faces[:, 1] == faces[:, 2]) | (faces[:, 0] == faces[:, 2])
-        mesh.update_faces(~collapsed)
+        mesh, collapsed = welded(trimesh.util.concatenate(meshes))
         report[oid] = {"watertight": bool(mesh.is_watertight), "triangles": int(len(mesh.faces)),
-                       "collapsed_triangles": int(collapsed.sum()), "euler_number": int(mesh.euler_number)}
+                       "collapsed_triangles": collapsed, "euler_number": int(mesh.euler_number)}
+    return report
+
+
+def welded(mesh: Any) -> tuple[Any, int]:
+    """`mesh` welded by position, its collapsed triangles dropped, and how many were dropped.
+
+    A triangle whose corners weld to fewer than three vertices is dropped: it has no area and
+    bounds nothing. BRepMesh emits one wherever a face boundary meets a sphere pole (a ball-end
+    channel end). Dropping it removes one degenerate edge and two coincident uses of a real edge,
+    so it cannot close a hole: a gap still leaves edges that only one remaining triangle uses.
+    """
+    mesh.merge_vertices(merge_tex=True, merge_norm=True)
+    faces = mesh.faces
+    collapsed = (faces[:, 0] == faces[:, 1]) | (faces[:, 1] == faces[:, 2]) | (faces[:, 0] == faces[:, 2])
+    mesh.update_faces(~collapsed)
+    return mesh, int(collapsed.sum())
+
+
+def write_stl(shape: Any, path: Path, linear_mm: float, angular_rad: float) -> None:
+    """Tessellate `shape` with absolute deflections and write it as binary STL, in its own units (mm)."""
+    from OCP.BRepMesh import BRepMesh_IncrementalMesh
+    from OCP.StlAPI import StlAPI_Writer
+
+    BRepMesh_IncrementalMesh(shape, linear_mm, False, angular_rad, True)
+    writer = StlAPI_Writer()
+    writer.ASCIIMode = False
+    with load_pose().stdout_to_stderr():
+        if not writer.Write(shape, str(path)):
+            raise occ.GeometryError(f"cannot write {path}")
+
+
+def _shells(faces: Any, vertices: int) -> int:
+    """Connected components of a welded mesh: triangles sharing a vertex are one shell."""
+    parent = list(range(vertices))
+
+    def root(i: int) -> int:
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    for a, b, c in faces.tolist():
+        ra = root(a)
+        for other in (b, c):
+            ro = root(other)
+            if ro != ra:
+                parent[ro] = ra
+    return len({root(i) for i in set(faces.flatten().tolist())})
+
+
+def stl_report(path: Path) -> dict[str, Any]:
+    """What a manufacturing STL holds, read back: binary layout, finite coordinates, and after welding by
+    position (`welded`) its degenerate triangles, closure, winding, signed volume, shells and box."""
+    import numpy as np
+    import trimesh
+
+    data = path.read_bytes()
+    count = struct.unpack_from("<I", data, 80)[0] if len(data) >= STL_HEADER else -1
+    binary = len(data) == STL_HEADER + STL_RECORD * count
+    loaded = trimesh.load(str(path), file_type="stl", process=False, force="mesh")
+    finite = bool(np.isfinite(loaded.vertices).all())
+    mesh, collapsed = welded(loaded)
+    degenerate = int((mesh.area_faces <= DEGENERATE_MM2).sum()) if finite else None
+    low, high = mesh.bounds if len(mesh.faces) else (np.zeros(3), np.zeros(3))
+    return {"binary": binary, "triangles": count, "finite": finite, "collapsed_triangles": collapsed,
+            "degenerate_triangles": degenerate, "watertight": bool(mesh.is_watertight),
+            "winding_consistent": bool(mesh.is_winding_consistent),
+            "volume_mm3": float(mesh.volume) if finite else None,
+            "shells": _shells(mesh.faces, len(mesh.vertices)),
+            "bbox_mm": {"min": [float(v) for v in low], "max": [float(v) for v in high]},
+            "max_abs_mm": float(np.abs(mesh.vertices).max()) if len(mesh.vertices) else 0.0}
     return report
 
 
