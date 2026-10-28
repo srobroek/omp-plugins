@@ -56,7 +56,7 @@ LOAD references/assembly-drawings.md before writing the `drawing` block of `asse
 
 ## Outputs
 
-`DIR/<PN>/`: `sheet-1.svg`, `sheet-1.pdf` (page at sheet size, selectable osifont text), `sheet-1.png` (144 dpi preview), `coverage.json` and, written last, `package.json` with provenance hashes, export evidence and `release` blockers. Exit 0 every drawing passed, 1 a content check failed, 2 invalid input or infrastructure failure.
+`DIR/<PN>/` contains `sheet-1.svg`, `sheet-1.pdf`, `sheet-1.png` (144 dpi), `coverage.json`, and `package.json` with provenance hashes and release blockers. The PDF uses selectable Osifont text. Registered missing symbols render as vectors; unregistered glyphs fail export. Exit 0 means every drawing passed, 1 means a content check failed, and 2 means invalid input or infrastructure failure.
 
 ## Rules
 

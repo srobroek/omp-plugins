@@ -222,15 +222,16 @@ class SheetExportParts(unittest.TestCase):
         runs = sheet_export.split_text(root)
         self.assertEqual(root.findall(f".//{sheet_export.TEXT}"), [])
         self.assertEqual(len(root.findall(".//{http://www.w3.org/2000/svg}path")), 1)
-        self.assertEqual([run["text"] for run in runs], ["Centred label", "Moved", "22.00"])
+        self.assertEqual([run["segments"][0]["text"] for run in runs], ["Centred label", "Moved", "22.00"])
         centred, moved, rotated = runs
         self.assertEqual((centred["x"], centred["y"], centred["anchor"], centred["size"], centred["family"], centred["bold"]),
                          (5.0, 6.0, "middle", 3.5, "osifont", False))
         self.assertEqual(centred["matrix"], [1.0, 0.0, 0.0, 1.0, 10.0, 20.0])
-        self.assertEqual((moved["x"], moved["y"], moved["family"], moved["bold"], moved["anchor"]), (7.0, 8.0, "sans-serif", True, "start"))
+        self.assertEqual((moved["x"], moved["y"], moved["family"], moved["bold"], moved["anchor"]),
+                         (7.0, 8.0, "osifont", True, "start"))
         a, b, c, d, e, f = rotated["matrix"]
         apply = lambda x, y: (round(a * x + c * y + e, 9), round(b * x + d * y + f, 9))
-        self.assertEqual((apply(3, 4), apply(4, 4)), ((3.0, 4.0), (3.0, 3.0)))  # rotated -90 degrees about (3, 4)
+        self.assertEqual((apply(3, 4), apply(4, 4)), ((3.0, 4.0), (3.0, 3.0)))
         self.assertEqual((rotated["size"], rotated["fill"]), (2.5, "#111"))
 
     def test_sheet_size_and_unsized_text_are_checked(self) -> None:
@@ -271,11 +272,20 @@ class SheetExportParts(unittest.TestCase):
             pdf = root / "output.pdf"
             png = root / "output.png"
             svg.write_text('<svg xmlns="http://www.w3.org/2000/svg" width="200mm" height="150mm" viewBox="0 0 200 150">'
-                           '<text x="10" y="20" font-family="sans-serif" font-size="10">Aa 0123</text></svg>',
-                           encoding="utf-8")
+                           '<text x="10" y="20" font-family="sans-serif" font-size="10">Aa 0123</text>'
+                           '<text x="10" y="40" font-size="10">⟂∥×−·</text></svg>', encoding="utf-8")
             sheet_export.export_sheet(command, svg, pdf, png, ["Aa 0123"], 300)
             content = sheet_export.read_pdf(pdf)
+            runs = sheet_export.split_text(SafeET.fromstring(svg.read_text(encoding="utf-8")))
+            self.assertEqual(runs[1]["segments"], [{"vector": character} for character in "⟂∥×−·"])
+            self.assertTrue(all(set(run) == {"segments", "vector_advance", "vector_markup", "x", "y", "anchor", "size",
+                                              "family", "bold", "fill", "matrix"} for run in runs))
+        self.assertEqual(content.text, "Aa 0123")
         self.assertEqual(content.fonts, ["osifont"])
+    def test_svg_unknown_glyph_is_rejected(self) -> None:
+        root = SafeET.fromstring('<svg xmlns="http://www.w3.org/2000/svg"><text font-family="serif" font-size="10">☃</text></svg>')
+        with self.assertRaisesRegex(sheet_export.ExportError, "unsupported glyph.*U\\+2603"):
+            sheet_export.split_text(root)
 
 
 if __name__ == "__main__":
