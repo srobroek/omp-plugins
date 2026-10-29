@@ -8,6 +8,7 @@
 | `PARAMS` | yes | dict of JSON-serialisable defaults; lengths in mm, angles in degrees |
 | `build(params)` | yes | returns one part: a solid, or a compound when the part is several solids |
 | `drawing_features(params, shape)` | no | returns semantic feature locators for drawings; see below |
+| `build_manufacture(params)` | only with a declared state | returns the part in its manufacturing state, such as a bent strap's flat blank; see below |
 
 - `build` receives a private copy of `PARAMS`; the manifest records the values it received.
 - Accepted return values: CadQuery `Shape` or `Workplane` (every stack object; several become one
@@ -51,6 +52,46 @@ primitives only (a kernel object fails the part with a `ContractError`):
   surface span, such as both cheek spans of a clevis bore. Witnesses identify geometry; drawings
   measure every value from the STEP, so never put dimensions here.
 - Without the hook the model still builds; producer-ready drawings need it.
+
+## Manufacturing state
+
+`run` writes the manufacturing outputs of every custom-made part (`references/outputs.md`). A part
+made in its installed shape needs nothing: its definition is reused, not built again. A part
+manufactured in another state, such as a TPU strap that is printed flat and bent when it is
+installed, declares that state in part.yaml and builds it in `build_manufacture(params)`:
+
+```yaml
+manufacture:
+  relationship: different
+  state: flat               # lower_snake_case name of the state
+  reason: elastic_bending   # why the states differ
+  decision: DR-007          # the decision record approving the difference
+  volume_rel_tolerance: 1.0e-6     # and/or volume_abs_tolerance_mm3: the allowed volume difference
+  mesh: {linear_deflection_mm: 0.05, angular_deflection_rad: 0.1}   # optional, FDM part.stl
+```
+
+```python
+def build_manufacture(params: dict):
+    length = math.radians(params["angle"]) * (params["inner_radius"] + params["thickness"] / 2)
+    return cq.Solid.makeBox(length, params["thickness"], params["width"])
+```
+
+- The hook runs exactly when part.yaml declares `relationship: different`; a hook without that
+  declaration, a declaration without a hook, and a hook that is not callable each fail the part with
+  a `ContractError`. A `different` declaration also needs `state`, `reason`, `decision` and a
+  positive volume tolerance; one without them is refused before any kernel runs.
+- It receives its own private copy of the same `PARAMS` that `build` gets and returns a shape as
+  `build` does. It writes no files.
+- It cannot change the PN, revision or material: part.yaml stays their authority, and the STEP
+  product keeps the name `"<PN> <title>"`.
+- Share construction between `build` and `build_manufacture` through private helpers of the
+  model.py, so both states follow one set of parameters.
+- Model the state in any frame and orientation: `run` sets an FDM part on the printer bed itself
+  (one proper rotation, no mirror) and keeps a CNC part in its model frame.
+- The run fails and writes no version when the state differs from the installed definition. That
+  is a kernel volume difference beyond the declared tolerance, another solid count, or an invalid
+  B-rep. Equal volume does not prove the same holes, walls or material, so the state's rationale
+  stays a reviewed engineering decision.
 
 ## Kernel environments
 

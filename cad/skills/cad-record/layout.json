@@ -3,7 +3,7 @@
   "tokens": {
     "V": {"pattern": "v[1-9][0-9]*", "example": "v3", "meaning": "cad-model version label"},
     "PN": {"pattern": "[A-Z]{2,5}-[0-9]{4}", "example": "LMP-0002", "meaning": "part number"},
-    "S": {"pattern": "[A-Z]{2,5}-[0-9]{4}|[a-z][a-z0-9_-]*", "example": "assembly", "meaning": "bundle subject: a PN, a subassembly, check or case id, or assembly for the whole product"},
+    "S": {"pattern": "[A-Z]{2,5}-[0-9]{3,4}|[a-z][a-z0-9_-]*", "example": "assembly", "meaning": "bundle subject: a PN, a record id such as a stack-up (STK-101), a subassembly, check or case id, or assembly for the whole product"},
     "ID": {"pattern": "[a-z][a-z0-9_-]*", "example": "arm-load", "meaning": "analysis case id"},
     "REV": {"pattern": "[A-HJ-NPRTUVWY]", "example": "A", "meaning": "released revision letter"},
     "DR": {"pattern": "DR-[0-9]{3}", "example": "DR-001", "meaning": "decision record id"},
