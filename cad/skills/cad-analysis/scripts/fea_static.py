@@ -567,10 +567,12 @@ def main(argv: list[str] | None = None) -> int:
             recipe_inputs = {**_input_hashes(case), **_snapshot_record_hashes(record_dir, case)}
             if args.out is not None:
                 raise CaseError("--out is only allowed for standalone scratch analyses")
+            tools = solver_versions()
             recipe = {
                 "inputs": recipe_inputs,
                 "case_yaml_sha256": hashlib.sha256(case_path.read_bytes()).hexdigest(),
-                "solver_versions": solver_versions(),
+                # tool identity is its version; the absolute install path differs per host and goes to results.json
+                "solver_versions": {name: tool["version"] for name, tool in tools.items()},
                 "options": _case_options(case),
                 "producer_code_sha256": _producer_code_hashes(),
             }
@@ -586,7 +588,7 @@ def main(argv: list[str] | None = None) -> int:
                 job_scratch = Path(args.hw).parent / ".cad-work"
                 job_scratch.mkdir(parents=True, exist_ok=True)
                 result, status = run_job(case_path, case, scratch_root=job_scratch,
-                                         result_path=output, solver_versions=recipe["solver_versions"])
+                                         result_path=output, solver_versions=tools)
                 if status != 2:
                     run_dir = Path(result["run_directory"])
                     evidence_files = []

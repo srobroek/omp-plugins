@@ -468,13 +468,16 @@ class VersionedPublicationTests(unittest.TestCase):
                  for path in version.rglob("*") if path.is_file()}
         (version / "manifest.json").write_text(json.dumps({"label": "v1", "files": files}), encoding="utf-8")
 
-    def call(self, replace: bool = False) -> tuple[int, dict]:
+    def call(self, replace: bool = False, tools_root: str = "/opt/freecad-a") -> tuple[int, dict]:
         argv = [str(self.case), "--hw", str(self.hw), "--version", "v1"]
         if replace:
             argv.append("--replace")
+        tools = {"freecad": {"path": f"{tools_root}/freecadcmd", "version": "1.1.4"},
+                 "gmsh": {"path": f"{tools_root}/gmsh", "version": "4.15.0"},
+                 "calculix": {"path": f"{tools_root}/ccx", "version": "2.23"}}
         output = __import__("io").StringIO()
         with patch("fea_static.find_freecad", return_value=Path("/fake/freecadcmd")), \
-             patch("fea_static.solver_versions", return_value={"freecad": "1.1.4", "gmsh": "4.13", "calculix": "2.22"}), \
+             patch("fea_static.solver_versions", return_value=tools), \
              patch("fea_static.run_job", side_effect=self.run_job), \
              patch("sys.stdout", output):
             status = fea_static.main(argv)
@@ -503,6 +506,14 @@ class VersionedPublicationTests(unittest.TestCase):
         self.assertTrue(second["reused"])
         self.assertEqual(before, {path.relative_to(bundle).as_posix(): path.read_bytes()
                                   for path in bundle.rglob("*") if path.is_file()})
+
+    def test_same_solver_versions_at_another_install_path_reuse_the_bundle(self) -> None:
+        self.assertEqual(self.call(tools_root="/opt/freecad-a")[0], 0)
+        manifest = json.loads((self.hw / "analysis" / "v1" / "cantilever" / "manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["recipe"]["solver_versions"], {"freecad": "1.1.4", "gmsh": "4.15.0", "calculix": "2.23"})
+        with patch("fea_static.run_job", side_effect=AssertionError("same tool versions should reuse")):
+            status, report = self.call(tools_root="/home/other/squashfs-root/usr/bin")
+        self.assertEqual((status, report["reused"]), (0, True))
 
     def test_changed_case_recipe_is_refused_then_replaced_immutably(self) -> None:
         self.call()
