@@ -676,6 +676,8 @@ def main(argv: list[str] | None = None) -> int:
         if not 0 < args.timeout:
             raise pose.MotionError("--timeout must be positive")
         assembly = pose.load_assembly(args.hw, record_hw)
+        if args.frames is not None and version:
+            args.attach = list(json.loads((version_dir / "manifest.json").read_text(encoding="utf-8")).get("attach") or [])
         if args.frames is None:
             refuse_coupled(assembly)
         freecad = find_freecad(args.freecad)

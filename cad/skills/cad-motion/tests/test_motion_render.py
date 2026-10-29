@@ -22,6 +22,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 import zlib
 from pathlib import Path
 from typing import Any
@@ -54,10 +55,10 @@ motion = load("cad_motion_motion", SCRIPTS / "motion.py")
 pose, plan, motion_glb = motion.pose, motion.plan, motion.motion_glb
 
 
-def chain_of(hw: Path) -> Any:
+def chain_of(hw: Path, manifest: dict[str, Any] | None = None) -> Any:
     assembly = pose.load_assembly(hw)
-    return pose.build_chain(assembly.joints, assembly.occurrences, couplings=assembly.couplings)
-
+    joints = [*assembly.joints, *pose.attach_joints((manifest or {}).get("attach") or [], assembly)]
+    return pose.build_chain(joints, assembly.occurrences, couplings=assembly.couplings)
 
 def v6_hw(root: Path) -> Path:
     hw = root / "v6" / "hw"
@@ -127,6 +128,40 @@ class PlanValidation(unittest.TestCase):
         derived = {row["joint"]: row for row in report["derived"]}
         self.assertEqual(derived["J-031"]["visited"], [0.0, 360.0])
         self.assertEqual(derived["J-013"]["root"], "J-001")
+class PlanLongTravel(PlanValidation):
+    def test_generated_default_plan_scales_step_to_fit_frame_cap(self) -> None:
+        data = {"subassemblies": [{"id": "linear", "parts": ["TST-0010", "TST-0011"]}],
+                "joints": [{"id": "J-100", "type": "prismatic", "parent": "TST-0010", "child": "TST-0011",
+                            "axis": [1, 0, 0], "origin": [0, 0, 0], "min": 0, "max": 1700, "nominal": 0}]}
+        inventory = pose.assembly_data.normalize(data, {})
+        joint = pose.make_joint(data["joints"][0])
+        chain = pose.build_chain([joint], inventory.occurrences)
+        effective = plan.prepare(chain, plan.default_plan(chain), "default")
+        frames = plan.expand(chain, effective)
+        report = plan.coverage(chain, effective, frames)
+        self.assertEqual(effective["max_step"]["mm"], plan.DEFAULT_STEP["mm"])
+        self.assertLessEqual(len(frames), plan.MAX_FRAMES)
+        self.assertEqual((frames[0].settings["J-100"], frames[-1].settings["J-100"]), (0.0, 0.0))
+        self.assertEqual(report["status"], "pass")
+
+    def test_manifest_attachments_are_in_the_motion_context_and_crosscheck_command(self) -> None:
+        fixture = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, fixture, ignore_errors=True)
+        hw = fixture / "project" / "hw"
+        folder = motion_version.write(hw, pose)
+        ctx = motion.Context(hw, "v1")
+        self.assertEqual(ctx.attach, ["TST-0005=TST-0001"])
+        self.assertIn("TST-0005", ctx.chain.ids)
+        self.assertIn("attach:TST-0005", {joint.id for joint in ctx.chain.joints})
+        command = []
+        with mock.patch.object(motion.scriptenv, "script_command", side_effect=lambda *args: command.extend(args) or command), \
+                mock.patch.object(motion, "_run_json", return_value=(2, {"error": "expected stop"})) as run_json:
+            with self.assertRaisesRegex(pose.MotionError, "gave no result"):
+                motion.crosscheck_freecad(ctx, fixture / "frames.json", fixture)
+        self.assertIn("--attach", command)
+        self.assertIn("TST-0005=TST-0001", command)
+        self.assertEqual(run_json.call_args.args[0], command)
+        self.assertEqual(json.loads((folder / "manifest.json").read_text(encoding="utf-8"))["attach"], ctx.attach)
 
     def test_the_lamp_default_plan_covers_three_drivers_and_a_combined_pose(self) -> None:
         effective = plan.prepare(self.lamp, plan.default_plan(self.lamp), "default")

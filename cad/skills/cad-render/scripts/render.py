@@ -779,11 +779,12 @@ async def _retry_view(name: str, capture: Callable[[dict[str, Any], int], Any]) 
     if quality.failures and closeup:
         candidates = [(result, quality, {}, "original")]
         for direction in ALTERNATE_CLOSEUP_DIRECTIONS:
-            options = {"direction": to_glb(direction), "frameScale": 1.15}
+            options = {"direction": to_glb(direction), "frameScale": 1.0}
             candidate, candidate_quality = await attempt("alternate-camera", options)
             candidates.append((candidate, candidate_quality, options, "alternate-camera"))
         result, quality, best_options, strategy = max(
-            candidates, key=lambda item: item[0].get("visible_subject_fraction", 0))
+            candidates, key=lambda item: (not item[1].failures,
+                                          item[0].get("visible_subject_fraction", 0) or 0))
         if quality.failures:
             result, quality = await attempt("ghosted-context", {**best_options, "ghost": True})
             strategy = "ghosted-context"
@@ -976,13 +977,16 @@ def _png(data_url: str, what: str) -> bytes:
     return base64.b64decode(data_url.partition(",")[2])
 
 
-def capture_motion(url: str, spec: dict[str, Any], size: tuple[int, int]) -> dict[str, Any]:
-    """Render every group's frames on one page with one camera per group, then the contact sheet."""
+def capture_motion(url: str, spec: dict[str, Any], size: tuple[int, int], out_dir: Path) -> dict[str, Any]:
+    """Render every group's frames to disk, retaining hashes and the few images needed for a sheet."""
     from playwright.async_api import Error as PlaywrightError
     from playwright.async_api import async_playwright
 
     frames, checks = spec["frames"], spec.get("check") or {}
-    out: dict[str, Any] = {"cameras": [], "pngs": {}, "worlds": {}, "sheet": None, "info": {}, "timings": {}}
+    frame_dir = out_dir / "frames"
+    frame_dir.mkdir(parents=True)
+    out: dict[str, Any] = {"cameras": [], "frame_hashes": {}, "frame_count": 0, "worlds": {},
+                           "sheet": None, "info": {}, "timings": {}}
     errors: list[str] = []
     started = time.monotonic()
 
@@ -1006,7 +1010,10 @@ def capture_motion(url: str, spec: dict[str, Any], size: tuple[int, int]) -> dic
                     for index in group["render"]:
                         result = await page.evaluate("(a) => window.cadRender.captureMotion(a.deltas, a.check)",
                                                      {"deltas": frames[index]["deltas"], "check": str(index) in checks})
-                        out["pngs"][index] = _png(result["png"], f"frame {index}")
+                        png = _png(result["png"], f"frame {index}")
+                        (frame_dir / f"frame-{index:04d}.png").write_bytes(png)
+                        out["frame_hashes"][index] = sha256(png)
+                        out["frame_count"] += 1
                         if index in tiles:
                             data_urls[index] = result["png"]
                         if str(index) in checks:
@@ -1082,25 +1089,20 @@ def run_motion(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.1}, daemon=True)
     thread.start()
     try:
-        captured = capture_motion(f"http://127.0.0.1:{server.server_address[1]}/", spec, size)
+        captured = capture_motion(f"http://127.0.0.1:{server.server_address[1]}/", spec, size, out_dir)
     finally:
         server.shutdown()
         server.server_close()
     parity = motion_parity(spec, captured["worlds"])
-    out_dir.mkdir(parents=True)
-    (out_dir / "frames").mkdir()
-    files = {}
-    for index, png in sorted(captured["pngs"].items()):
-        name = f"frames/frame-{index:04d}.png"
-        (out_dir / name).write_bytes(png)
-        files[name] = sha256(png)
+    files = {f"frames/frame-{index:04d}.png": digest
+             for index, digest in captured["frame_hashes"].items()}
     if captured["sheet"] is not None:
         (out_dir / "contact-sheet.png").write_bytes(captured["sheet"]["png"])
         files["contact-sheet.png"] = sha256(captured["sheet"]["png"])
     info = captured["info"]
     metadata = {
         "version": version.label, "case": spec.get("case"), "status": parity["status"],
-        "image": {"width": size[0], "height": size[1]}, "frames_rendered": len(captured["pngs"]),
+        "image": {"width": size[0], "height": size[1]}, "frames_rendered": captured["frame_count"],
         "groups": [{"id": group["id"], "view": group["camera"], "fit_frames": [min(group["fit"]), max(group["fit"])],
                     "rendered": len(group["render"]), "camera": camera_record(camera),
                     "swept_radius_mm": round(camera["swept_radius_m"] * 1000, 3)}
@@ -1118,7 +1120,7 @@ def run_motion(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     }
     (out_dir / "motion-render.json").write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
     summary = {"status": parity["status"], "version": version.label, "out_dir": str(out_dir),
-               "frames": len(captured["pngs"]), "contact_sheet": str(out_dir / "contact-sheet.png")
+               "frames": captured["frame_count"], "contact_sheet": str(out_dir / "contact-sheet.png")
                if captured["sheet"] is not None else None, "parity": parity, "wall_s": metadata["wall_s"]}
     return (0 if parity["status"] == "pass" else 1), summary
 
