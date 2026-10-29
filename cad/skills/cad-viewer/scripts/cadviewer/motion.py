@@ -14,8 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
 from typing import Any
-
-from . import LimitError, ViewerError
+from . import LimitError, ViewerError, record
 
 POSE_PATH = Path(__file__).resolve().parents[3] / "cad-motion" / "scripts" / "pose.py"
 PLAN_PATH = POSE_PATH.with_name("plan.py")
@@ -47,13 +46,16 @@ def plan_module() -> ModuleType:
     return _module(PLAN_MODULE_NAME, PLAN_PATH)
 
 
-def load_chain(hw: Path) -> Any:
-    """The occurrence chain of hw/assembly.yaml, at the record's rest placements, with its couplings."""
+def load_chain(hw: Path, version: Any | None = None) -> Any:
+    """The occurrence chain at record rest placements, with built-version attachments and couplings."""
     pose = pose_module()
     try:
-        assembly = pose.load_assembly(hw)
-        return pose.build_chain(assembly.joints, assembly.occurrences, couplings=assembly.couplings)
-    except pose.MotionError as error:
+        assembly = (pose.load_assembly(hw) if version is None
+                    else pose.load_assembly(version.hw, version.record_dir))
+        attachments = pose.attach_joints(version.manifest.get("attach") or [], assembly) if version else []
+        joints = [*assembly.joints, *attachments]
+        return pose.build_chain(joints, assembly.occurrences, couplings=assembly.couplings)
+    except (pose.MotionError, record.ViewerError) as error:
         raise ViewerError(str(error)) from error
 
 

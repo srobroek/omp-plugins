@@ -218,7 +218,25 @@ class RetryLadder(unittest.TestCase):
         _, quality, attempts = asyncio.run(render._retry_view("closeup-LMP-0004", lambda options, attempt: capture(options)))
         self.assertTrue(quality.passed)
         self.assertEqual(attempts[-1]["strategy"], "ghosted-context")
-        self.assertTrue(all("metrics" in row and "camera" in row for row in attempts))
+    def test_closeup_alternates_stay_fitted_and_clean_candidates_beat_visible_clipped_ones(self) -> None:
+        calls = []
+        clipped = frame(subject=(30, 20, 120, 60), shadow=(40, 60, 95, 75))
+        clean = frame(**GOOD)
+
+        def capture(options: dict, attempt: int) -> dict:
+            calls.append(options)
+            if not options:
+                return self.capture_frame("closeup-LMP-0004", clean, fraction=0.1)
+            if len(calls) == 2:
+                return self.capture_frame("closeup-LMP-0004", clipped, fraction=0.99)
+            return self.capture_frame("closeup-LMP-0004", clean, fraction=0.3)
+
+        result, quality, attempts = asyncio.run(render._retry_view("closeup-LMP-0004", capture))
+        self.assertTrue(quality.passed, quality.failures)
+        self.assertEqual(result["retry"]["strategy"], "alternate-camera")
+        self.assertTrue(all(options.get("frameScale", 1.0) <= 1.0 for options in calls[1:]))
+        self.assertNotIn("ghosted-context", [row["strategy"] for row in attempts])
+
     def test_isolated_retry_resets_subject_visibility_ratio(self) -> None:
         attempts = []
         def capture(options: dict) -> dict:

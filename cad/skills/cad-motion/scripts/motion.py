@@ -112,7 +112,8 @@ class Context:
         self.version, self.folder, self.record = LAYOUT.built_version(self.hw, requested)
         self.manifest = json.loads((self.folder / "manifest.json").read_text(encoding="utf-8"))
         assembly = pose.load_assembly(self.hw, self.record)
-        joints = [*assembly.joints, *pose.attach_joints(self.manifest.get("attach") or [], assembly)]
+        self.attach = list(self.manifest.get("attach") or [])
+        joints = [*assembly.joints, *pose.attach_joints(self.attach, assembly)]
         self.chain = pose.build_chain(joints, assembly.occurrences, couplings=assembly.couplings)
         values = (self.manifest.get("pose") or {}).get("values") or {}
         missing = [j.id for j in self.chain.movable if j.id not in values]
@@ -373,8 +374,11 @@ def _recipe(ctx: Context, effective: Mapping[str, Any], outputs: list[str], size
 def crosscheck_freecad(ctx: Context, frames_path: Path, work: Path) -> tuple[dict[str, Any], Path]:
     """freecad_assembly.py --frames on the plan frames: (crosscheck.json, motion.FCStd path)."""
     job = work / "crosscheck"
-    code, result = _run_json(scriptenv.script_command(FREECAD_PY, "--hw", str(ctx.hw), "--version", ctx.version,
-                                                      "--frames", str(frames_path), "--job-dir", str(job)),
+    command = scriptenv.script_command(FREECAD_PY, "--hw", str(ctx.hw), "--version", ctx.version,
+                                       "--frames", str(frames_path), "--job-dir", str(job))
+    for attach in ctx.attach:
+        command.extend(("--attach", attach))
+    code, result = _run_json(command,
                              work / "crosscheck.log", FREECAD_TIMEOUT_S, "freecad_assembly.py")
     if code == 2 or not (job / "crosscheck.json").is_file():
         raise pose.MotionError(f"the FreeCAD cross-check gave no result: {result.get('error') or result}")

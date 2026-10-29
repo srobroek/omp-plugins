@@ -133,9 +133,7 @@ def prepare(chain: Any, data: Any, case: str) -> dict[str, Any]:
 
 
 def default_plan(chain: Any) -> dict[str, Any]:
-    """Every independent joint over its whole range: per joint nominal -> min -> max -> nominal,
-    zero-length legs dropped, and the return dropped when max reproduces the nominal pose (a 720 deg
-    crank); then, with two or more independent joints, all to min, all to max and all home together."""
+    """Every independent joint over its whole range, with step sizes scaled to fit MAX_FRAMES."""
     joints = chain.independent
     if not joints:
         raise PlanError(["the record has no independent movable joint, so it has no motion to plan"])
@@ -162,9 +160,36 @@ def default_plan(chain: Any) -> dict[str, Any]:
         leg("all-to-max", "every independent joint to its maximum", {j.id: float(j.max) for j in joints})
         if not same_pose(chain, current, nominal):
             leg("all-home", "every independent joint back to nominal", dict(nominal))
+    max_step = _default_max_step(chain, segments)
     return {"schema": SCHEMA, "case": DEFAULT_CASE, "title": "Every independent joint over its full range",
-            "fps": DEFAULT_FPS, "max_step": dict(DEFAULT_STEP), "segments": segments, "coverage": "full",
+            "fps": DEFAULT_FPS, "max_step": max_step, "segments": segments, "coverage": "full",
             "generated": "default plan, generated from the record"}
+
+def _default_max_step(chain: Any, segments: Sequence[Mapping[str, Any]]) -> dict[str, float]:
+    """Smallest uniform increase to the default units that fits all generated motion under MAX_FRAMES."""
+    plan = {"segments": segments}
+    total = sum(_frame_counts(chain, plan)) + 1
+    if total <= MAX_FRAMES:
+        return dict(DEFAULT_STEP)
+
+    def fits(scale: float) -> bool:
+        step = {unit: value * scale for unit, value in DEFAULT_STEP.items()}
+        return sum(_frame_counts(chain, {"segments": segments, "max_step": step})) + 1 <= MAX_FRAMES
+
+    low, high = 1.0, max(2.0, total / MAX_FRAMES)
+    while not fits(high):
+        high *= 2
+    for _ in range(64):
+        middle = (low + high) / 2
+        if middle == low or middle == high:
+            break
+        if fits(middle):
+            high = middle
+        else:
+            low = middle
+    return {unit: value * high for unit, value in DEFAULT_STEP.items()}
+
+
 
 
 def same_pose(chain: Any, a: Mapping[str, float], b: Mapping[str, float]) -> bool:

@@ -561,7 +561,7 @@ class Host:
                 return {"view": view, "state": self.view.as_json()}
             if view != "section":
                 raise ViewerError(f"unknown view {view!r}")
-            chain = motion.load_chain(loaded.version.hw)
+            chain = motion.load_chain(loaded.version.hw, loaded.version)
             plane = motion.section_plane(chain, loaded.shown, _text(body, "joint"))
             normal, point = plane["normal"], plane["point"]
             # three-cad-viewer measures a clip slider from the scene's bounding-box centre: it keeps
@@ -618,10 +618,10 @@ class Host:
         shown version's record snapshot, whose nominal pose the viewer displays."""
         loaded = self.versions[self._layout()["a"]]
         if body.get("case"):
-            chain = motion.load_chain(loaded.version.record_dir)
+            chain = motion.load_chain(loaded.version.record_dir, loaded.version)
             return motion.plan_case_animation(chain, loaded.shown, loaded.version.hw, _text(body, "case"))
         steps, seconds = int(body.get("steps") or 13), float(body.get("seconds") or 4.0)
-        chain = motion.load_chain(loaded.version.hw)
+        chain = motion.load_chain(loaded.version.hw, loaded.version)
         return motion.plan_animation(chain, loaded.shown, _text(body, "joint"), _number(body, "from"),
                                      _number(body, "to"), steps, seconds)
 

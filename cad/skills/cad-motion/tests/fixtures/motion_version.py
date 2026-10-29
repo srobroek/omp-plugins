@@ -24,16 +24,18 @@ BOXES = {
     "TST-0002": ((0.0, -5.0, 0.0), (100.0, 5.0, 5.0)),
     "TST-0003": ((100.0, -4.0, 5.0), (180.0, 4.0, 9.0)),
     "TST-0004": ((180.0, -3.0, 9.0), (200.0, 3.0, 12.0)),
+    "TST-0005": ((35.0, -3.0, -4.0), (45.0, 3.0, 4.0)),
 }
-TITLES = {"TST-0001": "Base", "TST-0002": "Arm", "TST-0003": "Forearm", "TST-0004": "Tip"}
+TITLES = {"TST-0001": "Base", "TST-0002": "Arm", "TST-0003": "Forearm", "TST-0004": "Tip",
+          "TST-0005": "Cover"}
 NOMINAL_J1 = 30.0
 BASIS = ((1.0, 0.0, 0.0), (0.0, 0.0, 1.0), (0.0, -1.0, 0.0))
 
 
 def assembly(j3_limit: float = 30.0) -> dict[str, Any]:
-    """The assembly.yaml mapping; `j3_limit` bounds the coupled J-003 (J-002 reaches +-60, so J-003 +-30)."""
+    """Planar arm fixture with a built-but-unlisted cover attached to TST-0001."""
     return {
-        "subassemblies": [{"id": "arm", "title": "Planar arm", "parts": sorted(BOXES)}],
+        "subassemblies": [{"id": "arm", "title": "Planar arm", "parts": sorted(set(BOXES) - {"TST-0005"})}],
         "joints": [
             {"id": "J-001", "type": "revolute", "parent": "TST-0001", "child": "TST-0002", "axis": [0, 0, 1],
              "origin": [0, 0, 0], "min": -90, "max": 90, "nominal": NOMINAL_J1},
@@ -108,10 +110,11 @@ def _sha(path: Path) -> str:
 
 
 def write(hw: Path, pose: Any, j3_limit: float = 30.0) -> Path:
-    """Write the record into `hw` and seal hw/versions/v1 built from it; returns the version folder."""
+    """Write the record and sealed v1, with an attached built PN that has no assembly occurrence."""
     import yaml
 
     hw.mkdir(parents=True, exist_ok=True)
+    attach = ["TST-0005=TST-0001"]
     (hw / "product.yaml").write_text("id: motion-arm\n", encoding="utf-8")
     (hw / "interfaces.yaml").write_text("interfaces: []\n", encoding="utf-8")
     (hw / "assembly.yaml").write_text(yaml.safe_dump(assembly(j3_limit), sort_keys=False), encoding="utf-8")
@@ -121,7 +124,8 @@ def write(hw: Path, pose: Any, j3_limit: float = 30.0) -> Path:
             f"PN: {pn}\ntitle: {title}\nmaterial: Aluminum 6061-T6\nfinish: Machined\nmodel_frame: assembly_zero\n",
             encoding="utf-8")
     loaded = pose.load_assembly(hw)
-    chain = pose.build_chain(loaded.joints, loaded.occurrences, couplings=loaded.couplings)
+    joints = [*loaded.joints, *pose.attach_joints(attach, loaded)]
+    chain = pose.build_chain(joints, loaded.occurrences, couplings=loaded.couplings)
     values = chain.complete({})
     placed, moved = chain.transforms(values), chain.motions(values)
     folder = hw / "versions" / "v1"
@@ -141,18 +145,21 @@ def write(hw: Path, pose: Any, j3_limit: float = 30.0) -> Path:
     (folder / "assembly.step").write_text("fixture placeholder; the motion tests never read it\n", encoding="utf-8")
     (folder / "part-map.json").write_text(json.dumps({
         "schema_version": 2, "glb": "assembly.glb",
-        "parts": {oid: {"product": f"{oid} {TITLES[oid]}", "occurrences": [oid], "node_indices": [i + 1]}
-                  for i, oid in enumerate(order)},
-        "occurrences": {oid: {"PN": oid, "ref": oid, "node_indices": [i + 1]} for i, oid in enumerate(order)}}),
-        encoding="utf-8")
+        "parts": {pn: {"product": f"{pn} {TITLES[pn]}",
+                        "occurrences": [oid for oid in order if chain.pn(oid) == pn],
+                        "node_indices": [i + 1 for i, oid in enumerate(order) if chain.pn(oid) == pn]}
+                  for pn in TITLES},
+        "occurrences": {oid: {"PN": chain.pn(oid), "ref": chain.ref(oid), "node_indices": [i + 1]}
+                        for i, oid in enumerate(order)}}), encoding="utf-8")
     (folder / "metrics.json").write_text(json.dumps({"schema_version": 2, "parts": {
         pn: {"bbox_mm": {"min": list(lo), "max": list(hi), "size": [b - a for a, b in zip(lo, hi)]}}
         for pn, (lo, hi) in BOXES.items()}}), encoding="utf-8")
     files = {p.relative_to(folder).as_posix(): _sha(p) for p in sorted(folder.rglob("*")) if p.is_file()}
     manifest = {
-        "schema_version": 2, "label": "v1", "product_id": "motion-arm", "ground": chain.root, "attach": [],
+        "schema_version": 2, "label": "v1", "product_id": "motion-arm", "ground": chain.root, "attach": attach,
         "assembly_yaml_sha256": files["record/assembly.yaml"],
-        "occurrences": {oid: {"PN": oid, "ref": oid, "group": "arm", "rest": rows(chain.rests[oid])} for oid in order},
+        "occurrences": {oid: {"PN": chain.pn(oid), "ref": chain.ref(oid), "group": "arm" if oid in loaded.inventory else None,
+                              "rest": rows(chain.rests[oid])} for oid in order},
         "pose": {"values": values, "transforms": {oid: rows(placed[oid]) for oid in order},
                  "motions": {oid: rows(moved[oid]) for oid in order}},
         "joints": [{"id": j.id, "type": j.type, "parent": j.parent, "child": j.child, "axis": list(j.axis),

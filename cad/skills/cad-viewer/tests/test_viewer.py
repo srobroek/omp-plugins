@@ -116,6 +116,59 @@ def make_version(hw: Path, label: str, products: dict[str, str] | None = None, l
             "manifest": f"versions/{label}/manifest.json"}), encoding="utf-8")
 
 
+def make_attached_version(hw: Path, pose: Any, attach: list[str]) -> Path:
+    """Seal the lamp record with its ring PN attached in the version manifest instead of the record joints."""
+    import yaml
+
+    data = yaml.safe_load((hw / "assembly.yaml").read_text(encoding="utf-8"))
+    data["joints"] = [joint for joint in data["joints"] if joint["id"] not in {"J-010", "J-011", "J-012"}]
+    (hw / "assembly.yaml").write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    assembly = pose.load_assembly(hw)
+    chain = pose.build_chain([*assembly.joints, *pose.attach_joints(attach, assembly)], assembly.occurrences,
+                             couplings=assembly.couplings)
+    values = chain.complete({})
+    transforms = chain.transforms(values)
+    folder = hw / "versions" / "v9"
+    (folder / "record").mkdir(parents=True)
+    for name in ("product.yaml", "interfaces.yaml", "assembly.yaml"):
+        shutil.copyfile(hw / name, folder / "record" / name)
+    shutil.copytree(hw / "parts", folder / "record" / "parts")
+    (folder / "assembly.step").write_text("STEP", encoding="utf-8")
+    (folder / "assembly.glb").write_text("GLB", encoding="utf-8")
+    (folder / "parts").mkdir()
+    for part_pn in PNS:
+        (folder / "parts" / f"{part_pn}.step").write_text("STEP", encoding="utf-8")
+    occurrence_nodes = {oid: index for index, oid in enumerate(chain.ids, start=1)}
+    part_map = {"schema_version": 2, "glb": "assembly.glb",
+                "parts": {part_pn: {"product": f"{part_pn} {record.read_yaml(hw / 'parts' / part_pn / 'part.yaml')['title']}",
+                                    "node_indices": [occurrence_nodes[oid] for oid in chain.ids
+                                                     if chain.pn(oid) == part_pn]}
+                          for part_pn in PNS},
+                "occurrences": {oid: {"PN": chain.pn(oid), "node_indices": [index]}
+                                for oid, index in occurrence_nodes.items()}}
+    (folder / "part-map.json").write_text(json.dumps(part_map), encoding="utf-8")
+    (folder / "metrics.json").write_text(json.dumps({"schema_version": 2, "parts": {
+        part_pn: {"volume_mm3": 1000.0, "mass_g": 2.7, "mass_target_g": None,
+                  "bbox_mm": {"min": [0, 0, 0], "max": [10, 5, 5], "size": [10, 5, 5]}}
+        for part_pn in PNS}, "totals": {"volume_mm3": 11000.0, "mass_g": 29.7}}), encoding="utf-8")
+    groups = {member: group.id for group in assembly.groups for member in group.members}
+    manifest = {"schema_version": 2, "label": "v9", "product_id": "lamp-arm", "attach": attach,
+                "record": {}, "manufacturing": {}, "ground": chain.root,
+                "occurrences": {oid: {"PN": chain.pn(oid), "ref": chain.ref(oid), "group": groups.get(oid),
+                                      "rest": chain.rests[oid].rows()} for oid in chain.ids},
+                "pose": {"values": values, "transforms": {oid: transform.rows() for oid, transform in transforms.items()},
+                         "motions": {oid: transform.rows() for oid, transform in chain.motions(values).items()}},
+                "joints": [{"id": joint.id, "type": joint.type, "parent": joint.parent, "child": joint.child,
+                            "axis": list(joint.axis), "origin": list(joint.origin), "min": joint.min,
+                            "max": joint.max, "nominal": joint.nominal} for joint in chain.joints]}
+    files = [path for path in folder.rglob("*") if path.is_file() and path.name != "manifest.json"]
+    manifest["files"] = {path.relative_to(folder).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+                         for path in files}
+    (folder / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    (hw / "versions" / "latest.json").write_text(json.dumps({"label": "v9"}), encoding="utf-8")
+    return folder
+
+
 class Fixture(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = Path(tempfile.mkdtemp(prefix="cad-viewer-test-"))
@@ -619,6 +672,19 @@ class Holes(Fixture):
                     {"holes": [{"id": "H1", "diameter_mm": 0, "through": True}]}):
             with self.subTest(bad=bad), self.assertRaisesRegex(ViewerError, "holes"):
                 record.holes("LMP-0002", bad["holes"])
+
+
+class AnimateAttached(Fixture):
+    def test_manifest_attachment_moves_with_parent_and_is_available_for_sections(self) -> None:
+        make_attached_version(self.hw, motion.pose_module(), ["@ring-base=LMP-0005", "@ring-elbow=LMP-0006",
+                                                              "@ring-head=LMP-0007"])
+        version = record.load_version(self.hw)
+        chain = motion.load_chain(version.record_dir, version)
+        shown = {oid: motion.rigid_from_rows(rows) for oid, rows in version.nominal_rows().items()}
+        plan = motion.plan_animation(chain, shown, "J-001", 0.0, 80.0, steps=3)
+        ring_track = next(track for track in plan.tracks if track.id == "ring-base")
+        self.assertNotEqual(ring_track.quaternions[0], ring_track.quaternions[-1])
+        self.assertEqual(motion.section_plane(chain, shown, "J-001")["joint"], "J-001")
 
 
 class AnimateLimits(Fixture):
