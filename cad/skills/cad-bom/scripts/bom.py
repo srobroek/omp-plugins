@@ -41,6 +41,7 @@ import contextlib
 import csv
 import ctypes
 import functools
+import importlib.util
 import json
 import os
 import re
@@ -280,32 +281,19 @@ def main(argv: list[str] | None = None) -> int:
     record_hw = args.hw
     version = None
     if args.version:
-        version = LAYOUT.latest(args.hw) if args.version == "latest" else args.version
-        if version is None:
-            print("bom: no built version: latest.json is absent", file=sys.stderr)
-            return 2
-        version_dir = LAYOUT.version_dir(args.hw, version)
-        if not (version_dir / "manifest.json").is_file():
-            print(f"bom: --version {version} is not built", file=sys.stderr)
-            return 2
-        problems = LAYOUT.verify(version_dir)
-        if problems:
-            print(f"bom: --version {version}: integrity failure: {'; '.join(problems)}", file=sys.stderr)
-            return 2
-        record_hw = LAYOUT.resolve(args.hw, "version.record", V=version)
-        if not (record_hw / "product.yaml").is_file():
-            print(f"bom: --version {version}: record snapshot is missing", file=sys.stderr)
-            return 2
-    out = args.out.resolve() if args.out else (args.hw / "bom.csv").resolve()
-    expected = (args.hw / "bom.csv").resolve()
-    if out != expected:
         try:
-            relative = LAYOUT.relative(args.hw, out)
-        except LAYOUT.LayoutError:
-            relative = ""
-        if not relative.startswith(".cad-work/"):
-            print(f"bom: --out must be hw/bom.csv or under .cad-work, not {out}", file=sys.stderr)
+            version, _, record_hw = LAYOUT.built_version(args.hw, args.version)
+        except LAYOUT.LayoutError as error:
+            print(f"bom: {error}", file=sys.stderr)
             return 2
+    try:
+        if args.out and args.out.resolve() == (args.hw / "bom.csv").resolve():
+            out = args.out.resolve()
+        else:
+            out = LAYOUT.scratch_path(args.hw, args.out, "--out") if args.out else (args.hw / "bom.csv").resolve()
+    except LAYOUT.LayoutError as error:
+        print(f"bom: {error}", file=sys.stderr)
+        return 2
     if not args.step.is_file():
         print(f"bom: STEP file not found: {args.step}", file=sys.stderr)
         return 2
@@ -318,13 +306,14 @@ def main(argv: list[str] | None = None) -> int:
     failed = bool(result["missing_part_yaml"] or result["missing_in_step"] or result["unidentified"])
     summary = {"status": "fail" if failed else "pass", "bom_csv": str(out), **result}
     if version:
-        summary["reconciled_version"] = version
+        summary["reconciled_against"] = version
     json.dump(summary, sys.stdout, indent=2)
     sys.stdout.write("\n")
     for key in ("missing_part_yaml", "missing_in_step", "unidentified"):
         if result[key]:
             print(f"bom: {key}: {', '.join(result[key])}", file=sys.stderr)
     return 1 if failed else 0
+
 
 
 if __name__ == "__main__":
