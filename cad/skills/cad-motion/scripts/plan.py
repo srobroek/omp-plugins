@@ -181,7 +181,8 @@ def _number(value: Any) -> bool:
 
 
 def validate(chain: Any, plan: Any, case: str) -> list[str]:
-    """Every problem with `plan` against the chain's joints; empty when it can be expanded."""
+    """Every problem with `plan` against the chain's joints; empty when it can be expanded. It reads only
+    `joints`, `movable`, `independent` and `couplings`, so a pose.Assembly checks a plan against a record."""
     if not isinstance(plan, dict):
         return ["a plan is a YAML mapping"]
     problems: list[str] = []

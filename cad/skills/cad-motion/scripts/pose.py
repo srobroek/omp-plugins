@@ -314,6 +314,11 @@ class Joint:
         return value, residual.angle_degrees(), _distance(residual.apply(self.origin), self.origin)
 
 
+def independent_joints(joints: Iterable[Joint], couplings: Any) -> tuple[Joint, ...]:
+    """The author-settable joints: every movable joint without a coupling."""
+    return tuple(j for j in joints if j.movable and j.id not in couplings.laws)
+
+
 @dataclass(frozen=True, eq=False)
 class Assembly:
     """The normalized record: occurrences and groups (an assembly_data.Inventory), joints whose
@@ -332,6 +337,15 @@ class Assembly:
     @property
     def groups(self) -> tuple[Any, ...]:
         return self.inventory.groups
+
+    @property
+    def movable(self) -> tuple[Joint, ...]:
+        return tuple(j for j in self.joints if j.movable)
+
+    @property
+    def independent(self) -> tuple[Joint, ...]:
+        """The record's author-settable joints, whether or not every member has a joint path to the ground."""
+        return independent_joints(self.joints, self.couplings)
 
     @property
     def definitions(self) -> tuple[str, ...]:
@@ -526,7 +540,7 @@ class Chain:
     @property
     def independent(self) -> tuple[Joint, ...]:
         """The author-settable joints: every movable joint without a coupling."""
-        return tuple(j for j in self.movable if j.id not in self.couplings.laws)
+        return independent_joints(self.joints, self.couplings)
 
     @property
     def dependent(self) -> tuple[Joint, ...]:
