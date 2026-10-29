@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Any, Iterator
 from urllib.parse import parse_qs, quote, urlsplit
 
-from . import LimitError, ViewerError, capture, gallery, motion, record, publication
+from . import LimitError, ViewerError, capture, gallery, motion, record
 from .capture import Presenter
 from .session import HOST, port_open
 
@@ -790,28 +790,35 @@ class Host:
             shown = self.versions.get("A")
         if not selected or not selected.get("label") or shown is None:
             raise ViewerError("nothing shown yet; run `viewer.py show` first")
+
         hw, label = shown.version.hw, selected["label"]
         api = record._layout()
         requested = Path(str(body["out"])) if body.get("out") else None
         view = str(body.get("view"))
-        subject = view.replace("isolate:", "isolate-") if view.startswith("isolate:") else view
-        recipe = {"view": view, "crop": body.get("crop") or "page", "joint": body.get("joint"),
-                  "zoom": body.get("zoom"), "refit": body.get("refit"), "selected": selected,
-                  "viewer_state": {"mode": state["mode"], "view": state["view"], "animation": state["animation"]}}
+        subject = view.replace(":", "-")
+        viewer_state = {"mode": state["mode"], "view": state["view"], "animation": state["animation"],
+                        "selected": selected}
+        size = [self.viewport[0], self.viewport[1]]
+        recipe = {"view": view, "viewer_state": viewer_state, "size": size}
+
         try:
-            existing = None if requested else publication.reusable(hw, label, subject, recipe, bool(body.get("replace")))
-        except api.PublishConflict as error:
+            if requested is None:
+                existing = api.reusable(hw, "bundle.captures", {"V": label, "S": subject}, recipe,
+                                        replace=bool(body.get("replace")))
+                if existing is not None:
+                    return {"status": "pass", "cache": "hit", "out": str(existing / f"{view}.png"),
+                            "version": label, "view": view, "viewer_state": viewer_state}
+                staged = api.staging(hw, "bundle.captures")
+                target = staged / f"{view}.png"
+            else:
+                staged = None
+                target = api.scratch_path(hw, requested, "--out")
+                if target.exists() or target.is_symlink():
+                    raise ViewerError(f"{target} already exists; capture outputs are never overwritten")
+            body["out"] = str(target)
+        except api.LayoutError as error:
             raise ViewerError(str(error)) from error
-        if existing is not None:
-            return {"status": "pass", "cache": "hit", "out": str(existing / f"{view}.png"), "version": label}
-        if requested is None:
-            staged = publication.staging(hw)
-            target = staged / f"{view}.png"
-            body["out"] = str(target)
-        else:
-            staged = None
-            target = api.scratch_path(hw, requested, "--out")
-            body["out"] = str(target)
+
         self.guard.begin_capture()
         try:
             job = self.presenter.submit(lambda page: capture.capture(self, page, body))
@@ -821,9 +828,15 @@ class Host:
         job.add_done_callback(lambda _: self.guard.end_capture())
         result = self.presenter.result(job, CAPTURE_TIMEOUT_S, "capture")
         if staged is not None:
-            (staged / "capture.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
-            result["out"] = str(publication.publish(hw, label, subject, staged, recipe,
-                                                    bool(body.get("replace"))) / f"{view}.png")
+            metadata = {"version": label, "view": result["view"], "viewer_state": result["viewer_state"]}
+            (staged / "capture.json").write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
+            try:
+                published = api.publish(hw, "bundle.captures", {"V": label, "S": subject}, staged, recipe=recipe,
+                                        producer="cad-viewer viewer.py capture", status=result["status"],
+                                        replace=bool(body.get("replace")))
+            except api.LayoutError as error:
+                raise ViewerError(str(error)) from error
+            result["out"] = str(published.path / f"{view}.png")
         return result
 
     def serve(self) -> None:

@@ -143,21 +143,24 @@ def _section(sid: str, title: str, source: Path, tiles: list[dict[str, Any]], em
 
 
 def _renders(hw: Path, version: str) -> dict[str, Any]:
+    api = record._layout()
     root = hw / "renders" / version
     tiles: list[dict[str, Any]] = []
     notes: list[str] = []
     folders = sorted((path for path in root.iterdir() if path.is_dir()), key=lambda path: path.name) if root.is_dir() else []
     for folder in folders:
-        data_path = folder / "render.json"
-        if not data_path.is_file() or not (folder / "manifest.json").is_file():
+        data_path, manifest_path = folder / "render.json", folder / "manifest.json"
+        if not manifest_path.is_file():
             continue
-        manifest = _json(data_path)
-        problems = record._layout().verify(folder)
+        problems = api.verify(folder)
         if problems:
             notes.append(f"{folder} fails its bundle inventory: {'; '.join(problems)}")
             continue
-        views = manifest.get("views") if isinstance(manifest, dict) and isinstance(manifest.get("views"), dict) else {}
-        materials = manifest.get("materials") if isinstance(manifest, dict) and isinstance(manifest.get("materials"), dict) else {}
+        metadata = _json(data_path) if data_path.is_file() else {}
+        if not isinstance(metadata, dict):
+            metadata = {}
+        views = metadata.get("views") if isinstance(metadata.get("views"), dict) else {}
+        materials = metadata.get("materials") if isinstance(metadata.get("materials"), dict) else {}
         listed: set[str] = set()
         for name, entry in views.items():
             entry = entry if isinstance(entry, dict) else {}
@@ -183,8 +186,8 @@ def _renders(hw: Path, version: str) -> dict[str, Any]:
             if png.name not in listed and (tile := _tile(hw, png, png.stem)) is not None:
                 tiles.append({**tile, "status": "unknown", "note": "not listed in render.json",
                               "bundle": str(folder)})
-        if isinstance(manifest, dict) and manifest.get("status"):
-            notes.append(f"{folder.name}: {manifest['status']}")
+        if metadata.get("status"):
+            notes.append(f"{folder.name}: {metadata['status']}")
     empty = f"No renders for {version}: run cad-render `render.py {hw} --version {version}`."
     return _section("renders", "Renders", root, tiles, empty, notes)
 
