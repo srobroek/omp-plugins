@@ -11,12 +11,12 @@ Keep the source of truth in the hardware project's `hw/` design record. `cad-rec
 | SPECIFY | Set measurable requirements and verification criteria. | Requirements with rationale, source, priority, verification method and criteria; updated interfaces. | `cad-record`: validate project |
 | concept | One `cad-concept-designer` per variant drafts 2-4 rapid three.js variants in one batch; merge them, then refine, merge, or drop by feedback. | Scene, options and selection in a decision record. Preview is not verified CAD. | `cad-concept`: `concept.py check <scene>`; handoff: `concept.py handoff <scene>` |
 | VARIANT gate | Get explicit concept selection. | Selected concept and gate evidence in workflow record and decision. | `cad-concept`: checked handoff |
-| layout | Define subassemblies, interfaces, joints/limits, BOM skeleton. | Assembly and interfaces; preliminary EBOM. | `cad-record`: validate; `cad-model run hw --label vN`, then `cad-model check vN --hw hw`; `cad-render hw --version vN` |
-| LAYOUT freeze | Present layout, interfaces, BOM skeleton for approval. | Frozen decision and gate evidence; `flow.recheck_from: layout`. | `cad-viewer`: serve, show version and compare checks. |
+| layout | Define subassemblies, interfaces, joints/limits, BOM skeleton. | Assembly and interfaces; preliminary EBOM. | `cad-record`: validate. `cad-model run hw --label vN`, then `cad-model check vN --hw hw`. `cad-render hw --version vN`. Once a joint moves, `cad-motion` `motion.py render --hw hw --version vN --case default --outputs glb,sheet`. |
+| LAYOUT freeze | Present layout, interfaces, BOM skeleton, and the default motion render for approval. | Frozen decision and gate evidence; `flow.recheck_from: layout`. | `cad-viewer`: serve, show version and compare checks; `viewer.py animate --case default` plays the motion. |
 | parts | One `cad-part-designer` per subassembly and one `cad-sourcing-researcher` per purchased family, in one batch; build one integrated version; PARTS gate. | Part records and models; PN, revision, material, process, finish, mass target, make/buy, supplier. | Run build, check, render and `cad-design form_check.py --hw hw --parts-dir <version parts> --fidelity F2`. |
 | detail | One `cad-part-designer` per made part applies fits, fasteners, tolerances, and process rules in one batch. Build, check, and draw one integrated version for the DETAIL gate. | Part revisions, fit decisions, drawings, and evidence. | `cad-fits`; `cad-design form_check.py` at F3; `cad-drawings` publishes each part drawing for that version. |
 | bom | Reconcile part numbers, revisions, quantities, make/buy, suppliers, and assemblies. | Released-intent EBOM. | `cad-bom`: `bom.py --hw hw` or `bom.py --version vN --hw hw` to reconcile against a version snapshot. |
-| analysis | One `cad-analyst` per case checks interference, clearance, stack-up, kinematics, or static FEA at the worst pose, in one batch; FEA at the worst pose follows the sweep; ANALYSIS gate. | Verification tied to requirements/configurations; analysis artifacts and assumptions. | Use `cad-motion`, `cad-analysis` and `cad-fits` on the selected version. Case results publish through cad-record layout; verification links identify the versioned evidence bundle. |
+| analysis | One `cad-analyst` per case checks interference, clearance, stack-up, kinematics, static FEA at the worst pose, or a motion case, in one batch; FEA at the worst pose follows the sweep; ANALYSIS gate. | Verification tied to requirements/configurations; analysis artifacts and assumptions; accepted motion cases in `hw/motion/cases/<case>/plan.yaml`. | Use `cad-motion`, `cad-analysis` and `cad-fits` on the selected version. Case results publish through cad-record layout; verification links identify the versioned evidence bundle. The lead publishes an accepted motion plan with `motion.py render --hw hw --version vN --case <case> --outputs glb,sheet,video`; a record with coupled joints adds `--crosscheck freecad` and a verification row from `crosscheck.json`, where only `solved` joints count as independent evidence. |
 | critique | Spawn mechanical and DFM reviewers in one parallel read-only batch. | Preserve both verdicts and evidence in workflow record. Neither reviewer waits for the other. | `cad-review-mech`; `cad-review-dfm` |
 | reconcile | Resolve critique findings. Rerun affected checks. | Updated decisions, verification, revisions, dispositions. | `cad-flow`; `cad-recheck` stamps the exact staged `hw/` tree only after checks pass. |
 | design_freeze | Present reconciled design, analyses, and record for approval. | Frozen anchor pins the exact built version and its manifest hash. | `cad-record`: validate project and confirm every custom-made part has complete manufacturing outputs. |
@@ -38,6 +38,14 @@ Draft, show live previews, and collect feedback. Continue until the user says â€
 - After DESIGN freeze, reopen only affected parts and dependents. Preserve unaffected parts and their evidence. Before another release, build a new version and re-freeze its exact manifest anchor.
 - Before using `uv run --script skill://<name>/scripts/...` on a non-OMP harness, resolve `skill://<name>/` to that skill's base directory; OMP resolves the URI directly.
 - A preview or render is not a check result. Tie reported checks to a design revision/configuration.
+
+Once a version has an independent movable joint, each commit batch also runs the default motion render beside cad-render: `uv run --script skill://cad-flow/scripts/run.py cad-motion/scripts/motion.py render --hw hw --version vN --case default --outputs glb,sheet`. Only the contact-sheet tiles render, so it takes seconds to a minute. Exit 1, a coverage gap or a limit finding, blocks the gate; exit 2 is no result. The LAYOUT freeze gate shows:
+
+```text
+L1 MOTION RENDER vN default: PASS|FLAGGED|FAIL, {frames} frames, {segments} segments, {timings_s.total} s
+   Coverage -- {summary}
+   Files -- {contact-sheet.png absolute path}, {motion.glb absolute path}
+```
 
 ## Delegation
 
@@ -72,14 +80,14 @@ The units, briefs, and ownership are the same. Keep the unit list and each unit'
 Each worker's brief is self-contained. It names:
 
 - the unit id, and the molecule step text or, without Beads, the same instruction;
-- the PNs, variant, or case the unit owns;
+- the PNs, variant, or case the unit owns; a motion case also names the requirements and use cases its plan must show;
 - the inputs as absolute paths (record files, version label, frozen interfaces, shared node ids), plus kernel and fidelity;
 - the write boundary, and that the worker asks the user nothing and writes no ledger entry;
 - the report format, which gives every file as an absolute path.
 
 ### Integrate
 
-Read every report of the batch before you change anything. Accept a part delivery only when its scratch build passed; otherwise dispatch the unit again. Decide each proposal: apply an accepted one to the shared record yourself, and record why a declined one was declined. Merge concept variants into the scene, adopt cited sourcing values, and write verification rows from analysis results. Then run the stage's commit batch once on `hw/`; at L2 and L3 that is `cad-model run` and `check`, the form check, the render, the L3 drawings, and the recheck. Present the stage gate with the absolute path of every file it shows.
+Read every report of the batch before you change anything. Accept a part delivery only when its scratch build passed; otherwise dispatch the unit again. Decide each proposal: apply an accepted one to the shared record yourself, and record why a declined one was declined. Merge concept variants into the scene, adopt cited sourcing values, write verification rows from analysis results, and copy an accepted motion plan to `hw/motion/cases/<case>/plan.yaml` before publishing it. Then run the stage's commit batch once on `hw/`; at L2 and L3 that is `cad-model run` and `check`, the form check, the render, the L3 drawings, and the recheck. Present the stage gate with the absolute path of every file it shows.
 
 ### Scratch workspace
 

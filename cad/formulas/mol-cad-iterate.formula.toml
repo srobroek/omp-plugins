@@ -95,7 +95,7 @@ title = "Recheck L4 analysis for {{affected_parts}}: one analysis molecule per c
 type = "task"
 needs = ["detail-gate"]
 labels = ["cad", "phase:analysis", "fanout"]
-description = "List the analysis cases that cover {{affected_parts}}: the joint sweep, the FreeCAD assembly check, tolerance stack-ups, and static FEA at the worst-case pose. Bond each case that needs no other case's output onto this step before dispatch: `bd mol bond mol-cad-analysis <this-step> --type parallel --ref analysis-<case> --var product={{product}} --var scope={{scope}} --var case=<id> --var kind=sweep|assembly|stackup|fea --var version=vN`. Dispatch every ready subagent step below this step in ONE parallel batch of cad-analyst workers, as skill://cad-flow Delegation describes. An FEA case at the worst-case pose waits for the sweep molecule, then runs as the next batch. Close this step when every child is closed."
+description = "List the analysis cases that cover {{affected_parts}}: the joint sweep, the FreeCAD assembly check, tolerance stack-ups, static FEA at the worst-case pose, and motion cases whose joints moved. Bond each case that needs no other case's output onto this step before dispatch: `bd mol bond mol-cad-analysis <this-step> --type parallel --ref analysis-<case> --var product={{product}} --var scope={{scope}} --var case=<id> --var kind=sweep|assembly|stackup|fea|motion --var version=vN`. Dispatch every ready subagent step below this step in ONE parallel batch of cad-analyst workers, as skill://cad-flow Delegation describes. An FEA case at the worst-case pose waits for the sweep molecule, then runs as the next batch. Close this step when every child is closed."
 
 [steps.metadata]
 skill_hints = "cad-flow, cad-motion, cad-analysis"
