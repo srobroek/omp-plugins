@@ -27,8 +27,8 @@ TRIGGER
    With `--hw hw --version vN`, the script publishes `results.json` to `hw/analysis/vN/<stack-id>/` and reuses a
    matching bundle; changed recipes require `--replace`. Standalone `--out` destinations must be under `.cad-work`.
 
-Exit codes for both scripts: 0 pass, 1 check failure (`--expect` mismatch or requirement not met),
-2 usage error or input outside coverage.
+Exit codes for both scripts: 0 pass; 1 reports that a check failed (`--expect` mismatch or a stack-up requirement).
+2 reports invalid usage or an input outside the supported table coverage.
 
 ## Coverage
 
