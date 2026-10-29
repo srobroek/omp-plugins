@@ -260,6 +260,13 @@ class SizesAtAPlane(unittest.TestCase):
         self.assertAlmostEqual(depth.value, 0.8)
         self.assertEqual(sheet._callout_text(depth, "iso"), "depth 0.8")
 
+    def test_a_dimension_at_a_left_edge_plane_extends_left_past_its_line(self) -> None:
+        """A wall thickness at a rim on the view's left edge: extension lines run left, outside the view."""
+        dim = sheet.Linear("dim-wall", "cut", (40.0, 10.0), (40.0, 16.0), False, "3", side=-1)
+        markup = sheet._dimension_markup(dim, 30.0, 3.5, "asme").markup
+        self.assertIn('x1="39.000" y1="10.000" x2="28.500" y2="10.000"', markup)
+        self.assertIn('text-anchor="end"', markup, "ASME text reads leftward, away from the view")
+
 
 if __name__ == "__main__":
     unittest.main()

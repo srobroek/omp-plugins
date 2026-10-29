@@ -70,9 +70,10 @@ datums. Instances with a missing or extra node keep one location each.
   as an `angle` request) and for a width between inclined flanks (a dovetail's width at its bed, with
   the flank `angle`). Its planes are one feature's two or one from each of two features, the pair
   nearest the plane; equal pairs side by side count (`2× 2.3`). It draws as a linear dimension in a view
-  that sees those lines end-on, from the theoretical sharp corner when an edge is chamfered away. A
-  spherical recess takes a `radius` request on its sphere (printed `SR`) and a `depth` request on the
-  sphere and the plane it opens through, measured to the sphere's lowest point.
+  that sees those lines end-on, on the side of the view that plane lies, from the theoretical sharp
+  corner when an edge is chamfered away. A spherical recess takes a `radius` request on its sphere
+  (printed `SR`) and a `depth` request on the sphere and the plane it opens through, measured to the
+  sphere's lowest point.
 - `geometric_tolerances`: `{id, characteristic, features, zone_mm, diameter_zone?, datum_frame?}`.
 - `edges` (detail drawings, required): the general indication of the edges of undefined shape, ISO 13715
   limits `[lower, upper]` in mm for `external` and `internal` edges. A `+` value permits excess material
@@ -114,12 +115,17 @@ datums. Instances with a missing or extra node keep one location each.
 | `round`, `chamfer` | size, in a callout or the general note | |
 
 A prismatic feature (planes normal to a frame axis, cylinders and cones on one) may not sit only in a
-controlled-model `surface`. Inclined planes, spheres, tori and B-spline faces may, but a profile does
-not state a size: a drafted wall, a width between two non-parallel walls of a recess or protrusion
-(stated at its rim or top), and a spherical recess need their size, and a drafted or flank face its
-angle; any other inclined face's angle is then the model's. `drawing_draft.py` proposes locators and
-the direct size requests from the same recognition, `at` requests and their angles included; faces
-that match no pattern are listed with the reason. Once the model has its hook, the draft uses the
+controlled-model `surface`. Inclined planes, spheres, tori and B-spline faces may. A profile does not
+state a size, though. These features need their own:
+
+- a drafted wall: its thickness at its reference plane, and the draft angle;
+- a width between two non-parallel walls of a recess or protrusion: the width at its rim or top, and
+  the flank angle;
+- a spherical recess: its SR and depth.
+
+Any other inclined face's angle is then the model's. `drawing_draft.py` proposes locators and the
+direct size requests from the same recognition, `at` requests and their angles included. It lists
+each face that matches no pattern, with the reason. Once the model has its hook, the draft uses the
 hook's names, and `drawing_merge.py` merges the reviewed block into part.yaml after checking that
 every feature it names is a locator the hook returns.
 
