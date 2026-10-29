@@ -208,6 +208,10 @@ def _runtime_check(uv: str, runtime: Runtime) -> Check:
     try:
         found = _python(_environment(uv, runtime), code)
     except RuntimeError as error:
+        if name == "cad-model" and "cannot open shared object file" in str(error):
+            guidance = ("OCP is missing a system shared library. On Linux, install "
+                        "`libglvnd-glx`, `libX11`, and `expat` (for example: "
+                        "`dnf install libglvnd-glx libX11 expat`), then rerun preflight.")
         return _check(name, name, "fail", f"{', '.join(runtime.imports)} did not import in the environment of "
                       f"{runtime.script.name}: {error}.", guidance)
     if found["version"] != expected:
@@ -243,10 +247,10 @@ def _chromium_check(uv: str, install: bool = False) -> Check:
                   f"Playwright {expected} launches Chromium {found['chromium']} ({found['path']}).", "")
 
 
-def find_freecadcmd(environ: Mapping[str, str], home: Path | None = None,
-                    platform_name: str | None = None,
-                    macos_command: Path | None = None) -> Path | None:
-    """Resolve FreeCAD using its ordered, authoritative lookup candidates."""
+def _find_freecadcmd(environ: Mapping[str, str], home: Path | None = None,
+                     platform_name: str | None = None,
+                     macos_command: Path | None = None) -> Path | None:
+    """Resolve FreeCAD using CAD_TOOL's ordered authoritative candidate list."""
     home_dir = home or Path(environ.get("HOME", str(Path.home())))
     for kind, value in CAD_TOOL.lookup_candidates:
         if kind == "environment":
@@ -266,6 +270,13 @@ def find_freecadcmd(environ: Mapping[str, str], home: Path | None = None,
             if command.is_file() and os.access(command, os.X_OK):
                 return command
     return None
+
+
+def find_freecadcmd(environ: Mapping[str, str], home: Path | None = None,
+                    platform_name: str | None = None,
+                    macos_command: Path | None = None) -> Path | None:
+    """Resolve FreeCAD through the authoritative runtime lookup."""
+    return _find_freecadcmd(environ, home, platform_name, macos_command)
 
 
 def cad_tool_version(command: Path, environ: Mapping[str, str]) -> tuple[str | None, str]:

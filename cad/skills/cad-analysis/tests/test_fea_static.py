@@ -283,46 +283,28 @@ mesh_size: 5
         with self.assertRaisesRegex(ValueError, "out of range"):
             select_solid_index(names, None, 3)
 
-    def test_freecad_lookup_prefers_environment_before_path(self) -> None:
-        from unittest.mock import patch
+    def test_freecad_lookup_uses_home_path_and_case_insensitive_candidate_names(self) -> None:
         from freecad_lookup import find_freecad
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            from_env = root / "env-freecad"
-            from_path = root / "path-freecad"
-            for command in (from_env, from_path):
-                command.touch()
-                command.chmod(0o755)
-            with patch.dict("os.environ", {"FREECADCMD": str(from_env)}), patch(
-                "freecad_lookup.shutil.which", return_value=str(from_path)
-            ):
-                self.assertEqual(find_freecad(), from_env)
-
-    def test_freecad_lookup_prefers_path_before_bundle(self) -> None:
-        from unittest.mock import patch
-        from freecad_lookup import MACOS_FREECADCMD, find_freecad
+            command = root / "bin" / "freecadcmd"
+            command.parent.mkdir(parents=True)
+            command.write_text("#!/bin/sh\n", encoding="utf-8")
+            command.chmod(0o755)
+            with patch.dict("os.environ", {"HOME": str(root), "PATH": str(command.parent)}, clear=True):
+                self.assertEqual(find_freecad(), command)
+    def test_freecad_lookup_does_not_fallback_from_invalid_environment_override(self) -> None:
+        from freecad_lookup import find_freecad
 
         with tempfile.TemporaryDirectory() as directory:
-            from_path = Path(directory) / "path-freecad"
-            from_path.touch()
-            from_path.chmod(0o755)
-            with patch.dict("os.environ", {}, clear=True), patch(
-                "freecad_lookup.shutil.which", return_value=str(from_path)
-            ), patch("freecad_lookup.MACOS_FREECADCMD", MACOS_FREECADCMD):
-                self.assertEqual(find_freecad(), from_path)
-    def test_freecad_lookup_falls_back_to_macos_bundle(self) -> None:
-        from unittest.mock import patch
-        import freecad_lookup
-
-        with tempfile.TemporaryDirectory() as directory:
-            bundle = Path(directory) / "bundle-freecad"
-            bundle.touch()
-            bundle.chmod(0o755)
-            with patch.dict("os.environ", {}, clear=True), patch(
-                "freecad_lookup.shutil.which", return_value=None
-            ), patch.object(freecad_lookup, "MACOS_FREECADCMD", bundle):
-                self.assertEqual(freecad_lookup.find_freecad(), bundle)
+            root = Path(directory)
+            on_path = root / "freecadcmd"
+            on_path.write_text("#!/bin/sh\n", encoding="utf-8")
+            on_path.chmod(0o755)
+            with patch.dict("os.environ", {"FREECADCMD": str(root / "missing"), "PATH": str(root)}, clear=True):
+                self.assertEqual(find_freecad(), root / "missing")
+            self.assertTrue(on_path.is_file())
 
     def test_missing_freecad_is_structured_exit_two(self) -> None:
         from unittest.mock import patch

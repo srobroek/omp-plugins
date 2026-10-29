@@ -139,6 +139,12 @@ class FreeCADDiscovery(unittest.TestCase):
         found = freecad_runtime.find_freecadcmd({"PATH": str(self.root)})
         self.assertEqual(found, app if app.is_file() else None)
 
+    def test_lookup_uses_authoritative_home_candidate_when_path_omits_it(self) -> None:
+        command = self.executable(self.root / ".local" / "bin" / "freecadcmd")
+        environ = {"HOME": str(self.root), "PATH": str(self.root / "empty")}
+        found = freecad_runtime.find_freecadcmd(environ, platform_name="linux")
+        self.assertEqual(found, command)
+
     def test_templates_follow_a_symlinked_bundle_command(self) -> None:
         command = self.executable(self.root / "squashfs-root" / "usr" / "bin" / "freecadcmd")
         link = self.root / "local" / "bin" / "freecadcmd"
@@ -159,6 +165,11 @@ class FreeCADConcurrency(unittest.TestCase):
             self.assertEqual(freecad_runtime.jobs_for(None, 10, 1_000), 4)
             self.assertEqual(freecad_runtime.jobs_for(None, 2, 1_000), 2)
             self.assertEqual(freecad_runtime.jobs_for(5, 2, 1_000), 2)
+
+    def test_auto_jobs_ignore_unknown_memory_bound(self) -> None:
+        with patch.object(freecad_runtime.os, "cpu_count", return_value=8), \
+                patch.object(freecad_runtime, "available_memory_bytes", return_value=0):
+            self.assertEqual(freecad_runtime.jobs_for(None, 5, 1_000), 5)
 
     def test_shared_pool_results_stay_in_input_order(self) -> None:
         with ThreadPoolExecutor(max_workers=3) as executor:

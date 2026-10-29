@@ -18,6 +18,7 @@ import platform
 import re
 import shutil
 import sys
+import subprocess
 import tempfile
 import urllib.request
 from dataclasses import dataclass
@@ -130,6 +131,11 @@ def _release_info(path: Path) -> dict[str, str]:
                 values[key] = value.strip().strip('"')
     return values
 
+def _is_debian_family(release: Mapping[str, str]) -> bool:
+    """Whether os-release identifies Debian or Ubuntu, including ID_LIKE derivatives."""
+    identifiers = {release.get("ID", "").lower(), *release.get("ID_LIKE", "").lower().split()}
+    return bool(identifiers & {"debian", "ubuntu"})
+
 
 def plan(report, cwd: Path, home: Path, environ: Mapping[str, str], harness: str | None = None) -> list[PlanItem]:
     """Plan actions for missing non-CAD prerequisites."""
@@ -144,10 +150,18 @@ def plan(report, cwd: Path, home: Path, environ: Mapping[str, str], harness: str
     chromium = next((check for check in report.checks if check.id == "playwright-chromium"), None)
     if chromium is not None and chromium.status != "pass" and platform.system() == "Linux":
         release = _release_info(Path("/etc/os-release"))
-        target_os = release.get("ID", "this OS")
-        detail = (f"Playwright install-deps supports Debian/Ubuntu only; {target_os} is unsupported. "
-                  f"Install the missing Chromium libraries manually: {chromium.detail}")
-        items.append(PlanItem("browser-libraries-manual", "Install Chromium system libraries manually", detail))
+        if _is_debian_family(release):
+            items.append(PlanItem("browser-libraries", "Install Chromium system libraries",
+                                  "Run `playwright install-deps chromium` (Debian/Ubuntu)."))
+        else:
+            target_os = release.get("ID", "this OS")
+            detail = (f"Playwright install-deps supports Debian/Ubuntu only; {target_os} is unsupported. "
+                      f"Install the missing Chromium libraries manually: {chromium.detail}")
+            items.append(PlanItem("browser-libraries-manual", "Install Chromium system libraries manually", detail))
+    if platform.system() == "Linux":
+        items.append(PlanItem("manual-libraries", "Install OCP system libraries manually",
+                              "Install `libglvnd-glx`, `libX11`, and `expat` (for example: "
+                              "`dnf install libglvnd-glx libX11 expat`) for headless OCP."))
     workspace = preflight.beads_workspace(cwd, environ)
     if workspace is None:
         print("Warning: no Beads workspace found; skipped copying CAD formulas.")
@@ -229,8 +243,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     failures = []
     warm_started = False
     for item in items:
-        if item.id == "browser-libraries-manual":
-            print(f"Manual browser libraries step: {item.command}", file=sys.stderr)
+        if item.id in {"browser-libraries-manual", "manual-libraries"}:
+            print(f"Manual system libraries step: {item.command}", file=sys.stderr)
             continue
         try:
             if item.id == "uv":

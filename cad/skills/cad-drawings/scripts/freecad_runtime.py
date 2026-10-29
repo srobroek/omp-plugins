@@ -7,11 +7,12 @@ result whose ``status`` is ``pass`` is a success, anything else carries an ``err
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
-import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -22,23 +23,29 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, TypeVar, cast
 
+
+def find_freecadcmd(environ: Mapping[str, str] = os.environ, *, home: Path | None = None,
+                    platform_name: str | None = None,
+                    macos_command: Path | None = None) -> Path | None:
+    """Resolve FreeCAD using cad-flow's authoritative ordered candidate list.
+
+    A set FREECADCMD is returned as given without fallback, so an invalid value is reported
+    rather than silently replaced by another FreeCAD.
+    """
+    flow_scripts = Path(__file__).resolve().parents[2] / "cad-flow" / "scripts"
+    if str(flow_scripts) not in sys.path:
+        sys.path.insert(0, str(flow_scripts))
+    spec = importlib.util.spec_from_file_location("cad_flow_preflight", flow_scripts / "preflight.py")
+    if spec is None or spec.loader is None:
+        raise ImportError(f"{flow_scripts / 'preflight.py'} not found")
+    preflight = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = preflight
+    spec.loader.exec_module(preflight)
+    return preflight._find_freecadcmd(environ, home, platform_name, macos_command)
+
 MACOS_FREECADCMD = Path("/Applications/FreeCAD.app/Contents/Resources/bin/freecadcmd")
 JOB_VARIABLE = "CAD_DRAWING_JOB"
 
-
-def find_freecadcmd(environ: Mapping[str, str] = os.environ) -> Path | None:
-    """The FREECADCMD path when set, else freecadcmd or FreeCADCmd on PATH, else the macOS app's.
-
-    A set FREECADCMD is used as given, without falling back, so a wrong value is reported rather
-    than silently replaced by another FreeCAD.
-    """
-    if environ.get("FREECADCMD"):
-        return Path(environ["FREECADCMD"])
-    for name in ("freecadcmd", "FreeCADCmd"):
-        found = shutil.which(name, path=environ.get("PATH"))
-        if found:
-            return Path(found)
-    return MACOS_FREECADCMD if MACOS_FREECADCMD.is_file() else None
 
 
 def templates_dir(freecadcmd: Path | None) -> Path:
@@ -62,7 +69,7 @@ class JobInterrupted(Exception):
 
 _CANCEL_JOBS = threading.Event()
 _CANCEL_SIGNAL: int | None = None
-_ACTIVE_LOCK = threading.Lock()
+_ACTIVE_LOCK = threading.RLock()
 _ACTIVE_PROCESSES: set[subprocess.Popen[str]] = set()
 _T = TypeVar("_T")
 _R = TypeVar("_R")
@@ -89,7 +96,9 @@ def jobs_for(requested: int | None, item_count: int, peak_rss_bytes: int) -> int
     if requested is not None:
         return min(requested, item_count)
     cpu_count = os.cpu_count() or 1
-    memory_count = max(1, available_memory_bytes() // max(peak_rss_bytes, 1))
+    available_memory = available_memory_bytes()
+    memory_count = (available_memory // max(peak_rss_bytes, 1)
+                    if available_memory > 0 else item_count)
     return max(1, min(cpu_count, item_count, memory_count))
 
 

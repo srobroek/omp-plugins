@@ -122,6 +122,16 @@ class RuntimeProbeTests(unittest.TestCase):
         self.assertEqual(check.status, "fail")
         self.assertIn("error: no wheel for cadquery-ocp", check.detail)
 
+    def test_missing_ocp_shared_library_reports_system_package_fix(self) -> None:
+        def run(environment, code):
+            raise RuntimeError("ImportError: libGL.so.1: cannot open shared object file: No such file or directory")
+
+        with patch.object(preflight, "_python", side_effect=run):
+            check = preflight._runtime_check("uv", runtime("cad-model"))
+        self.assertEqual(check.status, "fail")
+        self.assertIn("libglvnd-glx", check.fix)
+        self.assertNotIn("first run needs network access", check.fix)
+
     def test_chromium_install_runs_playwright_in_the_environment_shared_by_dependency_set(self) -> None:
         calls = []
 
@@ -336,6 +346,17 @@ class CadToolLookupTests(unittest.TestCase):
             with patch.object(preflight.shutil, "which", return_value=None):
                 found = preflight.find_freecadcmd({"PATH": ""}, root, "linux")
         self.assertIsNone(found)
+
+    def test_preflight_and_runtime_share_authoritative_home_lookup(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            command = root / ".local" / "bin" / "freecadcmd"
+            command.parent.mkdir(parents=True)
+            command.write_text("#!/bin/sh\n", encoding="utf-8")
+            command.chmod(0o755)
+            environ = {"HOME": str(root), "PATH": str(root / "empty")}
+            self.assertEqual(preflight.find_freecadcmd(environ, platform_name="linux"), command)
+            self.assertEqual(preflight.freecad_runtime.find_freecadcmd(environ, home=root, platform_name="linux"), command)
 
 class FreeCADTests(unittest.TestCase):
     def test_missing_configured_freecad_fails_with_install_hint(self) -> None:
