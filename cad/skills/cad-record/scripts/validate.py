@@ -12,6 +12,7 @@ import functools
 import hashlib
 import importlib.util
 import json
+import os
 import posixpath
 import re
 import sys
@@ -775,13 +776,151 @@ def validate_project(project_dir: Path) -> list[dict[str, str]]:
     return findings
 
 
+# --- migration plan: a read-only move and rebuild report ------------------------------------------------------------
+
+REMOVE_CODES = frozenset({"layout.transient", "layout.metadata", "layout.empty_directory"})
+
+
+def sealed_owner(rel: str) -> tuple[Any, dict[str, str]] | None:
+    """The sealed layout directory that project-relative `rel` names or lies in: (entry, token values)."""
+    path = rel
+    while path and path != layout.HW:
+        found = layout.load().sealed(path)
+        if found is not None:
+            return found
+        path = posixpath.dirname(path)
+    return None
+
+
+def destination_owner(destination: str) -> Any:
+    """The layout entry a canonical destination belongs to: the entry it classifies as, else the entry
+    with the longest literal path prefix, for a destination that keeps a placeholder (hw/drawings/<V>/...)."""
+    lay = layout.load()
+    for candidate in (destination.rstrip("/"), f"{destination.rstrip('/')}/{layout.MANIFEST}"):
+        found = lay.classify(candidate)
+        if found is not None:
+            return found.entry
+    prefixes = [(len(entry.path.split("{", 1)[0]), entry) for entry in lay.entries
+                if destination.startswith(entry.path.split("{", 1)[0])]
+    return max(prefixes, key=lambda item: item[0])[1] if prefixes else None
+
+
+def plan_item(hw: Path, item: Mapping[str, Any], records: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
+    """One layout finding as a plan step: what the path is, where it belongs, what must run to put it
+    there, and how sure the layout is of that destination."""
+    lay = layout.load()
+    rel = layout.relative(hw, item["path"])
+    code = item["code"]
+    destination = item.get("canonical_location")
+    classification = lay.stray_class(rel).name if code == "layout.stray" else code.split(".", 1)[1]
+    owner = destination_owner(destination) if destination else None
+    sealing = sealed_owner(rel) if owner is None else None
+    writer = owner if owner is not None else sealing[0] if sealing is not None else None
+    rebuild = writer.writer if writer is not None and writer.kind == "generated" else None
+    if code in REMOVE_CODES:
+        operation, rebuild = "remove", None
+    elif destination is None:
+        operation = "review"
+    else:
+        operation = "rebuild" if rebuild else "move"
+    if operation == "remove" or (operation == "move" and classification != "data" and "<" not in destination):
+        confidence = "high"  # a determined place the bytes move to unchanged, or a leftover to delete
+    elif operation == "rebuild":
+        # a rebuild lands it; geometry needs the PN it names to be a custom-made part record
+        found = re.search(lay.tokens["PN"]["pattern"], destination)
+        known = found is not None and found.group(0) in records and layout.custom_made(records[found.group(0)])
+        confidence = "low" if classification == "geometry" and not known else "medium"
+    else:
+        confidence = "low"
+    return {"path": rel, "code": code, "severity": item["severity"], "classification": classification,
+            "operation": operation, "destination": destination, "rebuild": rebuild, "confidence": confidence,
+            "action": item.get("action")}
+
+
+def legacy_items(hw: Path) -> list[dict[str, Any]]:
+    """Built versions without complete manufacturing outputs and version 1 releases: kept as they are,
+    readable, but never frozen, released or reissued."""
+    lay, items = layout.load(), []
+    next_label = layout.next_version(hw)
+    for label in layout.versions(hw):
+        manifest = load_json(layout.version_dir(hw, label) / layout.MANIFEST, [])
+        made = manifest.get("manufacturing") if isinstance(manifest, dict) else None
+        if isinstance(made, dict) and all(isinstance(e, dict) and e.get("complete") is True for e in made.values()):
+            continue
+        items.append({"path": f"{layout.HW}/versions/{label}", "code": None, "severity": "info",
+                      "classification": "legacy version", "operation": "keep", "destination": None,
+                      "rebuild": lay.entry("version.core").writer, "confidence": "high",
+                      "action": f"{label} stays readable as built, but its manufacturing outputs are missing or "
+                                f"incomplete, so it cannot be frozen or released. Build {next_label} with cad-model "
+                                "run to freeze. Nothing was changed."})
+    for path in sorted((hw / "releases").glob(f"*/{layout.MANIFEST}")):
+        manifest = load_json(path, [])
+        if isinstance(manifest, dict) and "schema_version" not in manifest:
+            items.append({"path": layout.relative(hw, path.parent), "code": None, "severity": "info",
+                          "classification": "legacy release", "operation": "keep", "destination": None,
+                          "rebuild": lay.entry("release.package").writer, "confidence": "high",
+                          "action": f"Release {path.parent.name} lists project files in place (manifest version 1). "
+                                    "Keep it for inspection and recovery; it is never reissued. Issue the next "
+                                    "revision with release.py from a frozen version. Nothing was changed."})
+    return items
+
+
+def migration_plan(project_dir: Path) -> dict[str, Any]:
+    """Every layout finding of the record, plus legacy versions and releases, as a move and rebuild
+    plan. Reads only; nothing is moved, deleted or rebuilt."""
+    hw = project_dir / "hw" if (project_dir / "hw").is_dir() else project_dir
+    records = {}
+    for path in sorted((hw / "parts").glob("*/part.yaml")):
+        data = load_yaml(path, [])
+        if isinstance(data, dict):
+            records[path.parent.name] = data
+    items = [plan_item(hw, item, records) for item in validate_project(project_dir) if "code" in item]
+    items += legacy_items(hw)
+    targets: dict[str, list[str]] = {}
+    for item in items:
+        if item["destination"] and "<" not in item["destination"]:
+            targets.setdefault(item["destination"], []).append(item["path"])
+    for item in items:
+        destination = item["destination"]
+        determined = bool(destination) and "<" not in destination
+        item["collisions"] = [p for p in targets.get(destination, []) if p != item["path"]] if determined else []
+        item["destination_exists"] = os.path.lexists(layout.locate(hw, destination.rstrip("/"))) if determined else None
+    counts: dict[str, int] = {}
+    for item in items:
+        counts[item["operation"]] = counts.get(item["operation"], 0) + 1
+    return {"plan": "migration", "next_version": layout.next_version(hw), "changed": False,
+            "counts": dict(sorted(counts.items())), "items": items}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("project_dir", type=Path, help="project directory containing hw/ or the hw/ directory itself")
+    parser.add_argument("--migration-plan", action="store_true",
+                        help="print a read-only move and rebuild plan for every stray, legacy or damaged path")
+    parser.add_argument("--report", type=Path, help="with --migration-plan: write the plan here, under .cad-work/")
     args = parser.parse_args()
+    if args.report is not None and not args.migration_plan:
+        parser.error("--report needs --migration-plan")
     if not args.project_dir.exists() or not args.project_dir.is_dir():
         print(json.dumps({"ok": False, "findings": [finding(str(args.project_dir), "project directory does not exist")]}))
         return 2
+    if args.migration_plan:
+        hw = (args.project_dir / "hw" if (args.project_dir / "hw").is_dir() else args.project_dir).resolve()
+        target = None
+        if args.report is not None:
+            try:
+                target = layout.scratch_path(hw, args.report, "--report")
+            except layout.LayoutError as error:
+                print(json.dumps({"ok": False, "findings": [finding(str(args.report), str(error))]}))
+                return 2
+        text = json.dumps(migration_plan(args.project_dir), indent=2)
+        if target is None:
+            print(text)
+        else:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(text + "\n", encoding="utf-8")
+            print(json.dumps({"report": layout.relative(hw, target)}))
+        return 0
     findings = validate_project(args.project_dir)
     failures = blocking(findings)
     print(json.dumps({"ok": not failures, "findings": findings}, indent=2))

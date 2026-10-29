@@ -90,10 +90,10 @@ Before you use a bundle or a version as input, call `verify(directory)`. It retu
 problems against the manifest inventory. An empty list means the folder verifies. It also reads a
 v2 release manifest, whose `files` map each path to its `sha256` and `original`.
 
-A writer of a sealed directory that is not a bundle, such as `release.py`, stages under `.cad-work/`
+`release.py` writes a sealed directory that is not a bundle. Such a writer stages under `.cad-work/`
 and lands with `claim(staged, target, target_rel)`. `claim` takes the target with an exclusive
-`mkdir` and renames the stage onto it. A target that exists raises `PublishConflict`, and nothing
-moves. `publish` lands bundles the same way.
+`mkdir` and renames the stage onto it. A target that exists raises `PublishConflict`, and the stage
+stays where it is. `publish` lands bundles the same way.
 
 ## Write a producer command
 
