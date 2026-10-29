@@ -40,7 +40,7 @@ sys.path.insert(0, str(SCRIPTS))
 from cadmodel import build, check, diff, fonts, manufacture, mesh, occ, orientation, runner  # noqa: E402 - stdlib-only imports; OCP loads on first use
 
 AP242 = "AP242_MANAGED_MODEL_BASED_3D_ENGINEERING"
-SCHEMA = re.compile(r"FILE_SCHEMA\s*\(\s*\('([^']+)'\)\s*\)\s*;")
+SCHEMA = re.compile(r"FILE_SCHEMA\s*\(\s*\(\s*'([^']+)'\s*\)\s*\)")
 ASSEMBLY = """joints:
   - {id: J-001, type: revolute, parent: TST-0001, child: TST-0002, axis: [0, 0, 1], origin: [0, 0, 20],
      min: -90, max: 90, nominal: 90}
