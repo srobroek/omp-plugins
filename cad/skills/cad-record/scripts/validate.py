@@ -463,7 +463,23 @@ def check_couplings(assembly: dict[str, Any], path: str, findings: list[dict[str
     findings.extend(finding(path, problem) for problem in couplings.range_problems(limits, nominal, units))
 
 
-def check_motion_cases(hw: Path, findings: list[dict[str, str]]) -> None:
+def motion_chain(pose: Any, assembly: Any) -> Any:
+    """The record's joint chain, with each member that has no joint path to the ground attached to it by a
+    fixed joint, as `--attach` connects it at run time. A plan names joints only, so the attachment is moot."""
+    edges = [(joint.id, joint.parent, joint.child) for joint in assembly.joints]
+    nodes = list(dict.fromkeys([*(n for _, p, c in edges for n in (p, c)), *(o.id for o in assembly.occurrences)]))
+    ground, _ = pose.assembly_data.joint_tree(edges, nodes, connected=False)
+    children = {child for _, _, child in edges}
+
+    def ref(node: str) -> str:
+        return assembly.inventory.get(node).ref if node in assembly.inventory.ids else node
+
+    loose = [f"{ref(node)}={ref(ground)}" for node in nodes if node != ground and node not in children]
+    return pose.build_chain([*assembly.joints, *pose.attach_joints(loose, assembly)], assembly.occurrences,
+                            couplings=assembly.couplings)
+
+
+def check_motion_cases(hw: Path, assembly_path: str, findings: list[dict[str, str]]) -> None:
     """Each authored motion case loads against the record's joints as cad-motion motion.py loads it: its
     schema, independent joints inside their limits, and no authored `default`, which is the generated case.
     Coverage stays a result of the render."""
@@ -474,11 +490,11 @@ def check_motion_cases(hw: Path, findings: list[dict[str, str]]) -> None:
     pose = _load_module("cad_motion_pose", MOTION_SCRIPTS / "pose.py")
     plan = _load_module("cad_motion_plan", MOTION_SCRIPTS / "plan.py")
     try:
-        assembly = pose.load_assembly(hw)
-        chain = pose.build_chain(assembly.joints, assembly.occurrences, couplings=assembly.couplings)
-    except pose.MotionError as error:
-        findings.extend(finding(str(cases / name), f"motion case {name} not checked: {error}", severity="warning")
-                        for name in names)
+        chain = motion_chain(pose, pose.load_assembly(hw))
+    except (pose.MotionError, pose.assembly_data.InventoryError) as error:
+        if not any(item["path"] == assembly_path for item in blocking(findings)):  # else those findings explain it
+            findings.extend(finding(str(cases / name), f"motion case {name} cannot be checked against the "
+                                                       f"record's joints: {error}") for name in names)
         return
     for name in names:
         try:
@@ -748,7 +764,7 @@ def validate_project(project_dir: Path) -> list[dict[str, str]]:
     if inventory is not None:
         check_joints(documents["assembly.yaml"], inventory, assembly_path, part_records, findings)
         check_couplings(documents["assembly.yaml"], assembly_path, findings)
-        check_motion_cases(hw, findings)
+        check_motion_cases(hw, assembly_path, findings)
         totals = bom_totals(bom, bom_levels)
         for pn, count in inventory.quantities().items():
             placed = inventory.of(pn)
