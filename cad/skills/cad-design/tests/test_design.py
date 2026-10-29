@@ -15,7 +15,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-
+import os
 HERE = Path(__file__).resolve().parent
 SKILL = HERE.parent
 SCRIPTS = SKILL / "scripts"
@@ -25,6 +25,11 @@ FIXTURES = SKILL.parent / "cad-motion" / "tests" / "fixtures" / "build_fixtures.
 DEFECTS = HERE / "fixtures" / "defects"
 KERNELS = ("cadquery", "build123d")
 TEMPLATE_PARTS = sorted(p.name for p in (EXAMPLE / "hw" / "parts").iterdir() if (p / "part.yaml").is_file())
+sys.path.insert(0, str(SKILL.parent / "cad-drawings" / "scripts"))
+import freecad_runtime  # noqa: E402
+FREECADCMD = freecad_runtime.find_freecadcmd()
+FREECAD_PRESENT = FREECADCMD is not None and FREECADCMD.is_file() and os.access(FREECADCMD, os.X_OK)
+
 MADE_PARTS = ["LMP-0001", "LMP-0002", "LMP-0003", "LMP-0004"]
 
 
@@ -41,7 +46,7 @@ def form_check(parts_dir: Path, fidelity: str) -> tuple[int, dict]:
                      "--parts-dir", str(parts_dir), "--fidelity", fidelity])
 
 
-@unittest.skipUnless(shutil.which("uv"), "uv is required to build the kernel environments")
+@unittest.skipUnless(FREECAD_PRESENT, "reference lamp tests need FreeCAD 1.1.4's bundled Osifont")
 class ReferenceModelTests(unittest.TestCase):
     """Both kernels' reference parts: build, B-rep, contract parity, joints, and form."""
 

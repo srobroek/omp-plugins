@@ -19,6 +19,11 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 SCRATCH = HERE.parent / "scripts" / "scratch.py"
+sys.path.insert(0, str(HERE.parents[1] / "cad-drawings" / "scripts"))
+import freecad_runtime  # noqa: E402
+FREECADCMD = freecad_runtime.find_freecadcmd()
+FREECAD_PRESENT = FREECADCMD is not None and FREECADCMD.is_file()
+
 TEMPLATE = HERE.parents[1] / "cad-record" / "assets" / "project-template" / "hw"
 VALIDATOR = HERE.parents[1] / "cad-record" / "scripts" / "validate.py"
 LAMP_EXAMPLE = HERE.parents[2] / "examples" / "lamp-arm" / "hw"
@@ -172,8 +177,7 @@ class LampExample(ScratchCase):
                          [f"LMP-{number:04d}" for number in range(1, 12)])
 
 
-@unittest.skipIf(shutil.which("uv") is None, "uv is not on PATH")
-class Build(LampExample):
+    @unittest.skipUnless(FREECAD_PRESENT, "lamp build needs FreeCAD 1.1.4 bundled Osifont")
     def test_build_checks_the_scratch_copy_and_never_touches_hw_versions(self) -> None:
         before = tree(self.hw)
         self.init("part-base_sub", "LMP-0001")

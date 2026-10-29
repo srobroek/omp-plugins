@@ -136,7 +136,7 @@ class FreeCADDiscovery(unittest.TestCase):
 
     def test_without_path_command_only_the_macos_app_remains(self) -> None:
         app = freecad_runtime.MACOS_FREECADCMD
-        found = freecad_runtime.find_freecadcmd({"PATH": str(self.root)})
+        found = freecad_runtime.find_freecadcmd({"HOME": str(self.root / "empty-home"), "PATH": str(self.root)})
         self.assertEqual(found, app if app.is_file() else None)
 
     def test_lookup_uses_authoritative_home_candidate_when_path_omits_it(self) -> None:
@@ -274,9 +274,9 @@ class SheetExportParts(unittest.TestCase):
         self.assertEqual(read.page_sizes_pt, [(842.0, 595.0)])
         self.assertEqual(read.fonts, ["osifont"])
         self.assertEqual(read.text, "A B\nD")  # tab read as a space; the synthetic-bold repeat skipped
+    @unittest.skipUnless(FREECAD_PRESENT, "bundled Osifont test needs FreeCAD 1.1.4 freecadcmd")
     def test_svg_generic_families_are_painted_with_osifont(self) -> None:
         command = freecad_runtime.find_freecadcmd()
-        self.assertIsNotNone(command)
         with tempfile.TemporaryDirectory(prefix="cad-font-parity-") as tmp:
             root = Path(tmp)
             svg = root / "input.svg"

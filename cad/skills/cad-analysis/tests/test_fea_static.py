@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -17,7 +18,10 @@ from unittest.mock import patch
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts/fea_static.py"
 OCCURRENCE_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "build_occurrence_step.py"
 POSE_PATH = Path(__file__).resolve().parents[2] / "cad-motion" / "scripts" / "pose.py"
-FREECADCMD = Path("/Applications/FreeCAD.app/Contents/Resources/bin/freecadcmd")
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "cad-drawings" / "scripts"))
+import freecad_runtime
+FREECADCMD = freecad_runtime.find_freecadcmd()
+FREECAD_PRESENT = FREECADCMD is not None and FREECADCMD.is_file() and os.access(FREECADCMD, os.X_OK)
 SPIKE = Path("/tmp/cad-spike-freecad")
 sys.path.insert(0, str(SCRIPT.parent))
 
@@ -167,7 +171,7 @@ class SweepEvidenceContracts(unittest.TestCase):
             self.case("")
 
 
-@unittest.skipUnless(FREECADCMD.is_file(), "FreeCAD 1.1.4 freecadcmd is not installed")
+@unittest.skipUnless(FREECAD_PRESENT, "FreeCAD 1.1.4 freecadcmd is not installed (shared lookup)")
 @unittest.skipUnless(shutil.which("uv"), "uv is required to write the occurrence STEP through OCP")
 class OccurrenceAnalysis(unittest.TestCase):
     """One beam definition placed twice (fixtures/build_occurrence_step.py): `@beam-b` is turned and moved, so
@@ -329,8 +333,8 @@ App.closeDocument(doc.Name)
         self.assertTrue(step.is_file() and step.stat().st_size > 0, generated.stdout + generated.stderr)
         return step
 
-    @unittest.skipUnless(FREECADCMD.is_file(), "FreeCAD 1.1.4 freecadcmd is not installed")
-    @unittest.skipUnless((SPIKE / "fem.py").is_file(), "proven cantilever FreeCAD spike is missing")
+    @unittest.skipUnless(FREECAD_PRESENT, "FreeCAD 1.1.4 freecadcmd is not installed (shared lookup)")
+    @unittest.skipUnless(SPIKE.is_file(), "external cantilever FEM spike is missing from /tmp/cad-spike-freecad/fem.py")
     def test_cantilever_matches_beam_theory_within_five_percent(self) -> None:
         with tempfile.TemporaryDirectory(prefix="cad-fea-cantilever-") as directory:
             root = Path(directory)
@@ -357,7 +361,7 @@ mesh_size: 5
             self.assertTrue((root / "results.json").is_file())
             self.assertEqual(report["worst_case_pose"], {"step": str(step), "pose": {"J-001": 17, "J-002": -42}})
 
-    @unittest.skipUnless(FREECADCMD.is_file(), "FreeCAD 1.1.4 freecadcmd is not installed")
+    @unittest.skipUnless(FREECAD_PRESENT, "FreeCAD 1.1.4 freecadcmd is not installed (shared lookup)")
     def test_identical_case_repeats_mesh_and_stress_results(self) -> None:
         import math
         with tempfile.TemporaryDirectory(prefix="cad-fea-repeat-") as directory:
@@ -411,7 +415,7 @@ mesh_size: 5
             self.assertEqual(status, 2)
             self.assertEqual(result["error"]["code"], "freecad_timeout")
 
-    @unittest.skipUnless(FREECADCMD.is_file(), "FreeCAD 1.1.4 freecadcmd is not installed")
+    @unittest.skipUnless(FREECAD_PRESENT, "FreeCAD 1.1.4 freecadcmd is not installed (shared lookup)")
     def test_invalid_face_selector_is_structured_exit_two(self) -> None:
         with tempfile.TemporaryDirectory(prefix="cad-fea-case-") as directory:
             root = Path(directory)

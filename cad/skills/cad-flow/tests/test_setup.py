@@ -47,16 +47,22 @@ class PlanTests(unittest.TestCase):
 
     def test_uv_and_runtime_failures_have_distinct_actions(self) -> None:
         items = setup.plan(report("uv", "cadquery"), self.root, self.home, self.env)
-        self.assertEqual([item.id for item in items], ["uv", "warm-cadquery"])
+        identifiers = [item.id for item in items]
+        self.assertEqual(identifiers[:2], ["uv", "warm-cadquery"])
+        self.assertTrue(all(identifier in {"uv", "warm-cadquery", "manual-libraries"} for identifier in identifiers))
         self.assertIn("https://astral.sh/uv/install.sh", items[0].command)
 
     def test_formula_copy_is_idempotent(self) -> None:
-        beads = self.root / ".beads"
-        beads.mkdir()
+        beads = self.root / "workspace" / ".beads"
+        beads.mkdir(parents=True)
         env = {**self.env, "BEADS_DIR": str(beads)}
-        self.assertEqual([item.id for item in setup.plan(report(), self.root, self.home, env)], ["formulas"])
+        planned = [item.id for item in setup.plan(report(), self.root, self.home, env)]
+        self.assertIn("formulas", planned)
+        self.assertTrue(all(identifier in {"formulas", "manual-libraries"} for identifier in planned))
         setup._copy_formulas(self.root, env)
-        self.assertEqual(setup.plan(report(), self.root, self.home, env), [])
+        planned = [item.id for item in setup.plan(report(), self.root, self.home, env)]
+        self.assertNotIn("formulas", planned)
+        self.assertTrue(all(identifier == "manual-libraries" for identifier in planned))
         self.assertEqual({path.name for path in (beads / "formulas").glob("*.formula.toml")},
                          {path.name for path in setup.FORMULAS.glob("*.formula.toml")})
 

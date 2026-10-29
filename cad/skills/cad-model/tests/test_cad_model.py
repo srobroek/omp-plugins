@@ -29,6 +29,10 @@ from pathlib import Path
 from unittest import mock
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parents[2] / "cad-drawings" / "scripts"))
+import freecad_runtime  # noqa: E402
+FREECADCMD = freecad_runtime.find_freecadcmd()
+FREECAD_PRESENT = FREECADCMD is not None and FREECADCMD.is_file() and os.access(FREECADCMD, os.X_OK)
 FIXTURES = HERE / "fixtures"
 SCRIPTS = HERE.parent / "scripts"
 CLI = SCRIPTS / "cad_model.py"
@@ -227,6 +231,7 @@ class DeterministicTextTests(unittest.TestCase):
                 module = type("Model", (), {"__file__": str(model)})()
                 runner._validate_text_fonts(module)
 
+    @unittest.skipUnless(FREECAD_PRESENT, "verified bundled Osifont requires FreeCAD 1.1.4 freecadcmd")
     def test_verified_osifont_path_matches_the_runner_contract(self) -> None:
         font = Path(fonts.osifont_path())
         self.assertEqual(hashlib.sha256(font.read_bytes()).hexdigest(), fonts.OSIFONT_SHA256)
@@ -269,6 +274,7 @@ class DeterministicTextTests(unittest.TestCase):
             with self.assertRaisesRegex(FileNotFoundError, "cannot find the preflight-selected FreeCAD"):
                 fonts.osifont_path.__wrapped__()
 
+    @unittest.skipUnless(FREECAD_PRESENT, "font geometry tests require FreeCAD 1.1.4 bundled Osifont")
     def test_text_fixtures_build_identically_in_both_kernels(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:  # run_kernels writes each part's STEP to its "step" path
             requests = {kernel: [{"pn": f"TXT-{i:04d}", "name": "Text fixture",
