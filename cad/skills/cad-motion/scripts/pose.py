@@ -118,6 +118,8 @@ VERSION_LABEL = re.compile(r"^v([1-9][0-9]*)$")  # a cad-model version label: v1
 OCCURRENCE_TAG = re.compile(r" \[@([a-z][a-z0-9_-]*)\]$")
 # A STEP component location matches a rest placement within these bounds (mm, rotation-matrix entries).
 PLACEMENT_TOL_MM, PLACEMENT_TOL_ROT = 1e-6, 1e-9
+# Motion coordinates and exported STEP lengths are millimetres.
+STEP_LENGTH_UNIT = "MM"
 ASSEMBLY_DATA_PATH = Path(__file__).resolve().parents[2] / "cad-record" / "scripts" / "assembly_data.py"
 COUPLING_PATH = Path(__file__).resolve().with_name("coupling.py")
 
@@ -141,6 +143,8 @@ def _load_module(name: str, path: Path) -> Any:
     return module
 
 
+LAYOUT = _load_module("cad_record_layout", Path(__file__).resolve().parents[2] / "cad-record" / "scripts" / "layout.py")
+layout_io = _load_module("cad_motion_layout_io", Path(__file__).resolve().with_name("layout_io.py"))
 # cad-record's occurrence normalizer, the one reader of assembly.yaml occurrences, and the coupling laws.
 assembly_data = _load_module("cad_record_assembly_data", ASSEMBLY_DATA_PATH)
 coupling = _load_module("cad_motion_coupling", COUPLING_PATH)
@@ -404,7 +408,7 @@ def make_joint(raw: Mapping[str, Any], resolve: Callable[[str, str], str] | None
 
 
 def _part_records(hw: Path) -> dict[str, dict[str, Any]]:
-    """Every readable hw/parts/<PN>/part.yaml mapping, keyed by its folder name."""
+    """Read the selected record's part metadata, keyed by part number directory."""
     import yaml
 
     records = {}
@@ -416,13 +420,12 @@ def _part_records(hw: Path) -> dict[str, dict[str, Any]]:
         if isinstance(data, dict):
             records[record.parent.name] = data
     return records
-
-
-def load_assembly(hw: Path) -> Assembly:
-    """Normalize hw/assembly.yaml (cad-record assembly_data) and resolve its joint references."""
+def load_assembly(hw: Path, record_hw: Path | None = None) -> Assembly:
+    """Normalize the selected assembly and the same-state part metadata."""
     import yaml
 
-    path = hw / "assembly.yaml"
+    record_hw = record_hw or hw
+    path = record_hw / "assembly.yaml"
     try:
         data = yaml.safe_load(path.read_text(encoding="utf-8"))
     except (OSError, yaml.YAMLError) as error:
@@ -430,7 +433,7 @@ def load_assembly(hw: Path) -> Assembly:
     if not isinstance(data, dict) or not isinstance(data.get("joints"), list):
         raise MotionError(f"{path}: expected a mapping with a `joints` list")
     frames = {pn: str(record.get("model_frame", assembly_data.DEFAULT_FRAME))
-              for pn, record in _part_records(hw).items()}
+              for pn, record in _part_records(record_hw).items()}
     try:
         inventory = assembly_data.normalize(data, frames)
     except assembly_data.InventoryError as error:
@@ -438,8 +441,8 @@ def load_assembly(hw: Path) -> Assembly:
     assembly = Assembly(inventory, (), frames)
     joints = tuple(make_joint(raw, assembly.attachable) if isinstance(raw, dict) else _bad_joint(raw)
                    for raw in data["joints"])
-    ids = [j.id for j in joints]
-    duplicates = sorted({i for i in ids if ids.count(i) > 1})
+    ids = [joint.id for joint in joints]
+    duplicates = sorted({joint_id for joint_id in ids if ids.count(joint_id) > 1})
     if duplicates:
         raise MotionError(f"{path}: duplicate joint ids {duplicates}")
     try:
@@ -447,6 +450,7 @@ def load_assembly(hw: Path) -> Assembly:
     except coupling.CouplingError as error:
         raise MotionError(f"{path}: {error}") from None
     return Assembly(inventory, joints, frames, couplings)
+
 
 
 def _bad_joint(raw: Any) -> Joint:
@@ -990,11 +994,11 @@ def read_assembly_step(path: Path) -> StepAssembly:
     return StepAssembly(definitions, tuple(components))
 
 
-def load_definitions(hw: Path, parts_dir: Path) -> dict[str, Part]:
-    """Part definitions keyed by PN from one STEP per part: `<PN>.step` or `<PN> <anything>.step`."""
+def load_definitions(hw: Path, parts_dir: Path, record_hw: Path | None = None) -> dict[str, Part]:
+    """Part definitions keyed by PN from one STEP per part."""
     if not parts_dir.is_dir():
         raise MotionError(f"parts directory not found: {parts_dir}")
-    records = _part_records(hw)
+    records = _part_records(record_hw or hw)
     found: dict[str, Part] = {}
     for path in sorted(parts_dir.iterdir()):
         match = PN_PREFIX.match(path.stem)
@@ -1119,6 +1123,8 @@ def _write_document(path: Path, doc: Any, tool: Any) -> None:
         STEPControl_Controller.Init_s()
         if not Interface_Static.SetCVal_s("write.step.schema", "AP242DIS"):
             raise MotionError("cannot select the AP242 schema")
+        if not Interface_Static.SetCVal_s("write.step.unit", STEP_LENGTH_UNIT):
+            raise MotionError(f"cannot select the STEP length unit {STEP_LENGTH_UNIT}")
         writer = STEPCAFControl_Writer(XSControl_WorkSession(), False)
         writer.SetNameMode(True)
         writer.SetColorMode(True)
@@ -1196,19 +1202,8 @@ def add_geometry_arguments(parser: argparse.ArgumentParser) -> None:
 
 
 def version_parts_dir(hw: Path, version: str) -> Path:
-    """The zero-pose per-part STEP folder of a built cad-model version; `latest` via latest.json."""
-    versions = hw / "versions"
-    label = version
-    if version == "latest":
-        try:
-            label = json.loads((versions / "latest.json").read_text(encoding="utf-8"))["label"]
-        except (OSError, ValueError, KeyError, TypeError) as error:
-            raise MotionError(f"--version latest: cannot read the label in {versions / 'latest.json'}: {error}") from error
-        if not isinstance(label, str) or not VERSION_LABEL.match(label):
-            raise MotionError(f"--version latest: {versions / 'latest.json'} names no version label: {label!r}")
-    folder = versions / label
-    if not (folder / "manifest.json").is_file():
-        raise MotionError(f"--version {version}: {folder} is not a built cad-model version (no manifest.json)")
+    """The verified zero-pose per-part STEP folder of a built cad-model version."""
+    _, folder, _ = layout_io.version(hw, version)
     return folder / "parts"
 
 
@@ -1235,8 +1230,9 @@ def refuse_posed_version_step(step: Path) -> None:
 
 
 def load_inputs(args: argparse.Namespace) -> tuple[Assembly, Chain, dict[str, Part]]:
-    """Read the record and the definitions and build the connected occurrence chain."""
-    assembly = load_assembly(args.hw)
+    """Read the selected version's immutable assembly and part-record snapshot."""
+    record_hw = getattr(args, "record_hw", args.hw)
+    assembly = load_assembly(args.hw, record_hw)
     located = None
     if args.step is not None:
         refuse_posed_version_step(args.step)
@@ -1246,7 +1242,7 @@ def load_inputs(args: argparse.Namespace) -> tuple[Assembly, Chain, dict[str, Pa
         definitions, located = step.definitions, bind_components(assembly, step, args.step)
     else:
         definitions = load_definitions(args.hw, version_parts_dir(args.hw, args.version) if args.version
-                                       else args.parts_dir)
+                                       else args.parts_dir, record_hw)
     if not definitions:
         raise MotionError("no part geometry found; product or file names must start with a PN")
     chain = assembly_chain(assembly, definitions, attach_joints(args.attach, assembly), located)
@@ -1264,27 +1260,62 @@ def main(argv: list[str] | None = None) -> int:
     add_geometry_arguments(parser)
     parser.add_argument("--set", action="append", default=[], metavar="J-###=VALUE",
                         help="independent joint value in deg (revolute) or mm (prismatic); repeatable")
-    parser.add_argument("--out", type=Path, required=True, help="posed STEP AP242 path")
+    parser.add_argument("--case", default="pose", help="case id for the immutable motion bundle")
+    parser.add_argument("--replace", action="store_true", help="retain and replace a different recipe")
+    parser.add_argument("--out", type=Path, help="STEP path for scratch; only .cad-work paths are allowed")
     args = parser.parse_args(argv)
     try:
+        version, record_hw = None, args.hw
+        if args.version:
+            version, _, record_hw = layout_io.version(args.hw, args.version)
+            args.version, args.record_hw = version, record_hw
+            if args.out is not None:
+                raise MotionError("--out is only allowed for scratch inputs; versioned pose publishes to hw/motion")
+            LAYOUT.resolve(args.hw, "bundle.motion", V=version, S=args.case)
+        else:
+            if args.out is None:
+                raise MotionError("--out is required for scratch inputs")
+            args.out = layout_io.scratch_output(args.hw, args.out, "--out")
         assembly, chain, definitions = load_inputs(args)
+        chain.product_id = product_id(record_hw)
         values = chain.complete(parse_values(args.set))
         findings = chain.limit_findings(values)
-        result: dict[str, Any] = {
-            "status": "fail" if findings else "pass",
-            "values": values,
-            "independent": [j.id for j in chain.independent],
-            "derived": {j.id: chain.couplings.describe(j.id) for j in chain.dependent},
-            "units": {j.id: j.unit for j in chain.movable},
-            "findings": findings,
-            "no_geometry": [pn for pn in assembly.definitions if pn not in definitions],
-            "occurrences": {occurrence_id: chain.pn(occurrence_id) for occurrence_id in chain.ids},
-        }
-        if not findings:
-            transforms = write_posed(args.out, args.hw, chain, definitions, values)
+        result: dict[str, Any] = {"status": "fail" if findings else "pass", "values": values,
+                                  "independent": [j.id for j in chain.independent],
+                                  "derived": {j.id: chain.couplings.describe(j.id) for j in chain.dependent},
+                                  "units": {j.id: j.unit for j in chain.movable}, "findings": findings,
+                                  "no_geometry": [pn for pn in assembly.definitions if pn not in definitions],
+                                  "occurrences": {oid: chain.pn(oid) for oid in chain.ids}}
+        if not findings and version:
+            inputs = [record_hw / "product.yaml", record_hw / "assembly.yaml",
+                      *sorted((record_hw / "parts").glob("*/part.yaml"))]
+            if (record_hw / "interfaces.yaml").is_file():
+                inputs.append(record_hw / "interfaces.yaml")
+            recipe = {"operation": "pose", "values": values, "attach": list(args.attach),
+                      "source_sha256": layout_io.fingerprint(*inputs)}
+            reused = layout_io.reuse(args.hw, "bundle.motion", version, args.case, recipe, args.replace)
+            if reused:
+                result = reused[1]
+                result.update(bundle=str(reused[0]), reused=True)
+            else:
+                stage = LAYOUT.staging(args.hw, "bundle.motion")
+                try:
+                    transforms = write_posed(stage / "pose.step", record_hw, chain, definitions, values)
+                    result["placements"] = placements_report(chain, transforms)
+                    result["out"] = str(LAYOUT.bundle_dir(args.hw, "motion", version, args.case) / "pose.step")
+                    (stage / "result.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+                    published = layout_io.publish(args.hw, "bundle.motion", version, args.case, stage, recipe,
+                                                  "cad-motion pose.py", result["status"], args.replace)
+                except Exception:
+                    import shutil
+                    shutil.rmtree(stage, ignore_errors=True)
+                    raise
+                result.update(bundle=str(published.path), reused=published.reused)
+        elif not findings:
+            transforms = write_posed(args.out, record_hw, chain, definitions, values)
             result["placements"] = placements_report(chain, transforms)
             result["out"] = str(args.out)
-    except (MotionError, OSError) as error:
+    except (MotionError, OSError, LAYOUT.LayoutError) as error:
         print(f"pose: {error}", file=sys.stderr)
         return 2
     print(json.dumps(result, indent=2))

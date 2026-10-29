@@ -23,9 +23,9 @@ TRIGGER
    requirement cites its REQ-### and gets a DR-### entry.
 3. Stack-up: write the chain as YAML (format in the `scripts/stackup.py` docstring: contributors with
    `nominal`, `tol` or `tol_plus`/`tol_minus`, `direction` 1|-1; optional `requirement` min/max/method),
-   then `uv run --script skill://cad-fits/scripts/stackup.py STACK.yaml`.
-   → JSON with nominal, mean, worst-case and RSS min/max, per-contributor shares, and the verdict.
-4. RECHECK reruns both scripts for every changed part and its dependents. A nonzero exit is a finding.
+   then run `uv run --script skill://cad-fits/scripts/stackup.py STACK.yaml` for a standalone result.
+   To publish, pass `--hw hw --version vN`; the bundle is `hw/analysis/vN/<stack-id>/` and changed recipes
+   require `--replace`. Other `--out` destinations must be under `.cad-work`.
 
 Exit codes for both scripts: 0 pass, 1 check failure (`--expect` mismatch or requirement not met),
 2 usage error or input outside coverage.

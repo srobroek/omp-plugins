@@ -335,33 +335,40 @@ def main(argv: list[str] | None = None) -> int:
                         help="occurrence whose start/mid/end placements are reported (default: every joint child)")
     parser.add_argument("--time-step", type=float, default=0.01, help="simulation output step over time 0..1")
     parser.add_argument("--freecad", type=Path, help="freecadcmd binary")
-    parser.add_argument("--job-dir", type=Path, help="keep the generated job here (default: a temporary directory)")
-    parser.add_argument("--timeout", type=float, default=600.0, help="seconds before freecadcmd is stopped")
+    parser.add_argument("--job-dir", type=Path, help="scratch job directory under .cad-work (versioned runs retain solver files automatically)")
+    parser.add_argument("--case", default="freecad-assembly", help="case id for the immutable motion bundle")
+    parser.add_argument("--replace", action="store_true", help="retain and replace a different recipe")
     args = parser.parse_args(argv)
     started = time.monotonic()
     try:
-        refuse_coupled(pose.load_assembly(args.hw))
-    except pose.MotionError as error:
-        print(f"freecad_assembly: {error}", file=sys.stderr)
-        return 2
-    freecad = find_freecad(args.freecad)
-    if freecad is None:
-        print("freecad_assembly: freecadcmd not found; pass --freecad or set FREECADCMD", file=sys.stderr)
-        return 2
-    if not 0.0 < args.time_step <= 0.5:
-        print("freecad_assembly: --time-step must be in (0, 0.5]", file=sys.stderr)
-        return 2
-    temporary = None
-    try:
+        version, record_hw = None, args.hw
+        if args.version:
+            version, _, record_hw = pose.layout_io.version(args.hw, args.version)
+            args.version, args.record_hw = version, record_hw
+            pose.LAYOUT.resolve(args.hw, "bundle.motion", V=version, S=args.case)
+        if args.job_dir is not None:
+            args.job_dir = pose.layout_io.scratch_output(args.hw, args.job_dir, "--job-dir")
+        refuse_coupled(pose.load_assembly(args.hw, record_hw))
+        if not 0.0 < args.time_step <= 0.5:
+            raise pose.MotionError("--time-step must be in (0, 0.5]")
+        freecad = find_freecad(args.freecad)
+        if freecad is None:
+            raise pose.MotionError("freecadcmd not found; pass --freecad or set FREECADCMD")
         _, chain, definitions = pose.load_inputs(args)
         report = ([chain.resolve(ref, "--report-part: ") for ref in args.report_part] if args.report_part
-                  else [j.child for j in chain.movable])
-        if args.job_dir:
+                  else [joint.child for joint in chain.movable])
+        retained = version is not None
+        temporary = None
+        if args.job_dir is not None:
             job_dir = args.job_dir.resolve()
-            job_dir.mkdir(parents=True, exist_ok=True)
+        elif retained:
+            job_scratch = Path(args.hw).parent / ".cad-work"
+            job_scratch.mkdir(parents=True, exist_ok=True)
+            job_dir = Path(tempfile.mkdtemp(prefix="cad-motion-job-", dir=job_scratch))
         else:
             temporary = tempfile.TemporaryDirectory(prefix="cad-motion-")
             job_dir = Path(temporary.name)
+        job_dir.mkdir(parents=True, exist_ok=True)
         pns = sorted({chain.pn(oid) for oid in chain.ids})
         paths = {pn: job_dir / f"{pn}.step" for pn in pns}
         for pn in pns:
@@ -371,35 +378,61 @@ def main(argv: list[str] | None = None) -> int:
                         job_dir / f"result-{run_id}.json", args.time_step)
         job_started = time.monotonic()
         result, warnings, exit_code = run_job(freecad, job_dir, spec, args.timeout)
-        job_seconds = time.monotonic() - job_started
         frames = result["frames"]
-        if len(frames) < 1:
+        if not frames:
             raise pose.MotionError("FreeCAD generated no frames")
         checks = check_frames(chain, frames)
-    except (pose.MotionError, OSError) as error:
-        print(f"freecad_assembly: {error}", file=sys.stderr)
-        return 2
-    finally:
+        moved = any(frames[0][oid] != frames[-1][oid] for oid in chain.ids)
+        failed = bool(checks["violations"] or checks["residuals"] or checks["range_findings"])
+        summary = {"status": "fail" if failed else "pass",
+                   "freecad": {"binary": freecad.name, "version": ".".join(result["version"][:3]),
+                               "exit_code": exit_code, "warnings": warnings},
+                   "frames": len(frames), "placements_change": moved, "motions": spec["motions"],
+                   "placements": frame_placements(frames, chain, report), "limit_check": checks["joints"],
+                   "violations": checks["violations"][:MAX_LISTED],
+                   "range_findings": checks["range_findings"][:MAX_LISTED],
+                   "residuals": checks["residuals"][:MAX_LISTED],
+                   "timings_s": {"freecad": round(time.monotonic() - job_started, 2),
+                                 "total": round(time.monotonic() - started, 2)}}
+        if version:
+            summary["retained_files"] = sorted(path.relative_to(job_dir).as_posix()
+                                               for path in job_dir.rglob("*") if path.is_file())
+            recipe = {"operation": "freecad_assembly", "case": args.case, "time_step": args.time_step,
+                      "report_part": list(args.report_part), "attach": list(args.attach),
+                      "source_files": pose.layout_io.fingerprint(record_hw / "product.yaml",
+                          record_hw / "assembly.yaml", *sorted((record_hw / "parts").glob("*/part.yaml"))),
+                      "freecad": {"binary": freecad.name, "version": summary["freecad"]["version"]}}
+            reused = pose.layout_io.reuse(args.hw, "bundle.motion", version, args.case, recipe, args.replace)
+            if reused:
+                summary = reused[1]
+                summary.update(bundle=str(reused[0]), reused=True)
+            else:
+                stage = pose.LAYOUT.staging(args.hw, "bundle.motion")
+                try:
+                    import shutil
+                    for source in job_dir.rglob("*"):
+                        if source.is_file():
+                            target = stage / "evidence" / source.relative_to(job_dir)
+                            target.parent.mkdir(parents=True, exist_ok=True)
+                            shutil.copyfile(source, target)
+                    (stage / "result.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+                    published = pose.layout_io.publish(args.hw, "bundle.motion", version, args.case, stage, recipe,
+                                                       "cad-motion freecad_assembly.py", summary["status"], args.replace)
+                    summary.update(bundle=str(published.path), reused=published.reused)
+                except Exception:
+                    shutil.rmtree(stage, ignore_errors=True)
+                    raise
+            if args.job_dir is None:
+                shutil.rmtree(job_dir, ignore_errors=True)
+        elif args.job_dir:
+            summary["job_dir"] = str(job_dir)
         if temporary is not None:
             temporary.cleanup()
-    moved = any(frames[0][oid] != frames[-1][oid] for oid in chain.ids)
-    failed = bool(checks["violations"] or checks["residuals"] or checks["range_findings"])
-    print(json.dumps({
-        "status": "fail" if failed else "pass",
-        "freecad": {"binary": str(freecad), "version": ".".join(result["version"][:3]), "exit_code": exit_code,
-                    "warnings": warnings},
-        "frames": len(frames),
-        "placements_change": moved,
-        "motions": spec["motions"],
-        "placements": frame_placements(frames, chain, report),
-        "limit_check": checks["joints"],
-        "violations": checks["violations"][:MAX_LISTED],
-        "range_findings": checks["range_findings"][:MAX_LISTED],
-        "residuals": checks["residuals"][:MAX_LISTED],
-        "job_dir": str(job_dir) if args.job_dir else None,
-        "timings_s": {"freecad": round(job_seconds, 2), "total": round(time.monotonic() - started, 2)},
-    }, indent=2))
-    return 1 if failed else 0
+        print(json.dumps(summary, indent=2))
+        return 1 if failed else 0
+    except (pose.MotionError, OSError, pose.LAYOUT.LayoutError) as error:
+        print(f"freecad_assembly: {error}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

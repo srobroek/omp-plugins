@@ -20,6 +20,19 @@ import yaml
 
 from fea_part_selection import OCCURRENCE_REF
 from freecad_lookup import find_freecad
+import importlib.util
+import shutil
+import sys
+
+LAYOUT_PATH = Path(__file__).resolve().parents[2] / "cad-record" / "scripts" / "layout.py"
+_LAYOUT_SPEC = importlib.util.spec_from_file_location("cad_record_layout", LAYOUT_PATH)
+if _LAYOUT_SPEC is None or _LAYOUT_SPEC.loader is None:
+    raise ImportError(f"{LAYOUT_PATH} not found")
+LAYOUT = sys.modules.get("cad_record_layout")
+if LAYOUT is None:
+    LAYOUT = importlib.util.module_from_spec(_LAYOUT_SPEC)
+    sys.modules["cad_record_layout"] = LAYOUT
+    _LAYOUT_SPEC.loader.exec_module(LAYOUT)
 
 POSE_TOL = 1e-6  # cad-motion's sweep reports pose values rounded to 6 decimals
 
@@ -203,18 +216,20 @@ def sweep_evidence(case_path: Path, value: Any, step: Path, raw: dict[str, Any])
     return {"path": str(path), "sha256": digest, "criterion": evidence.get("criterion")}
 
 
-def run_directory(case_path: Path, run_id: str) -> Path:
-    """Return the isolated working directory for one case run."""
-    return case_path.parent.resolve() / "runs" / run_id
+def run_directory(case_path: Path, run_id: str, scratch_root: Path | None = None) -> Path:
+    """Return an isolated solver run directory outside hw/ for managed cases."""
+    parent = (scratch_root / "jobs" / "fea_static") if scratch_root is not None else case_path.parent.resolve() / "runs"
+    return parent / run_id
 
 
-def run_job(case_path: Path, case: dict[str, Any], timeout: float = 600.0) -> tuple[dict[str, Any], int]:
+def run_job(case_path: Path, case: dict[str, Any], timeout: float = 600.0, *, scratch_root: Path | None = None,
+            result_path: Path | None = None) -> tuple[dict[str, Any], int]:
     run_id = uuid.uuid4().hex
-    run_dir = run_directory(case_path, run_id)
+    run_dir = run_directory(case_path, run_id, scratch_root)
     run_dir.mkdir(parents=True, exist_ok=True)
     job_path = run_dir / f"fea_static_{run_id}.py"
     marker_path = run_dir / f"fea_static_{run_id}.json"
-    output_path = case_path.parent.resolve() / "results.json"
+    output_path = result_path or case_path.parent.resolve() / "results.json"
     job = {
         "run_id": run_id,
         "step": case["_step"],
@@ -302,7 +317,7 @@ def run():
         geom=selected_occurrence(doc) if JOB.get("occurrence") is not None else selected_part(doc)
         a=ObjectsFem.makeAnalysis(doc, "Analysis")
         solver=ObjectsFem.makeSolverCalculiXCcxTools(doc, "CalculiXCcxTools")
-        solver.AnalysisType="static"; solver.GeometricalNonlinearity="linear"; solver.WorkingDir=os.path.dirname(JOB["output"]); solver.SplitInputWriter=False; solver.MatrixSolverType="spooles"; a.addObject(solver)
+        solver.AnalysisType="static"; solver.GeometricalNonlinearity="linear"; solver.WorkingDir=JOB["run_directory"]; solver.SplitInputWriter=False; solver.MatrixSolverType="spooles"; a.addObject(solver)
         matobj=ObjectsFem.makeMaterialSolid(doc, "Material"); mat=matobj.Material
         mat["Name"]=JOB["material"].get("name", "Case material")
         mat["YoungsModulus"]="%s MPa" % JOB["material"]["E"]
@@ -361,6 +376,8 @@ def run():
         result["mesh_input_hashes"]=mesh_inputs
         result["mesh_input_files"]=["GmshGeometry.brep", "GmshInput.geo"]
         result["status"]="fail" if result["required_safety_factor"] is not None and safety_factor is not None and safety_factor < result["required_safety_factor"] else "pass"
+        result["retained_files"]=[os.path.relpath(os.path.join(root,name), JOB["run_directory"]).replace(os.sep,"/")
+                                  for root,dirs,files in os.walk(JOB["run_directory"]) for name in files]
         with open(JOB["output"], "w", encoding="utf-8") as f: json.dump(result,f,indent=2); f.write("\\n")
     finally:
         App.closeDocument(doc.Name)
@@ -413,22 +430,112 @@ except Exception as e:
     return result, status
 
 
+def _version_inputs(hw: Path, requested: str) -> tuple[str, Path, Path]:
+    version = LAYOUT.latest(hw) if requested == "latest" else requested
+    version_dir = LAYOUT.version_dir(hw, version)
+    if not (version_dir / "manifest.json").is_file():
+        raise CaseError(f"--version {version}: {version_dir} is not a built version")
+    problems = LAYOUT.verify(version_dir)
+    if problems:
+        raise CaseError(f"--version {version}: integrity failure: {'; '.join(problems)}")
+    record = LAYOUT.resolve(hw, "version.record", V=version)
+    return version, version_dir, record
+
+
+def _scratch_output(hw: Path | None, path: Path) -> Path:
+    target = path.resolve()
+    parts = target.parts
+    if ".cad-work" not in parts:
+        raise CaseError(f"--out must be under .cad-work, not {target}")
+    index = parts.index(".cad-work")
+    if index + 1 >= len(parts):
+        raise CaseError(f"--out must name a file under .cad-work, not {target}")
+    if hw is not None:
+        try:
+            relative = LAYOUT.relative(hw, target)
+        except LAYOUT.LayoutError as error:
+            raise CaseError(f"--out must be under {hw.parent / '.cad-work'}, not {target}") from error
+        if not relative.startswith(".cad-work/"):
+            raise CaseError(f"--out must be under {hw.parent / '.cad-work'}, not {target}")
+    return target
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("case", type=Path, help="case YAML")
+    parser.add_argument("--hw", type=Path, help="hardware project hw/; required with --version")
+    parser.add_argument("--version", help="built version to bind into hw/analysis/vN/<case>/")
+    parser.add_argument("--case-id", help="bundle subject; defaults to the source case directory name")
+    parser.add_argument("--replace", action="store_true", help="retain a different recipe and publish this one")
+    parser.add_argument("--out", type=Path, help="scratch result JSON path, only under .cad-work")
     args = parser.parse_args(argv)
+    if bool(args.hw) != bool(args.version):
+        parser.error("--hw and --version must be provided together")
     if find_freecad() is None:
         print(json.dumps(error("freecadcmd not found; set FREECADCMD or add it to PATH", code="freecad_unavailable")))
         return 2
     try:
-        case = load_case(args.case.resolve())
-    except CaseError as exc:
-        print(json.dumps(error(str(exc))))
-        return 2
-    try:
-        result, status = run_job(args.case.resolve(), case)
-    except OSError as exc:
-        print(json.dumps(error(str(exc), code="io_error")))
+        case_path = args.case.resolve()
+        case = load_case(case_path)
+        version = None
+        if args.hw:
+            version, version_dir, record_dir = _version_inputs(args.hw, args.version)
+            case_id = args.case_id or case_path.parent.name
+            if not case_id or case_id == "analysis":
+                raise CaseError("--case-id is required when the case file is not under hw/analysis/cases/<id>/")
+            LAYOUT.resolve(args.hw, "bundle.analysis", V=version, S=case_id)
+            result_dir = LAYOUT.bundle_dir(args.hw, "analysis", version, case_id)
+            try:
+                case_relative = case_path.relative_to(Path(args.hw).resolve())
+            except ValueError as error:
+                raise CaseError("versioned FEA case YAML must be under hw/analysis/cases/<case-id>/") from error
+            case_dir = LAYOUT.resolve(args.hw, "analysis.case", ID=case_id)
+            if len(case_relative.parts) < 4 or case_relative.parts[:4] != ("analysis", "cases", case_id, case_relative.parts[3]):
+                raise CaseError("versioned FEA case YAML must be under hw/analysis/cases/<case-id>/")
+            if args.out is not None:
+                raise CaseError("--out is only allowed for standalone scratch analyses")
+            stage = LAYOUT.staging(args.hw, "bundle.analysis")
+            output = stage / "results.json"
+            job_scratch = Path(args.hw).parent / ".cad-work"
+            job_scratch.mkdir(parents=True, exist_ok=True)
+            result, status = run_job(case_path, case, scratch_root=job_scratch, result_path=output)
+            if status != 2:
+                run_dir = Path(result["run_directory"])
+                for rel in sorted(result.get("retained_files", [])):
+                    source = run_dir / rel
+                    if source.is_file():
+                        target = stage / "evidence" / rel
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copyfile(source, target)
+                for extra in ("spec.json", "job.py"):
+                    source = run_dir / extra
+                    if source.is_file():
+                        shutil.copyfile(source, stage / "evidence" / extra)
+                result["run_directory"] = None
+                result["bundle"] = str(result_dir)
+                output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+                recipe = {"case": case_id, "case_yaml_sha256": hashlib.sha256(case_path.read_bytes()).hexdigest(),
+                          "inputs": {"step_sha256": hashlib.sha256(Path(case["_step"]).read_bytes()).hexdigest()},
+                          "material": case["material"], "fixed_faces": case["fixed_faces"], "loads": case["loads"],
+                          "mesh_size": case["mesh_size"], "part": case.get("part"),
+                          "occurrence": case.get("occurrence"), "solid_index": case.get("solid_index"),
+                          "pose": case.get("pose"), "evidence": case.get("_evidence"),
+                          "required_safety_factor": case.get("required_safety_factor")}
+                published = LAYOUT.publish(args.hw, "bundle.analysis", {"V": version, "S": case_id}, stage,
+                                           recipe=recipe, producer="cad-analysis fea_static.py", status=result["status"],
+                                           replace=args.replace)
+                result["bundle"] = str(published.path)
+                result["reused"] = published.reused
+            else:
+                shutil.rmtree(stage, ignore_errors=True)
+        else:
+            output = _scratch_output(args.hw, args.out) if args.out is not None else None
+            scratch_root = (Path(args.hw).parent / ".cad-work" if args.hw else output.parent if output else None)
+            if scratch_root is not None:
+                scratch_root.mkdir(parents=True, exist_ok=True)
+            result, status = run_job(case_path, case, scratch_root=scratch_root, result_path=output)
+    except (CaseError, OSError, LAYOUT.LayoutError) as exc:
+        print(json.dumps(error(str(exc), code="invalid_case")))
         return 2
     print(json.dumps(result, indent=2))
     return status

@@ -49,6 +49,15 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+LAYOUT_PATH = Path(__file__).resolve().parents[2] / "cad-record" / "scripts" / "layout.py"
+_SPEC = importlib.util.spec_from_file_location("cad_record_layout", LAYOUT_PATH)
+if _SPEC is None or _SPEC.loader is None:
+    raise ImportError(f"{LAYOUT_PATH} not found")
+LAYOUT = sys.modules.get("cad_record_layout")
+if LAYOUT is None:
+    LAYOUT = importlib.util.module_from_spec(_SPEC)
+    sys.modules["cad_record_layout"] = LAYOUT
+    _SPEC.loader.exec_module(LAYOUT)
 
 COLUMNS = ("level", "PN", "rev", "qty", "title", "material", "process", "make_buy", "supplier", "mass",
            "unit", "designation", "manufacturer", "manufacturer_part_number", "supplier_part_number",
@@ -164,12 +173,12 @@ def read_step_tree(path: Path) -> list[Node]:
     return [product(roots.Value(index)) for index in range(1, roots.Length() + 1)]
 
 
-def load_parts(hw: Path) -> dict[str, dict[str, Any]]:
+def load_parts(hw: Path, record_hw: Path | None = None) -> dict[str, dict[str, Any]]:
     """Return part.yaml mappings keyed by their parts/<PN> directory name."""
     import yaml
 
     parts: dict[str, dict[str, Any]] = {}
-    root = hw / "parts"
+    root = (record_hw or hw) / "parts"
     if not root.is_dir():
         return parts
     for part_yaml in sorted(root.glob("*/part.yaml")):
@@ -265,20 +274,51 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="EBOM roll-up from a STEP AP242 assembly")
     parser.add_argument("step", type=Path, help="STEP AP242 assembly file")
     parser.add_argument("--hw", type=Path, required=True, help="hardware design record directory (hw/)")
-    parser.add_argument("--out", type=Path, help="bom.csv path (default: HW/bom.csv)")
+    parser.add_argument("--version", help="built version snapshot to reconcile against")
+    parser.add_argument("--out", type=Path, help="BOM path; only hw/bom.csv or .cad-work destinations are allowed")
     args = parser.parse_args(argv)
-    out = args.out or args.hw / "bom.csv"
+    record_hw = args.hw
+    version = None
+    if args.version:
+        version = LAYOUT.latest(args.hw) if args.version == "latest" else args.version
+        if version is None:
+            print("bom: no built version: latest.json is absent", file=sys.stderr)
+            return 2
+        version_dir = LAYOUT.version_dir(args.hw, version)
+        if not (version_dir / "manifest.json").is_file():
+            print(f"bom: --version {version} is not built", file=sys.stderr)
+            return 2
+        problems = LAYOUT.verify(version_dir)
+        if problems:
+            print(f"bom: --version {version}: integrity failure: {'; '.join(problems)}", file=sys.stderr)
+            return 2
+        record_hw = LAYOUT.resolve(args.hw, "version.record", V=version)
+        if not (record_hw / "product.yaml").is_file():
+            print(f"bom: --version {version}: record snapshot is missing", file=sys.stderr)
+            return 2
+    out = args.out.resolve() if args.out else (args.hw / "bom.csv").resolve()
+    expected = (args.hw / "bom.csv").resolve()
+    if out != expected:
+        try:
+            relative = LAYOUT.relative(args.hw, out)
+        except LAYOUT.LayoutError:
+            relative = ""
+        if not relative.startswith(".cad-work/"):
+            print(f"bom: --out must be hw/bom.csv or under .cad-work, not {out}", file=sys.stderr)
+            return 2
     if not args.step.is_file():
         print(f"bom: STEP file not found: {args.step}", file=sys.stderr)
         return 2
     try:
-        result = roll_up(read_step_tree(args.step), load_parts(args.hw))
+        result = roll_up(read_step_tree(args.step), load_parts(args.hw, record_hw))
         write_csv(out, result["rows"])
     except (BomError, OSError) as error:
         print(f"bom: {error}", file=sys.stderr)
         return 2
     failed = bool(result["missing_part_yaml"] or result["missing_in_step"] or result["unidentified"])
     summary = {"status": "fail" if failed else "pass", "bom_csv": str(out), **result}
+    if version:
+        summary["reconciled_version"] = version
     json.dump(summary, sys.stdout, indent=2)
     sys.stdout.write("\n")
     for key in ("missing_part_yaml", "missing_in_step", "unidentified"):

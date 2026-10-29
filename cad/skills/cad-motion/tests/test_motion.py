@@ -664,6 +664,13 @@ class StepTests(unittest.TestCase):
             self.assertIn(f"PRODUCT('{name}'", text)
         # 90 degrees about Z through (200, 0, 0): x' = 200 - y, y' = x - 200.
         self.assertEqual(result["placements"]["TST-0003"], [[0.0, -1.0, 0.0, 200.0], [1.0, 0.0, 0.0, -200.0], [0.0, 0.0, 1.0, 0.0]])
+    def test_pose_step_declares_millimetre_units(self) -> None:
+        out = self.root / "posed-mm.step"
+        proc, _ = self.run_script("pose.py", "--hw", str(self.hw(180)), "--parts-dir", str(self.planar),
+                                  "--set", "J-002=90", "--out", str(out))
+        self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+        text = out.read_text(encoding="utf-8")
+        self.assertIn("SI_UNIT(.MILLI.,.METRE.)", text)
 
     def test_overlapping_links_are_a_collision(self) -> None:
         proc, result = self.run_script("sweep.py", "--hw", str(self.hw(180)), "--parts-dir", str(self.planar),

@@ -123,6 +123,34 @@ class StackupCliTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 2)
         self.assertIn("invalid YAML", proc.stderr)
 
+    def test_stack_publishes_a_version_bound_analysis_bundle(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            project = root / "project"
+            hw = project / "hw"
+            hw.mkdir(parents=True)
+            version = hw / "versions" / "v1"
+            version.mkdir(parents=True)
+            (version / "manifest.json").write_text(json.dumps({"label": "v1", "files": {}}), encoding="utf-8")
+            stack = dict(STACK)
+            stack["id"] = "STK-101"
+            stack_dir = hw / "analysis" / "cases" / "stk-101"
+            stack_dir.mkdir(parents=True)
+            stack_path = stack_dir / "stack.yaml"
+            import yaml
+            stack_path.write_text(yaml.safe_dump(stack, sort_keys=False), encoding="utf-8")
+            proc = subprocess.run(["uv", "run", "--quiet", "--script", str(SCRIPT), str(stack_path),
+                                   "--hw", str(hw), "--version", "v1"], capture_output=True, text=True,
+                                  check=False, timeout=300)
+            self.assertEqual(proc.returncode, 1, proc.stderr)
+            output = json.loads(proc.stdout)
+            bundle = hw / "analysis" / "v1" / "STK-101"
+            manifest = json.loads((bundle / "manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(output["bundle"], str(bundle))
+            self.assertEqual(manifest["recipe"]["source_yaml_sha256"], hashlib.sha256(stack_path.read_bytes()).hexdigest())
+            self.assertEqual(json.loads((bundle / "results.json").read_text(encoding="utf-8"))["nominal"], 0.1)
+
+
 
 if __name__ == "__main__":
     unittest.main()

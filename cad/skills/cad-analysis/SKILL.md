@@ -14,19 +14,14 @@ TRIGGER
 1. Prepare a case YAML with a STEP path, an optional `part` PN or `occurrence` for an assembly STEP,
    material properties, fixed-face selector, face loads, mesh size, and optional `pose`; see the input
    shape below.
-2. Run `scripts/fea_static.py <case.yaml>` with FreeCAD 1.1.4, Gmsh, and CalculiX available; it writes
-   `results.json` beside the case YAML and keeps the per-run job and solver files in
-   `runs/<run_id>/`. The `run_directory` field in `results.json` names that run directory, and the
-   command also emits result JSON.
-3. For an assembly sweep, run cad-motion `sweep.py ... --worst-step worst.step`, then set
-   `step: worst.step`, `part: <PN>` (or `occurrence: "@id"` for a part placed more than once), and
-   `evidence: worst.step.json` (the sweep's evidence beside its STEP) in this case YAML. The analysis
-   checks that the STEP is the one the evidence hashes and takes the evidence's complete `pose` (a
-   supplied `pose` must equal it). The sweep has already posed that STEP: the analysis reads its
-   geometry as placed and records `pose` without applying it again. The fixed-face and load plane
-   selectors use the assembly coordinates of that STEP.
-4. Review warnings, solver versions, and `worst_case_pose` (the analysed STEP, its pose, and the
-   evidence path, hash and criterion).
+2. Run `scripts/fea_static.py <case.yaml>` with FreeCAD 1.1.4, Gmsh, and CalculiX available. For a versioned case,
+   pass `--hw hw --version vN` (and optional `--case-id ID --replace`) to publish `results.json`, retained solver files,
+   and a manifest under `hw/analysis/vN/<case-id>/`. The source case belongs under `hw/analysis/cases/<case-id>/`.
+   Explicit `--out` is only allowed under `.cad-work`; solver scratch remains there.
+3. For a versioned assembly sweep, set `step` and `evidence` to `hw/motion/vN/<case>/worst.step` and
+   its `worst.step.json`; the analysis checks the STEP hash and complete pose, never re-poses it.
+   Face selectors use the assembly coordinates of that STEP.
+4. Review warnings, solver versions, and `worst_case_pose` (analysed STEP, pose, and evidence hash).
 5. Record accepted checks in the hardware project's `verification.csv`.
 
 ## Inputs

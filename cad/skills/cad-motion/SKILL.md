@@ -48,15 +48,15 @@ Only independent joints take `--set`; setting a coupled one exits 2 and names it
 FreeCAD Assembly simulation drives every joint independently, so `freecad_assembly.py` refuses a
 record with couplings (exit 2). Verify coupled motion with `pose.py` and `sweep.py`.
 
-1. Pose: `uv run --script skill://cad-flow/scripts/run.py cad-motion/scripts/pose.py --hw hw --version vN --set J-002=-90 --out posed.step`
-   → posed STEP AP242 with product names kept. A value outside [min, max] exits 1 with a
-   `joint_limit` finding and writes no STEP.
-2. Sweep: `uv run --script skill://cad-flow/scripts/run.py cad-motion/scripts/sweep.py --hw hw --version vN --worst-step worst.step
-   [--steps 19] [--grid 3] [--min-clearance MM] [--pair-clearance REF:REF=MM] [--include-pair REF:REF] [--end-effector REF] [--jobs 1|N|auto] [--cache DIR | --no-cache]`
-   → JSON: `collisions` (sample, independent and complete pose, pair, volume), `min_clearance` per
-   pair with its pose, `pair_clearance` per clearance requirement, `limit_findings`,
-   `reach_envelope`, `worst_case` (written to `--worst-step`, evidence in `<worst-step>.json`), and
-   `timings_s`. Only independent joints are sampled; every coupled joint is derived at each sample.
+1. Pose:
+   `uv run --script skill://cad-flow/scripts/run.py cad-motion/scripts/pose.py --hw hw --version vN --set J-002=-90`
+   publishes `pose.step`, `result.json`, and a manifest under `hw/motion/vN/pose/` in millimetres.
+   Use `--case ID` to select the immutable bundle subject; same recipe reuses, changed settings need
+   `--replace`. With scratch geometry (`--step` or `--parts-dir`), pass `--out .cad-work/<unit>/posed.step`.
+2. Sweep: `uv run --script skill://cad-flow/scripts/run.py cad-motion/scripts/sweep.py --hw hw --version vN
+   [--case ID] [--replace] [--steps 19] [--grid 3] [--min-clearance MM] [--pair-clearance REF:REF=MM]
+   [--include-pair REF:REF] [--end-effector REF] [--jobs 1|N|auto] [--cache DIR | --no-cache]`
+   → JSON `worst_case` (STEP and evidence are inside `hw/motion/vN/<case>/`), `collisions`, clearances, `reach_envelope`, and `timings_s`.
    `--jobs 1`, the default, measures in this process on OCCT's thread pool. `--jobs N` measures
    pairs in N worker processes (forkserver; spawn on macOS), each about 110 MB; `auto` is the CPU
    count, at most 8. Workers pay off for many small parts and on a busy host. The result is the
@@ -79,13 +79,14 @@ record with couplings (exit 2). Verify coupled motion with `pose.py` and `sweep.
    record's on that pair (`overrides` names it). Each `pair_clearance` row reports the pair,
    `required_mm`, the smallest `clearance_mm` with its sample and pose (the larger overlap breaks a
    tie at 0 mm), `samples_below`, `status`, and its `source`. A row below its requirement exits 1.
-3. FreeCAD: `uv run --script skill://cad-flow/scripts/run.py cad-motion/scripts/freecad_assembly.py --hw hw --version vN [--report-part REF]`
-   → JSON: `frames`, start/mid/end `placements`, per-joint `limit_check`, `violations`, `residuals`.
+3. FreeCAD: `uv run --script skill://cad-flow/scripts/run.py cad-motion/scripts/freecad_assembly.py --hw hw --version vN [--case ID] [--replace] [--report-part REF]`
+   publishes `result.json` and its retained FreeCAD job files under `hw/motion/vN/<case>/`; its JSON summary includes
+   `frames`, start/mid/end `placements`, `limit_check`, `violations`, and `residuals`.
 4. Record each result as a `verification.csv` row: `requirement_id` from requirements.yaml,
-   `result` pass|fail from the exit code, `evidence` = script, inputs, pose, and key numbers.
-5. Hand `worst.step` to the FEA load case with `evidence: worst.step.json` (cad-analysis checks the
-   STEP hash and pose, never re-poses); cite its pose in the FEA row. The clearance and
-   interference criteria select geometric poses; a stress case needs its own load criterion.
+   `result` pass|fail from the exit code, `evidence` = bundle path, inputs, pose, and key numbers.
+5. Hand `hw/motion/vN/<case>/worst.step` and its sibling `worst.step.json` to the FEA case
+   (`cad-analysis` checks the STEP hash and pose, never re-poses); cite the bundle as evidence.
+   The clearance and interference criteria select geometric poses; a stress case needs its own load criterion.
 
 Exit codes for all scripts:
 

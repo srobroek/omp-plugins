@@ -33,11 +33,23 @@ Exit 0 = requirement met by the governing method, 1 = not met,
 from __future__ import annotations
 
 import argparse
+import hashlib
+import importlib.util
 import json
 import math
 import sys
 from pathlib import Path
 from typing import Any
+
+LAYOUT_PATH = Path(__file__).resolve().parents[2] / "cad-record" / "scripts" / "layout.py"
+_SPEC = importlib.util.spec_from_file_location("cad_record_layout", LAYOUT_PATH)
+if _SPEC is None or _SPEC.loader is None:
+    raise ImportError(f"{LAYOUT_PATH} not found")
+LAYOUT = sys.modules.get("cad_record_layout")
+if LAYOUT is None:
+    LAYOUT = importlib.util.module_from_spec(_SPEC)
+    sys.modules["cad_record_layout"] = LAYOUT
+    _SPEC.loader.exec_module(LAYOUT)
 
 METHODS = ("worst_case", "rss")
 RESULT_DECIMALS = 6
@@ -164,23 +176,59 @@ def load_stack(path: Path) -> Any:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="1D worst-case and RSS tolerance stack-up")
     parser.add_argument("stack", type=Path, help="stack definition YAML")
+    parser.add_argument("--hw", type=Path, help="hardware project hw/; required with --version")
+    parser.add_argument("--version", help="built version to bind into hw/analysis/vN/<stack-id>/")
+    parser.add_argument("--replace", action="store_true", help="retain and replace a different recipe")
+    parser.add_argument("--out", type=Path, help="scratch result JSON path, only under .cad-work")
     args = parser.parse_args(argv)
+    if bool(args.hw) != bool(args.version):
+        parser.error("--hw and --version must be provided together")
     try:
-        result = compute(load_stack(args.stack))
+        stack_path = args.stack.resolve()
+        stack = load_stack(stack_path)
+        result = compute(stack)
+        requirement = result["requirement"]
+        status = "fail" if requirement is not None and not requirement["pass"] else "pass"
+        if args.hw:
+            version = LAYOUT.latest(args.hw) if args.version == "latest" else args.version
+            if version is None:
+                raise StackError("no built version: latest.json is absent")
+            version_dir = LAYOUT.version_dir(args.hw, version)
+            if not (version_dir / "manifest.json").is_file() or LAYOUT.verify(version_dir):
+                raise StackError(f"--version {version}: missing or invalid built version")
+            stack_id = result.get("id")
+            if not isinstance(stack_id, str) or not stack_id:
+                raise StackError("stack id is required for versioned publication")
+            LAYOUT.resolve(args.hw, "bundle.analysis", V=version, S=stack_id)
+            if args.out is not None:
+                raise StackError("--out is only allowed for standalone scratch output")
+            stage = LAYOUT.staging(args.hw, "bundle.analysis")
+            output = stage / "results.json"
+            output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+            recipe = {"case": stack_id, "source_yaml_sha256": hashlib.sha256(stack_path.read_bytes()).hexdigest(),
+                      "result": result}
+            published = LAYOUT.publish(args.hw, "bundle.analysis", {"V": version, "S": stack_id}, stage,
+                                       recipe=recipe, producer="cad-fits stackup.py", status=status,
+                                       replace=args.replace)
+            result["bundle"] = str(published.path)
+            result["reused"] = published.reused
+        elif args.out is not None:
+            target = args.out.resolve()
+            if ".cad-work" not in target.parts or target.parts.index(".cad-work") + 1 >= len(target.parts):
+                raise StackError(f"--out must be under .cad-work, not {target}")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+        json.dump(result, sys.stdout, indent=2)
+        sys.stdout.write("\n")
+        if status == "fail":
+            print(f"stackup: requirement not met ({requirement['method']})", file=sys.stderr)
+        return 1 if status == "fail" else 0
     except OSError as error:
         print(f"stackup: cannot read {args.stack}: {error}", file=sys.stderr)
         return 2
-    except StackError as error:
+    except (StackError, LAYOUT.LayoutError) as error:
         print(f"stackup: {args.stack}: {error}", file=sys.stderr)
         return 2
-    json.dump(result, sys.stdout, indent=2)
-    sys.stdout.write("\n")
-    requirement = result["requirement"]
-    if requirement is not None and not requirement["pass"]:
-        print(f"stackup: requirement not met ({requirement['method']})", file=sys.stderr)
-        return 1
-    return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())

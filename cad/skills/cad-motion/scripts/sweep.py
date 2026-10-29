@@ -513,12 +513,15 @@ def pair_requirements(chain: Any, declared: list[dict[str, Any]],
 
 
 def pose_command(args: argparse.Namespace, settings: dict[str, float]) -> str:
-    """The pose.py command that replays a sample: it sets the independent joints only."""
+    """The pose.py command that replays a sample, into this case or scratch output."""
     parts = ["uv run --script skill://cad-flow/scripts/run.py cad-motion/scripts/pose.py", f"--hw {args.hw}",
              geometry_option(args)]
     parts += [f"--attach {spec}" for spec in args.attach]
     parts += [f"--set {jid}={value!r}" for jid, value in settings.items()]
-    parts.append(f"--out {args.worst_step}")
+    if args.version:
+        parts.extend(("--case", args.case))
+    else:
+        parts.extend(("--out", str(args.worst_step)))
     return " ".join(parts)
 
 
@@ -528,41 +531,37 @@ def geometry_option(args: argparse.Namespace) -> str:
     return f"--step {args.step}" if args.step else f"--parts-dir {args.parts_dir}"
 
 
-def evidence_path(step: Path) -> Path:
-    """`worst.step` -> `worst.step.json`: the evidence beside the worst-case STEP."""
+def evidence_path_for(step: Path) -> Path:
+    """`worst.step` -> `worst.step.json`."""
     return step.with_name(step.name + ".json")
 
 
 def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
-
 def write_evidence(args: argparse.Namespace, chain: Any, definitions: dict[str, Any], worst: dict[str, Any],
-                   description: dict[str, Any], digest: str) -> Path:
-    """Write `<worst-step>.json`: what selected the worst pose and how to check and replay its STEP."""
+                   description: dict[str, Any], digest: str, path: Path | None = None,
+                   record_hw: Path | None = None) -> Path:
+    """Write the replayable evidence beside `worst.step` or inside its staged bundle."""
     sample = worst["sample"]
     occurrences = {}
     for oid in chain.ids:
         part = definitions[chain.pn(oid)]
         occurrences[oid] = {"PN": chain.pn(oid), "ref": chain.ref(oid),
                             "component": pose.component_name(part, chain.inventory.get(oid)) or part.name}
-    path = evidence_path(args.worst_step)
+    path = path or evidence_path_for(args.worst_step)
+    record_hw = record_hw or args.hw
     path.write_text(json.dumps({
-        "schema_version": EVIDENCE_SCHEMA,
-        "producer": "cad-motion sweep.py",
-        **description,
-        "metric": worst["metric"],
-        "pair": worst["pair"],
+        "schema_version": EVIDENCE_SCHEMA, "producer": "cad-motion sweep.py", **description,
+        "metric": worst["metric"], "pair": worst["pair"],
         "sample": {"index": sample.index, "source": sample.source},
-        "independent_pose": sample.settings,
-        "pose": sample.values,
-        "units": {j.id: j.unit for j in chain.movable},
-        "inputs": {"hw": str(args.hw), "assembly_yaml_sha256": sha256(args.hw / "assembly.yaml"),
+        "independent_pose": sample.settings, "pose": sample.values,
+        "units": {joint.id: joint.unit for joint in chain.movable},
+        "inputs": {"assembly_yaml_sha256": sha256(record_hw / "assembly.yaml"),
                    "geometry": geometry_option(args), "attach": list(args.attach),
                    "pair_clearance": list(args.pair_clearance)},
         "step": {"path": str(args.worst_step), "sha256": digest},
-        "occurrences": occurrences,
-        "command": pose_command(args, sample.settings),
+        "occurrences": occurrences, "command": pose_command(args, sample.settings),
     }, indent=2) + "\n", encoding="utf-8")
     return path
 
@@ -585,7 +584,8 @@ def declared_policy(hw: Path, assembly: Any) -> tuple[set[tuple[str, str]], set[
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Kinematic sweep with interference and clearance checks")
     pose.add_geometry_arguments(parser)
-    parser.add_argument("--worst-step", type=Path, required=True, help="posed STEP AP242 of the worst-case pose")
+    parser.add_argument("--case", default="sweep", help="versioned motion bundle case ID")
+    parser.add_argument("--replace", action="store_true", help="retain and replace a different recipe")
     parser.add_argument("--worst-criterion", choices=sorted(CRITERIA), default="max_horizontal_reach",
                         help="how the worst-case pose is selected")
     parser.add_argument("--steps", type=int, default=19,
@@ -611,14 +611,26 @@ def main(argv: list[str] | None = None) -> int:
                          help="pair measurement cache directory (default: $XDG_CACHE_HOME/cad-motion, else "
                               "~/.cache/cad-motion)")
     caching.add_argument("--no-cache", action="store_true", help="measure every pair, reading and writing no cache")
+    parser.add_argument("--worst-step", type=Path, help="STEP path for scratch; versioned sweeps publish to hw/motion")
+    parser.add_argument("--case", default="sweep", help="case id for immutable motion bundle")
+    parser.add_argument("--replace", action="store_true", help="retain and replace a different recipe")
     args = parser.parse_args(argv)
     if args.steps < 2 or args.grid == 1 or args.grid < 0:
         print("sweep: --steps must be >= 2, and --grid 0 or >= 2", file=sys.stderr)
         return 2
     started = time.monotonic()
     try:
-        for stale in (args.worst_step, evidence_path(args.worst_step)):  # never left looking like this run's result
-            stale.unlink(missing_ok=True)
+        version, record_hw = None, args.hw
+        if args.version:
+            version, _, record_hw = pose.layout_io.version(args.hw, args.version)
+            args.version, args.record_hw = version, record_hw
+            if args.worst_step is not None:
+                raise pose.MotionError("--worst-step is only valid for scratch geometry; versioned sweeps publish to hw/motion")
+            pose.LAYOUT.resolve(args.hw, "bundle.motion", V=version, S=args.case)
+        else:
+            if args.worst_step is None:
+                raise pose.MotionError("--worst-step is required for scratch geometry")
+            args.worst_step = pose.layout_io.scratch_output(args.hw, args.worst_step, "--worst-step")
         assembly, chain, definitions = pose.load_inputs(args)
         if not chain.independent:
             raise pose.MotionError("the chain has no independent movable joint to sweep")
@@ -626,17 +638,16 @@ def main(argv: list[str] | None = None) -> int:
         if bound > args.max_poses:
             raise pose.MotionError(f"{bound} poses exceed --max-poses {args.max_poses}; lower --steps or --grid")
         pairs, excluded = pairs_to_check(chain, args.include_pair)
-        allowed, fitted, declared = declared_policy(args.hw, assembly)
+        allowed, fitted, declared = declared_policy(record_hw, assembly)
         requirements = pair_requirements(chain, declared, args.pair_clearance)
         effector = end_effector(chain, args.end_effector)
-        path = [j for j in chain.path(effector) if j.movable]
+        path = [joint for joint in chain.path(effector) if joint.movable]
         if not path:
             raise pose.MotionError(f"no movable joint moves the end effector {chain.ref(effector)}")
         used = {pn: definitions[pn] for pn in {chain.pn(oid) for oid in chain.ids}}
         geometry = Geometry(chain, used)
         cache = None if args.no_cache else pair_measure.PairCache(args.cache or pair_measure.default_cache_dir())
-        measurer = pair_measure.PairMeasurer({pn: part.shape for pn, part in used.items()}, jobs=args.jobs,
-                                             cache=cache)
+        measurer = pair_measure.PairMeasurer({pn: part.shape for pn, part in used.items()}, jobs=args.jobs, cache=cache)
         loaded = time.monotonic()
         samples = generate_poses(chain, args.steps, args.grid)
         try:
@@ -648,69 +659,94 @@ def main(argv: list[str] | None = None) -> int:
                 cache.close()
         swept = time.monotonic()
         complete = state.evaluated == len(samples)
-        worst = None
+        clearance, findings = clearance_report(state.clearance, args.min_clearance, fitted)
+        requirement_rows = pair_clearance_report(chain, requirements, state.pair_clearance)
+        failed = bool(state.collisions or findings or state.limits or any(row["status"] == "fail" for row in requirement_rows))
+        status = "incomplete" if not complete else ("fail" if failed else "pass")
+        refs = [[chain.ref(a), chain.ref(b)] for a, b in pairs]
+        result: dict[str, Any] = {
+            "status": status,
+            "poses": {"evaluated": state.evaluated, "planned": len(samples), "steps_per_joint": args.steps,
+                      "grid_per_joint": args.grid, "movable_joints": [joint.id for joint in chain.movable],
+                      "independent_joints": [joint.id for joint in chain.independent],
+                      "dependent_joints": [joint.id for joint in chain.dependent],
+                      "spacing": {joint.id: (joint.max - joint.min) / (args.steps - 1) for joint in chain.independent}},
+            "pairs": {"checked": refs, "excluded_adjacent": [[chain.ref(a), chain.ref(b)] for a, b in excluded],
+                      "declared_overlap": [[chain.ref(a), chain.ref(b)] for a, b in pairs if tuple(sorted((a, b))) in allowed],
+                      "declared_fit": [[chain.ref(a), chain.ref(b)] for a, b in pairs if tuple(sorted((a, b))) in fitted]},
+            "occurrences": {oid: chain.pn(oid) for oid in chain.ids},
+            "collision_pose_count": len(state.collisions), "collisions": state.collisions[:MAX_LISTED],
+            "limit_pose_count": len(state.limits), "limit_findings": state.limits[:MAX_LISTED],
+            "min_clearance": clearance, "clearance_findings": findings, "pair_clearance": requirement_rows,
+            "reach_envelope": {"part": chain.ref(effector), "min": [round(v, 3) for v in state.envelope_min],
+                               "max": [round(v, 3) for v in state.envelope_max], "units": "mm"},
+            "worst_case": None,
+            "timings_s": {"load": round(loaded - started, 2), "sweep": round(swept - loaded, 2),
+                          "export": 0.0, "total": round(time.monotonic() - started, 2),
+                          "per_pose_ms": round((swept - loaded) / state.evaluated * 1000, 1) if state.evaluated else 0.0,
+                          "pair_requests": measurer.requested, "pair_evaluations": measurer.measured,
+                          "cache_hits": measurer.reused, "disk_hits": measurer.disk_hits, "pruned": measurer.pruned},
+        }
         if complete and state.worst is not None:
             sample = state.worst["sample"]
             description = {"criterion": args.worst_criterion, "definition": CRITERIA[args.worst_criterion].format(
                 joint=path[0].id, effector=chain.ref(effector), required=args.min_clearance, volume_tol=args.volume_tol)}
-            pose.write_posed(args.worst_step, args.hw, chain, definitions, sample.values)
-            digest = sha256(args.worst_step)
-            evidence = write_evidence(args, chain, definitions, state.worst, description, digest)
-            worst = {
-                **description,
-                **state.worst["metric"],
-                "pair": state.worst["pair"],
-                "sample": sample.index,
-                "source": sample.source,
-                "independent_pose": rounded(sample.settings),
-                "pose": rounded(sample.values),
-                "step": str(args.worst_step),
-                "step_sha256": digest,
-                "evidence": str(evidence),
-                "command": pose_command(args, sample.settings),
-            }
-        exported = time.monotonic()
-    except (pose.MotionError, OSError) as error:
+            stage = pose.LAYOUT.staging(args.hw, "bundle.motion") if version else None
+            worst_step = stage / "worst.step" if stage else args.worst_step
+            try:
+                pose.write_posed(worst_step, record_hw, chain, definitions, sample.values)
+                digest = sha256(worst_step)
+                evidence_path = (stage / "worst.step.json") if stage else evidence_path_for(worst_step)
+                write_evidence(args, chain, definitions, state.worst, description, digest, evidence_path, record_hw)
+                result["worst_case"] = {**description, **state.worst["metric"], "pair": state.worst["pair"],
+                                         "sample": sample.index, "source": sample.source,
+                                         "independent_pose": rounded(sample.settings), "pose": rounded(sample.values),
+                                         "step": str(worst_step), "step_sha256": digest,
+                                         "evidence": str(evidence_path), "command": pose_command(args, sample.settings)}
+                if version:
+                    result["worst_case"]["step"] = str(pose.LAYOUT.bundle_dir(args.hw, "motion", version, args.case)
+                                                         / "worst.step")
+            except Exception:
+                if stage is not None:
+                    import shutil
+                    shutil.rmtree(stage, ignore_errors=True)
+                raise
+        if version:
+            if status == "incomplete":
+                raise pose.MotionError(f"sweep incomplete; no bundle published ({state.evaluated}/{len(samples)} poses)")
+            recipe = {"operation": "sweep", "steps": args.steps, "grid": args.grid,
+                      "worst_criterion": args.worst_criterion, "end_effector": args.end_effector,
+                      "include_pair": list(args.include_pair), "min_clearance": args.min_clearance,
+                      "pair_clearance": list(args.pair_clearance), "volume_tol": args.volume_tol,
+                      "max_poses": args.max_poses, "time_limit": args.time_limit, "jobs": args.jobs,
+                      "attach": list(args.attach), "source_sha256": pose.layout_io.fingerprint(
+                          record_hw / "product.yaml", record_hw / "assembly.yaml",
+                          *sorted((record_hw / "parts").glob("*/part.yaml")),
+                          *([record_hw / "interfaces.yaml"] if (record_hw / "interfaces.yaml").is_file() else []))}
+            reused = pose.layout_io.reuse(args.hw, "bundle.motion", version, args.case, recipe, args.replace)
+            if reused:
+                result = reused[1]
+                result["bundle"] = str(reused[0])
+                result["reused"] = True
+            else:
+                stage = stage or pose.LAYOUT.staging(args.hw, "bundle.motion")
+                (stage / "result.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+                published = pose.layout_io.publish(args.hw, "bundle.motion", version, args.case, stage, recipe,
+                                                   "cad-motion sweep.py", status, args.replace)
+                result["bundle"] = str(published.path)
+                result["reused"] = published.reused
+        else:
+            result["timings_s"]["export"] = round(time.monotonic() - swept, 2)
+            result["timings_s"]["total"] = round(time.monotonic() - started, 2)
+        print(json.dumps(result, indent=2))
+        if not complete:
+            print(f"sweep: stopped after {state.evaluated} of {len(samples)} poses at --time-limit {args.time_limit} s",
+                  file=sys.stderr)
+            return 2
+        return 1 if failed else 0
+    except (pose.MotionError, OSError, pose.LAYOUT.LayoutError) as error:
         print(f"sweep: {error}", file=sys.stderr)
         return 2
-    clearance, findings = clearance_report(state.clearance, args.min_clearance, fitted)
-    requirement_rows = pair_clearance_report(chain, requirements, state.pair_clearance)
-    failed = bool(state.collisions or findings or state.limits or any(r["status"] == "fail" for r in requirement_rows))
-    status = "incomplete" if not complete else ("fail" if failed else "pass")
-    per_pose = (swept - loaded) / state.evaluated if state.evaluated else 0.0
-    refs = [[chain.ref(a), chain.ref(b)] for a, b in pairs]
-    print(json.dumps({
-        "status": status,
-        "poses": {"evaluated": state.evaluated, "planned": len(samples), "steps_per_joint": args.steps,
-                  "grid_per_joint": args.grid, "movable_joints": [j.id for j in chain.movable],
-                  "independent_joints": [j.id for j in chain.independent],
-                  "dependent_joints": [j.id for j in chain.dependent],
-                  "spacing": {j.id: (j.max - j.min) / (args.steps - 1) for j in chain.independent}},
-        "pairs": {"checked": refs, "excluded_adjacent": [[chain.ref(a), chain.ref(b)] for a, b in excluded],
-                  "declared_overlap": [[chain.ref(a), chain.ref(b)] for a, b in pairs if tuple(sorted((a, b))) in allowed],
-                  "declared_fit": [[chain.ref(a), chain.ref(b)] for a, b in pairs if tuple(sorted((a, b))) in fitted]},
-        "occurrences": {oid: chain.pn(oid) for oid in chain.ids},
-        "collision_pose_count": len(state.collisions),
-        "collisions": state.collisions[:MAX_LISTED],
-        "limit_pose_count": len(state.limits),
-        "limit_findings": state.limits[:MAX_LISTED],
-        "min_clearance": clearance,
-        "clearance_findings": findings,
-        "pair_clearance": requirement_rows,
-        "reach_envelope": {"part": chain.ref(effector), "min": [round(v, 3) for v in state.envelope_min],
-                           "max": [round(v, 3) for v in state.envelope_max], "units": "mm"},
-        "worst_case": worst,
-        "timings_s": {"load": round(loaded - started, 2), "sweep": round(swept - loaded, 2),
-                      "export": round(exported - swept, 2), "total": round(time.monotonic() - started, 2),
-                      "per_pose_ms": round(per_pose * 1000, 1),
-                      "pair_requests": measurer.requested, "pair_evaluations": measurer.measured,
-                      "cache_hits": measurer.reused, "disk_hits": measurer.disk_hits, "pruned": measurer.pruned},
-    }, indent=2))
-    if not complete:
-        print(f"sweep: stopped after {state.evaluated} of {len(samples)} poses at --time-limit {args.time_limit} s",
-              file=sys.stderr)
-        return 2
-    return 1 if failed else 0
 
 
 if __name__ == "__main__":
