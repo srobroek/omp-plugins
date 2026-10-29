@@ -1,21 +1,23 @@
 ---
 name: cad-motion
-description: Poses jointed assemblies, sweeps joints for interference, picks the worst-case FEA pose. Triggers on "pose the arm", "sweep the joints", "does it collide".
+description: Poses, sweeps and renders jointed assemblies for interference, worst-case FEA pose and motion video. Triggers on "pose the arm", "sweep the joints", "render the motion".
 ---
 
 # CAD Motion
 
-Stage L1 LAYOUT (joints and limits in `assembly.yaml`) and L4 ANALYSIS (sweep, worst-case pose for FEA).
+Stage L1 LAYOUT (joints and limits in `assembly.yaml`, the default motion render) and L4 ANALYSIS (sweep,
+worst-case pose for FEA, authored motion cases).
 Numbers come from the scripts. Kinematic only: no masses, forces, speeds, or dynamics.
 
 TRIGGER
 + "pose the arm at J-002=-90", "export the folded pose", "check the joint limits"
 + "sweep the joints", "does the head hit the base", "minimum clearance", "reach envelope"
 + "worst-case pose for FEA", "simulate the assembly in FreeCAD"
-++ "couple the cams to the crank", "sweep the engine through 720 degrees", "do the valves hit the pistons"
++ "couple the cams to the crank", "sweep the engine through 720 degrees", "do the valves hit the pistons"
++ "render the motion", "animate the lamp", "make a video of the engine", "is all the motion shown"
 - joint record authoring or schema questions → `cad-record`
 - the static FEA itself, fits, or 1D stack-ups → `cad-analysis` (later), `cad-fits`
-- animation in the viewer → later follow-up; this skill has no viewer output
+- interactive playback of a plan → `cad-viewer` `animate --case`
 
 ## Workflow
 
@@ -44,8 +46,9 @@ derives its value from a driver joint, through one of three laws:
 
 Coordinates stay unwrapped: a four-stroke crank runs 0..720. Limits apply to derived values too.
 Only independent joints take `--set`; setting a coupled one exits 2 and names its driver. The
-FreeCAD Assembly simulation drives every joint independently, so `freecad_assembly.py` refuses a
-record with couplings (exit 2). Verify coupled motion with `pose.py` and `sweep.py`.
+FreeCAD limit simulation drives every joint independently, so `freecad_assembly.py` refuses a record
+with couplings (exit 2) unless it runs on a motion plan's frames (`--frames`, the cross-check below).
+Verify coupled motion with `pose.py` and `sweep.py`.
 
 1. Pose:
    `uv run --script skill://cad-flow/scripts/run.py cad-motion/scripts/pose.py --hw hw --version vN --set J-002=-90`
@@ -99,6 +102,45 @@ Exit codes for all scripts:
   findings, `pose.py` joint-limit findings, and `freecad_assembly.py` violations and residuals.
 - 2: a usage or infrastructure error, or a sweep stopped by `--time-limit`.
 
+## Motion render
+
+`scripts/motion.py` renders the motion of any built version from a motion plan; `scripts/plan.py`
+expands the plan through pose.py's Chain, the only kinematics. Case `default` is generated from the
+record and never authored: each independent joint nominal → min → max → nominal, then all to min,
+all to max and home. An authored case lives at `hw/motion/cases/<case>/plan.yaml` (the lead
+accepts it). A scratch plan is `--plan .cad-work/<unit>/plan.yaml` and renders only to `--out-dir`.
+
+Plan schema 1: `fps`, `max_step {deg, mm}` (default 5 deg / 1 mm between frames), optional `start`,
+ordered `segments` (`id`, `title`, `to: {J-…: value}` absolute targets of independent joints,
+`easing: linear|ease_in_out`, `camera: iso|front|side`, or a hold `{id, hold_frames: N}`), and
+`coverage: full` (default) or `partial` with `coverage_reason`. Full reference: `scripts/plan.py`.
+
+Coverage contract: every independent joint must visit its whole `[min, max]`, and every frame,
+derived joints included, stays inside its limits. A gap fails (exit 1) unless the plan declares
+`partial` with a reason, which passes as `flagged`. Coupled, fixed or unknown joints and targets
+outside the limits are plan errors (exit 2; a coupled joint names its driver).
+
+1. Plan: `uv run --script skill://cad-flow/scripts/run.py cad-motion/scripts/motion.py plan --hw hw --version vN
+   [--case C | --plan .cad-work/<unit>/plan.yaml] [--print-default] [--frames-out .cad-work/<unit>/frames.json]`
+   prints the coverage report; `--print-default` prints the default plan as YAML to start a case from.
+2. Render: `... motion.py render --hw hw --version vN [--case C] [--outputs glb,sheet,video,frames]
+   [--size 1280x720] [--crosscheck freecad] [--replace] [--out-dir .cad-work/<unit>/render]` checks
+   coverage first (a failure writes nothing), then publishes `hw/motion/vN/<case>/`: `plan.json`,
+   `coverage.json`, `result.json`, and as asked `motion.glb` (the version's own GLB nodes and
+   materials with one LINEAR clip, keys refined until the interpolation is within 0.1 mm / 0.1 deg),
+   `contact-sheet.png` (the start and each segment end, captioned), `video.mp4` (H.264, constant fps)
+   and `frames/`. cad-render draws the frames with one camera per segment, fitted to what the segment
+   sweeps; motion frames have no floor shadow. Default outputs are `glb,sheet`: seconds, as only the
+   sheet tiles render. The same recipe reuses the bundle; another needs `--replace`.
+3. Cross-check: `--crosscheck freecad` first solves the coupled record in FreeCAD on the same frames
+   (`freecad_assembly.py --frames`): Belt or Gears joints for parallel linear couplings, closed
+   loops for slider-cranks, formulas for the rest. Every joint must agree within 1e-3, and only
+   `solved` joints count as independent evidence (`crosscheck.json`, `evidence/motion.FCStd`).
+   A deviation exits 1 and names the joint and frame; no FreeCAD result exits 2. The negative
+   control `freecad_assembly.py --frames F --job-dir .cad-work/<unit>/fc --start far-branch` must fail.
+4. MUST read the contact sheet and sample frames before reporting a render, as cad-render requires
+   for PNGs.
+
 ## Limits
 
 - A sweep samples discrete poses. Passing proves those poses only, not the motion between them;
@@ -140,3 +182,9 @@ L1 MOTION {POSE|SWEEP|FREECAD}: {PASS|FAIL}, {poses or frames}, {timing}
    Worst case: {criterion, pose, metric, STEP path}
 ```
 CAP 80w clean · 160w with findings
+
+```text
+L1 MOTION RENDER vN <case>: {PASS|FLAGGED|FAIL}, {frames} frames, {segments} segments, {timings_s.total} s
+   Coverage -- {summary}; derived: {unmoved_derived, only if any}
+   Files -- {absolute paths: contact sheet, video, motion.glb}
+```
