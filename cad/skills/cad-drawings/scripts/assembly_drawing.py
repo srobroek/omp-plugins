@@ -366,7 +366,7 @@ def run(args: argparse.Namespace, freecadcmd: Path, jobs: int = 1) -> tuple[dict
                                      status="pass", replace=args.replace).path
         result["output_dir"] = str(output_dir)
     result["files"] = [{"sheet": s["sheet"], "size": s["size"],
-                        **{kind: str(Path(name)) for kind, name in s["files"].items()}}
+                        **{kind: str(hw.parent / name) for kind, name in s["files"].items()}}
                        for s in package.sheets]
     return result, package.exit_code
 

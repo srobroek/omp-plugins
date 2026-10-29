@@ -66,9 +66,10 @@ class DrawingContext:
     product_sha256: str
     interfaces: tuple[Mapping[str, Any], ...]
     interfaces_sha256: str
+    assembly: Mapping[str, Any]
+    bom: tuple[Mapping[str, str], ...]
     assembly_step: Path
     assembly_step_sha256: str
-    bom: tuple[Mapping[str, str], ...]
     features_sha256: str | None
     parts: Mapping[str, PartContext]
 
@@ -216,9 +217,10 @@ def load_context(hw: Path, version_dir: Path) -> DrawingContext:
     interfaces_path = version_dir / "record" / "interfaces.yaml"
     interfaces_sha256 = verified["record/interfaces.yaml"]
     interfaces = _yaml(interfaces_path)["interfaces"]
+    assembly = _yaml(version_dir / "record" / "assembly.yaml")
     return DrawingContext(
         hw=hw, version_dir=version_dir, label=manifest["label"], manifest=manifest,
         manifest_sha256=sha256(manifest_path), product=product, product_sha256=sha256(product_path),
-        interfaces=tuple(interfaces), interfaces_sha256=interfaces_sha256,
+        interfaces=tuple(interfaces), interfaces_sha256=interfaces_sha256, assembly=assembly,
         assembly_step=assembly_step, assembly_step_sha256=assembly_step_sha256, bom=bom,
         features_sha256=features_sha256, parts=parts)
