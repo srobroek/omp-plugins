@@ -782,6 +782,81 @@ def _sha_or_none(value: Any) -> str | None:
     return value if isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) else None
 
 
+def built_version(hw: Path, requested: str) -> tuple[str, Path, Path]:
+    """(label, version folder, record snapshot folder) of a built version; `requested` is a label or
+    `latest`. LayoutError when it is not built, fails its manifest or has no record snapshot."""
+    hw = Path(hw)
+    label = latest(hw) if requested == "latest" else requested
+    if label is None:
+        raise LayoutError("no built version: versions/latest.json is absent")
+    folder = version_dir(hw, label)
+    if not (folder / MANIFEST).is_file():
+        raise LayoutError(f"{label} is not a built version: {folder / MANIFEST} is missing")
+    problems = verify(folder)
+    if problems:
+        raise LayoutError(f"{label} fails its manifest: {'; '.join(problems)}")
+    record = resolve(hw, "version.record", V=label)
+    if not record.is_dir():
+        raise LayoutError(f"{label} has no record snapshot at {record}; build a new version")
+    return label, folder, record
+
+
+def scratch_path(hw: Path, path: Path | str, option: str) -> Path:
+    """`path` resolved, when it lies under the project's .cad-work/; an explicit output override
+    anywhere else is a LayoutError naming `option`."""
+    target = Path(path).resolve()
+    root = Path(os.path.realpath(Path(hw).parent / SCRATCH))
+    if not _within(str(target), str(root)) or target == root:
+        raise LayoutError(f"{option} must be under {root}, not {target}")
+    return target
+
+
+def _reusable(target: Path, recipe_sha: str, version_sha: str | None) -> dict[str, Any] | None:
+    """The manifest of the bundle at `target` when it has this recipe and version manifest and verifies."""
+    try:
+        existing = json.loads((target / MANIFEST).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if (isinstance(existing, dict) and existing.get("recipe_sha256") == recipe_sha
+            and existing.get("version_manifest_sha256") == version_sha and not verify(target)):
+        return existing
+    return None
+
+
+def _version_sha(hw: Path, params: Mapping[str, str]) -> str | None:
+    if "V" not in params:
+        return None
+    version_manifest = version_dir(hw, params["V"]) / MANIFEST
+    if not version_manifest.is_file():
+        raise LayoutError(f"{params['V']} is not a built version: {version_manifest} is missing")
+    return _sha256(version_manifest)
+
+
+def _recipe_conflict(target_rel: str) -> PublishConflict:
+    return PublishConflict(f"{target_rel} exists with another recipe or does not verify; "
+                           "a different recipe for the same version and subject needs --replace")
+
+
+def reusable(hw: Path, entry_id: str, params: Mapping[str, str], recipe: Mapping[str, Any], *,
+             replace: bool = False) -> Path | None:
+    """Before running a producer: the existing bundle `publish` would return unchanged for this
+    recipe, or None when there is none to reuse. An existing bundle with another recipe, or one that
+    fails verification, is a PublishConflict unless `replace` (then None: run and publish)."""
+    hw = Path(hw)
+    _bundle_entry(entry_id)
+    target_rel = load().path(entry_id, params)
+    target = locate(hw, target_rel)
+    if not os.path.lexists(target):
+        return None
+    canonical = json.loads(canonical_json(recipe))
+    if _reusable(target, recipe_sha256(canonical), _version_sha(hw, params)) is not None:
+        return target
+    if not replace:
+        raise _recipe_conflict(target_rel)
+    return None
+
+
+
 def publish(hw: Path, entry_id: str, params: Mapping[str, str], staged: Path, *, recipe: Mapping[str, Any],
             producer: str, status: str | None = None, replace: bool = False) -> Published:
     """Seal the files in `staged` (from `staging`) as the bundle of `entry_id` at `params`.
@@ -802,12 +877,7 @@ def publish(hw: Path, entry_id: str, params: Mapping[str, str], staged: Path, *,
             or os.path.realpath(staged) == scratch_root:
         raise LayoutError(f"stage the bundle in a directory under {hw.parent / SCRATCH}, not {staged}")
     files = _staged_files(lay, entry, target_rel, staged)
-    version_sha = None
-    if "V" in params:
-        version_manifest = version_dir(hw, params["V"]) / MANIFEST
-        if not version_manifest.is_file():
-            raise LayoutError(f"{params['V']} is not a built version: {version_manifest} is missing")
-        version_sha = _sha256(version_manifest)
+    version_sha = _version_sha(hw, params)
     if not isinstance(recipe, Mapping):
         raise LayoutError("the recipe must be a JSON object")
     recipe = json.loads(canonical_json(recipe))
@@ -816,17 +886,16 @@ def publish(hw: Path, entry_id: str, params: Mapping[str, str], staged: Path, *,
     replaces = None
     retained = None
     if os.path.lexists(target):
+        existing = _reusable(target, recipe_sha, version_sha)
+        if existing is not None:
+            shutil.rmtree(staged)
+            return Published(target, existing, reused=True, replaced=None)
         try:
             existing = json.loads((target / MANIFEST).read_text(encoding="utf-8"))
         except (OSError, ValueError):
             existing = None
-        if (isinstance(existing, dict) and existing.get("recipe_sha256") == recipe_sha
-                and existing.get("version_manifest_sha256") == version_sha and not verify(target)):
-            shutil.rmtree(staged)
-            return Published(target, existing, reused=True, replaced=None)
         if not replace:
-            raise PublishConflict(f"{target_rel} exists with another recipe or does not verify; "
-                                  "a different recipe for the same version and subject needs --replace")
+            raise _recipe_conflict(target_rel)
         stamp = f"{time.time_ns()}-{uuid.uuid4().hex[:8]}"
         retained = hw.parent / SCRATCH / "replaced" / target_rel / stamp
         old_manifest = target / MANIFEST
