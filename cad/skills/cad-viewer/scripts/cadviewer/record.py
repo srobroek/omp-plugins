@@ -293,10 +293,11 @@ def version_previews(hw: Path, label: str) -> dict[str, list[dict[str, Any]]]:
 
 def _version_entry(hw: Path, label: str) -> dict[str, Any]:
     entry: dict[str, Any] = {"label": label, "built_utc": None, "parts": None, "error": None,
-                             "previews": version_previews(hw, label)}
+                             "previews": {kind: [] for kind in ("renders", "captures", "drawings")}}
     api = _layout()
     try:
         folder = api.version_dir(hw, label)
+        entry["previews"] = version_previews(hw, label)
         manifest_path = folder / "manifest.json"
         problems = api.verify(folder)
         if problems:

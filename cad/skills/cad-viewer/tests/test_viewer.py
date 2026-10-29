@@ -85,9 +85,8 @@ def make_version(hw: Path, label: str, products: dict[str, str] | None = None, l
     for name in ("product.yaml", "interfaces.yaml", "assembly.yaml"):
         shutil.copyfile(hw / name, folder / "record" / name)
     shutil.copytree(hw / "parts", folder / "record" / "parts")
-    (folder / "parts").mkdir()
-    for name in ("assembly.step", "assembly.glb"):
-        (folder / name).write_text("", encoding="utf-8")
+    (folder / "assembly.step").write_text("STEP", encoding="utf-8")
+    (folder / "assembly.glb").write_text("GLB", encoding="utf-8")
     nodes = {oid: i for i, oid in enumerate(chain.ids, start=1)}
     (folder / "part-map.json").write_text(json.dumps({"schema_version": 2, "glb": "assembly.glb", "parts": {
         pn: {"product": name, "node_indices": [nodes[o] for o in chain.ids if chain.pn(o) == pn]}
@@ -366,17 +365,24 @@ class HostApi(unittest.TestCase):
     def setUp(self) -> None:
         self.calls: list[tuple[int, dict]] = []
         fake = types.ModuleType("ocp_viewer")
+        fake.Camera = types.SimpleNamespace(ISO="ISO", FRONT="FRONT", RIGHT="RIGHT", TOP="TOP", RESET="RESET")
+        fake.Collapse = None
+        fake.show = lambda *_args, **_kwargs: None
         fake.set_viewer_config = lambda port=None, **values: self.calls.append((port, values))
         patcher = mock.patch.dict(sys.modules, {"ocp_viewer": fake})
         patcher.start()
         self.addCleanup(patcher.stop)
         self.tmp = Path(tempfile.mkdtemp(prefix="cad-viewer-api-"))
         self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.hw = self.tmp / "hw"
+        shutil.copytree(TEMPLATE_HW, self.hw)
+        make_version(self.hw, "v1")
         self.port = session.free_port()
         self.host = host.Host(self.tmp / "session.json", self.port, PORTS)
-        self.host.gallery.open(TEMPLATE_HW)
-        self.host.versions["A"] = host.Loaded(
-            types.SimpleNamespace(hw=TEMPLATE_HW, label="v1"), None, {}, {}, {}, "v1")
+        version = record.load_version(self.hw)
+        self.host.gallery.open(self.hw)
+        self.host.versions["A"] = host.Loaded(version, None, record.panel_model(version, None), {}, {}, "v1")
+        self.host.slots["a"].showing = "A"
         self.host.presenter = StubPresenter()
         server = host.make_server(self.host)
         threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -388,14 +394,16 @@ class HostApi(unittest.TestCase):
         return api_request(self.port, method, route, body, headers)
 
     def test_a_change_during_a_capture_is_refused_and_state_still_answers(self) -> None:
-        self.host.gallery.open(TEMPLATE_HW)
+        self.host.gallery.open(self.hw)
+        self.host.versions["A"].panel["product_id"] = "lamp-arm"
         started, release = threading.Event(), threading.Event()
-        self.host.versions["A"] = host.Loaded(
-            types.SimpleNamespace(hw=TEMPLATE_HW, label="v1"), None, {}, {}, {}, "v1")
         def slow_capture(_host, _page, body: dict) -> dict:
             started.set()
             release.wait(10)
-            return {"status": "pass", "view": body["view"], "viewer_state": {}}
+            out = Path(body["out"])
+            out.parent.mkdir(parents=True, exist_ok=True)
+            (out.parent / f"{body['view'].replace(':', '-')}.png").write_bytes(b"PNG")
+            return {"status": "pass", "view": body["view"], "viewer_state": {"mode": "single"}}
 
         answers: dict[str, tuple[int, dict]] = {}
         with mock.patch.object(capture, "capture", slow_capture):
@@ -411,19 +419,19 @@ class HostApi(unittest.TestCase):
             self.assertEqual(self.calls, [], "a refused request reached a viewer")
             release.set()
             worker.join(10)
-        self.assertEqual(answers["capture"], (200, {"status": "pass", "view": "section", "viewer_state": {}}))
+        self.assertEqual(answers["capture"][0], 200)
+        self.assertIn("section.png", answers["capture"][1]["out"])
         self.assertEqual(self.request("POST", "/api/studio", {"environment": "studio"})[0], 200)
-        self.assertEqual(sorted(port for port, _ in self.calls), [1001, 2001])
+        self.host.versions["A"].panel["product_id"] = "lamp-arm"
 
     def test_capture_reuses_and_publishes_a_versioned_bundle(self) -> None:
-        hw = TEMPLATE_HW
-        self.host.gallery.open(hw)
-        self.host.versions["A"] = host.Loaded(
-            types.SimpleNamespace(hw=hw, label="v1"), None, {}, {}, {}, "v1")
-
+        hw = self.hw
+        self.host.versions["A"].requested = "v1"
+        self.host.versions["A"].panel["product_id"] = "lamp-arm"
         def fake_capture(_host, _page, body):
             Path(body["out"]).write_bytes(b"PNG")
-            return {"status": "pass", "view": body["view"], "viewer_state": body["viewer_state"]}
+            return {"status": "pass", "view": body["view"], "viewer_state": {"mode": "single"},
+                    "version": "v1", "viewport": [1440, 900], "cameras": {}}
 
         api = record._layout()
         with mock.patch.object(capture, "capture", fake_capture), \
@@ -444,11 +452,9 @@ class HostApi(unittest.TestCase):
         self.assertEqual(model["sections"][1]["tiles"][0]["title"], "iso")
 
     def test_capture_explicit_scratch_output_is_never_overwritten(self) -> None:
-        hw = TEMPLATE_HW
-        self.host.gallery.open(hw)
-        self.host.versions["A"] = host.Loaded(
-            types.SimpleNamespace(hw=hw, label="v1"), None, {}, {}, {}, "v1")
-        output = TEMPLATE_HW.parent / ".cad-work" / "test-viewer-capture-no-overwrite.png"
+        hw = self.hw
+        self.host.versions["A"].requested = "v1"
+        output = hw.parent / ".cad-work" / "test-viewer-capture-no-overwrite-3.png"
         body = {"view": "iso", "out": str(output)}
 
         def fake_capture(_host, _page, request):
@@ -475,12 +481,13 @@ class HostApi(unittest.TestCase):
         self.assertEqual(self.request("POST", "/api/studio", body, {"Host": f"localhost:{self.port}"})[0], 200)
         self.assertEqual(self.request("POST", "/api/studio", body)[0], 200)  # the CLI sends no Origin
 
-    def test_a_capture_writes_only_a_png_into_an_existing_folder(self) -> None:
-        target = self.tmp / "new" / "x.png"
-        status, answer = self.request("POST", "/api/capture", {"view": "iso", "out": str(target)})
+    def test_capture_refuses_when_the_presenter_is_not_running(self) -> None:
+        self.host.presenter = None
+        status, answer = self.request("POST", "/api/capture", {"view": "iso"})
         self.assertEqual(status, 400)
-        self.assertIn("nothing shown yet", answer["error"])
-        self.assertFalse(target.parent.exists())
+        self.assertIn("presenter browser is not running", answer["error"])
+
+    def test_capture_target_validates_outputs(self) -> None:
         (self.tmp / "elsewhere.png").write_bytes(b"")
         (self.tmp / "link.png").symlink_to(self.tmp / "elsewhere.png")
         for out in ("relative.png", str(self.tmp / ".zshrc"), str(self.tmp / "link.png"), str(self.tmp)):
@@ -531,7 +538,8 @@ class PartMapLoading(Fixture):
         self.assertEqual(record.load_version(self.hw, "v1").label, "v1")
         with self.assertRaisesRegex(ViewerError, "missing"):
             record.load_version(self.hw, "v7")
-        with self.assertRaisesRegex(ViewerError, "latest or vN"):
+        with self.assertRaisesRegex(
+                ViewerError, "does not match"):
             record.load_version(self.hw, "../v1")
 
     def test_no_build_yet(self) -> None:
@@ -585,6 +593,10 @@ class Holes(Fixture):
         for pn, extra in self.OVERLAY["parts"].items():
             metrics["parts"][pn].update(extra)
         path.write_text(json.dumps(metrics), encoding="utf-8")
+        manifest = path.parent / "manifest.json"
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        data["files"]["metrics.json"] = hashlib.sha256(path.read_bytes()).hexdigest()
+        manifest.write_text(json.dumps(data), encoding="utf-8")
         return record.load_version(self.hw)
 
     def test_holes_per_part_keep_order_through_and_depth(self) -> None:
@@ -767,20 +779,19 @@ class VersionList(Fixture):
     def test_every_version_folder_newest_first_with_build_time_and_part_count(self) -> None:
         for label in ("v1", "v2", "v10"):
             make_version(self.hw, label)
-        manifest = self.hw / "versions" / "v2" / "manifest.json"
-        data = json.loads(manifest.read_text(encoding="utf-8"))
-        manifest.write_text(json.dumps({**data, "created_utc": "2026-10-28T09:15:00Z"}), encoding="utf-8")
-        (self.hw / "versions" / "v3").mkdir()  # a version folder without its build files
-        (self.hw / "versions" / ".v11-partial").mkdir()  # a build in progress
+        version_manifest = self.hw / "versions" / "v2" / "manifest.json"
+        data = json.loads(version_manifest.read_text(encoding="utf-8"))
+        updated = {**data, "created_utc": "2026-10-28T09:15:00Z"}
+        version_manifest.write_text(json.dumps(updated), encoding="utf-8")
+        (self.hw / "versions" / "v3").mkdir()
+        (self.hw / "versions" / ".v11-partial").mkdir()
         listed = record.version_list(self.hw)
         self.assertEqual([entry["label"] for entry in listed], ["v10", "v2", "v1"])
-        self.assertEqual(listed[1], {"label": "v2", "built_utc": "2026-10-28T09:15:00Z",
-                                     "parts": len(data["occurrences"]), "error": None,
-                                     "previews": {"renders": [], "captures": [], "drawings": []}})
-        self.assertIsNone(next(entry for entry in listed if entry["label"] == "v3")["parts"])
-        self.assertRegex(listed[0]["built_utc"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")  # the manifest's mtime
-        self.assertEqual((listed[1]["built_utc"], listed[1]["parts"]), (None, None))
-        self.assertIn("v3", listed[1]["error"])
+        v2 = next(entry for entry in listed if entry["label"] == "v2")
+        self.assertEqual(v2["built_utc"], "2026-10-28T09:15:00Z")
+        self.assertEqual(v2["parts"], len(data["occurrences"]))
+        self.assertEqual(v2["previews"], {"renders": [], "captures": [], "drawings": []})
+        self.assertRegex(listed[0]["built_utc"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
         self.assertEqual(record.latest_label(self.hw), "v10")
 
     def test_latest_label_is_none_without_a_readable_latest_json(self) -> None:

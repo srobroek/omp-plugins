@@ -421,7 +421,8 @@ class Host:
         if shown is None:
             raise ViewerError("nothing shown yet; run `viewer.py show` first")
         hw = shown.version.hw
-        same = current is not None and record.version_files(hw, version).label == current.version.label
+        label, _folder, _record_snapshot = record.version_files(hw, version)
+        same = current is not None and label == current.version.label
         loaded = replace(current, requested=version) if same else _load(str(hw), version, None)
         with self.lock:
             if self.versions.get("A") is None or self.versions["A"].version.hw != hw:
