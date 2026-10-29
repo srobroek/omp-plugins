@@ -159,15 +159,16 @@ class EndToEnd(unittest.TestCase):
             with self.subTest(regime=regime):
                 root = self.root / regime
                 hw = write_project(root, regime)
-                status, result = run_cli(hw, hw.parent / ".cad-work" / "out")
+                status, result = run_cli(hw)
                 self.assertEqual((status, result["status"]), (0, "pass"), result.get("findings"))
-                package = json.loads((hw.parent / ".cad-work" / "out" / "package.json").read_text(encoding="utf-8"))
+                package_path = Path(result["output_dir"])
+                package = json.loads((package_path / "package.json").read_text(encoding="utf-8"))
                 sheets = [row for row in package["coverage"]["rows"] if row["kind"] == "assembly_sheet"]
                 self.assertEqual([(s["sheet"], s["scope"]) for s in sheets], [(1, "top"), (2, "pins")])
                 self.assertEqual(sheets[0]["items"]["2"], {"PN": PIN, "qty": 2, "occurrences": ["pin-a", "pin-b"]})
                 exploded = sheets[0]["views"]["exploded_iso"]
                 balloons = {b["item"]: b for b in assembly_check.read_balloons(
-                    assembly_check.SafeET.fromstring((hw.parent / ".cad-work" / "out" / "sheet-1.svg").read_text(encoding="utf-8")))}
+                    assembly_check.SafeET.fromstring((package_path / "sheet-1.svg").read_text(encoding="utf-8")))}
                 self.assertEqual(sorted(balloons), ["1", "2"])
                 # Each leader dot sits on the measured visible point of its own occurrence, inside the view.
                 for item, occurrence in (("1", PLATE), ("2", "pin-a")):
@@ -180,10 +181,10 @@ class EndToEnd(unittest.TestCase):
                     for kind in ("svg", "pdf", "png"):
                         self.assertTrue(Path(record["files"][kind]).is_file())
                     self.assertEqual(record["export"]["pdf_fonts"], ["osifont"])
-                self.assertEqual(assembly_check.check_package(hw.parent / ".cad-work" / "out")["status"], "pass")
+                self.assertEqual(assembly_check.check_package(package_path)["status"], "pass")
 
                 tampered = root / "tampered"
-                shutil.copytree(hw.parent / ".cad-work" / "out", tampered)
+                shutil.copytree(package_path, tampered)
                 svg_path = tampered / "sheet-1.svg"
                 svg = svg_path.read_text(encoding="utf-8")
                 start = svg.index('<g id="balloon-exploded_iso-2"')
@@ -196,15 +197,15 @@ class EndToEnd(unittest.TestCase):
 
     def test_parallel_assembly_sheets_match_sequential_report_order(self) -> None:
         hw = write_project(self.root / "parallel")
-        sequential_status, sequential = run_cli(hw, hw.parent / ".cad-work" / "out-sequential", jobs=1)
-        parallel_status, parallel = run_cli(hw, hw.parent / ".cad-work" / "out-parallel", jobs=2)
+        sequential_status, sequential = run_cli(hw, jobs=1)
+        parallel_status, parallel = run_cli(hw, jobs=2)
         self.assertEqual((sequential_status, sequential["status"]), (0, "pass"), sequential.get("findings"))
         self.assertEqual((parallel_status, parallel["status"]), (0, "pass"), parallel.get("findings"))
-        sequential_package = json.loads((hw.parent / ".cad-work" / "out-sequential" / "package.json").read_text())
-        parallel_package = json.loads((hw.parent / ".cad-work" / "out-parallel" / "package.json").read_text())
+        sequential_package = json.loads((Path(sequential["output_dir"]) / "package.json").read_text())
+        parallel_package = json.loads((Path(parallel["output_dir"]) / "package.json").read_text())
         self.assertEqual([row["sheet"] for row in sequential_package["sheets"]], [1, 2])
         self.assertEqual([row["sheet"] for row in parallel_package["sheets"]], [1, 2])
-        self.assertEqual(sequential["coverage"]["rows"], parallel["coverage"]["rows"])
+        self.assertEqual(sequential_package["coverage"]["rows"], parallel_package["coverage"]["rows"])
 
 
 
