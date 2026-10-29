@@ -161,6 +161,8 @@
                {"name": "manufacturing/**", "role": "manufacture", "optional": true},
                {"name": "drawings/**", "role": "document", "optional": true},
                {"name": "analysis/**", "role": "evidence", "optional": true},
+               {"name": "checks/**", "role": "evidence", "optional": true},
+               {"name": "motion/**", "role": "evidence", "optional": true},
                {"name": "bom.csv", "role": "snapshot", "optional": true},
                {"name": "verification.csv", "role": "snapshot", "optional": true},
                {"name": "docs/**", "role": "document", "optional": true}]},

@@ -87,7 +87,13 @@ Expose `replace` as the command's `--replace` flag. After a failure the staging 
 `.cad-work/` as scratch, and the bundle path keeps its old content.
 
 Before you use a bundle or a version as input, call `verify(directory)`. It returns a list of
-problems against the manifest inventory. An empty list means the folder verifies.
+problems against the manifest inventory. An empty list means the folder verifies. It also reads a
+v2 release manifest, whose `files` map each path to its `sha256` and `original`.
+
+A writer of a sealed directory that is not a bundle, such as `release.py`, stages under `.cad-work/`
+and lands with `claim(staged, target, target_rel)`. `claim` takes the target with an exclusive
+`mkdir` and renames the stage onto it. A target that exists raises `PublishConflict`, and nothing
+moves. `publish` lands bundles the same way.
 
 ## Write a producer command
 

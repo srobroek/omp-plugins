@@ -232,12 +232,49 @@ class Publication(TempProject):
         self.assertEqual((self.target / "iso.png").read_text(encoding="utf-8"), "new\n")
         self.assertEqual(layout.audit(self.hw).problems, ())
 
+    def test_a_writer_that_lands_first_during_replace_keeps_the_replaced_bundle_named(self) -> None:
+        publish(self.hw, "bundle.renders", self.params, {"iso.png": "old\n"}, recipe={"size": 800})
+        claim = layout.claim
+
+        def racing(staged: Path, target: Path, target_rel: str) -> None:
+            target.mkdir()  # another writer claims the path after the old bundle moved away
+            claim(staged, target, target_rel)
+
+        layout.claim = racing
+        self.addCleanup(setattr, layout, "claim", claim)
+        with self.assertRaisesRegex(layout.PublishConflict, "another writer published hw/renders/v1/assembly first; "
+                                                            "the bundle it replaced is kept at .cad-work/replaced/"):
+            publish(self.hw, "bundle.renders", self.params, {"iso.png": "new\n"}, recipe={"size": 1600}, replace=True)
+        staged = list((self.project / ".cad-work" / "publication").iterdir())
+        self.assertEqual([sorted(p.name for p in s.iterdir()) for s in staged], [["iso.png"]])
+
     def test_a_tampered_bundle_is_not_reused(self) -> None:
         publish(self.hw, "bundle.renders", self.params, {"iso.png": "png\n"})
         write(self.target / "iso.png", "edited\n")
         self.assertEqual(layout.verify(self.target), ["iso.png changed after it was sealed"])
         with self.assertRaises(layout.PublishConflict):
             publish(self.hw, "bundle.renders", self.params, {"iso.png": "png\n"})
+
+    def test_a_sealed_v2_release_verifies_and_a_tampered_copy_is_reported(self) -> None:
+        release = self.hw / "releases" / "A"
+        write(release / "bom.csv", "level,PN\n")
+        write(release / "manufacturing" / "LMP-0001" / "part.step", "step\n")
+        files = {p.relative_to(release).as_posix(): {"sha256": sha(p), "original": "hw/bom.csv"}
+                 for p in sorted(release.rglob("*")) if p.is_file()}
+        write(release / "manifest.json", json.dumps({"schema_version": 2, "files": files}))
+        self.assertEqual(layout.verify(release), [])
+        write(release / "manufacturing" / "LMP-0001" / "part.step", "edited\n")
+        self.assertEqual(layout.verify(release), ["manufacturing/LMP-0001/part.step changed after it was sealed"])
+
+    def test_claim_renames_onto_a_free_target_and_never_onto_a_taken_one(self) -> None:
+        staged = write(self.project / ".cad-work" / "stage" / "bom.csv").parent
+        target = self.hw / "releases" / "A"
+        layout.claim(staged, target, "hw/releases/A")
+        self.assertEqual((sorted(p.name for p in target.iterdir()), staged.exists()), (["bom.csv"], False))
+        again = write(self.project / ".cad-work" / "again" / "bom.csv", "other\n").parent
+        with self.assertRaisesRegex(layout.PublishConflict, "another writer published hw/releases/A first"):
+            layout.claim(again, target, "hw/releases/A")
+        self.assertEqual(((target / "bom.csv").read_text(encoding="utf-8"), again.is_dir()), ("x\n", True))
 
     def test_publish_refuses_foreign_names_missing_files_and_staging_outside_scratch(self) -> None:
         cases = {"foreign name": ("bundle.renders", {"iso.png": "x", "notes.txt": "x"}, "not a file a bundle.renders"),

@@ -730,6 +730,8 @@ def verify(directory: Path) -> list[str]:
     problems = [f"{name} is a link, a special file or an unsafe name" for name in odd]
     problems += [f"{name}/ is an empty directory" for name in empty]
     for name, expected in sorted(inventory.items()):
+        if isinstance(expected, dict):  # a v2 release manifest lists {sha256, original}
+            expected = expected.get("sha256")
         if not _safe_relative(name) or name == MANIFEST:
             problems.append(f"the manifest lists an unsafe path {name!r}")
         elif name not in files:
@@ -917,20 +919,31 @@ def publish(hw: Path, entry_id: str, params: Mapping[str, str], staged: Path, *,
     manifest.update(recipe=recipe, recipe_sha256=recipe_sha, files=files, replaces=replaces)
     manifest_path = staged / MANIFEST
     manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    try:
+        claim(staged, target, target_rel)
+    except PublishConflict as error:
+        manifest_path.unlink()
+        kept = f"; the bundle it replaced is kept at {replaces['moved_to']}" if replaces else ""
+        raise PublishConflict(f"{error}{kept}") from error.__cause__
+    except LayoutError:
+        manifest_path.unlink(missing_ok=True)
+        raise
+    return Published(target, manifest, reused=False, replaced=retained)
+
+
+def claim(staged: Path, target: Path, target_rel: str) -> None:
+    """Rename `staged` onto `target`, which must not exist. An exclusive mkdir claims it first, so
+    two writers never both land; PublishConflict when another writer holds it."""
     target.parent.mkdir(parents=True, exist_ok=True)
     try:
         os.mkdir(target)
     except FileExistsError as error:
-        manifest_path.unlink()
-        kept = f"; the bundle it replaced is kept at {replaces['moved_to']}" if replaces else ""
-        raise PublishConflict(f"another writer published {target_rel} first{kept}") from error
+        raise PublishConflict(f"another writer published {target_rel} first") from error
     try:
         os.rename(staged, target)
     except OSError as error:
         os.rmdir(target)
-        manifest_path.unlink(missing_ok=True)
         raise LayoutError(f"cannot publish {target_rel}: {error}") from error
-    return Published(target, manifest, reused=False, replaced=retained)
 
 
 # --- references/layout.md ------------------------------------------------------------------------------------------

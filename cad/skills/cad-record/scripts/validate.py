@@ -554,6 +554,23 @@ def bom_totals(bom: list[dict[str, str]], levels: list[int | None]) -> dict[str,
     return totals
 
 
+def check_release_readiness(hw: Path, verification: list[dict[str, str]],
+                            part_records: Mapping[str, tuple[dict[str, Any], str]], path: str,
+                            findings: list[dict[str, str]]) -> None:
+    """What every release needs from the record: a verification.csv whose rows all pass or are
+    waived, and no prototype (X) part revision."""
+    verification_path = hw / "verification.csv"
+    if not verification_path.is_file():
+        findings.append(finding(path, "release requires a verification.csv"))
+    else:
+        for index, row in enumerate(verification, start=2):
+            if row.get("result") not in {"pass", "waived"}:
+                findings.append(finding(f"{verification_path}:{index}", "release verification result must be pass or waived"))
+    for pn, (part, part_path) in part_records.items():
+        if isinstance(part.get("rev"), str) and part["rev"].startswith("X"):
+            findings.append(finding(part_path, f"release cannot include prototype revision {part['rev']} for {pn}"))
+
+
 def validate_project(project_dir: Path) -> list[dict[str, str]]:
     findings: list[dict[str, str]] = []
     hw = project_dir / "hw" if (project_dir / "hw").is_dir() else project_dir
@@ -751,16 +768,7 @@ def validate_project(project_dir: Path) -> list[dict[str, str]]:
                     exists = False
                 if not exists:
                     findings.append(finding(str(path), f"release file does not exist within project: {file_name}"))
-            verification_path = hw / "verification.csv"
-            if not verification_path.is_file():
-                findings.append(finding(str(path), "release requires a verification.csv"))
-            else:
-                for index, row in enumerate(verification, start=2):
-                    if row.get("result") not in {"pass", "waived"}:
-                        findings.append(finding(f"{verification_path}:{index}", "release verification result must be pass or waived"))
-            for pn, (part, part_path) in part_records.items():
-                if isinstance(part.get("rev"), str) and part["rev"].startswith("X"):
-                    findings.append(finding(part_path, f"release cannot include prototype revision {part['rev']} for {pn}"))
+            check_release_readiness(hw, verification, part_records, str(path), findings)
     if valid.get("product.yaml"):
         check_flow(documents["product.yaml"], str(hw / "product.yaml"), hw, part_records, findings)
     check_layout(hw, documents.get("product.yaml"), part_records, findings)
