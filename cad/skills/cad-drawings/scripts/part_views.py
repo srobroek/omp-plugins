@@ -22,12 +22,15 @@ viewer, TechDraw's ``Direction``.
 - ``kind: detail`` enlarges ``feature`` as seen in the principal view (or the view named by ``toward``).
 - ``sheet: N`` draws the view on sheet N (default 1; a detail defaults to its base view's sheet). The
   principal view is on sheet 1, the sheets are numbered from 1 without gaps, and an orthographic view
-  away from sheet 1 is named by a letter.
+  away from sheet 1 is named by a letter. A lettered view's direction is shown by a reference arrow
+  with its letter on a projected view that sees that direction in its plane (ISO 128-3 reference
+  arrow layout); its ``base`` names that view. ``relocated`` takes a view out of its projected
+  position the same way when the sheet planner needs the room.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -244,7 +247,36 @@ def plan_views(drawing: Mapping[str, Any], frame: DatumFrame, features: Mapping[
     numbers = sorted({p.sheet for p in plans})
     if numbers != list(range(1, len(numbers) + 1)):
         raise IntentError("invalid_drawing_intent", f"drawing.views fill sheets {numbers}; number them 1 to {len(numbers)}")
-    return plans
+    # a lettered projected view's direction is shown by a reference arrow on a view that carries it
+    return [replace(p, base=arrow_host(p, plans)) if p.kind == "part" and p.label is not None else p for p in plans]
+
+
+def arrow_host(plan: ViewPlan, plans: Sequence[ViewPlan]) -> str | None:
+    """The view that carries a lettered view's reference arrow (ISO 128-3, ASME Y14.3 view indicator): a
+    projected view that sees the lettered view's direction in its own plane; the principal view, then views on
+    the same sheet, then plan order."""
+    hosts = [p for p in plans if p.kind == "part" and p.id != plan.id and p.label is None
+             and fg.perpendicular(p.direction, plan.direction)]
+    hosts.sort(key=lambda p: (p.relation != "front", p.sheet != plan.sheet, plans.index(p)))
+    return hosts[0].id if hosts else None
+
+
+def relocated(plans: Sequence[ViewPlan], view_id: str, reserved: Iterable[str], sheet: int | None = None
+              ) -> list[ViewPlan] | None:
+    """The plans with view ``view_id`` out of its projected position, and on ``sheet`` when given: a projected
+    view is then named by a letter (never one in ``reserved``, the datum letters) and its direction shown by a
+    reference arrow on another view; a section or detail keeps its letter. None when no view can carry the
+    arrow."""
+    plan = next(p for p in plans if p.id == view_id)
+    if plan.kind == "part" and plan.base is None:
+        host = arrow_host(plan, plans)
+        if host is None:
+            return None
+        used = {p.label for p in plans} | set(reserved)
+        plan = replace(plan, label=plan.label or next(letter for letter in SECTION_LETTERS if letter not in used),
+                       base=host)
+    plan = replace(plan, relation=None, sheet=plan.sheet if sheet is None else sheet)
+    return [plan if p.id == view_id else p for p in plans]
 
 
 def grid_cell(relation: str | None, projection: str) -> tuple[int, int] | None:

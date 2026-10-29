@@ -64,6 +64,15 @@ datums. Instances with a missing or extra node keep one location each.
   plane's datum location, so a wall thickness is a chain dimension, never a redundant third one. A
   `location` on a plane feature replaces its datum-frame location, so a depth such as a counterbore
   floor's carries its own limits; the deviation applies to the printed distance from the datum.
+  Two planes that are not parallel have no width of their own: a `thickness` or `width` with `at: <plane
+  feature>` is stated at that reference plane (ISO 129-1), as the distance between the lines where the
+  two planes meet it. Use it for a drafted wall (thickness at the rim or parting plane, with the draft
+  as an `angle` request) and for a width between inclined flanks (a dovetail's width at its bed, with
+  the flank `angle`). Its planes are one feature's two or one from each of two features, the pair
+  nearest the plane; equal pairs side by side count (`2× 2.3`). It draws as a linear dimension in a view
+  that sees those lines end-on, from the theoretical sharp corner when an edge is chamfered away. A
+  spherical recess takes a `radius` request on its sphere (printed `SR`) and a `depth` request on the
+  sphere and the plane it opens through, measured to the sphere's lowest point.
 - `geometric_tolerances`: `{id, characteristic, features, zone_mm, diameter_zone?, datum_frame?}`.
 - `edges` (detail drawings, required): the general indication of the edges of undefined shape, ISO 13715
   limits `[lower, upper]` in mm for `external` and `internal` edges. A `+` value permits excess material
@@ -78,7 +87,11 @@ datums. Instances with a missing or extra node keep one location each.
   a `finish` note. Notes never carry dimension values; edge values belong in `edges`.
 - `manufacturing`: `interface_condition` (an FDM interface tighter than its process policy needs
   `post_processed` or `finish_machined`), `dimensions_apply`, `post_processing`, `build_direction`.
-- `sheet`: allowed `sizes`, `orientation`, `scale` (`auto` or `n:m`).
+- `sheet`: allowed `sizes`, smallest first, `orientation`, `scale` (`auto` or `n:m`). Each sheet keeps
+  the projected views in their places and packs the other views beside them. When no allowed scale fits
+  the smallest size that way, the planner first takes a projected view not next to the principal (the
+  rear view) out of its place, with a letter and a reference arrow on a view that sees its direction,
+  then moves views to further sheets, and tries the next size only when even that does not fit.
 
 `interfaces.yaml` binds interface sizes: `press_fit`, `running_fit`, `locating_fit` with `hole` and
 `shaft` endpoints `{PN, feature, region?}`; `heat_set[].feature` for the host seat; and
@@ -94,17 +107,21 @@ datums. Instances with a missing or extra node keep one location each.
 | `hole` | diameter | axis; a blind depth directly or both ends from one datum frame |
 | `boss`, `shaft`, `groove` | diameter; groove width | axis; a boss height directly or baseline |
 | `pocket`, `notch`, `slot`, `cutout` | width, length, depth (a slot through its kind) | its walls |
-| `rib`, `wall` | thickness (two opposed parallel planes with material between, thin against their extent) | its faces |
+| `rib`, `wall` | thickness (two opposed planes with material between, thin against their extent; drafted faces at the plane both end on, with the draft angle) | its faces |
 | `step` | | height, directly or baseline |
 | `arc` | contour radius | its axis |
+| `dish` | SR, and depth below the plane it opens through | |
 | `round`, `chamfer` | size, in a callout or the general note | |
 
 A prismatic feature (planes normal to a frame axis, cylinders and cones on one) may not sit only in a
-controlled-model `surface`. Inclined planes, spheres, tori and B-spline faces may; an inclined face's
-angle is then the model's. `drawing_draft.py` proposes locators and the direct size requests from the
-same recognition; faces that match no pattern are listed with the reason. Once the model has its hook,
-the draft uses the hook's names, and `drawing_merge.py` merges the reviewed block into part.yaml after
-checking that every feature it names is a locator the hook returns.
+controlled-model `surface`. Inclined planes, spheres, tori and B-spline faces may, but a profile does
+not state a size: a drafted wall, a width between two non-parallel walls of a recess or protrusion
+(stated at its rim or top), and a spherical recess need their size, and a drafted or flank face its
+angle; any other inclined face's angle is then the model's. `drawing_draft.py` proposes locators and
+the direct size requests from the same recognition, `at` requests and their angles included; faces
+that match no pattern are listed with the reason. Once the model has its hook, the draft uses the
+hook's names, and `drawing_merge.py` merges the reviewed block into part.yaml after checking that
+every feature it names is a locator the hook returns.
 
 ## Vendor specification and source control sheets
 

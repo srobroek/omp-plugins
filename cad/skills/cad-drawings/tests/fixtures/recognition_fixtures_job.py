@@ -4,10 +4,14 @@ Fixtures (mm, FreeCAD Part, no cad-model build): ``plate`` 60x40x10 with a 20x15
 through holes d5 and a blind hole d4 x 6; ``shell`` a 50x30x20 box shelled to 2 mm walls and floor
 with a 10x6 cutout through its +X wall; ``slotted`` a 50x20x5 plate with a closed slot 6 wide, 20
 long and 3 deep; ``chamfered_boss`` a 30x30x5 plate with a d6 boss 10 high whose top edge has a
-0.5 mm chamfer. The result maps each fixture to its faces and recognition.
+0.5 mm chamfer; ``drafted_dish`` a 60 long tub whose long walls are 3 thick at the rim (z = 20) and
+drafted 3 deg wider toward the floor, a spherical dish 0.8 deep and 16 across in its 3 mm floor, and
+under the floor a dovetail 20 wide at its bed (z = -8) with 70 deg flanks. The result maps each
+fixture to its faces and recognition.
 """
 
 import json
+import math
 import os
 import sys
 import traceback
@@ -51,11 +55,31 @@ def chamfered_boss():
     return shape.makeChamfer(0.5, top)
 
 
+def prism(points, x0, x1):
+    """A prism of the YZ polygon ``points`` from x0 to x1."""
+    wire = Part.makePolygon([V(x0, y, z) for y, z in (*points, points[0])])
+    return Part.Face(wire).extrude(V(x1 - x0, 0, 0))
+
+
+def drafted_dish():
+    rim_half, height = 15.0, 20.0
+    floor_half = rim_half + height * math.tan(math.radians(3.0))
+    shape = prism([(-floor_half, 0), (floor_half, 0), (rim_half, height), (-rim_half, height)], 0, 60)
+    shape = shape.cut(box(3, -12, 3, 57, 12, 21))
+    bed_half, depth_dt = 10.0, 8.0
+    top_half = bed_half - depth_dt / math.tan(math.radians(70.0))
+    shape = shape.fuse(prism([(-bed_half, -depth_dt), (bed_half, -depth_dt), (top_half, 0), (-top_half, 0)], 10, 50))
+    rim, depth = 8.0, 0.8
+    radius = (rim ** 2 + depth ** 2) / (2 * depth)
+    dish = Part.makeSphere(radius, V(30, 0, 3 - depth + radius)).common(box(3, -12, 2, 57, 12, 3.5))
+    return shape.removeSplitter().cut(dish)
+
+
 def main():
     try:
         result = {"status": "pass", "fixtures": {}}
         for name, build in (("plate", plate), ("shell", shell), ("slotted", slotted),
-                            ("chamfered_boss", chamfered_boss)):
+                            ("chamfered_boss", chamfered_boss), ("drafted_dish", drafted_dish)):
             shape = build().removeSplitter()
             faces = feature_geometry.extract_faces(shape)
             recognition = feature_recognition.recognize([feature_geometry.Face.from_dict(f) for f in faces],

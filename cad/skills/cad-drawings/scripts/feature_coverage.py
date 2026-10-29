@@ -16,6 +16,10 @@ that names it, its faces and everything about it the sheet leaves out:
   datum plane that holds one of them states it; the difference of two baseline locations does not;
 - heights (a boss's, a step's) and a hole's depth may also be located baseline: both their faces
   located in the one datum frame;
+- a size between two planes that are not parallel (a drafted wall's thickness, a width between
+  inclined flanks) is stated only by a characteristic measured at a reference plane (``at``) on one
+  plane of each side; the angle of a drafted or flank face then needs its own dimension, and a
+  spherical recess its SR and depth, where a controlled-model profile states neither;
 - a hole, boss, shaft, slot or contour arc is located: its axis has a location, a pattern, or lies on
   a datum axis;
 - a round or chamfer (an edge fillet or edge break) states its size in a callout or in the general
@@ -141,7 +145,19 @@ class _Checker:
         coordinate = self.frame.coords(face.point)["xyz".index(axis[0])]
         return abs(coordinate) < TOLERANCE_MM or any(abs(coordinate - v) < TOLERANCE_MM for v in self.located[axis[0]])
 
+    def at_plane(self, size: Size) -> str | None:
+        """A size between non-parallel planes is stated only at a reference plane: a characteristic measured at
+        a stated plane (``at``) on a pair of planes, one from each of the size's face sets."""
+        first, second = (set(side) for side in size.between)
+        for char in self.chars:
+            if char.operation in SEPARATION_OPERATIONS and char.details.get("at") and any(
+                    (a in first and b in second) or (a in second and b in first) for a, b in char.details["pairs"]):
+                return char.id
+        return None
+
     def stated(self, item: Recognized, size: Size) -> str | None:
+        if size.at:
+            return self.at_plane(size)
         by = self.direct(size) or (self.from_datum(size) if size.name in SEPARATIONS else None)
         if by is None and size.name in SEPARATIONS and baseline(item, size) and size.between \
                 and all(any(self.plane_located(i) for i in side) for side in size.between):
@@ -149,8 +165,11 @@ class _Checker:
         if by is None and size.name == "depth" and size.between is None:
             # a curved or inclined entry: the floor's own location states the depth
             by = next((c.id for c in self.chars if c.operation in (*LOCATIONS, "depth") and self.on(c, size.faces)), None)
-        if by is None and size.name == "angle" and all(self.kinds(size.faces)[i] == "surface" for i in size.faces):
-            by = "profile"   # an inclined face that the controlled model defines within its profile tolerance
+        if by is None and size.name == "angle" and not any(s.at for s in item.sizes) \
+                and all(self.kinds(size.faces)[i] == "surface" for i in size.faces):
+            # an inclined face that the controlled model defines within its profile tolerance; a drafted wall's
+            # or an inclined flank's angle goes with its size at the reference plane, so it is stated too
+            by = "profile"
         return by
 
     def positioned(self, item: Recognized) -> str | None:
@@ -191,7 +210,7 @@ class _Checker:
             owners = sorted({self.binding.owner[i] for i in hidden})
             missing.append(f"faces {hidden} only defined by the controlled-model surface {', '.join(owners)}")
         for size in item.sizes:
-            if size.name == "radius" and item.category not in ("round", "arc") or item.category == "dish":
+            if size.name == "radius" and item.category not in ("round", "arc", "dish"):
                 continue   # pocket corners and slot ends: their rounds and slots state them
             if not item.prismatic and size.name not in ("depth", "radius"):
                 continue
@@ -201,10 +220,13 @@ class _Checker:
             rows.append({"feature": item.id, "category": item.category, "requirement": size.name,
                          "value_mm": round(size.value, 6), "faces": list(size.faces),
                          "between": [list(s) for s in size.between] if size.between else None,
+                         **({"at": list(size.at)} if size.at else {}),
                          "stated_by": by, "status": "pass" if by else "fail"})
             if by is None:
                 sides = f" between faces {list(size.between[0])} and {list(size.between[1])}" if size.between else ""
-                missing.append(f"{size.name} {size.value:g}{sides}")
+                plane = f" at the plane of face {list(size.at)}" if size.at else ""
+                missing.append(f"{'SR' if item.category == 'dish' and size.name == 'radius' else size.name} "
+                               f"{size.value:g}{sides}{plane}")
         if item.category in LOCATED and item.prismatic:
             by = self.positioned(item)
             rows.append({"feature": item.id, "category": item.category, "requirement": "position", "value_mm": None,

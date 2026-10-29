@@ -267,6 +267,59 @@ class Face:
 
 
 @dataclass(frozen=True)
+class Trace:
+    """Two planes' lines on a reference plane: a width or wall thickness stated at that plane (ISO 129-1).
+
+    ``first`` and ``second`` are points on the two lines, ``second`` straight across from ``first``;
+    ``along`` is the lines' direction and ``across`` the unit direction from the first line to the second."""
+
+    width: float
+    first: Vector
+    second: Vector
+    along: Vector
+    across: Vector
+
+
+def plane_trace(face: Face, ref: Face) -> tuple[Vector, Vector] | None:
+    """Where the plane of ``face`` meets the plane of ``ref``: a point on that line and its unit direction;
+    None when the planes are parallel."""
+    n, d = unit(face.normal), unit(ref.normal)
+    along = cross(n, d)
+    if norm(along) < 1e-9:
+        return None
+    along = unit(along)
+    toward = cross(n, along)   # in the face's plane, across its line on the reference plane
+    return add(face.point, scale(toward, dot(sub(ref.point, face.point), d) / dot(toward, d))), along
+
+
+def trace_at(first: Face, second: Face, ref: Face) -> Trace | None:
+    """The width between two planes at a reference plane: the distance between their lines on it, when those
+    lines are parallel (two planes parallel to each other, or two inclined flanks or drafted faces)."""
+    a, b = plane_trace(first, ref), plane_trace(second, ref)
+    if a is None or b is None or not parallel(a[1], b[1]):
+        return None
+    foot = add(b[0], scale(a[1], dot(sub(a[0], b[0]), a[1])))
+    gap = sub(foot, a[0])
+    if norm(gap) < 1e-9:
+        return None
+    return Trace(norm(gap), a[0], foot, a[1], unit(gap))
+
+
+def reach(face: Face, ref: Face) -> float:
+    """How far the face's boundary stays from the reference plane: 0 when they share an edge."""
+    d = unit(ref.normal)
+    return min((abs(dot(sub(p, ref.point), d)) for p in face.boundary_points()), default=math.inf)
+
+
+def side_by_side(first: Face, second: Face, along: Vector) -> bool:
+    """Whether two faces overlap along a direction: a pair across one wall or flank, not two separate features."""
+    spans = [[dot(p, along) for p in face.boundary_points()] for face in (first, second)]
+    if not spans[0] or not spans[1]:
+        return False
+    return min(max(spans[0]), max(spans[1])) - max(min(spans[0]), min(spans[1])) > GEOMETRY_EPS
+
+
+@dataclass(frozen=True)
 class ResolvedFeature:
     """A semantic feature bound to this run's STEP: its faces, their regions, anchors and relations."""
 
