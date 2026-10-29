@@ -400,10 +400,9 @@ class HostApi(unittest.TestCase):
         def slow_capture(_host, _page, body: dict) -> dict:
             started.set()
             release.wait(10)
-            out = Path(body["out"])
-            out.parent.mkdir(parents=True, exist_ok=True)
-            (out.parent / f"{body['view'].replace(':', '-')}.png").write_bytes(b"PNG")
-            return {"status": "pass", "view": body["view"], "viewer_state": {"mode": "single"}}
+            (Path(body["out"]).parent / f"{body['view'].replace(':', '-')}.png").write_bytes(b"PNG")
+            return {"status": "pass", "view": body["view"], "viewer_state": {"mode": "single"},
+                    "version": "v1", "viewport": [1440, 900], "cameras": {}}
 
         answers: dict[str, tuple[int, dict]] = {}
         with mock.patch.object(capture, "capture", slow_capture):
