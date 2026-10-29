@@ -1610,6 +1610,28 @@ class RecordedStreams(unittest.TestCase):
             self.isolation("opencode", paths, probe, lines)["leaks"],
         )
 
+    def test_opencode_error_event_keeps_the_provider_message(self):
+        # The OpenCode 2.1.4 shape of a rejected Bedrock token (live capture, pace,
+        # 2026-10-28), with Bedrock's expired-token wording in place of "invalid".
+        message = "The security token included in the request is expired"
+        event = {
+            "type": "error",
+            "timestamp": 1793189139415,
+            "sessionID": "ses_example",
+            "error": {
+                "type": "provider.auth",
+                "message": message,
+                "status": 403,
+                "response": {"body": json.dumps({"message": message})},
+            },
+        }
+        turn = adapters.build("opencode", {"bin": "opencode"}).parse(
+            [json.dumps(event)]
+        )
+        self.assertEqual(turn.error, f"provider.auth: {message} (HTTP 403)")
+        # The runner's one credential-refresh retry keys on this text.
+        self.assertTrue(runner._EXPIRED_CREDENTIALS.search(turn.error))
+
 
 if __name__ == "__main__":
     unittest.main()

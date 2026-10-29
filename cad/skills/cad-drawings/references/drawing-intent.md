@@ -14,7 +14,7 @@ drawing with `geometry_unaccounted`.
 | `kind` | Faces | Required characteristics |
 |---|---|---|
 | `plane_face` | coplanar planes | location along its frame axis (none for a datum or a plane through the origin) |
-| `bore` | inward cylinders; optional floors and drill-point cones | diameter (radius if partial), axis location or circular pattern, depth when floored |
+| `bore` | inward cylinders; optional floors and drill-point cones | diameter (radius if partial), axis location, circular pattern or grid, depth when floored |
 | `shaft` | outward cylinders | diameter, axis location |
 | `slot` | two opposed walls, one or two end radii, optional floor | width, length (closed), centre location or pattern, depth from a planar entry or floor elevation |
 | `groove` | root cylinder, two walls | root diameter, width, axial location |
@@ -28,6 +28,11 @@ drawing with `geometry_unaccounted`.
 Every axial end of a bore, shaft, groove or taper cylinder or cone must lie on a located plane, or
 meet a chamfer, round, taper, surface or socket face; otherwise request a `length` dimension.
 
+Four or more instances of one bore or shaft that fill a regular grid inside a circle (a grille) are a
+grid (ISO 129-1 equally spaced features): one callout states the pitch, the two grid directions and the
+circle the centres lie within, and only the instance nearest their centroid is located from the
+datums. Instances with a missing or extra node keep one location each.
+
 ## Intent (`part.yaml` `drawing`)
 
 - `type`: `detail`, `vendor_specification` or `source_control`.
@@ -36,7 +41,12 @@ meet a chamfer, round, taper, surface or socket face; otherwise request a `lengt
   `parallel_to` a reference with an optional `toward` sense, or `toward` a clocking feature.
 - `views`: the first orthographic view is the principal view; others take the projection method's
   place next to it. `normal_to` looks at a plane from its outward side; `along_axis`, `perpendicular_to`
-  and `opposite` as named; `section` `through` an axis or plane; `detail` of a `feature`.
+  and `opposite` as named. A `section` cuts `through` an axis or plane. With `normal_axis: x|y|z` it
+  cuts normal to that frame axis through the centre of its one `through` reference, such as a pocket,
+  an opening or a pair of holes. A `detail` enlarges a `feature`.
+- `sheet: N` on a view draws it on sheet N. The principal view stays on sheet 1 and the sheets are
+  numbered without gaps. A detail defaults to its base view's sheet. An orthographic view off sheet 1
+  is named by a letter. Each characteristic is drawn once in the package.
 - `features`: one entry per locator: `size: general|interface`, `presentation`, `tolerance_policy`,
   `profile`, `profile_tolerance_mm`, `thread` (`designation` such as `M10x1-6H`, `standard`,
   `operation`, `full_depth_anchor`), and a feature's own `surface_texture` or `edges`, which are
@@ -45,7 +55,10 @@ meet a chamfer, round, taper, surface or socket face; otherwise request a `lengt
   the general note of undimensioned fillets and edge chamfers. A contour radius gets its own callout.
 - `dimensions`: extra measured requests (`length`, `plane_separation`, `axis_distance`, `location`, ...)
   with an explicit `tolerance` (`deviation_mm` or a named policy); below 0.5 mm ISO 2768-1 has no general
-  value. A `plane_separation` or `thickness` is drawn from its first feature's plane to its second's,
+  value. A `width` between two features is a callout counting every opposed pair of their planes at
+  that width (`4× width 0.6`): use it for ribs or webs whose planes are not normal to a frame axis.
+  `presentation: section` on a feature or a request draws its sizes and locations in a section first.
+  A `plane_separation` or `thickness` is drawn from its first feature's plane to its second's,
   at the pair of parallel planes nearest each other (a slot's wall facing the other feature). Unless it
   is `reference: true`, it locates a second `plane_face` feature from the first in place of that
   plane's datum location, so a wall thickness is a chain dimension, never a redundant third one. A
@@ -89,7 +102,9 @@ meet a chamfer, round, taper, surface or socket face; otherwise request a `lengt
 A prismatic feature (planes normal to a frame axis, cylinders and cones on one) may not sit only in a
 controlled-model `surface`. Inclined planes, spheres, tori and B-spline faces may; an inclined face's
 angle is then the model's. `drawing_draft.py` proposes locators and the direct size requests from the
-same recognition; faces that match no pattern are listed with the reason.
+same recognition; faces that match no pattern are listed with the reason. Once the model has its hook,
+the draft uses the hook's names, and `drawing_merge.py` merges the reviewed block into part.yaml after
+checking that every feature it names is a locator the hook returns.
 
 ## Vendor specification and source control sheets
 

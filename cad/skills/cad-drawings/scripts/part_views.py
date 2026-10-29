@@ -15,15 +15,20 @@ viewer, TechDraw's ``Direction``.
   ``toward: F`` picks the sense.
 - ``opposite: V`` looks from the other side of view V.
 - ``kind: section`` cuts through ``through`` (one axis or plane, or two references) with a plane that
-  the principal view sees edge-on. A horizontal cutting line is viewed from below the principal view
-  and a vertical one from its right, so the section keeps the principal view's up direction.
+  the principal view sees edge-on; with ``normal_axis: x|y|z`` the plane is normal to that frame axis
+  through the centre of the one ``through`` reference (a recess, an opening, a pair of holes). A
+  horizontal cutting line is viewed from below the principal view and a vertical one from its right, so
+  the section keeps the principal view's up direction.
 - ``kind: detail`` enlarges ``feature`` as seen in the principal view (or the view named by ``toward``).
+- ``sheet: N`` draws the view on sheet N (default 1; a detail defaults to its base view's sheet). The
+  principal view is on sheet 1, the sheets are numbered from 1 without gaps, and an orthographic view
+  away from sheet 1 is named by a letter.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 import feature_geometry as fg
@@ -48,6 +53,7 @@ class ViewPlan:
     label: str | None = None
     scale: str = "auto"
     features: tuple[str, ...] = ()
+    sheet: int = 1                     # the drawing sheet the view is drawn on
 
     @property
     def up(self) -> Vector:
@@ -69,8 +75,8 @@ def _ref_direction(name: str, frame: DatumFrame, features: Mapping[str, Resolved
     instances = cylinder_instances(own)
     if feature.kind == "plane_face" and planes:
         return fg.unit(planes[0].normal), planes[0].point
-    if instances:
-        return instances[0].axis_dir, instances[0].axis_point
+    if instances:   # the middle of the cylinder's span: a section origin inside the part
+        return instances[0].axis_dir, instances[0].point_at((instances[0].t0 + instances[0].t1) / 2)
     raise IntentError("invalid_drawing_intent", f"view reference {name} has no plane or axis")
 
 
@@ -174,25 +180,33 @@ def plan_views(drawing: Mapping[str, Any], frame: DatumFrame, features: Mapping[
             if principal is None:
                 raise IntentError("invalid_drawing_intent", f"section {spec['id']} comes before any orthographic view")
             through = spec["through"] if isinstance(spec["through"], list) else [spec["through"]]
-            refs = [_ref_direction(name, frame, features, faces) for name in through]
-            vector, point = refs[0]
-            if len(refs) > 1:
-                second = _ref_point(through[1], frame, features, faces)
-                normal = fg.cross(vector, fg.sub(second, point))
-                if fg.norm(normal) < 1e-9:
-                    raise IntentError("invalid_drawing_intent", f"section {spec['id']} references are collinear")
-                normal = fg.unit(normal)
+            if "normal_axis" in spec:
+                # a plane normal to a frame axis through the reference's centre: a recess, a cutout, a hole pair
+                if len(through) != 1:
+                    raise IntentError("invalid_drawing_intent", f"section {spec['id']} with normal_axis cuts through "
+                                      f"one reference, not {through}")
+                point = _ref_point(through[0], frame, features, faces)
+                normal = frame.vector(spec["normal_axis"])
             else:
-                # the plane contains the reference axis (or is the reference plane) and the principal view's direction
-                ref_is_plane = (through[0] in frame.datums and frame.datums[through[0]].role == "plane") or \
-                    (features.get(through[0]) is not None and features[through[0]].kind == "plane_face")
-                if ref_is_plane:
-                    normal = vector
-                else:
-                    normal = fg.cross(vector, principal.direction)
+                refs = [_ref_direction(name, frame, features, faces) for name in through]
+                vector, point = refs[0]
+                if len(refs) > 1:
+                    second = _ref_point(through[1], frame, features, faces)
+                    normal = fg.cross(vector, fg.sub(second, point))
                     if fg.norm(normal) < 1e-9:
-                        normal = principal.up
+                        raise IntentError("invalid_drawing_intent", f"section {spec['id']} references are collinear")
                     normal = fg.unit(normal)
+                else:
+                    # the plane contains the reference axis (or is the reference plane) and the principal view's direction
+                    ref_is_plane = (through[0] in frame.datums and frame.datums[through[0]].role == "plane") or \
+                        (features.get(through[0]) is not None and features[through[0]].kind == "plane_face")
+                    if ref_is_plane:
+                        normal = vector
+                    else:
+                        normal = fg.cross(vector, principal.direction)
+                        if fg.norm(normal) < 1e-9:
+                            normal = principal.up
+                        normal = fg.unit(normal)
             if not fg.perpendicular(normal, principal.direction):
                 raise IntentError("feature_not_presentable", f"section {spec['id']} cuts obliquely to the principal view")
             # a horizontal cutting line: view from below, so the section keeps the principal view's up; else from the right
@@ -217,8 +231,19 @@ def plan_views(drawing: Mapping[str, Any], frame: DatumFrame, features: Mapping[
                             label=next(letters), scale=spec.get("scale", "auto"), features=(feature.id,))
         else:
             raise IntentError("invalid_drawing_intent", f"view {spec['id']} kind {kind!r} is not supported")
+        number = spec.get("sheet", by_id[plan.base].sheet if plan.kind == "detail" else 1)
+        if plan is principal and number != 1:
+            raise IntentError("invalid_drawing_intent", f"the principal view {plan.id} is on sheet {number}, not sheet 1")
+        if number != 1 and plan.kind == "part" and plan.label is None:
+            plan = replace(plan, label=next(letters))   # away from the principal: named, not only placed by projection
+        plan = replace(plan, sheet=number)
+        if plan.kind == "part" and principal is not None and principal.id == plan.id:
+            principal = plan
         plans.append(plan)
         by_id[plan.id] = plan
+    numbers = sorted({p.sheet for p in plans})
+    if numbers != list(range(1, len(numbers) + 1)):
+        raise IntentError("invalid_drawing_intent", f"drawing.views fill sheets {numbers}; number them 1 to {len(numbers)}")
     return plans
 
 

@@ -3,7 +3,8 @@
 Fixtures (mm, FreeCAD Part, no cad-model build): ``plate`` 60x40x10 with a 20x15x4 pocket, two
 through holes d5 and a blind hole d4 x 6; ``shell`` a 50x30x20 box shelled to 2 mm walls and floor
 with a 10x6 cutout through its +X wall; ``slotted`` a 50x20x5 plate with a closed slot 6 wide, 20
-long and 3 deep. The result maps each fixture to its faces and recognition.
+long and 3 deep; ``chamfered_boss`` a 30x30x5 plate with a d6 boss 10 high whose top edge has a
+0.5 mm chamfer. The result maps each fixture to its faces and recognition.
 """
 
 import json
@@ -44,10 +45,17 @@ def slotted():
     return box(0, 0, 0, 50, 20, 5).cut(cutter.removeSplitter())
 
 
+def chamfered_boss():
+    shape = box(0, 0, 0, 30, 30, 5).fuse(Part.makeCylinder(3, 10, V(15, 15, 5))).removeSplitter()
+    top = [e for e in shape.Edges if abs(e.BoundBox.ZMin - 15) < 1e-6 and abs(e.BoundBox.ZMax - 15) < 1e-6]
+    return shape.makeChamfer(0.5, top)
+
+
 def main():
     try:
         result = {"status": "pass", "fixtures": {}}
-        for name, build in (("plate", plate), ("shell", shell), ("slotted", slotted)):
+        for name, build in (("plate", plate), ("shell", shell), ("slotted", slotted),
+                            ("chamfered_boss", chamfered_boss)):
             shape = build().removeSplitter()
             faces = feature_geometry.extract_faces(shape)
             recognition = feature_recognition.recognize([feature_geometry.Face.from_dict(f) for f in faces],

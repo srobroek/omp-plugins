@@ -452,7 +452,15 @@ class _Classifier:
             sizes.append(Size("width", inst.t1 - inst.t0, inst.faces, (tuple(base[:1]), tuple(base[1:])), inst.axis_dir))
             self.add("groove", (*inst.faces, *base), sizes, "groove", inst.axis_dir)
         elif base:
-            sizes.append(Size("height", inst.t1 - inst.t0, inst.faces, (tuple(base), tuple(tops)), inst.axis_dir))
+            # a chamfered or rounded end: the boss's height runs to the end plane beyond that blend
+            beyond = [] if tops else sorted({n for _, b in ends if self.faces[b].support_type in ("cone", "torus")
+                                             for n in self.neighbours(b) if n not in inst.faces
+                                             and self.faces[n].support_type == "plane"
+                                             and fg.parallel(self.faces[n].normal, inst.axis_dir)})
+            ends_at = tops or beyond
+            height = inst.t1 - inst.t0 if tops or not beyond else max(
+                abs(fg.dot(fg.sub(self.faces[t].point, self.faces[b].point), inst.axis_dir)) for t in beyond for b in base)
+            sizes.append(Size("height", height, inst.faces, (tuple(base), tuple(ends_at)), inst.axis_dir))
             self.add("boss", (*inst.faces, *tops), sizes, "shaft", inst.axis_dir, base=base, top=tops)
         else:
             self.add("shaft", inst.faces, sizes, "shaft", inst.axis_dir)
