@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import platform
 import shutil
@@ -20,6 +21,22 @@ from typing import Any
 
 import yaml
 
+CAD_RECORD_SCRIPTS = Path(__file__).resolve().parents[2] / "cad-record" / "scripts"
+
+
+def _load_module(name: str, path: Path):
+    if name not in sys.modules:
+        spec = importlib.util.spec_from_file_location(name, path)
+        if spec is None or spec.loader is None:
+            raise ImportError(f"cannot load {path}")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        spec.loader.exec_module(module)
+    return sys.modules[name]
+
+
+layout = _load_module("cad_record_layout", CAD_RECORD_SCRIPTS / "layout.py")
+validate = None
 
 STAGES = (
     "ground",
@@ -36,6 +53,34 @@ STAGES = (
     "design_freeze",
     "release",
 )
+
+
+def staged_product(root: Path, stage: str | None = None) -> dict[str, Any]:
+    """Read the index version of product.yaml to grade layout paths at the staged stage."""
+    try:
+        raw = git("show", ":hw/product.yaml", cwd=root).decode("utf-8")
+        product = yaml.safe_load(raw)
+    except (RuntimeError, UnicodeError, yaml.YAMLError) as error:
+        if stage is None:
+            raise RuntimeError(f"cannot read staged hw/product.yaml: {error}") from error
+        product = {"flow": {"stage": stage}}
+    return product if isinstance(product, dict) else {}
+
+
+def require_clean_layout(root: Path, product: dict[str, Any]) -> None:
+    findings = []
+    report = layout.audit(root / "hw")
+    flow = product.get("flow")
+    stage = flow.get("stage") if isinstance(flow, dict) else None
+    strict = stage not in STAGES or STAGES.index(stage) >= STAGES.index("design_freeze")
+    for problem in report.problems:
+        severity = "error" if problem.severity == "stage" and strict else (
+            "warning" if problem.severity == "stage" else problem.severity)
+        if severity not in {"warning", "info"}:
+            findings.append(problem)
+    if findings:
+        first = findings[0]
+        raise RuntimeError(f"CAD layout has {len(findings)} blocking finding(s): {first.path}: {first.message}")
 
 
 def git(*args: str, cwd: Path) -> bytes:
@@ -101,6 +146,7 @@ def load_checks(path: Path) -> Any:
 
 
 def record(stage: str, checks_path: Path, passed: bool, root: Path) -> dict[str, Any]:
+    require_clean_layout(root, staged_product(root, stage))
     if stage not in STAGES:
         raise RuntimeError(f"unknown stage {stage!r}; expected one of: {', '.join(STAGES)}")
     checks = load_checks(checks_path)
@@ -159,7 +205,9 @@ def main() -> int:
                 product = yaml.safe_load(product_data)
             except yaml.YAMLError as error:
                 raise RuntimeError(f"cannot parse staged hw/product.yaml: {error}") from error
-            flow = product.get("flow") if isinstance(product, dict) else None
+            if not isinstance(product, dict):
+                raise RuntimeError("staged hw/product.yaml must be a mapping")
+            flow = product.get("flow")
             if not isinstance(flow, dict):
                 raise RuntimeError("staged hw/product.yaml is missing flow")
             current_stage = flow.get("stage")
@@ -168,6 +216,7 @@ def main() -> int:
                 raise RuntimeError("staged hw/product.yaml has a missing or unknown flow.stage")
             if not isinstance(threshold, str) or threshold not in STAGES:
                 raise RuntimeError("staged hw/product.yaml has a missing or unknown flow.recheck_from")
+            require_clean_layout(root, product)
             if STAGES.index(current_stage) < STAGES.index(threshold):
                 print(json.dumps({"passed": True, "required": False, "stage": current_stage}))
                 return 0
