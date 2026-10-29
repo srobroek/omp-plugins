@@ -5,16 +5,10 @@
 # ///
 """Generate checked, producer-ready part drawings from a built cad-model version.
 
-Usage: drawing.py HW [--version vN] --part PN [--part PN ...] --output-dir DIR [--timeout S]
+Usage: drawing.py HW [--version vN|latest] --part PN [--part PN ...] [--output-dir DIR] [--replace]
 
-For each part: verify the record and the version (``drawing_contract``), bind the model's
-``drawing_features`` locators to the part STEP in FreeCAD and recognise its manufacturing features
-(``feature_recognition``), measure every required characteristic in the datum frame
-(``drawing_intent``), plan and project the views (``part_views``, ``techdraw_job.py``), place
-dimensions and callouts (``sheet``), run the completeness gate (``completeness``, with
-``feature_coverage`` for the recognised features) and publish ``DIR/<PN>/`` through
-``drawing_document.publish_package``. A part with no drawing intent or no ``drawing_features`` hook
-gets no sheet: it fails with one finding per recognised feature it leaves undimensioned.
+Without --output-dir, publish each passing part package as an immutable drawing bundle at
+hw/drawings/vN/<PN>/. An explicit --output-dir is accepted only under .cad-work/.
 
 A catalogue part with a ``vendor_specification`` or ``source_control`` drawing gets a specification
 sheet: its procurement identity, the critical interface dimensions measured from the vendor
@@ -48,6 +42,7 @@ import feature_geometry as fg  # noqa: E402
 import feature_recognition  # noqa: E402
 import freecad_runtime  # noqa: E402
 import part_views  # noqa: E402
+import drawing_publication  # noqa: E402
 import sheet  # noqa: E402
 from drawing_document import CompositionError, SheetMetadata, SvgAnnotation, SvgNote, SvgTable  # noqa: E402
 from freecad_views import ViewGeometry  # noqa: E402
@@ -642,9 +637,6 @@ def compose_and_publish(context: drawing_contract.DrawingContext, part: drawing_
     return summary, package.exit_code
 
 
-def latest_label(hw: Path) -> str:
-    latest = json.loads((hw / "versions" / "latest.json").read_text(encoding="utf-8"))
-    return latest["label"]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -652,36 +644,50 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("hw", type=Path, help="the hardware project's hw/ folder")
     parser.add_argument("--version", help="built version label (default: versions/latest.json)")
     parser.add_argument("--part", action="append", required=True, help="part number; repeat for several parts")
-    parser.add_argument("--output-dir", required=True, type=Path, help="packages go to OUTPUT_DIR/<PN>/")
+    parser.add_argument("--output-dir", type=Path, help="write scratch packages under .cad-work only")
+    parser.add_argument("--replace", action="store_true", help="retain and replace conflicting bundles")
     parser.add_argument("--timeout", type=float, default=300.0, help="seconds per FreeCAD job")
     parser.add_argument("--jobs", type=int, help="maximum concurrent FreeCAD jobs (default: CPU and memory bound)")
     args = parser.parse_args(argv)
     if args.jobs is not None and args.jobs < 1:
         parser.error("--jobs must be a positive integer")
+    if len(set(args.part)) != len(args.part):
+        print(json.dumps(fail("invalid_input", "--part values must be unique because each part has one output package"), indent=2))
+        return 2
+    hw = args.hw.resolve()
     freecadcmd = freecad_runtime.find_freecadcmd()
     if freecadcmd is None or not freecadcmd.is_file():
         print(json.dumps(fail("freecad_unavailable", "freecadcmd not found; set FREECADCMD or put freecadcmd on PATH")))
         return 2
-    hw = args.hw.resolve()
+    api = drawing_publication.layout()
     try:
-        label = args.version or latest_label(hw)
-        context = drawing_contract.load_context(hw, hw / "versions" / label)
-    except drawing_contract.ContractError as exc:
-        print(json.dumps(fail(exc.code, str(exc), findings=[dict(f) for f in exc.findings]), indent=2))
-        return 1 if exc.code == "invalid_drawing_intent" else 2
-    except (OSError, KeyError, ValueError) as exc:
-        print(json.dumps(fail("invalid_input", str(exc)), indent=2))
-        return 2
-    output_root = args.output_dir.resolve()
-    if len(set(args.part)) != len(args.part):
-        print(json.dumps(fail("invalid_input", "--part values must be unique because each part has one output package"), indent=2))
-        return 2
+        label, version_dir, _ = api.built_version(hw, args.version or "latest")
+        context = drawing_contract.load_context(hw, version_dir)
+        output_root = api.scratch_path(hw, args.output_dir, "--output-dir") if args.output_dir else None
+    except (api.LayoutError, drawing_contract.ContractError, OSError, KeyError, ValueError) as exc:
+        print(json.dumps(fail(getattr(exc, "code", "invalid_input"), str(exc),
+                              findings=[dict(f) for f in getattr(exc, "findings", ())]), indent=2))
+        return 1 if getattr(exc, "code", None) == "invalid_drawing_intent" else 2
     jobs = freecad_runtime.jobs_for(args.jobs, len(args.part), freecad_runtime.FREECAD_JOB_PEAK_RSS_BYTES)
-    results, status = [], 0
 
     def draw_part(pn: str) -> tuple[dict[str, Any], int]:
+        subject = pn
+        recipe = {"part": pn, "provenance": context.provenance(pn)}
         try:
-            return run_part(context, pn, output_root / pn, freecadcmd, args.timeout)
+            if output_root is None:
+                existing = api.reusable(hw, "bundle.drawings", {"V": label, "S": subject}, recipe,
+                                        replace=args.replace)
+                if existing is not None:
+                    return {"pn": pn, "status": "pass", "cache": "hit", "output_dir": str(existing)}, 0
+                draft = api.staging(hw, "bundle.drawings")
+            result, code = run_part(context, pn, draft, freecadcmd, args.timeout)
+            if code == 0 and output_root is None:
+                published = drawing_publication.publish(hw, label, subject, draft, recipe,
+                                                        "cad-drawings drawing.py", args.replace)
+                result["output_dir"] = str(published)
+            return result, code
+        except api.PublishConflict as exc:
+            return fail("publish_conflict", str(exc), pn=pn), 2
         except drawing_contract.ContractError as exc:
             return fail(exc.code, str(exc), pn=pn), 2
         except DrawingError as exc:

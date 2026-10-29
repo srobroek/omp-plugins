@@ -11,9 +11,8 @@ One sheet contract generates every page, so sizes differ only in their dimension
   annotations, tables and general notes as one SVG in sheet millimetres with Y down. Its ids and
   classes are the ones ``layout_check.check_layout`` reads: ``view-*`` groups, ``cad-annotations``,
   ``cad-title-block`` and ``projection-symbol``.
-- ``publish_package`` checks and exports every sheet from a run-specific staging folder and only
-  then replaces the package folder; a failed run leaves rejected previews and ``rejected.json``,
-  never ``package.json``, so an earlier success cannot be mistaken for this run's.
+- ``publish_package`` checks and exports every sheet inside its supplied draft folder. Passing output
+  is later sealed by cad-record's bundle API; a rejected draft is retained in ``.cad-work``.
 """
 
 from __future__ import annotations
@@ -674,43 +673,21 @@ def _check_identity(sheets: Sequence[ComposedSheet]) -> None:
 PACKAGE_MARKERS = ("package.json", "rejected.json")
 
 
-def _replace_package(staging: Path, output_dir: Path, run_id: str) -> None:
-    """Swap the staged run in for the previous package; refuse a folder that is not a package."""
-    old = None
-    if output_dir.exists():
-        if not output_dir.is_dir() or (any(output_dir.iterdir())
-                                       and not any((output_dir / marker).is_file() for marker in PACKAGE_MARKERS)):
-            raise ValueError(f"{output_dir} is not empty and holds no drawing package; choose a package folder")
-        old = output_dir.with_name(f".{output_dir.name}.old-{run_id}")
-        os.replace(output_dir, old)
-    os.replace(staging, output_dir)
-    if old is not None:
-        shutil.rmtree(old)
-
-
 def publish_package(context: DrawingContext, sheets: Sequence[ComposedSheet], report: CoverageReport,
                     output_dir: Path, freecadcmd: Path, timeout: float,
                     release: Sequence[Mapping[str, Any]] = (), jobs: int = 1, executor: Any = None) -> PackageReport:
-    """Check, export and publish the sheets of one drawing as ``output_dir``; return what happened.
-
-    Order: the coverage verdict, ``check_layout`` on every sheet, then the PDF and PNG export of
-    every sheet with its identity text required in the PDF. On success ``output_dir`` holds
-    ``sheet-N.svg``/``.pdf``/``.png``, ``coverage.json`` and, written last, ``package.json``. On
-    failure it holds ``sheet-N.rejected.svg`` previews (and ``sheet-N.rejected.png`` when the layout
-    passed and only the coverage failed) and ``rejected.json``, never a PDF. Either way the previous
-    package is gone, so no earlier ``package.json`` survives a failed run. ``release`` lists the
-    release-readiness blockers (§8.1 stage 10); they never turn a passing content check into a failure.
-    """
+    """Check and export one drawing into an empty draft folder; never replaces old content."""
     _check_identity(sheets)
     if timeout <= 0:
         raise ValueError("timeout must be positive")
     drawing_number = sheets[0].metadata.drawing_number
     provenance = context.provenance(drawing_number)
     output_dir = output_dir.resolve()
-    output_dir.parent.mkdir(parents=True, exist_ok=True)
-    run_id = uuid.uuid4().hex
-    staging = output_dir.with_name(f".{output_dir.name}.staging-{run_id}")
-    staging.mkdir()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    if any(output_dir.iterdir()):
+        raise ValueError(f"{output_dir} must be an empty draft folder")
+    scratch = output_dir.parent / f".drawing-draft-{run_id}"
+    staging = scratch
     try:
         findings: list[dict[str, Any]] = [dict(f) for f in report.findings]
         layout_ok = True
@@ -727,16 +704,16 @@ def publish_package(context: DrawingContext, sheets: Sequence[ComposedSheet], re
                 number = sheet.metadata.sheet_number
                 paths = {kind: staging / f"sheet-{number}.{kind}" for kind in ("svg", "pdf", "png")}
                 try:
-                    result = sheet_export.export_sheet(freecadcmd, paths["svg"], paths["pdf"], paths["png"],
-                                                       sheet.required_text, timeout)
+                    exported = sheet_export.export_sheet(freecadcmd, paths["svg"], paths["pdf"], paths["png"],
+                                                         sheet.required_text, timeout)
                 except sheet_export.ExportError as exc:
                     return None, exc
                 return {"sheet": number, "size": sheet.spec.size,
                         "files": {k: p.name for k, p in paths.items()},
-                        "sha256": {k: sha256(p) for k, p in paths.items()}, "export": result}, None
+                        "sha256": {k: sha256(p) for k, p in paths.items()}, "export": exported}, None
 
-            exported = freecad_runtime.map_jobs(sheets, jobs, export, executor)
-            for sheet, (record, error) in zip(sheets, exported):
+            exported_rows = freecad_runtime.map_jobs(sheets, jobs, export, executor)
+            for sheet, (record, error) in zip(sheets, exported_rows):
                 if error is not None:
                     findings.append({"code": error.code, "sheet": sheet.metadata.sheet_number, "message": str(error)})
                 elif record is not None:
@@ -755,7 +732,17 @@ def publish_package(context: DrawingContext, sheets: Sequence[ComposedSheet], re
                 elif path.suffix in (".svg", ".png"):
                     path.rename(path.with_suffix(".rejected" + path.suffix))
             (staging / "rejected.json").write_text(json.dumps(result.to_dict(), indent=2) + "\n", encoding="utf-8")
-        _replace_package(staging, output_dir, run_id)
+        if not (staging / "rejected.json").is_file():
+            for path in staging.iterdir():
+                target = output_dir / path.name
+                if target.exists():
+                    raise ValueError(f"draft output collision: {target}")
+                os.replace(path, target)
         return result
     finally:
-        shutil.rmtree(staging, ignore_errors=True)
+        if (staging / "rejected.json").is_file():
+            retained = output_dir.parent.parent / ".cad-work" / "rejected-drawings" / run_id
+            retained.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(staging, retained)
+        else:
+            shutil.rmtree(staging, ignore_errors=True)

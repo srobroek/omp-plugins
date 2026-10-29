@@ -5,7 +5,10 @@
 # ///
 """Generate the checked assembly drawing package of a built cad-model version.
 
-    assembly_drawing.py HW --version vN --output-dir OUT [--timeout SECONDS]
+    assembly_drawing.py HW --version vN|latest [--output-dir DIR] [--replace] [--timeout SECONDS]
+
+The default output is an immutable `hw/drawings/vN/assembly/` bundle. Explicit output directories
+are scratch only and must be under `.cad-work/`. A rejected default draft remains in `.cad-work`.
 
 One package of ``assembly.yaml`` ``drawing``: sheet 1 draws the whole assembly, then one sheet per
 ``subassembly_sheets`` group, each with its assembled and exploded views, item balloons, a parts
@@ -22,7 +25,7 @@ failure code:
    ``drawing_document.publish_package`` checks the layout, exports PDF and PNG and publishes.
 
 Exit 0 published, 1 content findings (nothing is published), 2 invalid input or infrastructure.
-Any failure replaces an earlier package in OUT with ``rejected.json``.
+Rejected drafts are retained as scratch and never replace a sealed bundle.
 """
 
 from __future__ import annotations
@@ -47,6 +50,7 @@ import assembly_sheet  # noqa: E402
 import drawing_contract  # noqa: E402
 import drawing_document  # noqa: E402
 import freecad_runtime  # noqa: E402
+import drawing_publication  # noqa: E402
 from assembly_check import DIRECTIONS, AssemblyPlan, SheetPlan  # noqa: E402
 from assembly_sheet import BalloonTarget, MeasuredView  # noqa: E402
 from drawing_document import ComposedSheet, CompositionError, CoverageReport, SheetMetadata  # noqa: E402
@@ -313,35 +317,44 @@ def build(args: argparse.Namespace, freecadcmd: Path, work: Path, jobs: int = 1,
 
 
 def reject(output_dir: Path, findings: Sequence[Mapping[str, Any]], status: int) -> dict[str, Any]:
-    """Replace an earlier package in ``output_dir`` with ``rejected.json`` for a run that composed nothing."""
+    """Keep rejected draft files in their supplied .cad-work directory."""
     result = {"status": "fail" if status == 1 else "error", "output_dir": str(output_dir), "findings": list(findings)}
-    if output_dir.exists() and (not output_dir.is_dir() or (any(output_dir.iterdir()) and not any(
-            (output_dir / marker).is_file() for marker in drawing_document.PACKAGE_MARKERS))):
-        result["findings"].append(assembly_check.finding(
-            "invalid_drawing_intent", f"{output_dir} is not empty and holds no drawing package; nothing was replaced"))
-        return result
-    run_id = uuid.uuid4().hex
-    staging = output_dir.with_name(f".{output_dir.name}.staging-{run_id}")
-    staging.mkdir(parents=True)
-    (staging / "rejected.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
-    old = output_dir.with_name(f".{output_dir.name}.old-{run_id}")
-    if output_dir.exists():
-        os.replace(output_dir, old)
-    os.replace(staging, output_dir)
-    shutil.rmtree(old, ignore_errors=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "rejected.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     return result
 
+
 def run(args: argparse.Namespace, freecadcmd: Path, jobs: int = 1) -> tuple[dict[str, Any], int]:
-    output_dir = args.output_dir.resolve()
-    with tempfile.TemporaryDirectory(prefix="cad-assembly-drawing-") as work:
+    hw = args.hw.resolve()
+    api = drawing_publication.layout()
+    label, version_dir, _ = api.built_version(hw, args.version)
+    context = drawing_contract.load_context(hw, version_dir)
+    intent = assembly_check.read_intent(context.assembly)
+    recipe = {"drawing": context.provenance("assembly"), "bom": list(context.bom)}
+    params = {"V": label, "S": "assembly"}
+    if args.output_dir is None:
+        existing = api.reusable(hw, "bundle.drawings", params, recipe, replace=args.replace)
+        if existing is not None:
+            return {"status": "pass", "cache": "hit", "output_dir": str(existing)}, 0
+        output_dir = api.staging(hw, "bundle.drawings")
+    else:
+        output_dir = api.scratch_path(hw, args.output_dir, "--output-dir")
+        output_dir.mkdir(parents=True, exist_ok=True)
+    work_root = hw.parent / ".cad-work" / "assembly-drawing"
+    work_root.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="cad-assembly-drawing-", dir=work_root) as work:
         try:
             with ThreadPoolExecutor(max_workers=jobs, thread_name_prefix="cad-assembly") as executor:
-                context, sheets, report = build(args, freecadcmd, Path(work), jobs, executor)
-                package = drawing_document.publish_package(context, sheets, report, output_dir, freecadcmd, args.timeout,
-                                                           jobs=jobs, executor=executor)
+                _, sheets, report = build(args, freecadcmd, Path(work), jobs, executor)
+                package = drawing_document.publish_package(context, sheets, report, output_dir, freecadcmd,
+                                                           args.timeout, jobs=jobs, executor=executor)
         except Failure as failure:
             return reject(output_dir, failure.findings, failure.status), failure.status
     result = package.to_dict()
+    if package.exit_code == 0 and args.output_dir is None:
+        output_dir = drawing_publication.publish(hw, label, "assembly", output_dir, recipe,
+                                                 "cad-drawings assembly_drawing.py", args.replace)
+        result["output_dir"] = str(output_dir)
     result["files"] = [{"sheet": s["sheet"], "size": s["size"],
                         **{kind: str(output_dir / name) for kind, name in s["files"].items()}} for s in package.sheets]
     return result, package.exit_code
@@ -350,8 +363,9 @@ def run(args: argparse.Namespace, freecadcmd: Path, jobs: int = 1) -> tuple[dict
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("hw", type=Path, help="hardware design record directory (hw/)")
-    parser.add_argument("--version", required=True, help="built cad-model version label, such as v3")
-    parser.add_argument("--output-dir", required=True, type=Path, help="package folder; replaced by every run")
+    parser.add_argument("--version", required=True, help="built version label or latest")
+    parser.add_argument("--output-dir", type=Path, help="write scratch package under .cad-work only")
+    parser.add_argument("--replace", action="store_true", help="retain and replace a conflicting bundle")
     parser.add_argument("--timeout", type=float, default=600.0, help="seconds for each FreeCAD job and export")
     parser.add_argument("--jobs", type=int, help="maximum concurrent FreeCAD jobs (default: CPU and memory bound)")
     args = parser.parse_args(argv)
@@ -365,21 +379,36 @@ def main(argv: list[str] | None = None) -> int:
             "freecad_unavailable", f"FreeCAD not found ({freecadcmd}); set FREECADCMD or put freecadcmd on PATH")]}))
         return 2
     try:
-        context = drawing_contract.load_context(args.hw.resolve(), args.hw.resolve() / "versions" / args.version)
+        hw = args.hw.resolve()
+        api = drawing_publication.layout()
+        label, version_dir, _ = api.built_version(hw, args.version)
+        context = drawing_contract.load_context(hw, version_dir)
         intent = assembly_check.read_intent(context.assembly)
-        item_count = 1 + len(intent.subassembly_sheets)
-    except (drawing_contract.ContractError, assembly_check.IntentError) as exc:
+        recipe = {"drawing": context.provenance("assembly"), "bom": list(context.bom)}
+        if args.output_dir is None:
+            existing = api.reusable(hw, "bundle.drawings", {"V": label, "S": "assembly"}, recipe,
+                                    replace=args.replace)
+            if existing is not None:
+                print(json.dumps({"status": "pass", "cache": "hit", "output_dir": str(existing)}, indent=2))
+                return 0
+        else:
+            api.scratch_path(hw, args.output_dir, "--output-dir")
+    except (drawing_contract.ContractError, assembly_check.IntentError, OSError, ValueError, KeyError) as exc:
         findings = [dict(f) for f in getattr(exc, "findings", ())]
         if not findings:
-            findings = [assembly_check.finding(getattr(exc, "code", "invalid_drawing_intent"), str(exc))]
-        status = 2
-        result = reject(args.output_dir.resolve(), findings, status)
-        print(json.dumps(result, indent=2))
-        return status
-    jobs = freecad_runtime.jobs_for(args.jobs, item_count, freecad_runtime.FREECAD_JOB_PEAK_RSS_BYTES)
+            findings = [assembly_check.finding(getattr(exc, "code", "invalid_input"), str(exc))]
+        print(json.dumps({"status": "error", "findings": findings}, indent=2))
+        return 2
+    jobs = freecad_runtime.jobs_for(args.jobs, 1 + len(intent.subassembly_sheets),
+                                    freecad_runtime.FREECAD_JOB_PEAK_RSS_BYTES)
     try:
         with freecad_runtime.terminate_jobs_on_signal():
             result, status = run(args, freecadcmd, jobs)
+    except (Failure, api.PublishConflict, api.LayoutError) as exc:
+        findings = [dict(f) for f in getattr(exc, "findings", ())]
+        if not findings:
+            findings = [assembly_check.finding(getattr(exc, "code", "invalid_input"), str(exc))]
+        result, status = {"status": "error", "findings": findings}, 2
     except freecad_runtime.JobInterrupted as exc:
         result, status = {"status": "error", "findings": [assembly_check.finding("interrupted", str(exc))]}, 128 + exc.signum
     print(json.dumps(result, indent=2))

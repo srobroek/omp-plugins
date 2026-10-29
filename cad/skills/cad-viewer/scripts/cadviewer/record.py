@@ -1,9 +1,8 @@
 """Read one cad-model version of a hardware record into the viewer's scene and panel model.
 
-Kernel-free: JSON and PyYAML (`safe_load`) only. cad-render's stdlib `versions.py` resolves the
-version through cad-model's layout (`skill://cad-model/references/outputs.md`), the same resolver
-render.py uses. Part colours are the `pbr.color` of cad-render's material rule for part.yaml
-`material` and `finish`, so the viewer and the renders share one appearance table.
+Kernel-free: JSON and PyYAML (`safe_load`) only. cad-record's layout API resolves, verifies and lists built
+versions. The occurrence reader normalizes the shared occurrence contract. Part colours use cad-render's
+material rules so the viewer and renders share one appearance table.
 """
 
 from __future__ import annotations
@@ -23,7 +22,19 @@ from . import ViewerError
 
 PN_PREFIX = re.compile(r"^([A-Z]{2,5}-\d{4})(?![0-9])")
 
-CAD_RENDER_SCRIPTS = Path(__file__).resolve().parents[3] / "cad-render" / "scripts"
+CAD_SKILLS = Path(__file__).resolve().parents[3]
+CAD_RENDER_SCRIPTS = CAD_SKILLS / "cad-render" / "scripts"
+LAYOUT_PY = CAD_SKILLS / "cad-record" / "scripts" / "layout.py"
+@functools.cache
+def _layout() -> Any:
+    name = "cad_record_layout"
+    if name not in sys.modules:
+        spec = importlib.util.spec_from_file_location(name, LAYOUT_PY)
+        if spec is None or spec.loader is None:
+            raise ViewerError(f"cannot load {LAYOUT_PY}")
+        sys.modules[name] = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(sys.modules[name])
+    return sys.modules[name]
 
 
 @dataclass(frozen=True)
@@ -56,7 +67,8 @@ class Version:
     label: str
     product_id: str
     parts_dir: Path
-    files: dict[str, Path]  # assembly_step, glb, metrics, part_map, manifest
+    files: dict[str, Path]
+    record_dir: Path
     parts: tuple[Part, ...]
     groups: tuple[Group, ...]
     metrics: dict[str, Any]
@@ -124,11 +136,11 @@ def _cad_render_module(name: str) -> Any:
 
 
 def version_files(hw: Path, version: str) -> Any:
-    """cad-render's VersionFiles (label, files, parts_dir) for `latest` or a `vN` label."""
-    versions = _cad_render_module("versions")
+    """Verified built-version files and record snapshot from cad-record layout."""
+    api = _layout()
     try:
-        return versions.resolve(hw, version)
-    except versions.VersionError as error:
+        return api.built_version(hw, version)
+    except api.LayoutError as error:
         raise ViewerError(str(error)) from error
 
 
@@ -185,18 +197,20 @@ def legacy_groups(hw: Path) -> dict[str, str]:
 
 def load_version(hw: Path, version: str = "latest") -> Version:
     hw = hw.resolve()
-    found = version_files(hw, version)
-    label, files, parts_dir = found.label, found.files, found.parts_dir
+    label, folder, record_dir = version_files(hw, version)
+    files = {"assembly_step": folder / "assembly.step", "glb": folder / "assembly.glb",
+             "metrics": folder / "metrics.json", "part_map": folder / "part-map.json",
+             "manifest": folder / "manifest.json"}
     products = load_part_map(files["part_map"])
     manifest = read_json(files["manifest"])
-    versions = _cad_render_module("versions")
+    reader = _cad_render_module("versions")
     try:
-        occurrences = versions.built_occurrences(read_json(files["part_map"]), manifest, legacy_groups(hw))
-    except versions.VersionError as error:
+        occurrences = reader.built_occurrences(read_json(files["part_map"]), manifest, legacy_groups(record_dir))
+    except reader.VersionError as error:
         raise ViewerError(f"{label}: {error}") from error
     product_id = str(manifest.get("product_id") or "assembly")
     groups = []
-    for gid, title in load_groups(hw):
+    for gid, title in load_groups(record_dir):
         members = tuple(oid for oid in sorted(occurrences) if occurrences[oid].group == gid)
         if members:
             groups.append(Group(gid, title, members, f"/{product_id}/{gid}"))
@@ -204,7 +218,7 @@ def load_version(hw: Path, version: str = "latest") -> Version:
     for oid in sorted(occurrences):
         built = occurrences[oid]
         pn = built.pn
-        record_path = hw / "parts" / pn / "part.yaml"
+        record_path = record_dir / "parts" / pn / "part.yaml"
         record = read_yaml(record_path) if record_path.is_file() else {}
         record = record if isinstance(record, dict) else {}
         material, process = str(record.get("material") or ""), str(record.get("process") or "")
@@ -213,8 +227,9 @@ def load_version(hw: Path, version: str = "latest") -> Version:
         node = products[pn] if built.ref == pn else f"{products[pn]} [{built.ref}]"
         path = f"/{product_id}/{group}/{node}" if group else f"/{product_id}/{node}"
         title = str(record.get("title") or products[pn][len(pn):].strip())
-        parts.append(Part(oid, pn, built.ref, node, title, material, process, colour_for(material, finish), group, path))
-    return Version(hw, label, product_id, parts_dir, files, tuple(parts), tuple(groups),
+        parts.append(Part(oid, pn, built.ref, node, title, material, process,
+                          colour_for(material, finish), group, path))
+    return Version(hw, label, product_id, folder / "parts", files, record_dir, tuple(parts), tuple(groups),
                    read_json(files["metrics"]), manifest)
 
 
@@ -222,36 +237,30 @@ def load_version(hw: Path, version: str = "latest") -> Version:
 
 
 def latest_label(hw: Path) -> str | None:
-    """The vN `hw/versions/latest.json` names; None while it is absent, unreadable, or malformed."""
-    path = hw / "versions" / "latest.json"
+    """Return cad-record layout's latest built version label, or None when latest is absent."""
+    api = _layout()
     try:
-        data = read_json(path) if path.is_file() else None
-    except ViewerError:
+        return api.latest(hw)
+    except api.LayoutError:
         return None
-    label = data.get("label") if isinstance(data, dict) else None
-    return label if isinstance(label, str) and _cad_render_module("versions").LABEL.match(label) else None
 
 
 def version_list(hw: Path) -> list[dict[str, Any]]:
-    """Every `hw/versions/vN` folder, newest first, as the panel's version picker lists it.
-
-    `built_utc` is the manifest's `created_utc` (its modified time for a manifest without one),
-    `parts` its occurrence count (PN count for a version 1 manifest), and `error` why the version
-    cannot be shown (a missing or unreadable build file), else None. cad-model builds into a dot
-    folder and renames it when complete, so a build in progress is not listed.
-    """
-    folder = hw / "versions"
-    rule = _cad_render_module("versions").LABEL
-    labels = [p.name for p in folder.iterdir() if p.is_dir() and rule.match(p.name)] if folder.is_dir() else []
-    return [_version_entry(hw, label) for label in sorted(labels, key=lambda v: int(v[1:]), reverse=True)]
+    """Every built label from cad-record layout, newest first for the viewer picker."""
+    return [_version_entry(hw, label) for label in reversed(_layout().versions(hw))]
 
 
 def _version_entry(hw: Path, label: str) -> dict[str, Any]:
     entry: dict[str, Any] = {"label": label, "built_utc": None, "parts": None, "error": None}
+    api = _layout()
     try:
-        manifest_path = version_files(hw, label).files["manifest"]
+        folder = api.version_dir(hw, label)
+        manifest_path = folder / "manifest.json"
+        problems = api.verify(folder)
+        if problems:
+            raise ViewerError(f"{label} fails its manifest: {'; '.join(problems)}")
         manifest = read_json(manifest_path)
-    except ViewerError as error:
+    except (ViewerError, OSError, api.LayoutError) as error:
         entry["error"] = str(error)
         return entry
     if not isinstance(manifest, dict):

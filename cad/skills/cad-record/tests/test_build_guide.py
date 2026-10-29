@@ -53,7 +53,7 @@ class BuildGuide(unittest.TestCase):
         )
 
     def copy_coverage(self, hw: Path) -> None:
-        target = hw / "versions" / "v1" / "assembly" / "coverage.json"
+        target = hw / "drawings" / "v1" / "assembly" / "coverage.json"
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(json.dumps(COVERAGE), encoding="utf-8")
 

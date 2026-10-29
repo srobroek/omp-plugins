@@ -40,17 +40,16 @@ def write(path: Path, data: bytes | str | dict) -> Path:
 
 
 def make_project(root: Path) -> Path:
-    """The template record with versions v1 and v2 built (empty files), renders, captures,
-    drawings, and concept screenshots."""
+    """A template record with built v1/v2 bundles and current plus legacy art."""
     hw = root / "hw"
     shutil.copytree(TEMPLATE_HW, hw)
     for label in ("v1", "v2"):
-        for name in ("assembly.step", "assembly.glb", "metrics.json", "part-map.json", "manifest.json"):
-            write(hw / "versions" / label / name, "")
-    write(hw / "versions" / "latest.json", {
-        "label": "v2", **{k: f"versions/v2/{n}" for k, n in (("assembly_step", "assembly.step"), ("glb", "assembly.glb"),
-                                                               ("metrics", "metrics.json"), ("part_map", "part-map.json"),
-                                                               ("manifest", "manifest.json"))}})
+        folder = hw / "versions" / label
+        folder.mkdir(parents=True)
+        for name in ("assembly.step", "assembly.glb", "metrics.json", "part-map.json"):
+            write(folder / name, "")
+        write(folder / "manifest.json", {"label": label, "files": {}})
+    write(hw / "versions" / "latest.json", {"label": "v2"})
     renders = hw / "renders" / "v2"
     for view in ("iso", "part-LMP-0001", "closeup-LMP-0002"):
         write(renders / f"{view}.png", PNG)

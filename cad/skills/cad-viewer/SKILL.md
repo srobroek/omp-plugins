@@ -58,14 +58,15 @@ Session identity:
    its limits, exits 1 with `joint_limit` findings and pushes nothing. `--at` holds one pose for a
    capture. Animate independent joints only: coupled joints follow their driver at every keyframe,
    and naming a coupled joint exits 2 with its driver.
-6. `capture --view V --out hw/captures/<vN>/<view>.png [--crop page|viewer|canvas]` -> V is iso,
-   front, side, top, exploded, `isolate:<PN|group>`, `section --joint J-00x` (plane along the
-   joint axis), or current (the state as left, no refit). A PNG under `hw/captures/` shows in the
-   gallery. `current` takes the user's camera when their tab is open (`camera_from: user`).
-   Every view but section and current is refitted, and the user's view follows the refit:
-   `frames.a.in_frame` true and `fill` near 0.84 mean the whole product is in frame. While a
-   capture runs, every other command or panel button that would change the view is refused with
-   `capture in progress`; retry it after. -> read every PNG before describing it.
+6. `capture --view V [--out .cad-work/unit/.../capture.png] [--replace]` -> V is iso, front, side, top,
+   exploded, `isolate:<PN|group>`, `section --joint J-00x` (plane along the joint axis), or current
+   (the state as left, no refit). By default captures publish immutable bundles at
+   `hw/captures/<vN>/<view>/`; `--out` is accepted only under `.cad-work/`. `--replace` retains a
+   conflicting prior bundle. The bundle's capture.json binds the displayed version and viewer state.
+   `current` takes the user's camera when their tab is open (`camera_from: user`). Every view but section
+   and current is refitted, and the user's view follows the refit: `frames.a.in_frame` true and `fill`
+   near 0.84 mean the whole product is in frame. While a capture runs, every other command or panel
+   button that would change the view is refused with `capture in progress`; retry it after. Read every PNG.
 7. `gallery hw [--version vN]` -> opens the record in the preview gallery. Prints `url`
    (`http://127.0.0.1:<panel port>/gallery?version=vN`) and, under `files`, the absolute path of
    each listed file. `show` and `compare` also open their record and print a `gallery` URL per
@@ -100,15 +101,13 @@ to the live 3D viewer.
 
 | section | source | caption |
 |---|---|---|
-| Renders | `hw/renders/<vN>/manifest.json` (`skill://cad-render`) | view, quality status, failures, warnings, retry strategy and attempts, material per PN shown |
-| Viewer captures | PNGs under `hw/captures/` | file name, modified time |
-| Drawings | `package.json` packages and `drawing_<run>.complete.json` drawings anywhere under `hw/`, plus other PNGs under `hw/drawings/` | status, scale, projection, warnings, Open PDF with its absolute path |
+| Renders | `hw/renders/<vN>/<subject>/{render.json,*.png,manifest.json}` (`skill://cad-render`) | view quality, retry strategy, and material/input decisions from render.json |
+| Viewer captures | `hw/captures/<vN>/<subject>/{capture.json,*.png,manifest.json}` | captured view and state bound to one version |
+| Drawings | `hw/drawings/<vN>/<subject>/` drawing bundles | status, scale, projection, warnings, Open PDF with its absolute path |
 | Concept screenshots | `hw/concept/screenshots/` (`skill://cad-concept`) | scene and variant |
 
-A capture or drawing belongs to vN when a `vN` folder is on its path or a package's provenance
-names vN. Files that name no version show under every version, marked "version not recorded".
-The file route serves only PNG, JPEG, and PDF files inside the open `hw/`. It answers 403 to an
-absolute path, a `..` step, a dot folder, or a symlink out of `hw/`, and 404 to a missing file.
+The version picker uses only built labels from cad-record layout, with renders and captures grouped by
+version. The file route serves only PNG, JPEG, and PDF files inside the open `hw/`.
 
 ## Rules
 
