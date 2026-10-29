@@ -90,6 +90,43 @@ class InitAndDeliver(ScratchCase):
                 self.assertEqual((code, report["status"]), (2, "error"))
         self.assertFalse((self.project / ".cad-work").exists())
 
+
+    def test_deliver_refuses_a_hidden_generated_subtree_without_writing(self) -> None:
+        scratch_hw = Path(self.init("part-base_sub", "PRT-0001")["scratch_hw"])
+        generated = scratch_hw / "parts" / "PRT-0001" / ".generated" / "mesh.step"
+        generated.parent.mkdir()
+        generated.write_bytes(b"not a record source")
+        before = tree(self.hw)
+        code, report = self.scratch("deliver", "--hw", "hw", "--unit", "part-base_sub")
+        self.assertEqual((code, report["status"]), (2, "error"), report)
+        self.assertIn("non-record or non-canonical", report["error"])
+        self.assertEqual(tree(self.hw), before)
+
+    def test_deliver_refuses_an_unauthorized_new_part_without_writing(self) -> None:
+        scratch_hw = Path(self.init("part-base_sub", "PRT-0001")["scratch_hw"])
+        unauthorized = scratch_hw / "parts" / "PRT-0002"
+        unauthorized.mkdir()
+        (unauthorized / "part.yaml").write_text("PN: PRT-0002\n", encoding="utf-8")
+        before = tree(self.hw)
+        code, report = self.scratch("deliver", "--hw", "hw", "--unit", "part-base_sub")
+        self.assertEqual((code, report["status"]), (2, "error"), report)
+        self.assertIn("not authorized for new part PRT-0002", report["error"])
+        self.assertEqual(tree(self.hw), before)
+
+    def test_deliver_adds_an_authorized_new_part_under_parts(self) -> None:
+        scratch_hw = Path(self.init("part-base_sub", "PRT-0002")["scratch_hw"])
+        part = scratch_hw / "parts" / "PRT-0002"
+        self.assertTrue(part.is_dir())
+        (part / "part.yaml").write_text(
+            "PN: PRT-0002\nrev: X1\ntitle: New placeholder\nmaterial: Placeholder material\n"
+            "process: cnc\nfinish: As machined\nmass_target: null\nmake_buy: make\n", encoding="utf-8")
+        before = tree(self.hw)
+        code, report = self.scratch("deliver", "--hw", "hw", "--unit", "part-base_sub")
+        self.assertEqual((code, report["status"]), (0, "delivered"), report)
+        self.assertIn(str((self.hw / "parts" / "PRT-0002" / "part.yaml").resolve()), report["delivered"])
+        self.assertEqual((self.hw / "parts" / "PRT-0002" / "part.yaml").read_text(encoding="utf-8"),
+                         (part / "part.yaml").read_text(encoding="utf-8"))
+        self.assertEqual(tree(self.hw)["parts/PRT-0001/part.yaml"], before["parts/PRT-0001/part.yaml"])
     def test_deliver_writes_only_the_units_parts_and_lists_the_rest_as_proposals(self) -> None:
         before = tree(self.hw)
         scratch_hw = Path(self.init("part-base_sub", "PRT-0001")["scratch_hw"])

@@ -568,10 +568,21 @@ async function saveScreenshot() {
   ui.shotResult.dataset.kind = "info";
   ui.shotResult.textContent = "Saving…";
   try {
+    const capture = {
+      scene: state.file,
+      scene_sha256: await (await fetch(`/scenes/${encodeURIComponent(state.file)}`, { cache: "no-store" }))
+        .then((response) => response.arrayBuffer())
+        .then((bytes) => crypto.subtle.digest("SHA-256", bytes))
+        .then((digest) => Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("")),
+      variant: state.selected,
+      camera: { position: controls.object.position.toArray(), quaternion: controls.object.quaternion.toArray(), zoom: controls.object.zoom },
+      viewport: { width: ui.canvas.width, height: ui.canvas.height, device_pixel_ratio: window.devicePixelRatio },
+      labels: { parts: ui.partLabels.checked, groups: ui.groupLabels.checked },
+    };
     const response = await fetch("/api/screenshot", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ scene: state.file, variant: state.selected, png: compositeScreenshot() }),
+      body: JSON.stringify({ scene: state.file, variant: state.selected, capture, png: compositeScreenshot() }),
     });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error ?? `HTTP ${response.status}`);
@@ -586,13 +597,6 @@ async function saveScreenshot() {
     ui.shot.disabled = false;
   }
 }
-
-// --- wiring -----------------------------------------------------------------
-
-ui.fit.addEventListener("click", fitView);
-ui.shot.addEventListener("click", () => saveScreenshot().catch(() => {}));
-ui.partLabels.addEventListener("change", requestRender);
-ui.groupLabels.addEventListener("change", requestRender);
 ui.select.addEventListener("change", () => {
   state.file = ui.select.value;
   state.framed = false;

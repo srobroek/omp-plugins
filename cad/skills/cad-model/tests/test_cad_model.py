@@ -874,7 +874,7 @@ class OccurrenceBuildTests(unittest.TestCase):
         assert_vectors(self, metrics["occurrences"]["ins-2"]["bbox_mm"]["min"], [-12.0, 8.0, 18.0], places=6)
 
     def test_bom_rolls_the_six_instances_into_one_row_of_quantity_six(self) -> None:
-        out = Path(self.tmp.name) / "bom.csv"
+        out = self.hw.parent / ".cad-work" / "test" / "bom.csv"  # bom.py accepts an explicit --out only there
         proc = subprocess.run(["uv", "run", "--quiet", "--script", str(BOM_SCRIPT), str(self.folder / "assembly.step"),
                                "--hw", str(self.hw), "--out", str(out)], capture_output=True, text=True, check=False)
         self.assertEqual(proc.returncode, 0, proc.stdout[-2000:] + proc.stderr[-2000:])

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import math
@@ -122,6 +123,94 @@ class StackupCliTests(unittest.TestCase):
         proc = self.run_cli("contributors: [unclosed\n")
         self.assertEqual(proc.returncode, 2)
         self.assertIn("invalid YAML", proc.stderr)
+
+    def test_stack_publishes_a_version_bound_analysis_bundle(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            project = root / "project"
+            hw = project / "hw"
+            hw.mkdir(parents=True)
+            version = hw / "versions" / "v1"
+            version.mkdir(parents=True)
+            record = version / "record"
+            record.mkdir()
+            (record / "product.yaml").write_text("{}\n", encoding="utf-8")
+            files = {path.relative_to(version).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+                     for path in version.rglob("*") if path.is_file()}
+            (version / "manifest.json").write_text(json.dumps({"label": "v1", "files": files}), encoding="utf-8")
+            stack = dict(STACK)
+            stack["id"] = "STK-101"
+            stack_dir = hw / "analysis" / "cases" / "stk-101"
+            stack_dir.mkdir(parents=True)
+            stack_path = stack_dir / "stack.yaml"
+            import yaml
+            stack_path.write_text(yaml.safe_dump(stack, sort_keys=False), encoding="utf-8")
+            proc = subprocess.run(["uv", "run", "--quiet", "--script", str(SCRIPT), str(stack_path),
+                                   "--hw", str(hw), "--version", "v1"], capture_output=True, text=True,
+                                  check=False, timeout=300)
+            self.assertEqual(proc.returncode, 1, proc.stderr)
+            output = json.loads(proc.stdout)
+            bundle = hw / "analysis" / "v1" / "STK-101"
+            manifest = json.loads((bundle / "manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(output["bundle"], str(bundle))
+            self.assertEqual(manifest["recipe"]["source_yaml_sha256"], hashlib.sha256(stack_path.read_bytes()).hexdigest())
+            self.assertEqual(json.loads((bundle / "results.json").read_text(encoding="utf-8"))["nominal"], 0.1)
+
+    def test_rerun_reuses_bundle_and_recipe_change_requires_replace(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            project = root / "project"
+            hw = project / "hw"
+            version = hw / "versions" / "v1"
+            record = version / "record"
+            record.mkdir(parents=True)
+            (record / "product.yaml").write_text("{}\n", encoding="utf-8")
+            files = {path.relative_to(version).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+                     for path in version.rglob("*") if path.is_file()}
+            (version / "manifest.json").write_text(json.dumps({"label": "v1", "files": files}), encoding="utf-8")
+            stack = dict(STACK, id="STK-102")
+            stack_path = root / "stack.yaml"
+            import yaml
+            stack_path.write_text(yaml.safe_dump(stack, sort_keys=False), encoding="utf-8")
+            args = ["uv", "run", "--quiet", "--script", str(SCRIPT), str(stack_path),
+                    "--hw", str(hw), "--version", "v1"]
+            first = subprocess.run(args, capture_output=True, text=True, check=False, timeout=300)
+            self.assertEqual(first.returncode, 1, first.stderr)
+            bundle = hw / "analysis" / "v1" / "STK-102"
+            original = {path.relative_to(bundle).as_posix(): path.read_bytes()
+                        for path in bundle.rglob("*") if path.is_file()}
+            second = subprocess.run(args, capture_output=True, text=True, check=False, timeout=300)
+            self.assertEqual(second.returncode, 1, second.stderr)
+            self.assertTrue(json.loads(second.stdout)["reused"])
+            self.assertEqual(original, {path.relative_to(bundle).as_posix(): path.read_bytes()
+                                        for path in bundle.rglob("*") if path.is_file()})
+
+            stack_path.write_text(stack_path.read_text(encoding="utf-8").replace("nominal: 50", "nominal: 51"),
+                                  encoding="utf-8")
+            changed = subprocess.run(args, capture_output=True, text=True, check=False, timeout=300)
+            self.assertEqual(changed.returncode, 2)
+            self.assertIn("--replace", changed.stderr)
+            self.assertEqual(original, {path.relative_to(bundle).as_posix(): path.read_bytes()
+                                        for path in bundle.rglob("*") if path.is_file()})
+            replaced = subprocess.run([*args, "--replace"], capture_output=True, text=True, check=False, timeout=300)
+            self.assertEqual(replaced.returncode, 1, replaced.stderr)
+            self.assertFalse(json.loads(replaced.stdout)["reused"])
+            replaced_path = json.loads((bundle / "manifest.json").read_text(encoding="utf-8"))["replaces"]["moved_to"]
+            replaced_bundle = project / replaced_path
+            self.assertEqual(original, {path.relative_to(replaced_bundle).as_posix(): path.read_bytes()
+                                         for path in replaced_bundle.rglob("*") if path.is_file()})
+
+    def test_standalone_output_override_outside_cad_work_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            stack_path = root / "stack.yaml"
+            stack_path.write_text(STACK_YAML, encoding="utf-8")
+            proc = subprocess.run(["uv", "run", "--quiet", "--script", str(SCRIPT), str(stack_path),
+                                  "--out", str(root / "outside.json")], capture_output=True, text=True,
+                                 check=False, timeout=300)
+            self.assertEqual(proc.returncode, 2)
+            self.assertIn("--out must be under", proc.stderr)
+
 
 
 if __name__ == "__main__":

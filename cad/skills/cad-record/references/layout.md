@@ -19,7 +19,7 @@ listed files and nothing else.
 | `{REV}` | `[A-HJ-NPRTUVWY]` | `A` | released revision letter |
 | `{DR}` | `DR-[0-9]{3}` | `DR-001` | decision record id |
 | `{N}` | `[1-9][0-9]*` | `1` | sheet number |
-| `{VIEW}` | `[a-z][a-z0-9_-]*` | `iso` | render or capture view name |
+| `{VIEW}` | `[a-z][A-Za-z0-9_-]*` | `part-LMP-0001` | render or capture view name; per-part views carry the PN |
 | `{PRODUCT}` | `[a-z0-9][a-z0-9-]*` | `lamp-arm` | product id from product.yaml |
 | `{SCENE_SHA}` | `[0-9a-f]{64}` | `1111111111111111111111111111111111111111111111111111111111111111` | sha256 of the concept scene file |
 | `{CAPTURE_SHA}` | `[0-9a-f]{64}` | `2222222222222222222222222222222222222222222222222222222222222222` | sha256 of the captured viewer state |
@@ -53,7 +53,7 @@ listed files and nothing else.
 | `bundle.drawings` | `hw/drawings/{V}/{S}/` | generated, sealed by its bundle manifest | `sheet-{N}.svg` (document), `sheet-{N}.pdf` (document), `sheet-{N}.png` (review), `coverage.json` (data), `package.json` (data), `manifest.json` (manifest) | cad-drawings drawing.py, assembly_drawing.py | detail | immutable | one controlled drawing package; rejected drafts stay in .cad-work |
 | `bundle.renders` | `hw/renders/{V}/{S}/` | generated, sealed by its bundle manifest | `{VIEW}.png` (review), `render.json` (data, optional), `manifest.json` (manifest) | cad-render render.py | layout | immutable | one review render set |
 | `bundle.captures` | `hw/captures/{V}/{S}/` | generated, sealed by its bundle manifest | `{VIEW}.png` (review), `capture.json` (data, optional), `manifest.json` (manifest) | cad-viewer viewer.py capture | layout | immutable | viewer captures of exactly the displayed version and state |
-| `bundle.motion` | `hw/motion/{V}/{S}/` | generated, sealed by its bundle manifest | `pose.step` (evidence, optional), `worst.step` (evidence, optional), `worst.step.json` (data, optional), `result.json` (data), `manifest.json` (manifest) | cad-motion pose.py, sweep.py, freecad_assembly.py | analysis | immutable | one kinematic case: posed or worst-case geometry and its result |
+| `bundle.motion` | `hw/motion/{V}/{S}/` | generated, sealed by its bundle manifest | `pose.step` (evidence, optional), `worst.step` (evidence, optional), `worst.step.json` (data, optional), `evidence/**` (evidence, optional), `result.json` (data), `manifest.json` (manifest) | cad-motion pose.py, sweep.py, freecad_assembly.py | analysis | immutable | one kinematic case: posed or worst-case geometry and its result |
 | `bundle.analysis` | `hw/analysis/{V}/{S}/` | generated, sealed by its bundle manifest | `results.json` (data), `evidence/**` (evidence, optional), `manifest.json` (manifest) | cad-analysis fea_static.py, an accepted stack-up adapter | analysis | immutable | one analysis case result with every retained solver file |
 | `release.package` | `hw/releases/{REV}/` | generated, sealed by its release manifest | `manifest.json` (manifest), `definition/**` (definition, optional), `manufacturing/**` (manufacture, optional), `drawings/**` (document, optional), `analysis/**` (evidence, optional), `bom.csv` (snapshot, optional), `verification.csv` (snapshot, optional), `docs/**` (document, optional) | cad-record release.py (lead) | release | immutable | a sealed release package; a used revision is never overwritten |
 | `control.recheck` | `hw/.cad/recheck.json` | generated | (control) | cad-recheck stamp.py | layout | regenerated | stamp bound to the staged hw/ tree; any staged change invalidates it |
