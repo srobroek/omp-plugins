@@ -163,7 +163,7 @@ class EndToEnd(unittest.TestCase):
                 hw = write_project(root, regime)
                 status, result = run_cli(hw)
                 self.assertEqual((status, result["status"]), (0, "pass"), result.get("findings"))
-                package_path = Path(result["output_dir"])
+                package_path = hw.parent / result["output_dir"]
                 package = json.loads((package_path / "package.json").read_text(encoding="utf-8"))
                 sheets = [row for row in package["coverage"]["rows"] if row["kind"] == "assembly_sheet"]
                 self.assertEqual([(s["sheet"], s["scope"]) for s in sheets], [(1, "top"), (2, "pins")])
@@ -181,7 +181,7 @@ class EndToEnd(unittest.TestCase):
                 self.assertLess(operation["measured"]["gap"], 0.01)
                 for record in package["sheets"]:
                     for kind in ("svg", "pdf", "png"):
-                        self.assertTrue(Path(record["files"][kind]).is_file())
+                        self.assertTrue((hw.parent / record["files"][kind]).is_file())
                     self.assertEqual(record["export"]["pdf_fonts"], ["osifont"])
                 self.assertEqual(assembly_check.check_package(package_path)["status"], "pass")
 
@@ -203,8 +203,8 @@ class EndToEnd(unittest.TestCase):
         parallel_status, parallel = run_cli(hw, jobs=2)
         self.assertEqual((sequential_status, sequential["status"]), (0, "pass"), sequential.get("findings"))
         self.assertEqual((parallel_status, parallel["status"]), (0, "pass"), parallel.get("findings"))
-        sequential_package = json.loads((Path(sequential["output_dir"]) / "package.json").read_text())
-        parallel_package = json.loads((Path(parallel["output_dir"]) / "package.json").read_text())
+        sequential_package = json.loads((hw.parent / sequential["output_dir"] / "package.json").read_text())
+        parallel_package = json.loads((hw.parent / parallel["output_dir"] / "package.json").read_text())
         self.assertEqual([row["sheet"] for row in sequential_package["sheets"]], [1, 2])
         self.assertEqual([row["sheet"] for row in parallel_package["sheets"]], [1, 2])
         self.assertEqual(sequential_package["coverage"]["rows"], parallel_package["coverage"]["rows"])
@@ -213,7 +213,7 @@ class EndToEnd(unittest.TestCase):
         hw = write_project(self.root / "failed")
         status, first = run_cli(hw)
         self.assertEqual((status, first["status"]), (0, "pass"), first.get("findings"))
-        bundle = Path(first["output_dir"])
+        bundle = hw.parent / first["output_dir"]
         self.assertEqual(json.loads((bundle / "manifest.json").read_text(encoding="utf-8"))["status"], "pass")
         sealed = {p.relative_to(bundle).as_posix(): p.read_bytes() for p in bundle.rglob("*") if p.is_file()}
         with (hw / "bom.csv").open(encoding="utf-8") as stream:
