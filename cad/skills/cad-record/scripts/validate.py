@@ -43,6 +43,8 @@ def _load_module(name: str, path: Path) -> Any:
 coupling = _load_module("cad_motion_coupling", Path(__file__).resolve().parents[2] / "cad-motion" / "scripts" / "coupling.py")
 # The canonical hw/ layout (layout.json beside schemas/), the one reader of where record and output files live.
 layout = _load_module("cad_record_layout", Path(__file__).resolve().parent / "layout.py")
+# cad-motion's pose.py and plan.py, loaded only for a record with authored motion cases.
+MOTION_SCRIPTS = Path(__file__).resolve().parents[2] / "cad-motion" / "scripts"
 
 SCHEMAS = Path(__file__).resolve().parent.parent / "schemas"
 BOM_COLUMNS = ["level", "PN", "rev", "qty", "title", "material", "process", "make_buy", "supplier", "mass"]
@@ -461,6 +463,30 @@ def check_couplings(assembly: dict[str, Any], path: str, findings: list[dict[str
     findings.extend(finding(path, problem) for problem in couplings.range_problems(limits, nominal, units))
 
 
+def check_motion_cases(hw: Path, findings: list[dict[str, str]]) -> None:
+    """Each authored motion case loads against the record's joints as cad-motion motion.py loads it: its
+    schema, independent joints inside their limits, and no authored `default`, which is the generated case.
+    Coverage stays a result of the render."""
+    cases = layout.resolve(hw, "record.motion_case", ID="default").parent
+    names = sorted(entry.name for entry in cases.iterdir() if entry.is_dir()) if cases.is_dir() else []
+    if not names:
+        return
+    pose = _load_module("cad_motion_pose", MOTION_SCRIPTS / "pose.py")
+    plan = _load_module("cad_motion_plan", MOTION_SCRIPTS / "plan.py")
+    try:
+        assembly = pose.load_assembly(hw)
+        chain = pose.build_chain(assembly.joints, assembly.occurrences, couplings=assembly.couplings)
+    except pose.MotionError as error:
+        findings.extend(finding(str(cases / name), f"motion case {name} not checked: {error}", severity="warning")
+                        for name in names)
+        return
+    for name in names:
+        try:
+            plan.load(chain, hw, layout, name)
+        except plan.PlanError as error:
+            findings.extend(finding(str(cases / name), problem) for problem in error.problems)
+
+
 def check_manufacture(part: dict[str, Any], path: str, hw: Path, findings: list[dict[str, str]]) -> None:
     """part.yaml `manufacture` belongs to a custom-made part only, and its approving decision exists."""
     manufacture = part.get("manufacture")
@@ -722,6 +748,7 @@ def validate_project(project_dir: Path) -> list[dict[str, str]]:
     if inventory is not None:
         check_joints(documents["assembly.yaml"], inventory, assembly_path, part_records, findings)
         check_couplings(documents["assembly.yaml"], assembly_path, findings)
+        check_motion_cases(hw, findings)
         totals = bom_totals(bom, bom_levels)
         for pn, count in inventory.quantities().items():
             placed = inventory.of(pn)

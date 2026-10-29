@@ -444,6 +444,35 @@ class ValidateProject(unittest.TestCase):
         (self.hw / "assembly.yaml").write_text(yaml.safe_dump(assembly, sort_keys=False), encoding="utf-8")
         self.assertTrue(any(f"joints/3: 'nominal' is a required property" == m for m in self.messages()))
 
+    def author_motion_case(self, case: str, to: str) -> Path:
+        path = self.hw / "motion" / "cases" / case / "plan.yaml"
+        path.parent.mkdir(parents=True)
+        path.write_text(f"schema: 1\nsegments:\n  - id: reach\n    to: {to}\n    camera: iso\n", encoding="utf-8")
+        return path.parent
+
+    def motion_findings(self) -> list[tuple[str, str, str]]:
+        result, report = self.validate()
+        return [(item["path"], item["severity"], item["message"]) for item in report["findings"]
+                if "/motion/" in item["path"]]
+
+    def test_an_authored_motion_case_inside_the_joint_limits_validates(self) -> None:
+        self.author_motion_case("reach-out", "{J-001: 80, J-002: -120}")
+        self.assertEqual(self.motion_findings(), [])
+
+    def test_an_authored_motion_case_names_each_target_the_render_would_refuse(self) -> None:
+        self.couple_head("{type: linear, driver: J-002, ratio: 0.25}")
+        case = str(self.author_motion_case("reach-out", "{J-002: 30, J-003: 10, J-099: 1}"))
+        problems = {message for path, severity, message in self.motion_findings() if path == case and severity == "error"}
+        self.assertIn("segments[0] (reach): J-002 = 30 deg is outside [-120, 0]", problems)
+        self.assertTrue(any(m.startswith("segments[0] (reach): J-003 follows J-002") and m.endswith("move its driver instead")
+                            for m in problems), problems)
+        self.assertTrue(any(m.startswith("segments[0] (reach): J-099 is not a joint of this record") for m in problems))
+
+    def test_the_generated_default_motion_case_cannot_be_authored(self) -> None:
+        case = str(self.author_motion_case("default", "{J-001: 0}"))
+        self.assertTrue(any(path == case and severity == "error" and "case `default` is reserved" in message
+                            for path, severity, message in self.motion_findings()))
+
 
 if __name__ == "__main__":
     unittest.main()
