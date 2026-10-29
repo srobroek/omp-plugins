@@ -793,9 +793,9 @@ def validate_project(project_dir: Path) -> list[dict[str, str]]:
                 findings.append(finding(str(path), "release directory name does not match manifest rev"))
             project_root = hw.parent if hw == project_dir else project_dir
             root = project_root.resolve()
-            # version 1 lists project files in place; version 2 copies them and names each one's original
-            in_place = (manifest["files"] if "schema_version" not in manifest
-                        else [item["original"] for item in manifest["files"].values()])
+            # version 1 lists project files in place. Version 2 holds byte copies, which check_layout audits
+            # against the package inventory; their originals may change or go after release.
+            in_place = manifest["files"] if "schema_version" not in manifest else []
             for file_name in in_place:
                 candidate = root / file_name
                 try:

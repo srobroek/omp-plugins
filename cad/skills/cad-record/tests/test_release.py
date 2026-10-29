@@ -83,10 +83,11 @@ DRAWING = {"sheet-1.svg": "svg\n", "sheet-1.pdf": "pdf\n", "sheet-1.png": "png\n
            "package.json": "{}\n"}
 
 
-def build_version(hw: Path, omit: tuple[tuple[str, str], ...] = (), failed: dict[str, str] | None = None) -> None:
+def build_version(hw: Path, omit: tuple[tuple[str, str], ...] = (), failed: dict[str, str] | None = None,
+                  attach: tuple[str, ...] = ()) -> None:
     """hw/versions/v1 as cad-model run seals it: record snapshot, installed STEP per modelled part and
     the manufacturing outputs of every custom-made part. `omit` leaves (PN, file) out; `failed` marks
-    a part's named manufacturing check failed."""
+    a part's named manufacturing check failed; `attach` lists its `--attach REF=PARENT_REF` options."""
     folder = hw / "versions" / "v1"
     for name in ["product.yaml", "interfaces.yaml", "assembly.yaml"] + [
             p.relative_to(hw).as_posix() for p in sorted((hw / "parts").glob("*/part.yaml"))]:
@@ -116,7 +117,7 @@ def build_version(hw: Path, omit: tuple[tuple[str, str], ...] = (), failed: dict
         made[pn] = {"PN": pn, "process": record["process"], "path": f"manufacturing/{pn}", "files": files,
                     **{key: row[key] for key in ("status", "complete", "blocking_failures")}}
     inventory = {p.relative_to(folder).as_posix(): sha(p) for p in sorted(folder.rglob("*")) if p.is_file()}
-    manifest = {"schema_version": 3, "label": "v1", "product_id": "lamp-arm", "attach": [], "parts": parts,
+    manifest = {"schema_version": 3, "label": "v1", "product_id": "lamp-arm", "attach": list(attach), "parts": parts,
                 "record": {k: v for k, v in inventory.items() if k.startswith("record/")}, "manufacturing": made,
                 "files": inventory}
     write(folder / "manifest.json", json.dumps(manifest, indent=2))
@@ -124,7 +125,7 @@ def build_version(hw: Path, omit: tuple[tuple[str, str], ...] = (), failed: dict
 
 
 def frozen_lamp(hw: Path, *, before_build: Callable[[Path], None] | None = None, omit: tuple[tuple[str, str], ...] = (),
-                failed: dict[str, str] | None = None, skip_bundles: tuple[str, ...] = ()) -> None:
+                failed: dict[str, str] | None = None, skip_bundles: tuple[str, ...] = (), attach: tuple[str, ...] = ()) -> None:
     """The lamp example, reconciled for release (released revisions, verification passed with
     evidence), built as v1, frozen at it, every required bundle published, and DR-005 approving it."""
     shutil.copytree(LAMP, hw)
@@ -135,7 +136,7 @@ def frozen_lamp(hw: Path, *, before_build: Callable[[Path], None] | None = None,
     write(hw / "docs" / "inspection.md", "# Inspection record\n")
     if before_build:
         before_build(hw)
-    build_version(hw, omit, failed)
+    build_version(hw, omit, failed, attach)
     edit_yaml(hw / "product.yaml", lambda data: data["flow"].update(
         stage="release", frozen={"version": "v1", "manifest_sha256": sha(hw / "versions" / "v1" / "manifest.json"),
                                  "decision": "DR-004"}))
@@ -247,6 +248,27 @@ class Release(ReleaseCase):
         self.assertEqual(sorted(n for n in manifest["files"] if n.startswith("manufacturing/LMP-0011/")),
                          ["manufacturing/LMP-0011/manufacturing.json", "manufacturing/LMP-0011/part.step"])
 
+    def test_a_version_built_with_attach_releases(self) -> None:
+        def unjoin(hw: Path) -> None:  # members cad-model attaches at run time instead of by a joint
+            edit_yaml(hw / "assembly.yaml", lambda data: data.update(
+                joints=[joint for joint in data["joints"] if joint["id"] not in ("J-009", "J-012")]))
+
+        hw = self.project(before_build=unjoin, attach=("LMP-0010=LMP-0004", "@ring-head=LMP-0007"))
+        self.assertEqual(validate.blocking(validate.validate_project(hw)), [])
+        code, report = self.release(hw)
+        self.assertEqual(code, 0, report.get("findings"))
+        manifest = json.loads((hw / "releases" / "A" / "manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["manufacturing"]["LMP-0007"]["quantity"], 1)
+
+    def test_a_released_original_may_go_but_its_package_copy_may_not(self) -> None:
+        hw = self.project()
+        write(hw / "docs" / "notes.md", "# Notes\n")
+        self.assertEqual(self.release(hw)[0], 0)
+        (hw / "docs" / "notes.md").unlink()
+        self.assertEqual(validate.blocking(validate.validate_project(hw)), [], "release A holds its own copy")
+        (hw / "releases" / "A" / "docs" / "notes.md").unlink()
+        self.assertIn("releases/A/docs/notes.md", json.dumps(validate.blocking(validate.validate_project(hw))))
+
 
 class Refusal(ReleaseCase):
     """Each gap refuses with a finding that names it, and hw/ is byte-identical afterwards."""
@@ -310,6 +332,16 @@ class Refusal(ReleaseCase):
         hw = self.project()
         edit_csv(hw / "verification.csv", lambda rows: rows[1].update(evidence="hw/motion/v1/elbow-limits"))
         self.refused(hw, "hw/motion/v1/elbow-limits", "missing", "REQ-002 cites it")
+
+    def test_cited_evidence_inside_the_frozen_version_or_a_bundle_must_exist(self) -> None:
+        for evidence in ("hw/analysis/v1/arm-load/result.json", "hw/versions/v1/x.step"):
+            with self.subTest(evidence=evidence):
+                hw = self.project()
+                edit_csv(hw / "verification.csv", lambda rows: [row.update(evidence=evidence) for row in rows
+                                                                if row["requirement_id"] == "REQ-004"])
+                with (hw / "verification.csv").open(newline="", encoding="utf-8") as stream:
+                    line = next(n for n, row in enumerate(csv.DictReader(stream), start=2) if row["requirement_id"] == "REQ-004")
+                self.refused(hw, f"hw/verification.csv:{line}", "missing", f"REQ-004 evidence {evidence} does not exist")
 
     def test_a_bad_argument_is_a_usage_error(self) -> None:
         hw = self.project()

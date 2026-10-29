@@ -260,10 +260,10 @@ def check_evidence(release: Release, rows: list[dict[str, str]], version_sha: st
                 if params["V"] != release.version:
                     release.refuse(where, "stale", f"{row.get('requirement_id')} evidence {rel} belongs to "
                                                    f"{params['V']}, not the frozen {release.version}")
-                elif entry.manifest == "bundle":
+                    continue
+                if entry.manifest == "bundle":
                     select_bundle(release, entry.id.split(".", 1)[1], params["S"], version_sha,
                                   f"{row.get('requirement_id')} cites it as evidence")
-                continue
             try:
                 present = layout.locate(release.hw, rel).exists()
             except layout.LayoutError:
@@ -325,7 +325,10 @@ def assemble(hw: Path, rev: str, version: str, decision: str) -> tuple[Release, 
     inventory = validate.assembly_inventory(assembly, f"hw/versions/{version}/record/assembly.yaml", records,
                                             snapshot_findings)
     if inventory is not None:
-        inventory = inventory.extended(manifest.get("attach") or [])
+        # a version's attach entries are cad-model's `--attach REF=PARENT_REF` options; a PN endpoint
+        # with no occurrence is its identity singleton, an `@id` endpoint an occurrence already listed
+        attached = [ref for spec in manifest.get("attach") or [] for ref in spec.split("=", 1) if not ref.startswith("@")]
+        inventory = inventory.extended(attached)
     quantities = inventory.quantities() if inventory is not None else {}
     release.findings.extend(snapshot_findings)
     check_manufacturing(release, folder, manifest, parts, quantities)

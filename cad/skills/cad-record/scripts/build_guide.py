@@ -122,6 +122,8 @@ def item_geometry(assembly: Mapping[str, Any], frames: Mapping[str, str]) -> Sim
 
 
 def release_manifest(hw: Path, product_id: str, version: str) -> Path | None:
+    """The newest release of `version`: a version 2 manifest names it in frozen.version, a version 1
+    manifest lists its files in place. None when no release holds that version."""
     releases = hw / "releases"
     if not releases.is_dir():
         return None
@@ -131,12 +133,17 @@ def release_manifest(hw: Path, product_id: str, version: str) -> Path | None:
             manifest = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             continue
-        if manifest.get("product_id") != product_id:
+        if not isinstance(manifest, dict) or manifest.get("product_id") != product_id:
             continue
-        includes_version = any(re.search(rf"(?:^|/)versions/{re.escape(version)}(?:/|$)", item)
-                               for item in manifest.get("files", []) if isinstance(item, str))
-        candidates.append((includes_version, str(manifest.get("released_at", "")), path))
-    return max(candidates, default=(False, "", None), key=lambda row: (row[0], row[1], str(row[2])))[2]
+        if "schema_version" in manifest:
+            frozen = manifest.get("frozen")
+            holds_version = isinstance(frozen, Mapping) and frozen.get("version") == version
+        else:
+            holds_version = any(re.search(rf"(?:^|/)versions/{re.escape(version)}(?:/|$)", item)
+                                for item in manifest.get("files", []) if isinstance(item, str))
+        if holds_version:
+            candidates.append((str(manifest.get("released_at", "")), str(path), path))
+    return max(candidates, default=(None, None, None))[2]
 
 
 def built_manufacturing(layout: Any, hw: Path, version: str, pn: str, process: str, out: Path) -> str | None:

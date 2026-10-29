@@ -163,6 +163,24 @@ class BuildGuide(unittest.TestCase):
         self.assertIn("## Assembly steps\n\nnot recorded", guide)
         self.assertIn("## Checks before use\n\n| Requirement", guide)
 
+    def test_release_manifest_is_the_release_frozen_at_the_selected_version(self) -> None:
+        hw = self.root / "released-hw"
+        for version in ("v3", "v4", "v5"):
+            (hw / "versions" / version).mkdir(parents=True)
+            (hw / "versions" / version / "manifest.json").write_text(
+                json.dumps({"label": version, "parts": {}}), encoding="utf-8")
+        (hw / "product.yaml").write_text("id: released\n", encoding="utf-8")
+        for rev, version, released_at in (("A", "v3", "2026-10-01T00:00:00Z"), ("B", "v4", "2026-10-02T00:00:00Z")):
+            (hw / "releases" / rev).mkdir(parents=True)
+            (hw / "releases" / rev / "manifest.json").write_text(json.dumps({
+                "schema_version": 2, "product_id": "released", "rev": rev, "released_at": released_at,
+                "frozen": {"version": version}, "files": {"bom.csv": {"sha256": "0" * 64, "original": "hw/bom.csv"}},
+            }), encoding="utf-8")
+        for version, link in (("v3", "[hw/releases/A/manifest.json]("), ("v4", "[hw/releases/B/manifest.json]("),
+                              ("v5", "not recorded |")):
+            self.out = self.root / ".cad-work" / f"docs-{version}"  # each guide needs a new output directory
+            self.assertIn(f"| Release manifest | {link}", self.generate(hw, version))
+
     def test_buy_identity_open_fields_remain_visible(self) -> None:
         hw = self.copy_lamp_example()
         self.make_version(hw, "v1")
