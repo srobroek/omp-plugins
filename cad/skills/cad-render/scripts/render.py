@@ -11,6 +11,8 @@
 Usage:
     uv run --script skill://cad-flow/scripts/run.py cad-render/scripts/render.py HW [--version latest|vN] [--views iso front side exploded] [--subject S]
         [--size 1600x1200] [--jobs N] [--cache-dir DIR] [--replace] [--out-dir .cad-work/PATH]
+    uv run --script skill://cad-flow/scripts/run.py cad-render/scripts/render.py HW --version vN --motion SPEC.json
+        --out-dir .cad-work/PATH [--size 1280x720] [--cache-dir DIR]
 
 Resolves a verified built version through cad-record's layout API, maps each part's part.yaml
 material and finish to a MeshPhysicalMaterial through assets/materials.json, serves assets/renderer/
@@ -24,6 +26,14 @@ PN placed once; a bare PN placed several times is ambiguous and refused.
 
 Each frame is graded from its pixels and subject mask. BLANK, CLIPPED, and close-up OCCLUDED (less than 25% of the subject's isolated visible pixels remain visible) make a view unusable; NO_SHADOW and INVERTED_SHADOW are cosmetic warnings and keep the PNG.
 A verified bundle for an identical recipe is reused, including with `--replace`; `--replace` only renders again when the recipe differs.
+
+Motion frames (`--motion`, written by cad-motion motion.py render): every spec frame moves each
+occurrence by a rigid delta from the version's built pose; cad-render derives no kinematics. One
+camera per group of frames, fitted to the bounds the group sweeps, so the framing holds while the
+parts move; the floor shadow is left out (its bake costs 128 shadow maps per pose). It writes
+frames/frame-NNNN.png, contact-sheet.png and motion-render.json (cameras, and the parity of the node
+world placements against the spec's expected ones within 1e-9) into --out-dir; motion.py publishes
+them. Exit 1 = a parity failure.
 
 stdout: one JSON summary. Exit 0 = every view is usable (pass or warn, including cache hits), 1 = an unusable view remains after its retry ladder (renders and manifest are still written), 2 = usage or infrastructure error (nothing written).
 """
@@ -903,6 +913,215 @@ def grade(results: dict[str, Any]) -> tuple[dict[str, Any], dict[str, bytes], bo
     return views, pngs, passed
 
 
+# --------------------------------------------------------------------------- motion frames
+
+MOTION_CAMERAS = ("iso", "front", "side")  # the directions a motion plan segment may name
+PARITY_TOL = 1e-9  # m, and per quaternion component: a node's world placement against the spec's
+
+
+def _indices(value: Any, count: int, where: str) -> list[int]:
+    if not isinstance(value, list) or not all(isinstance(i, int) and not isinstance(i, bool) and 0 <= i < count
+                                              for i in value):
+        raise InfraError(f"{where} must list frame indices 0..{count - 1}")
+    return value
+
+
+def motion_spec(path: Path, version: Version) -> dict[str, Any]:
+    """A cad-motion motion.py frames spec, checked against the version it was planned on.
+
+    `frames[i].deltas` moves every occurrence by a rigid delta from the built pose (GLB metres,
+    translation and quaternion); `groups` share one camera (`camera` view, fitted over the `fit`
+    frames) and render their `render` frames; `check` holds the expected node world placements of a
+    few frames; `sheet` lays out the contact sheet tiles, each a rendered frame and two caption lines."""
+    spec = _json(path)
+    if not isinstance(spec, dict) or spec.get("schema") != 1:
+        raise InfraError(f"{path}: not a cad-motion motion spec (schema 1)")
+    if spec.get("version") != version.label:
+        raise InfraError(f"{path} was planned on {spec.get('version')!r}, not {version.label}")
+    frames, groups, sheet = spec.get("frames"), spec.get("groups"), spec.get("sheet")
+    if not isinstance(frames, list) or not frames or not isinstance(groups, list) or not groups \
+            or not isinstance(sheet, dict):
+        raise InfraError(f"{path}: a motion spec needs frames, groups and sheet")
+    occurrences = set(version.occurrences)
+    for index, frame in enumerate(frames):
+        deltas = frame.get("deltas") if isinstance(frame, dict) else None
+        if not isinstance(deltas, dict) or set(deltas) != occurrences:
+            raise InfraError(f"{path}: frame {index} must move exactly the version's occurrences")
+    rendered: list[int] = []
+    for number, group in enumerate(groups):
+        if not isinstance(group, dict) or group.get("camera") not in MOTION_CAMERAS or not group.get("id"):
+            raise InfraError(f"{path}: groups[{number}] needs an id and a camera in {list(MOTION_CAMERAS)}")
+        if not _indices(group.get("fit"), len(frames), f"groups[{number}].fit"):
+            raise InfraError(f"{path}: groups[{number}].fit is empty")
+        rendered += _indices(group.get("render"), len(frames), f"groups[{number}].render")
+    if len(set(rendered)) != len(rendered):
+        raise InfraError(f"{path}: a frame is rendered by two groups")
+    tiles = sheet.get("tiles")
+    if not isinstance(tiles, list) or not all(isinstance(t, dict) and t.get("frame") in rendered
+                                              and isinstance(t.get("lines"), list) and len(t["lines"]) == 2
+                                              for t in tiles):
+        raise InfraError(f"{path}: every sheet tile needs a rendered frame and two caption lines")
+    if not isinstance(sheet.get("columns"), int) or not isinstance(sheet.get("tile_width"), int):
+        raise InfraError(f"{path}: sheet needs integer columns and tile_width")
+    check = spec.get("check") or {}
+    if not isinstance(check, dict) or any(not key.isdigit() or int(key) not in rendered
+                                          or set(value) != occurrences for key, value in check.items()):
+        raise InfraError(f"{path}: check must map rendered frame indices to every occurrence's placement")
+    return spec
+
+
+def _png(data_url: str, what: str) -> bytes:
+    if not data_url.startswith("data:image/png;base64,"):
+        raise InfraError(f"{what}: the page returned no PNG data URL")
+    return base64.b64decode(data_url.partition(",")[2])
+
+
+def capture_motion(url: str, spec: dict[str, Any], size: tuple[int, int]) -> dict[str, Any]:
+    """Render every group's frames on one page with one camera per group, then the contact sheet."""
+    from playwright.async_api import Error as PlaywrightError
+    from playwright.async_api import async_playwright
+
+    frames, checks = spec["frames"], spec.get("check") or {}
+    out: dict[str, Any] = {"cameras": [], "pngs": {}, "worlds": {}, "sheet": None, "info": {}, "timings": {}}
+    errors: list[str] = []
+    started = time.monotonic()
+
+    async def capture() -> None:
+        async with async_playwright() as pw:
+            browser = await pw.chromium.launch(headless=True, args=CHROMIUM_ARGS)
+            context = await browser.new_context(viewport={"width": size[0], "height": size[1]}, device_scale_factor=1)
+            try:
+                page, info = await _open_capture_page(context, url, errors)
+                out["info"] = {**info, "chromium": browser.version}
+                out["timings"]["load_s"] = round(time.monotonic() - started, 3)
+                tiles = {tile["frame"] for tile in spec["sheet"]["tiles"]}
+                data_urls: dict[int, str] = {}
+                frames_started = time.monotonic()
+                for group in spec["groups"]:
+                    camera = await page.evaluate(
+                        "(a) => window.cadRender.motionCamera(a.poses, a.direction, a.seed)",
+                        {"poses": [frames[i]["deltas"] for i in group["fit"]],
+                         "direction": to_glb(DIRECTIONS[group["camera"]]), "seed": str(group["id"])})
+                    out["cameras"].append(camera)
+                    for index in group["render"]:
+                        result = await page.evaluate("(a) => window.cadRender.captureMotion(a.deltas, a.check)",
+                                                     {"deltas": frames[index]["deltas"], "check": str(index) in checks})
+                        out["pngs"][index] = _png(result["png"], f"frame {index}")
+                        if index in tiles:
+                            data_urls[index] = result["png"]
+                        if str(index) in checks:
+                            out["worlds"][index] = result["world"]
+                out["timings"]["frames_s"] = round(time.monotonic() - frames_started, 3)
+                sheet = spec["sheet"]
+                if sheet["tiles"]:
+                    result = await page.evaluate(
+                        "(a) => window.cadRender.contactSheet(a.tiles, a.columns, a.width)",
+                        {"tiles": [{"png": data_urls[t["frame"]], "lines": t["lines"]} for t in sheet["tiles"]],
+                         "columns": sheet["columns"], "width": sheet["tile_width"]})
+                    out["sheet"] = {"png": _png(result["png"], "contact sheet"), "size": [result["width"], result["height"]],
+                                    "tiles": result["tiles"]}
+            finally:
+                await context.close()
+                await browser.close()
+
+    try:
+        asyncio.run(capture())
+    except PlaywrightError as exc:
+        raise InfraError(f"browser: {exc.message}; page errors: {errors}") from exc
+    if errors:
+        raise InfraError(f"renderer page reported errors: {errors}")
+    if out["info"].get("unmapped_meshes"):
+        raise InfraError(f"GLB meshes owned by no part-map occurrence: {out['info']['unmapped_meshes']}")
+    return out
+
+
+def motion_parity(spec: dict[str, Any], worlds: dict[int, dict[str, Any]]) -> dict[str, Any]:
+    """Rendered node world placements against the spec's expected ones (cad-motion's Chain)."""
+    translation = rotation = 0.0
+    worst = None
+    for key, expected in (spec.get("check") or {}).items():
+        actual = worlds[int(key)]
+        for oid, want in expected.items():
+            got = actual[oid]
+            dt = max(abs(a - b) for a, b in zip(got["translation"], want["translation"]))
+            sign = 1.0 if sum(a * b for a, b in zip(got["quaternion"], want["quaternion"])) >= 0 else -1.0
+            dq = max(abs(sign * a - b) for a, b in zip(got["quaternion"], want["quaternion"]))
+            if max(dt, dq) >= max(translation, rotation):
+                worst = {"frame": int(key), "occurrence": oid}
+            translation, rotation = max(translation, dt), max(rotation, dq)
+    passed = translation <= PARITY_TOL and rotation <= PARITY_TOL
+    return {"status": "pass" if passed else "fail", "frames": sorted(int(k) for k in spec.get("check") or {}),
+            "max_translation_m": translation, "max_quaternion_component": rotation, "tolerance": PARITY_TOL,
+            "worst": worst}
+
+
+def run_motion(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
+    """`--motion SPEC`: scratch frames, contact sheet and motion-render.json for cad-motion motion.py."""
+    wall = time.monotonic()
+    if args.views is not None or args.subject != "assembly" or args.replace or args.jobs != DEFAULT_JOBS:
+        raise InfraError("--motion renders scratch frames: it takes --version, --size, --out-dir and --cache-dir, "
+                         "not --views, --subject, --replace or --jobs")
+    hw = args.hw.resolve()
+    size = parse_size(args.size)
+    if args.out_dir is None:
+        raise InfraError("--motion needs --out-dir under .cad-work; cad-motion motion.py publishes the bundle")
+    try:
+        out_dir = layout.scratch_path(hw, args.out_dir, "--out-dir")
+    except layout.LayoutError as exc:
+        raise InfraError(str(exc)) from exc
+    if out_dir.exists():
+        raise InfraError(f"--out-dir already exists; refusing to overwrite {out_dir}")
+    version = resolve_version(hw, args.version)
+    spec = motion_spec(args.motion, version)
+    try:
+        table = material_rules.MaterialTable.load()
+    except material_rules.MaterialsError as exc:
+        raise InfraError(str(exc)) from exc
+    scene, materials, keyed = build_scene(hw, version, [], size, table)
+    server = make_server(scene, version.files["glb"], args.cache_dir or default_cache_dir())
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.1}, daemon=True)
+    thread.start()
+    try:
+        captured = capture_motion(f"http://127.0.0.1:{server.server_address[1]}/", spec, size)
+    finally:
+        server.shutdown()
+        server.server_close()
+    parity = motion_parity(spec, captured["worlds"])
+    out_dir.mkdir(parents=True)
+    (out_dir / "frames").mkdir()
+    files = {}
+    for index, png in sorted(captured["pngs"].items()):
+        name = f"frames/frame-{index:04d}.png"
+        (out_dir / name).write_bytes(png)
+        files[name] = sha256(png)
+    if captured["sheet"] is not None:
+        (out_dir / "contact-sheet.png").write_bytes(captured["sheet"]["png"])
+        files["contact-sheet.png"] = sha256(captured["sheet"]["png"])
+    info = captured["info"]
+    metadata = {
+        "version": version.label, "case": spec.get("case"), "status": parity["status"],
+        "image": {"width": size[0], "height": size[1]}, "frames_rendered": len(captured["pngs"]),
+        "groups": [{"id": group["id"], "view": group["camera"], "fit_frames": [min(group["fit"]), max(group["fit"])],
+                    "rendered": len(group["render"]), "camera": camera_record(camera),
+                    "swept_radius_mm": round(camera["swept_radius_m"] * 1000, 3)}
+                   for group, camera in zip(spec["groups"], captured["cameras"])],
+        "sheet": None if captured["sheet"] is None else {"tiles": captured["sheet"]["tiles"],
+                                                         "size": captured["sheet"]["size"]},
+        "parity": parity, "floor_shadow": "omitted: the static renderer bakes it per pose",
+        "materials": {pn: {k: m[k] for k in ("part_material", "part_finish", "rule")} for pn, m in materials.items()},
+        "renderer": {"name": "cad-render three.js PBR", "sha256": renderer_sha256(), "three": THREE_VERSION,
+                     "three_revision": info.get("three"), "playwright": importlib.metadata.version("playwright"),
+                     "chromium": info.get("chromium"), "webgl": "SwiftShader (ANGLE)"},
+        "inputs": {"version_manifest_sha256": sha256(version.files["manifest"].read_bytes()),
+                   "source_sha256": keyed["key"]["source_sha256"]},
+        "files": files, "wall_s": {**captured["timings"], "total_s": round(time.monotonic() - wall, 3)},
+    }
+    (out_dir / "motion-render.json").write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
+    summary = {"status": parity["status"], "version": version.label, "out_dir": str(out_dir),
+               "frames": len(captured["pngs"]), "contact_sheet": str(out_dir / "contact-sheet.png")
+               if captured["sheet"] is not None else None, "parity": parity, "wall_s": metadata["wall_s"]}
+    return (0 if parity["status"] == "pass" else 1), summary
+
 
 
 def parse_size(text: str) -> tuple[int, int]:
@@ -931,7 +1150,7 @@ def run(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         if out_dir.exists():
             raise InfraError(f"--out-dir already exists; refusing to overwrite {out_dir}")
     version = resolve_version(hw, args.version)
-    views = parse_views(args.views, {oid: o.pn for oid, o in version.occurrences.items()})
+    views = parse_views(args.views or DEFAULT_VIEWS, {oid: o.pn for oid, o in version.occurrences.items()})
     try:
         table = material_rules.MaterialTable.load()
     except material_rules.MaterialsError as exc:
@@ -1017,7 +1236,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="render.py", description=__doc__.splitlines()[0])
     parser.add_argument("hw", type=Path, help="the project's hw/ directory")
     parser.add_argument("--version", default="latest", help="latest or vN")
-    parser.add_argument("--views", nargs="+", default=DEFAULT_VIEWS,
+    parser.add_argument("--views", nargs="+",
                         help="iso front side exploded closeup-<PN> part-<PN> (default: iso front side exploded)")
     parser.add_argument("--size", default="1600x1200", help="frame size WIDTHxHEIGHT")
     parser.add_argument("--subject", default="assembly", help="bundle subject (default: assembly)")
@@ -1026,12 +1245,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out-dir", type=Path, help="write scratch output under .cad-work only")
     parser.add_argument("--replace", action="store_true", help="retain and replace a conflicting bundle")
     parser.add_argument("--cache-dir", type=Path, help="pinned three.js module cache (default: cad-concept's)")
+    parser.add_argument("--motion", type=Path, metavar="SPEC",
+                        help="cad-motion motion.py frames spec: render its frames and contact sheet into --out-dir")
     try:
         args = parser.parse_args(argv)
     except SystemExit as exc:
         return 0 if exc.code == 0 else 2
     try:
-        code, summary = run(args)
+        code, summary = run_motion(args) if args.motion is not None else run(args)
     except InfraError as exc:
         print(json.dumps({"status": "error", "error": str(exc)}))
         return 2

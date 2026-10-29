@@ -663,6 +663,41 @@ class AnimateLimits(Fixture):
         self.assertAlmostEqual(sum(a * b for a, b in zip(plane["normal"], plane["axis"])), 0.0)
 
 
+class AnimateCase(Fixture):
+    """`animate --case`: a cad-motion motion plan played with every driver it moves."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.chain = motion.load_chain(self.hw)
+        self.shown = self.chain.transforms(self.chain.complete({}))
+
+    def test_the_default_plan_drives_all_three_joints_at_its_fps(self) -> None:
+        clip = motion.plan_case_animation(self.chain, self.shown, self.hw, "default")
+        self.assertEqual((clip.case, clip.fps, len(clip.times), clip.coverage), ("default", 30, 179, "pass"))
+        self.assertEqual(clip.drivers, ("J-001", "J-002", "J-003"))
+        self.assertAlmostEqual(clip.times[-1], 178 / 30)
+        self.assertIn("ring-head", {t.id for t in clip.tracks})
+        self.assertTrue(all(len(t.translations) == 179 for t in clip.tracks))
+        held = clip.summary(1.0)
+        self.assertEqual((held["frame_at"], held["settings_at"]), (178, {"J-001": 0.0, "J-002": -30.0, "J-003": 0.0}))
+
+    def test_an_authored_case_with_a_fixed_joint_target_is_a_usage_error(self) -> None:
+        case = self.hw / "motion" / "cases" / "ring" / "plan.yaml"
+        case.parent.mkdir(parents=True)
+        case.write_text("schema: 1\nsegments:\n  - {id: spin, to: {J-010: 5}}\n", encoding="utf-8")
+        with self.assertRaisesRegex(ViewerError, "J-010 is a fixed joint"):
+            motion.plan_case_animation(self.chain, self.shown, self.hw, "ring")
+
+    def test_animate_takes_a_joint_sweep_or_a_case_not_both(self) -> None:
+        parser = viewer.build_parser()
+        self.assertEqual(viewer.request_body(parser.parse_args(["animate", "--case", "default"])),
+                         ("POST", "/api/animate", {"case": "default", "at": None}))
+        with self.assertRaisesRegex(ViewerError, "go with --joint"):
+            viewer.request_body(parser.parse_args(["animate", "--case", "default", "--from", "0"]))
+        with self.assertRaisesRegex(ViewerError, "needs --from and --to"):
+            viewer.request_body(parser.parse_args(["animate", "--joint", "J-002"]))
+
+
 class AnimateCoupled(Fixture):
     """The head joint J-003 follows the elbow J-002 at a quarter of its angle (cad-motion coupling.py)."""
 

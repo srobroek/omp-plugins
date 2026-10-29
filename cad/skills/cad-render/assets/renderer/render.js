@@ -298,7 +298,8 @@ async function boot() {
       owned.add(mesh);
     }
     parts.set(part.id, { pn: part.pn, nodes, meshes, material, rest: nodes.map((n) => ({
-      parent: n.parent, position: n.position.clone(), quaternion: n.quaternion.clone(), visible: n.visible,
+      parent: n.parent, position: n.position.clone(), quaternion: n.quaternion.clone(), scale: n.scale.clone(),
+      visible: n.visible,
     })) });
   }
   const unmapped = [];
@@ -427,6 +428,7 @@ async function boot() {
         if (node.parent !== part.rest[i].parent) part.rest[i].parent.attach(node);
         node.position.copy(part.rest[i].position);
         node.quaternion.copy(part.rest[i].quaternion);
+        node.scale.copy(part.rest[i].scale);
         node.visible = part.rest[i].visible;
       });
     }
@@ -576,14 +578,19 @@ async function boot() {
     }
   }
 
+  // Points the key and the fill at the sphere (centre, radius).
+  function aimLights(centre, radius) {
+    aimShadowLight(key, centre, keyDir, radius);
+    fill.position.copy(centre).addScaledVector(new THREE.Vector3(...STUDIO.fillFrom).normalize(), radius * 4);
+    fill.target.position.copy(centre);
+  }
+
   // Places the key, the fill, the floor square, and the grader zones around the scene's bounding
   // sphere, and rebakes the floor when the pose changed. Returns the radius.
   function stage(box, pose) {
     const centre = box.getCenter(new THREE.Vector3());
     const radius = box.getSize(new THREE.Vector3()).length() / 2;
-    aimShadowLight(key, centre, keyDir, radius);
-    fill.position.copy(centre).addScaledVector(new THREE.Vector3(...STUDIO.fillFrom).normalize(), radius * 4);
-    fill.target.position.copy(centre);
+    aimLights(centre, radius);
     const side = 2 * radius * STUDIO.groundExtent;
     ground.scale.set(side, side, 1);
     ground.position.x = centre.x;
@@ -758,9 +765,134 @@ async function boot() {
     };
   }
 
+  // Motion frames (cad-motion motion.py through render.py --motion). A frame moves every occurrence
+  // by a rigid delta from the version's built pose, in GLB metres: node world = delta x built world.
+  // One camera serves a whole group of frames, fitted to the bounds the group sweeps, so the framing
+  // holds still while the parts move. The floor shadow is a 128-map bake per pose, so motion frames
+  // leave the floor out; the key light still shades the parts onto each other.
+  const unitScale = new THREE.Vector3(1, 1, 1);
+  const allMeshes = [...parts.values()].flatMap((part) => part.meshes);
+
+  function depth(node) {
+    let count = 0;
+    for (let parent = node.parent; parent; parent = parent.parent) count += 1;
+    return count;
+  }
+
+  function poseMotion(deltas) {
+    applyExplode(false);
+    const placed = [];
+    for (const [id, part] of parts) {
+      const delta = deltas[id];
+      if (!delta) throw new Error(`motion frame is missing occurrence ${id}`);
+      const move = new THREE.Matrix4().compose(new THREE.Vector3(...delta.translation),
+        new THREE.Quaternion(...delta.quaternion), unitScale);
+      for (const node of part.nodes) placed.push([node, move.clone().multiply(node.matrixWorld)]);
+    }
+    placed.sort((a, b) => depth(a[0]) - depth(b[0]));
+    for (const [node, world] of placed) {
+      node.parent.updateWorldMatrix(true, false);
+      node.matrix.copy(node.parent.matrixWorld.clone().invert().multiply(world));
+      node.matrix.decompose(node.position, node.quaternion, node.scale);
+      node.updateMatrixWorld(true);
+    }
+    root.updateMatrixWorld(true);
+  }
+
+  // The world corners of every mesh's bounding box at the current pose.
+  function boundsCorners() {
+    const points = [];
+    for (const mesh of allMeshes) {
+      if (!mesh.geometry.boundingBox) mesh.geometry.computeBoundingBox();
+      const { min, max } = mesh.geometry.boundingBox;
+      for (const x of [min.x, max.x]) for (const y of [min.y, max.y]) for (const z of [min.z, max.z]) {
+        points.push(new THREE.Vector3(x, y, z).applyMatrix4(mesh.matrixWorld));
+      }
+    }
+    return points;
+  }
+
+  function motionCamera(poses, direction, seed) {
+    const points = [];
+    let partRadius = 0;
+    poses.forEach((deltas, i) => {
+      poseMotion(deltas);
+      const corners = boundsCorners();
+      if (i === 0) partRadius = new THREE.Box3().setFromPoints(corners).getSize(new THREE.Vector3()).length() / 2;
+      points.push(...corners);
+    });
+    const box = new THREE.Box3().setFromPoints(points);
+    const radius = box.getSize(new THREE.Vector3()).length() / 2;
+    aimLights(box.getCenter(new THREE.Vector3()), radius);
+    ground.visible = false;
+    const fit = fitCamera(camera, points, direction);
+    seedRandom(viewSeed(seed, 0));
+    gtao.pdNoiseTexture.dispose();
+    gtao.pdNoiseTexture = gtao._generateNoise();
+    gtao.pdMaterial.uniforms.tNoise.value = gtao.pdNoiseTexture;
+    const aoRadius = partRadius * STUDIO.aoRadius;
+    gtao.updateGtaoMaterial({ radius: aoRadius, thickness: aoRadius, distanceExponent: 1, distanceFallOff: 1, scale: 1 });
+    gtao.updatePdMaterial({ lumaPhi: 10, depthPhi: 2, normalPhi: 3, radius: 6, rings: 2, samples: 16 });
+    return {
+      frame: "glb", position: camera.position.toArray(), target: fit.target.toArray(), up: camera.up.toArray(),
+      fov_deg: camera.fov, aspect: camera.aspect, near: camera.near, far: camera.far, swept_radius_m: radius,
+    };
+  }
+
+  // Renders one frame with the current group camera; `check` also returns each occurrence's first
+  // node world placement for render.py's parity check.
+  function captureMotion(deltas, check = false) {
+    poseMotion(deltas);
+    renderer.setRenderTarget(null);
+    renderer.shadowMap.type = THREE.VSMShadowMap;
+    renderer.autoClear = true;
+    renderer.setClearColor(0x000000, 0);
+    composer.render();
+    copyCtx.drawImage(renderer.domElement, 0, 0);
+    const world = {};
+    if (check) {
+      for (const [id, part] of parts) {
+        world[id] = { translation: part.nodes[0].getWorldPosition(new THREE.Vector3()).toArray(),
+                      quaternion: part.nodes[0].getWorldQuaternion(new THREE.Quaternion()).toArray() };
+      }
+    }
+    return { png: copy.toDataURL("image/png"), world };
+  }
+
+  // A grid of frame tiles, each captioned with two lines of text.
+  async function contactSheet(tiles, columns, tileWidth) {
+    const tileHeight = Math.round((tileWidth * height) / width);
+    const caption = 34;
+    const gap = 8;
+    const rows = Math.ceil(tiles.length / columns);
+    const sheet = document.createElement("canvas");
+    sheet.width = columns * tileWidth + (columns + 1) * gap;
+    sheet.height = rows * (tileHeight + caption) + (rows + 1) * gap;
+    const ctx = sheet.getContext("2d");
+    ctx.fillStyle = token("--color-backdrop");
+    ctx.fillRect(0, 0, sheet.width, sheet.height);
+    for (const [i, tile] of tiles.entries()) {
+      const image = new Image();
+      image.src = tile.png;
+      await image.decode();
+      const x = gap + (i % columns) * (tileWidth + gap);
+      const y = gap + Math.floor(i / columns) * (tileHeight + caption + gap);
+      ctx.drawImage(image, x, y, tileWidth, tileHeight);
+      ctx.fillStyle = token("--color-fg");
+      ctx.font = `600 12px ${token("--font-ui") || "sans-serif"}`;
+      ctx.fillText(tile.lines[0], x + 2, y + tileHeight + 14, tileWidth - 4);
+      ctx.font = "11px monospace";
+      ctx.fillText(tile.lines[1], x + 2, y + tileHeight + 29, tileWidth - 4);
+    }
+    return { png: sheet.toDataURL("image/png"), width: sheet.width, height: sheet.height, tiles: tiles.length };
+  }
+
   setStatus("ready", "Ready");
   return {
-     capture,
+    capture,
+    motionCamera,
+    captureMotion,
+    contactSheet,
     info: {
       three: THREE.REVISION,
       parts: [...parts.keys()],
@@ -787,4 +919,7 @@ const ready = boot().catch((error) => {
 window.cadRender = {
   ready: ready.then((api) => api.info),
   capture: async (name, options, attempt) => (await ready).capture(name, options, attempt),
+  motionCamera: async (poses, direction, seed) => (await ready).motionCamera(poses, direction, seed),
+  captureMotion: async (deltas, check) => (await ready).captureMotion(deltas, check),
+  contactSheet: async (tiles, columns, tileWidth) => (await ready).contactSheet(tiles, columns, tileWidth),
 };

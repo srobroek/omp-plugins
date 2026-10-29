@@ -613,8 +613,13 @@ class Host:
             self._push(self.slots["a"], key)
             return self._run_animation(body)
 
-    def _plan(self, body: dict[str, Any]) -> motion.AnimationPlan:
+    def _plan(self, body: dict[str, Any]) -> motion.AnimationPlan | motion.CaseAnimation:
+        """A one-joint sweep (`joint`, `from`, `to`) on the current record, or a motion plan `case` on the
+        shown version's record snapshot, whose nominal pose the viewer displays."""
         loaded = self.versions[self._layout()["a"]]
+        if body.get("case"):
+            chain = motion.load_chain(loaded.version.record_dir)
+            return motion.plan_case_animation(chain, loaded.shown, loaded.version.hw, _text(body, "case"))
         steps, seconds = int(body.get("steps") or 13), float(body.get("seconds") or 4.0)
         chain = motion.load_chain(loaded.version.hw)
         return motion.plan_animation(chain, loaded.shown, _text(body, "joint"), _number(body, "from"),
@@ -646,10 +651,8 @@ class Host:
             if at is not None:
                 animation.set_relative_time(at, port=port)
         self.animation_request = dict(body)
-        self.animation = {"joint": plan.joint, "unit": plan.unit, "from": plan.start, "to": plan.end,
-                          "keyframes": len(plan.times), "seconds": plan.times[-1],
-                          "moving_parts": [version.part(t.id).ref for t in plan.tracks], "at": at,
-                          "value_at": None if at is None else plan.value_at(at)}
+        self.animation = {**plan.summary(at), "keyframes": len(plan.times), "seconds": plan.times[-1],
+                          "moving_parts": [version.part(t.id).ref for t in plan.tracks], "at": at}
         return self.animation
 
     def browser_connected(self, body: dict[str, Any]) -> dict[str, Any]:

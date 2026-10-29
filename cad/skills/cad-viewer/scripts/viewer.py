@@ -17,7 +17,7 @@ Usage (run viewer through cad-flow's shared environment):
     uv run --script skill://cad-flow/scripts/run.py cad-viewer/scripts/viewer.py gallery HW [--session NAME]
     uv run --script skill://cad-flow/scripts/run.py cad-viewer/scripts/viewer.py mode single|split [--session NAME]
     uv run --script skill://cad-flow/scripts/run.py cad-viewer/scripts/viewer.py parts ACTION [PN|GROUP] [--session NAME]
-    uv run --script skill://cad-flow/scripts/run.py cad-viewer/scripts/viewer.py animate --joint ID --from VALUE --to VALUE [--session NAME]
+    uv run --script skill://cad-flow/scripts/run.py cad-viewer/scripts/viewer.py animate (--joint ID --from VALUE --to VALUE | --case CASE) [--session NAME]
     uv run --script skill://cad-flow/scripts/run.py cad-viewer/scripts/viewer.py studio [OPTIONS] [--session NAME]
     uv run --script skill://cad-flow/scripts/run.py cad-viewer/scripts/viewer.py capture --view VIEW --out PNG [--session NAME]
 
@@ -120,13 +120,16 @@ def build_parser() -> argparse.ArgumentParser:
     parts.add_argument("action", choices=("hide", "iso", "ghost", "reset"))
     parts.add_argument("target", nargs="?", help="PN or subassembly id (hide and iso)")
 
-    animate = sub.add_parser("animate", help="animation track for one joint, within its assembly.yaml limits")
+    animate = sub.add_parser("animate", help="animate one joint within its assembly.yaml limits, or a motion plan case")
     add_session(animate)
-    animate.add_argument("--joint", required=True, help="movable joint id, e.g. J-002")
-    animate.add_argument("--from", dest="start", type=float, required=True, help="start value (deg or mm)")
-    animate.add_argument("--to", dest="end", type=float, required=True, help="end value (deg or mm)")
-    animate.add_argument("--steps", type=int, default=13, help="keyframes, >= 2")
-    animate.add_argument("--seconds", type=float, default=4.0)
+    target = animate.add_mutually_exclusive_group(required=True)
+    target.add_argument("--joint", help="movable joint id, e.g. J-002")
+    target.add_argument("--case", help="motion plan case: default (generated) or hw/motion/cases/<case>; every "
+                                       "driver it moves plays at the plan's fps")
+    animate.add_argument("--from", dest="start", type=float, help="start value (deg or mm), with --joint")
+    animate.add_argument("--to", dest="end", type=float, help="end value (deg or mm), with --joint")
+    animate.add_argument("--steps", type=int, help="keyframes, >= 2, with --joint (default 13)")
+    animate.add_argument("--seconds", type=float, help="duration with --joint (default 4)")
     animate.add_argument("--at", type=fraction_arg, help="hold the playback at this fraction 0..1")
 
     studio = sub.add_parser("studio", help="Studio mode for look-dev: environment, tone mapping, exposure")
@@ -182,10 +185,18 @@ def request_body(args: argparse.Namespace) -> tuple[str, str, dict[str, Any]]:
             raise ViewerError(f"parts {args.action} needs a PN or subassembly id")
         return "POST", "/api/parts", {"action": args.action, "target": args.target}
     if args.command == "animate":
-        if args.steps < 2:
+        if args.case is not None:
+            if any(v is not None for v in (args.start, args.end, args.steps, args.seconds)):
+                raise ViewerError("--case plays the plan's own frames: --from, --to, --steps and --seconds go with --joint")
+            return "POST", "/api/animate", {"case": args.case, "at": args.at}
+        if args.start is None or args.end is None:
+            raise ViewerError("--joint needs --from and --to")
+        steps = 13 if args.steps is None else args.steps
+        if steps < 2:
             raise ViewerError("--steps must be at least 2")
         return "POST", "/api/animate", {"joint": args.joint, "from": args.start, "to": args.end,
-                                        "steps": args.steps, "seconds": args.seconds, "at": args.at}
+                                        "steps": steps, "seconds": 4.0 if args.seconds is None else args.seconds,
+                                        "at": args.at}
     if args.command == "capture":
         return "POST", "/api/capture", {"view": args.view, "out": path(args.out), "crop": args.crop,
                                         "joint": args.joint, "zoom": args.zoom, "refit": args.refit,

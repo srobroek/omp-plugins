@@ -58,6 +58,10 @@ Session identity:
    its limits, exits 1 with `joint_limit` findings and pushes nothing. `--at` holds one pose for a
    capture. Animate independent joints only: coupled joints follow their driver at every keyframe,
    and naming a coupled joint exits 2 with its driver.
+   `animate --case C [--at 0..1]` plays a cad-motion motion plan instead: case `default` (generated
+   from the shown version's record snapshot) or `hw/motion/cases/<C>/plan.yaml`, one key per plan
+   frame at its fps, every driver the plan moves at once. Use it for coupled and multi-pivot records.
+   A frame outside a joint's limits exits 1; a coverage gap still plays and `coverage` reports it.
 6. `capture --view V [--out .cad-work/unit/.../capture.png] [--replace]` -> V is iso, front, side, top,
    exploded, `isolate:<PN|group>`, `section --joint J-00x` (plane along the joint axis), or current
    (the state as left, no refit). By default captures publish an immutable `bundle.captures` at
