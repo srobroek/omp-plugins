@@ -356,7 +356,7 @@ def run(args: argparse.Namespace, freecadcmd: Path, jobs: int = 1) -> tuple[dict
     if package.exit_code == 0 and args.output_dir is None:
         output_dir = api.publish(hw, "bundle.drawings", {"V": label, "S": "assembly"}, output_dir,
                                  recipe=recipe, producer="cad-drawings assembly_drawing.py",
-                                 replace=args.replace).path
+                                 status="pass", replace=args.replace).path
         result["output_dir"] = str(output_dir)
     result["files"] = [{"sheet": s["sheet"], "size": s["size"],
                         **{kind: str(Path(name)) for kind, name in s["files"].items()}}

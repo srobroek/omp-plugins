@@ -214,6 +214,7 @@ class EndToEnd(unittest.TestCase):
         status, first = run_cli(hw)
         self.assertEqual((status, first["status"]), (0, "pass"), first.get("findings"))
         bundle = Path(first["output_dir"])
+        self.assertEqual(json.loads((bundle / "manifest.json").read_text(encoding="utf-8"))["status"], "pass")
         sealed = {p.relative_to(bundle).as_posix(): p.read_bytes() for p in bundle.rglob("*") if p.is_file()}
         with (hw / "bom.csv").open(encoding="utf-8") as stream:
             rows = list(csv.reader(stream))

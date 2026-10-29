@@ -707,7 +707,7 @@ def main(argv: list[str] | None = None) -> int:
             elif result.get("status") == "pass" and output_root is None:
                 result["output_dir"] = str(api.publish(
                     hw, "bundle.drawings", {"V": label, "S": subject}, draft, recipe=recipe,
-                    producer="cad-drawings drawing.py", replace=args.replace).path)
+                    producer="cad-drawings drawing.py", status="pass", replace=args.replace).path)
             return result, code
         except api.PublishConflict as exc:
             return fail("publish_conflict", str(exc), pn=pn), 2

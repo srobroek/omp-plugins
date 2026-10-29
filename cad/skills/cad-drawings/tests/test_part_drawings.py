@@ -182,6 +182,7 @@ class PinDrawingGate(unittest.TestCase):
         package = Path(result["output_dir"])
         self.assertEqual(package, (self.hw / "drawings" / "v1" / "LMP-0005").resolve())
         manifest = (package / "manifest.json").read_bytes()
+        self.assertEqual(json.loads(manifest)["status"], "pass")  # release.py accepts only a passing bundle
         package_json = json.loads((package / "package.json").read_text(encoding="utf-8"))
         self.assertEqual(package_json["output_dir"], str(package))
         self.assertTrue(all(Path(path).is_file() for sheet in package_json["sheets"]
