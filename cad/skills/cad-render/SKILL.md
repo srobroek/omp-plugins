@@ -37,6 +37,10 @@ TRIGGER
    At default 1600x1200, Mac serial runs and pace serial-vs-serial / serial-vs-jobs2 runs (30 views) matched
    byte-for-byte. The comparator uses exact parity.
    Each capture seeds GTAO noise from the view and retry index. The floor-shadow bake key includes visible part transforms and sampling settings.
+   Motion frames: `render.py hw --version vN --motion SPEC.json --out-dir .cad-work/...` renders the
+   frames, contact sheet and `motion-render.json` that cad-motion `motion.py render` writes the spec
+   for and publishes; run it through motion.py. The camera is fixed per segment and the floor
+   shadow is left out.
 3. Close-ups: add `closeup-<PN>` for each part/interface to show, or `part-<PN>` for a studio view of
    one part in stable resting orientation with the other assembly parts hidden.
 4. Read every PNG before describing it. Name the material each PN shows from
