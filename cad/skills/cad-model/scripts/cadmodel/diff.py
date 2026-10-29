@@ -1,4 +1,5 @@
-"""`diff`: per-part volume and bounding-box deltas and exact shared / A-only / B-only volumes."""
+"""`diff`: per-part volume and bounding-box deltas and exact shared / A-only / B-only volumes, and the
+manufacturing state, policy and output differences of each custom-made part, reported separately."""
 
 from __future__ import annotations
 
@@ -48,12 +49,61 @@ def compare_part(a: dict[str, Any], b: dict[str, Any], shape_a: Any, shape_b: An
             **exact}
 
 
+def _aspects(a: dict[str, Any], b: dict[str, Any]) -> list[str]:
+    """The manufacturing facts of one PN that differ between two manifest entries."""
+    def tolerance(entry: dict[str, Any]) -> tuple[Any, Any]:
+        declared = entry.get("tolerance") or {}
+        return declared.get("volume_rel"), declared.get("volume_abs_mm3")
+
+    def native(entry: dict[str, Any]) -> tuple[Any, Any]:
+        facts = entry.get("native") or {}
+        return facts.get("kernel_volume_mm3"), facts.get("kernel_solids")
+
+    def placement(entry: dict[str, Any]) -> tuple[Any, Any, list[list[float]]]:
+        facts = entry.get("placement") or {}
+        return facts.get("method"), facts.get("orientation"), facts.get("transform") or []
+
+    (va, sa), (vb, sb) = native(a), native(b)
+    (ma, oa, ta), (mb, ob, tb) = placement(a), placement(b)
+    differs = {
+        "state": a.get("state") != b.get("state"),
+        "tolerance": tolerance(a) != tolerance(b),
+        "output_policy": (a.get("mesh"), a.get("build_volume")) != (b.get("mesh"), b.get("build_volume")),
+        "geometry": ((va, sa) != (vb, sb) if va is None or vb is None
+                     else abs(vb - va) > occ.volume_slack(va, vb) * 10 or sa != sb),
+        "placement": (ma, oa, len(ta)) != (mb, ob, len(tb))
+        or any(abs(x - y) > 1e-6 for ra, rb in zip(ta, tb) for x, y in zip(ra, rb)),
+    }
+    return [name for name, changed in differs.items() if changed]
+
+
+def compare_manufacturing(a: dict[str, Any] | None, b: dict[str, Any] | None) -> dict[str, Any]:
+    """Per custom-made PN of two manifests' `manufacturing` entries: added, removed, changed (naming the
+    state, tolerance, output_policy, geometry or placement aspects) or unchanged."""
+    if a is None or b is None:
+        return {"available": False, "message": "a version was built before manufacturing outputs"}
+    rows: dict[str, Any] = {}
+    for pn in sorted(set(a) | set(b)):
+        if pn not in b or pn not in a:
+            rows[pn] = {"status": "removed" if pn not in b else "added"}
+            continue
+        aspects = _aspects(a[pn], b[pn])
+        rows[pn] = {"status": "changed" if aspects else "unchanged", "changed": aspects,
+                    "relationship_a": (a[pn].get("state") or {}).get("relationship"),
+                    "relationship_b": (b[pn].get("state") or {}).get("relationship"),
+                    "volume_a_mm3": (a[pn].get("native") or {}).get("kernel_volume_mm3"),
+                    "volume_b_mm3": (b[pn].get("native") or {}).get("kernel_volume_mm3")}
+    return {"available": True, "changed": sorted(pn for pn, row in rows.items() if row["status"] != "unchanged"),
+            "parts": rows}
+
+
 def diff(hw: Path, label_a: str, label_b: str) -> tuple[int, dict[str, Any]]:
     pose = load_pose()
     started = time.perf_counter()
     hw = hw.resolve()
     folders = {label: build.version_dir(hw, label) for label in (label_a, label_b)}
     metrics = {label: build.read_json(folder / "metrics.json")["parts"] for label, folder in folders.items()}
+    made = {label: build.read_json(folder / "manifest.json").get("manufacturing") for label, folder in folders.items()}
     shapes = {label: pose.load_definitions(hw, folder / "parts") for label, folder in folders.items()}
     ma, mb = metrics[label_a], metrics[label_b]
     rows: dict[str, Any] = {}
@@ -71,4 +121,5 @@ def diff(hw: Path, label_a: str, label_b: str) -> tuple[int, dict[str, Any]]:
     listed = {status: sorted(pn for pn, r in rows.items() if r["status"] == status)
               for status in ("added", "removed", "changed", "error")}
     return 0, {"a": label_a, "b": label_b, "frame": "each PN definition in its model frame", **listed,
-               "parts": rows, "timings_s": {"total_s": round(time.perf_counter() - started, 3)}}
+               "parts": rows, "manufacturing": compare_manufacturing(made[label_a], made[label_b]),
+               "timings_s": {"total_s": round(time.perf_counter() - started, 3)}}

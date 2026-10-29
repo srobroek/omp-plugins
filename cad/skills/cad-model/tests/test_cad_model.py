@@ -9,13 +9,16 @@ cadmodel directly and need neither uv nor OCP.
 
 from __future__ import annotations
 
+import contextlib
 import csv
+import hashlib
 import itertools
 import json
 import math
 import os
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -34,7 +37,7 @@ KERNELS = ("cadquery", "build123d")
 FINDING_KEYS = {"pn", "check", "type", "message", "where"}
 
 sys.path.insert(0, str(SCRIPTS))
-from cadmodel import build, check, diff, mesh, occ  # noqa: E402 - stdlib-only imports; OCP loads on first use
+from cadmodel import build, check, diff, manufacture, mesh, occ, orientation  # noqa: E402 - stdlib-only imports; OCP loads on first use
 
 AP242 = "AP242_MANAGED_MODEL_BASED_3D_ENGINEERING"
 
@@ -55,6 +58,20 @@ ARM_V1 = 70 * 20 * 5 + math.pi * 16 * 5 - math.pi * 9 * 5
 # z 15..20 minus the shared bore.
 OVERLAP_V3 = 20 * 30 * 5 - math.pi * 9 * 5
 
+# The flat-strap project: TST-0003, a 90 deg arc of a 2 x 10 mm TPU strap (inner radius 8) on the base
+# top, printed as its flat blank, the arc's developed length at mid-thickness. Its volume is 90 pi mm^3
+# in both states. The printer is only 5 mm tall, so the blank (14.1 x 2 x 10 as modelled) must turn
+# its 2 mm thickness up: permutation xzy, printer X reversed to keep the rotation proper.
+STRAP = "TST-0003"
+STRAP_PARAMS = {"inner_radius": 8.0, "thickness": 2.0, "width": 10.0, "angle": 90.0, "z0": 20.0, "flat": "flat"}
+STRAP_V = math.pi / 4 * (10 ** 2 - 8 ** 2) * 10
+FLAT_LENGTH = math.pi / 2 * 9
+FLAT_STATE = ("manufacture: {relationship: different, state: flat, reason: elastic_bending, decision: DR-001,"
+              " volume_rel_tolerance: 1.0e-6}\n")
+FLAT_PRODUCT = "id: strap\nbuild_volume: {x_mm: 60, y_mm: 60, z_mm: 5, margin_mm: 0}\n"
+STRAP_JOINT = ("joints:\n  - {{id: J-001, type: fixed, parent: TST-0001, child: {pn}, axis: [0, 0, 1],"
+               " origin: [0, 0, 0], min: 0, max: 0, nominal: 0}}\n")
+
 
 def assert_vectors(case: unittest.TestCase, got: list[float], want: list[float], places: int) -> None:
     case.assertEqual(len(got), len(want))
@@ -72,15 +89,16 @@ def assert_same_holes(case: unittest.TestCase, got: list[dict], want: list[dict]
         case.assertAlmostEqual(g["depth_mm"], w["depth_mm"], places=places)
 
 
-def set_model(hw: Path, pn: str, kernel: str, template: str, params: dict, title: str, material: str) -> None:
+def set_model(hw: Path, pn: str, kernel: str, template: str, params: dict, title: str, material: str,
+              process: str = "cnc", extra: str = "", make_buy: str = "make") -> None:
     folder = hw / "parts" / pn
     folder.mkdir(parents=True, exist_ok=True)
     source = (FIXTURES / kernel / template).read_text(encoding="utf-8")
     source = re.sub(r"^PARAMS = .*$", f"PARAMS = {params!r}", source, count=1, flags=re.M)
     (folder / "model.py").write_text(source, encoding="utf-8")
     (folder / "part.yaml").write_text(
-        f"PN: {pn}\nrev: X1\ntitle: {title}\nmaterial: {material}\nprocess: cnc\nfinish: none\n"
-        f"mass_target: 100\nmake_buy: make\nsupplier: null\n", encoding="utf-8")
+        f"PN: {pn}\nrev: X1\ntitle: {title}\nmaterial: {material}\nprocess: {process}\nfinish: none\n"
+        f"mass_target: 100\nmake_buy: {make_buy}\nsupplier: null\n{extra}", encoding="utf-8")
 
 
 def two_part_project(root: Path, kernel: str) -> Path:
@@ -92,11 +110,28 @@ def two_part_project(root: Path, kernel: str) -> Path:
     return hw
 
 
-def set_arm(hw: Path, kernel: str, template: str = "arm.py", **changes: float) -> None:
+def set_strap(hw: Path, kernel: str, flat: str = "flat", manufacture: str = FLAT_STATE, pn: str = STRAP) -> None:
+    set_model(hw, pn, kernel, "strap.py", {**STRAP_PARAMS, "flat": flat}, "Strap", "TPU 95A", "fdm", manufacture)
+
+
+def flat_project(root: Path, kernel: str, name: str = "flat-hw") -> Path:
+    """The base block (CNC, made as installed) with the TPU strap fixed on its top (FDM, printed flat)."""
+    hw = root / kernel / name
+    hw.mkdir(parents=True)
+    (hw / "product.yaml").write_text(FLAT_PRODUCT, encoding="utf-8")
+    (hw / "assembly.yaml").write_text(STRAP_JOINT.format(pn=STRAP), encoding="utf-8")
+    set_model(hw, "TST-0001", kernel, "base.py", {"size": 40.0, "height": 20.0, "bore": 6.0}, *PARTS["TST-0001"][:2])
+    set_strap(hw, kernel)
+    return hw
+
+
+def set_arm(hw: Path, kernel: str, template: str = "arm.py", bought: bool = False, **changes: float) -> None:
+    """The swing arm, made to its model; `bought` makes it a catalogue part, which has no manufacturing output."""
     params = {**ARM, **changes}
     if template == "arm_invalid.py":
         params = {k: params[k] for k in ("length", "width", "thickness", "z0")}
-    set_model(hw, "TST-0002", kernel, template, params, *PARTS["TST-0002"][:2])
+    record = ("purchased", "procurement: {mode: catalog}\n", "buy") if bought else ("cnc", "", "make")
+    set_model(hw, "TST-0002", kernel, template, params, *PARTS["TST-0002"][:2], *record)
 
 
 def safe_project(root: Path, kernel: str) -> Path:
@@ -125,20 +160,31 @@ def cli(*args: str) -> tuple[subprocess.CompletedProcess[str], dict, float]:
 
 
 def kernel_sequence(root: Path, kernel: str) -> dict:
-    """Build v1..v4 of the two-part project and the safe-edit project in one kernel."""
+    """Build v1..v4 of the two-part project, the safe-edit project and the flat-strap project in one kernel.
+
+    v4 is tried first with the arm made to an invalid model: that run is refused and nothing is
+    sealed. v4 is then built with the same invalid arm bought from a catalogue, for `check` to catch."""
     hw = two_part_project(root, kernel)
     runs = {}
-    for label, arm in (("v1", {}), ("v2", {"length": 80.0}), ("v3", {"z0": 15.0}), ("v4", "invalid")):
-        if arm == "invalid":
-            set_arm(hw, kernel, "arm_invalid.py")
-        else:
-            set_arm(hw, kernel, **arm)
+    for label, arm in (("v1", {}), ("v2", {"length": 80.0}), ("v3", {"z0": 15.0})):
+        set_arm(hw, kernel, **arm)
         runs[label] = cli("run", str(hw), "--label", label)
         runs[f"{label}-model"] = (hw / "parts" / "TST-0002" / "model.py").read_text(encoding="utf-8")
+    set_arm(hw, kernel, "arm_invalid.py")
+    runs["v4-refused"] = cli("run", str(hw), "--label", "v4")
+    runs["v4-refused-state"] = {
+        "latest": json.loads((hw / "versions" / "latest.json").read_text(encoding="utf-8"))["label"],
+        "versions": sorted(p.name for p in (hw / "versions").iterdir())}
+    set_arm(hw, kernel, "arm_invalid.py", bought=True)
+    runs["v4"] = cli("run", str(hw), "--label", "v4")
+    runs["v4-model"] = (hw / "parts" / "TST-0002" / "model.py").read_text(encoding="utf-8")
     runs["checks"] = {label: cli("check", label, "--hw", str(hw)) for label in ("v1", "v2", "v3", "v4")}
     runs["diff"] = cli("diff", "v1", "v2", "--hw", str(hw))
     runs["safe"] = cli("run", str(safe_project(root, kernel)), "--label", "v1")
     runs["hw"] = hw
+    runs["flat-hw"] = flat_project(root, kernel)
+    runs["flat"] = cli("run", str(runs["flat-hw"]), "--label", "v1")
+    runs["flat-check"] = cli("check", "v1", "--hw", str(runs["flat-hw"]))
     return runs
 
 
@@ -305,6 +351,9 @@ class KernelChecks:
         self.assertAlmostEqual(arm["shared_mm3"], ARM_V1 - boss, places=3)
         self.assertEqual(base["status"], "unchanged")
         self.assertAlmostEqual(base["shared_mm3"], BASE_V, places=4)
+        made = result["manufacturing"]
+        self.assertEqual((made["changed"], made["parts"]["TST-0002"]["changed"]), (["TST-0002"], ["geometry"]))
+        self.assertEqual(made["parts"]["TST-0001"]["status"], "unchanged")
 
     def test_safe_edits_reject_impossible_results(self) -> None:
         expected = {"SAF-0001": "safe_cut rejected an impossible result",
@@ -322,6 +371,80 @@ class KernelChecks:
             self.assertIn(text, found[pn]["message"])
             self.assertTrue(found[pn]["where"].startswith("model.py:"), found[pn])
         self.assertFalse((self.runs["hw"].parent / "safe-hw" / "versions" / "v1").exists())
+
+    def test_an_invalid_made_part_blocks_the_version(self) -> None:
+        proc, result, _ = self.runs["v4-refused"]
+        self.assertEqual(proc.returncode, 1, proc.stderr[-3000:])
+        self.assertEqual([(f["pn"], f["check"], f["type"]) for f in result["findings"]],
+                         [("TST-0002", "manufacture", "ManufactureError")])
+        self.assertEqual(result["findings"][0].keys(), FINDING_KEYS)
+        self.assertIn("native: valid", result["findings"][0]["message"])
+        self.assertIn("native", result["manufacturing"]["TST-0002"]["blocking_failures"])
+        # nothing sealed, no partial folder left, latest still names v3
+        self.assertEqual(self.runs["v4-refused-state"], {"latest": "v3", "versions": ["latest.json", "v1", "v2", "v3"]})
+
+    def test_versions_snapshot_the_record_they_were_built_from(self) -> None:
+        hw = self.runs["hw"]
+        v2 = hw / "versions" / "v2"
+        manifest = json.loads((v2 / "manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(sorted(manifest["record"]), ["record/assembly.yaml", "record/parts/TST-0001/part.yaml",
+                                                      "record/parts/TST-0002/part.yaml", "record/product.yaml"])
+        for name, sha in manifest["record"].items():
+            self.assertEqual(manifest["files"][name], sha)
+        # v2's arm was made; the current record buys it (v4), and the snapshot keeps the old state
+        self.assertIn("make_buy: make", (v2 / "record" / "parts" / "TST-0002" / "part.yaml").read_text(encoding="utf-8"))
+        self.assertIn("make_buy: buy", (hw / "parts" / "TST-0002" / "part.yaml").read_text(encoding="utf-8"))
+        v4 = json.loads((hw / "versions" / "v4" / "manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(sorted(v4["manufacturing"]), ["TST-0001"])  # a catalogue buy has no manufacturing output
+        self.assertEqual(self.runs["checks"]["v1"][1]["checks"]["artifact_integrity"]["status"], "pass")
+
+    def test_the_flat_strap_is_built_in_its_manufacturing_state(self) -> None:
+        proc, result, _ = self.runs["flat"]
+        self.assertEqual(proc.returncode, 0, proc.stdout[-3000:] + proc.stderr[-3000:])
+        folder = self.runs["flat-hw"] / "versions" / "v1"
+        made = folder / "manufacturing"
+        self.assertEqual(sorted(p.name for p in (made / STRAP).iterdir()), ["manufacturing.json", "part.step", "part.stl"])
+        self.assertEqual(sorted(p.name for p in (made / "TST-0001").iterdir()), ["manufacturing.json", "part.step"])
+        stl = (made / STRAP / "part.stl").read_bytes()
+        self.assertEqual(len(stl), 84 + 50 * struct.unpack_from("<I", stl, 80)[0], "binary STL")
+        manifest = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
+        strap, base = manifest["manufacturing"][STRAP], manifest["manufacturing"]["TST-0001"]
+        self.assertEqual((strap["PN"], strap["rev"], strap["material"], strap["product"]),
+                         (STRAP, "X1", "TPU 95A", f"{STRAP} Strap"))
+        self.assertEqual(strap["state"], {"relationship": "different", "name": "flat", "reason": "elastic_bending",
+                                          "decision": "DR-001", "source": "build_manufacture"})
+        self.assertAlmostEqual(strap["native"]["kernel_volume_mm3"], STRAP_V, places=6)
+        # the base block has no hook: its installed definition is reused, not built again
+        self.assertEqual((base["state"]["relationship"], base["state"]["source"]), ("same", "installed definition"))
+        self.assertEqual(base["native"]["kernel_volume_mm3"], base["installed"]["kernel_volume_mm3"])
+        self.assertEqual(base["placement"]["transform"], [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]])
+        placement = strap["placement"]
+        self.assertEqual((placement["method"], placement["orientation"], placement["determinant"]),
+                         ("axis_aligned", "xzy", 1.0))
+        self.assertEqual([row[:3] for row in placement["transform"]], [[-1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 1.0, 0.0]])
+        for name, sha in strap["files"].items():
+            self.assertEqual(hashlib.sha256((made / STRAP / name).read_bytes()).hexdigest(), sha, name)
+            self.assertEqual(manifest["files"][f"manufacturing/{STRAP}/{name}"], sha)
+
+        proc, checked, _ = self.runs["flat-check"]
+        section = checked.get("checks", {}).get("manufacturing")
+        self.assertEqual(proc.returncode, 0, json.dumps(section, indent=1)[:4000] + proc.stderr[-2000:])
+        self.assertEqual((section["status"], section["complete"], section["blocking_failures"]), ("pass", True, []))
+        rows = section["parts"][STRAP]["checks"]
+        self.assertEqual({name: row["status"] for name, row in rows.items()},
+                         dict.fromkeys(("outputs", "record", "native", "identity", "step", "mesh", "placement"), "pass"))
+        self.assertEqual((rows["step"]["units"], rows["step"]["product"], rows["step"]["solids"]), (["mm"], f"{STRAP} Strap", 1))
+        self.assertLessEqual(rows["step"]["rel_error"], 1e-6)
+        self.assertAlmostEqual(rows["identity"]["allowed_mm3"], STRAP_V * 1e-6, places=10)
+        self.assertLessEqual(rows["identity"]["difference_mm3"], rows["identity"]["allowed_mm3"])
+        self.assertEqual((rows["mesh"]["watertight"], rows["mesh"]["winding_consistent"], rows["mesh"]["shells"]),
+                         (True, True, 1))
+        low, high = rows["placement"]["bbox_mm"]["min"], rows["placement"]["bbox_mm"]["max"]
+        assert_vectors(self, [high[i] - low[i] for i in range(3)], [FLAT_LENGTH, 10.0, 2.0], places=6)
+        assert_vectors(self, [(low[0] + high[0]) / 2, (low[1] + high[1]) / 2, low[2]], [30.0, 30.0, 0.0], places=6)
+        self.assertNotIn("mesh", section["parts"]["TST-0001"]["checks"])
+        self.assertEqual(checked["checks"]["build_volume"]["parts"][STRAP]["status"], "pass")
+        self.assertEqual(checked["checks"]["artifact_integrity"], {"status": "pass", "blocking": True, "problems": []})
 
 
 @unittest.skipUnless(shutil.which("uv"), "uv is required for the kernel environments")
@@ -348,6 +471,165 @@ class CrossKernelTests(unittest.TestCase):
         self.assertEqual(checks[0].keys(), checks[1].keys())
         self.assertEqual(checks[0]["checks"].keys(), checks[1]["checks"].keys())
         self.assertEqual(runs[KERNELS[0]]["v1"][1].keys(), runs[KERNELS[1]]["v1"][1].keys())
+
+    def test_kernels_place_the_flat_strap_alike(self) -> None:
+        runs = all_runs()
+        entries = [json.loads((runs[k]["flat-hw"] / "versions" / "v1" / "manifest.json").read_text())["manufacturing"]
+                   for k in KERNELS]
+        self.assertEqual(entries[0].keys(), entries[1].keys())
+        for pn in entries[0]:
+            a, b = entries[0][pn], entries[1][pn]
+            self.assertLess(abs(a["native"]["kernel_volume_mm3"] - b["native"]["kernel_volume_mm3"]) / STRAP_V, 1e-6)
+            self.assertEqual((a["placement"]["method"], a["placement"]["orientation"]),
+                             (b["placement"]["method"], b["placement"]["orientation"]))
+            for ra, rb in zip(a["placement"]["transform"], b["placement"]["transform"]):
+                assert_vectors(self, ra, rb, places=6)
+
+
+def version_state(hw: Path) -> dict:
+    """What a failed run must leave unchanged: the latest label and the entries of hw/versions/."""
+    latest = hw / "versions" / "latest.json"
+    return {"latest": json.loads(latest.read_text(encoding="utf-8"))["label"] if latest.is_file() else None,
+            "versions": sorted(p.name for p in (hw / "versions").iterdir())}
+
+
+def tree_hashes(folder: Path) -> dict[str, str]:
+    return {p.relative_to(folder).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
+            for p in sorted(folder.rglob("*")) if p.is_file()}
+
+
+@unittest.skipUnless(shutil.which("uv"), "uv is required for the kernel environments")
+class ManufacturingStateTests(unittest.TestCase):
+    """The flat-strap project (CadQuery only): refused manufacturing declarations and states never seal a
+    version, a manufacturing-only change shows in diff, a tampered STL fails check, and a sealed version
+    whose latest pointer could not be written is kept and pointed at without a rebuild."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.tmp = tempfile.TemporaryDirectory()
+        root = Path(cls.tmp.name)
+        cls.hw = hw = flat_project(root, "cadquery")
+        cls.runs, cls.states = {"v1": cli("run", str(hw), "--label", "v1")}, {}
+        base = {"size": 40.0, "height": 20.0, "bore": 6.0}
+
+        def attempt(name: str, extra: tuple[str, ...] = ()) -> None:
+            """Run v2 with `extra` parts fixed to the base too, then remove them and their joints again."""
+            joints = [STRAP_JOINT.format(pn=pn).replace("J-001", f"J-{i:03d}") for i, pn in enumerate((STRAP, *extra), 1)]
+            (hw / "assembly.yaml").write_text("joints:\n" + "".join(j.removeprefix("joints:\n") for j in joints),
+                                              encoding="utf-8")
+            cls.runs[name] = cli("run", str(hw), "--label", "v2")
+            cls.states[name] = version_state(hw)
+            (hw / "assembly.yaml").write_text(STRAP_JOINT.format(pn=STRAP), encoding="utf-8")
+            for pn in extra:
+                shutil.rmtree(hw / "parts" / pn)
+
+        # The hook without a declaration, a declaration without a hook, a hook that is not callable.
+        set_strap(hw, "cadquery", manufacture="")
+        set_model(hw, "TST-0004", "cadquery", "base.py", base, "Spacer", "PETG", "fdm", FLAT_STATE)
+        set_strap(hw, "cadquery", pn="TST-0005")
+        with (hw / "parts" / "TST-0005" / "model.py").open("a", encoding="utf-8") as model:
+            model.write('\nbuild_manufacture = "flat"\n')
+        attempt("contract", ("TST-0004", "TST-0005"))
+        # A different state without a volume tolerance, refused before any kernel runs.
+        set_strap(hw, "cadquery", manufacture=FLAT_STATE.replace(", volume_rel_tolerance: 1.0e-6", ""))
+        attempt("tolerance")
+        # A blank 10 % too long, a blank in two pieces, and a blank that is an open shell.
+        set_strap(hw, "cadquery", flat="long")
+        set_strap(hw, "cadquery", flat="split", pn="TST-0004")
+        set_strap(hw, "cadquery", flat="open", pn="TST-0005")
+        attempt("identity", ("TST-0004", "TST-0005"))
+        # A manufacturing-only change: the declared tolerance; the installed definitions stay identical.
+        set_strap(hw, "cadquery", manufacture=FLAT_STATE.replace("1.0e-6", "2.0e-6"))
+        cls.runs["v2"] = cli("run", str(hw), "--label", "v2")
+        cls.runs["diff"] = cli("diff", "v1", "v2", "--hw", str(hw))
+        # One triangle cut from a sealed STL: a crack, and bytes the manifest no longer matches.
+        tampered = root / "tampered" / "hw"
+        shutil.copytree(hw, tampered)
+        stl = tampered / "versions" / "v2" / "manufacturing" / STRAP / "part.stl"
+        data = stl.read_bytes()
+        stl.write_bytes(data[:80] + struct.pack("<I", struct.unpack_from("<I", data, 80)[0] - 1) + data[84:-50])
+        cls.runs["tampered"] = cli("check", "v2", "--hw", str(tampered))
+        # The pointer write fails after v3 is sealed: latest.json is a directory.
+        (hw / "versions" / "latest.json").unlink()
+        (hw / "versions" / "latest.json").mkdir()
+        cls.runs["v3"] = cli("run", str(hw), "--label", "v3")
+        cls.states["v3"] = version_state(hw)
+        cls.v3_files = tree_hashes(hw / "versions" / "v3")
+        (hw / "versions" / "latest.json").rmdir()
+        cls.runs["stale"] = cli("latest", str(hw), "--label", "v2")
+        cls.runs["latest"] = cli("latest", str(hw), "--label", "v3")
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls.tmp.cleanup()
+
+    def findings(self, name: str) -> dict:
+        proc, result, _ = self.runs[name]
+        self.assertEqual(proc.returncode, 1, proc.stdout[-2000:] + proc.stderr[-3000:])
+        self.assertEqual(self.states[name], {"latest": "v1", "versions": ["latest.json", "v1"]}, name)
+        self.assertTrue(all(f.keys() == FINDING_KEYS for f in result["findings"]), result["findings"])
+        return {f["pn"]: f for f in result["findings"]}
+
+    def test_a_hook_needs_its_declaration_and_a_declaration_its_callable_hook(self) -> None:
+        self.assertEqual(self.runs["v1"][0].returncode, 0, self.runs["v1"][0].stderr[-3000:])
+        found = self.findings("contract")
+        self.assertEqual(sorted(found), [STRAP, "TST-0004", "TST-0005"])
+        self.assertTrue(all(f["type"] == "ContractError" for f in found.values()), found)
+        self.assertIn("does not declare manufacture.relationship: different", found[STRAP]["message"])
+        self.assertIn("defines no build_manufacture", found["TST-0004"]["message"])
+        self.assertIn("not callable", found["TST-0005"]["message"])
+
+    def test_a_different_state_without_a_tolerance_is_refused_before_the_kernels(self) -> None:
+        found = self.findings("tolerance")
+        self.assertEqual((found[STRAP]["check"], found[STRAP]["type"]), ("manufacture", "ContractError"))
+        self.assertIn("without a volume tolerance", found[STRAP]["message"])
+        self.assertNotIn("runners", self.runs["tolerance"][1])
+
+    def test_volume_drift_solid_count_and_an_invalid_state_block_the_version(self) -> None:
+        found = self.findings("identity")
+        self.assertEqual(sorted(found), [STRAP, "TST-0004", "TST-0005"])
+        self.assertTrue(all((f["check"], f["type"]) == ("manufacture", "ManufactureError") for f in found.values()))
+        self.assertIn("identity: volume_within_tolerance", found[STRAP]["message"])
+        self.assertIn("same_solids", found["TST-0004"]["message"])
+        self.assertIn("native: valid", found["TST-0005"]["message"])
+        identity = self.runs["identity"][1]["manufacturing"][STRAP]["checks"]["identity"]
+        self.assertAlmostEqual(identity["difference_mm3"], STRAP_V * 0.1, places=6)
+        self.assertAlmostEqual(identity["allowed_mm3"], STRAP_V * 1e-6, places=10)
+
+    def test_a_manufacturing_only_change_shows_in_diff(self) -> None:
+        self.assertEqual(self.runs["v2"][0].returncode, 0, self.runs["v2"][0].stderr[-3000:])
+        proc, result, _ = self.runs["diff"]
+        self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+        self.assertEqual((result["changed"], result["added"], result["removed"]), ([], [], []))
+        self.assertEqual(result["manufacturing"]["changed"], [STRAP])
+        self.assertEqual(result["manufacturing"]["parts"][STRAP]["changed"], ["tolerance"])
+
+    def test_a_cracked_stl_fails_check(self) -> None:
+        proc, result, _ = self.runs["tampered"]
+        self.assertEqual(proc.returncode, 1, proc.stderr[-2000:])
+        self.assertIn("manufacturing", result["blocking_failures"])
+        self.assertIn("artifact_integrity", result["blocking_failures"])
+        row = result["checks"]["manufacturing"]["parts"][STRAP]
+        self.assertEqual(row["blocking_failures"], ["mesh", "outputs"])
+        self.assertEqual(row["checks"]["outputs"]["changed"], ["part.stl"])
+        self.assertIn("watertight", row["checks"]["mesh"]["failed"])
+        self.assertEqual(result["checks"]["manufacturing"]["parts"]["TST-0001"]["status"], "pass")
+
+    def test_a_sealed_version_keeps_and_reconciles_a_failed_latest_pointer(self) -> None:
+        proc, _, _ = self.runs["v3"]
+        self.assertEqual(proc.returncode, 2, proc.stderr[-2000:])
+        self.assertIn("v3 is sealed", proc.stderr)
+        self.assertIn("cad_model.py latest", proc.stderr)
+        self.assertEqual(self.states["v3"]["versions"], ["latest.json", "v1", "v2", "v3"])  # no .latest.json.tmp left
+        stale, _, _ = self.runs["stale"]
+        self.assertEqual(stale.returncode, 2, stale.stderr[-2000:])
+        self.assertIn("not the newest", stale.stderr)
+        proc, result, _ = self.runs["latest"]
+        self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+        self.assertEqual(result["verified_files"], len(self.v3_files) - 1)
+        latest = json.loads((self.hw / "versions" / "latest.json").read_text(encoding="utf-8"))
+        self.assertEqual((latest["label"], latest["manufacturing"][STRAP]), ("v3", f"versions/v3/manufacturing/{STRAP}"))
+        self.assertEqual(tree_hashes(self.hw / "versions" / "v3"), self.v3_files)
 
 
 @unittest.skipUnless(shutil.which("uv"), "uv is required for the kernel environments")
@@ -645,19 +927,45 @@ class PairClearanceBuildTests(unittest.TestCase):
         self.assertAlmostEqual(row["clearance_mm"], 0.8, places=6)
 
 
+class BoxPart:
+    """A test double for a box-shaped part: `extents` along the unit `axes` (rows, in the model frame).
+
+    `measured` patches the OCP measurements cadmodel.orientation takes (the model box, the oriented
+    box, and the box after a rotation) with the exact values for this box."""
+
+    def __init__(self, extents: tuple[float, float, float], axes=orientation.IDENTITY) -> None:
+        self.extents, self.axes = extents, axes
+
+    def box(self, rotation=orientation.IDENTITY) -> tuple[tuple[float, ...], tuple[float, ...]]:
+        size = [sum(e * abs(sum(rotation[i][j] * a[j] for j in range(3))) for e, a in zip(self.extents, self.axes))
+                for i in range(3)]
+        return tuple(-s / 2 for s in size), tuple(s / 2 for s in size)
+
+    def measured(self, oriented: bool = True) -> contextlib.ExitStack:
+        stack = contextlib.ExitStack()
+        stack.enter_context(mock.patch.object(occ, "bbox", side_effect=lambda shape: self.box()))
+        stack.enter_context(mock.patch.object(orientation, "turned_box", side_effect=lambda shape, rot: self.box(rot)))
+        stack.enter_context(mock.patch.object(occ, "oriented_bbox", return_value=(self.extents, self.axes))
+                            if oriented else
+                            mock.patch.object(occ, "oriented_bbox", side_effect=AssertionError("fallback should not run")))
+        return stack
+
+
+def fdm_record(tmp: str, build_volume: str) -> Path:
+    hw = Path(tmp)
+    (hw / "parts" / "TST-0001").mkdir(parents=True)
+    (hw / "product.yaml").write_text(build_volume, encoding="utf-8")
+    (hw / "parts" / "TST-0001" / "part.yaml").write_text("process: fdm\n", encoding="utf-8")
+    return hw
+
+
 class CheckRuleTests(unittest.TestCase):
     """check's verdicts on given measurements; needs no OCP."""
     def test_build_volume_accepts_axis_permutation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            hw = Path(tmp)
-            (hw / "parts" / "TST-0001").mkdir(parents=True)
-            (hw / "product.yaml").write_text(
-                "build_volume: {x_mm: 35, y_mm: 10, z_mm: 5, margin_mm: 0}\n", encoding="utf-8")
-            (hw / "parts" / "TST-0001" / "part.yaml").write_text("process: fdm\n", encoding="utf-8")
-            shape = mock.Mock()
-            with mock.patch.object(occ, "bbox", return_value=((-17.5, -5.0, -2.5), (17.5, 5.0, 2.5))):
-                with mock.patch.object(occ, "oriented_bbox", side_effect=AssertionError("fallback should not run")):
-                    result = check.build_volume(hw, {"TST-0001": mock.Mock(shape=shape)})
+            hw = fdm_record(tmp, "build_volume: {x_mm: 35, y_mm: 10, z_mm: 5, margin_mm: 0}\n")
+            with BoxPart((35.0, 10.0, 5.0)).measured(oriented=False):
+                result = check.build_volume(hw, {"TST-0001": mock.Mock(shape=mock.Mock())})
         self.assertEqual(result["status"], "pass")
         row = result["parts"]["TST-0001"]
         self.assertEqual((row["orientation"], row["method"], row["size_mm"]),
@@ -665,49 +973,31 @@ class CheckRuleTests(unittest.TestCase):
 
     def test_build_volume_chooses_lowest_print_height(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            hw = Path(tmp)
-            (hw / "parts" / "TST-0001").mkdir(parents=True)
-            (hw / "product.yaml").write_text(
-                "build_volume: {x_mm: 35, y_mm: 20, z_mm: 10, margin_mm: 0}\n", encoding="utf-8")
-            (hw / "parts" / "TST-0001" / "part.yaml").write_text("process: fdm\n", encoding="utf-8")
-            with mock.patch.object(occ, "bbox", return_value=((-17.5, -5.0, -10.0), (17.5, 5.0, 10.0))):
-                with mock.patch.object(occ, "oriented_bbox", side_effect=AssertionError("AABB rotation should fit")):
-                    result = check.build_volume(hw, {"TST-0001": mock.Mock(shape=mock.Mock())})
+            hw = fdm_record(tmp, "build_volume: {x_mm: 35, y_mm: 20, z_mm: 10, margin_mm: 0}\n")
+            with BoxPart((35.0, 10.0, 20.0)).measured(oriented=False):
+                result = check.build_volume(hw, {"TST-0001": mock.Mock(shape=mock.Mock())})
         row = result["parts"]["TST-0001"]
         self.assertEqual((row["orientation"], row["size_mm"]), ("xzy", [35.0, 20.0, 10.0]))
+        self.assertEqual(row["rotation"], [[-1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 1.0, 0.0]])
+        self.assertEqual(row["determinant"], 1.0)
 
     def test_build_volume_falls_back_for_rotated_plate(self) -> None:
+        half = math.sqrt(0.5)
         with tempfile.TemporaryDirectory() as tmp:
-            hw = Path(tmp)
-            (hw / "parts" / "TST-0001").mkdir(parents=True)
-            (hw / "product.yaml").write_text(
-                "build_volume: {x_mm: 256, y_mm: 256, z_mm: 256, margin_mm: 5}\n", encoding="utf-8")
-            (hw / "parts" / "TST-0001" / "part.yaml").write_text("process: fdm\n", encoding="utf-8")
-            shape = mock.Mock()
-            with mock.patch.object(occ, "bbox", return_value=((-171.0, -171.0, -2.5), (171.0, 171.0, 2.5))):
-                with mock.patch.object(occ, "oriented_bbox", return_value=((240.0, 240.0, 5.0),
-                                                                            ((0.707, 0.707, 0.0),
-                                                                             (-0.707, 0.707, 0.0),
-                                                                             (0.0, 0.0, 1.0)))):
-                    result = check.build_volume(hw, {"TST-0001": mock.Mock(shape=shape)})
+            hw = fdm_record(tmp, "build_volume: {x_mm: 256, y_mm: 256, z_mm: 256, margin_mm: 5}\n")
+            with BoxPart((240.0, 240.0, 5.0), ((half, half, 0.0), (-half, half, 0.0), (0.0, 0.0, 1.0))).measured():
+                result = check.build_volume(hw, {"TST-0001": mock.Mock(shape=mock.Mock())})
         row = result["parts"]["TST-0001"]
         self.assertEqual((result["status"], row["orientation"], row["method"]), ("pass", "oriented", "oriented"))
         self.assertEqual(row["size_mm"], [240.0, 240.0, 5.0])
         self.assertEqual(row["axes"][2], [0.0, 0.0, 1.0])
+        self.assertAlmostEqual(row["determinant"], 1.0, places=12)
 
     def test_build_volume_fails_if_aabb_and_oriented_box_do_not_fit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            hw = Path(tmp)
-            (hw / "parts" / "TST-0001").mkdir(parents=True)
-            (hw / "product.yaml").write_text(
-                "build_volume: {x_mm: 256, y_mm: 256, z_mm: 256, margin_mm: 5}\n", encoding="utf-8")
-            (hw / "parts" / "TST-0001" / "part.yaml").write_text("process: fdm\n", encoding="utf-8")
-            with mock.patch.object(occ, "bbox", return_value=((-150.0, -10.0, -10.0), (150.0, 10.0, 10.0))):
-                with mock.patch.object(occ, "oriented_bbox", return_value=((300.0, 20.0, 20.0),
-                                                                            ((1.0, 0.0, 0.0),
-                                                                             (0.0, 1.0, 0.0),
-                                                                             (0.0, 0.0, 1.0)))):
-                    result = check.build_volume(hw, {"TST-0001": mock.Mock(shape=mock.Mock())})
+            hw = fdm_record(tmp, "build_volume: {x_mm: 256, y_mm: 256, z_mm: 256, margin_mm: 5}\n")
+            with BoxPart((300.0, 20.0, 20.0)).measured():
+                result = check.build_volume(hw, {"TST-0001": mock.Mock(shape=mock.Mock())})
         self.assertEqual((result["status"], result["blocking_failures"]), ("fail", ["TST-0001"]))
         message = result["parts"]["TST-0001"]["message"]
         self.assertIn("TST-0001", message)
@@ -716,10 +1006,7 @@ class CheckRuleTests(unittest.TestCase):
 
     def test_build_volume_warns_when_not_declared(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            hw = Path(tmp)
-            (hw / "parts" / "TST-0001").mkdir(parents=True)
-            (hw / "product.yaml").write_text("id: test\n", encoding="utf-8")
-            (hw / "parts" / "TST-0001" / "part.yaml").write_text("process: fdm\n", encoding="utf-8")
+            hw = fdm_record(tmp, "id: test\n")
             result = check.build_volume(hw, {"TST-0001": mock.Mock(shape=mock.Mock())})
         self.assertEqual((result["status"], result["blocking"]), ("warn", False))
         self.assertIn("TST-0001", result["parts"])
@@ -896,6 +1183,101 @@ class CheckRuleTests(unittest.TestCase):
         self.assertEqual((result["parts"][PIN]["joint"], result["parts"][PIN]["ok"]), ("J-001", True))
         self.assertEqual([(f["joint"], f["ok"]) for f in result["fixed_joints"]], [("J-002", False)])
         self.assertEqual(result["status"], "fail")
+
+
+class OrientationRuleTests(unittest.TestCase):
+    """cadmodel.orientation: one proper rotation per fit, measured after it is applied; needs no OCP."""
+
+    def test_every_permutation_is_a_proper_rotation_onto_its_named_axes(self) -> None:
+        for name in orientation.ORIENTATIONS:
+            with self.subTest(orientation=name):
+                rotation = orientation.permutation_rotation(name)
+                self.assertEqual(orientation.determinant(rotation), 1.0)
+                self.assertTrue(orientation.is_proper(rotation))
+                self.assertEqual([abs(rotation[i]["xyz".index(axis)]) for i, axis in enumerate(name)], [1.0] * 3)
+
+    def test_a_mirror_a_scale_or_a_shear_is_not_proper(self) -> None:
+        for rows in (((-1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0)),
+                     ((2.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0)),
+                     ((1.0, 0.1, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))):
+            self.assertFalse(orientation.is_proper(rows), rows)
+
+    def test_an_asymmetric_volume_takes_the_oriented_box_axes_in_the_order_that_fits(self) -> None:
+        """The tall axis of a tilted plate fits only along printer X; testing its oriented-box extents in
+        their own order and then lowering the height would have claimed a fit 280 mm deep in Y."""
+        a2 = tuple(v / math.sqrt(3) for v in (1.0, 1.0, 1.0))
+        a0 = tuple(v / math.sqrt(2) for v in (1.0, -1.0, 0.0))
+        a1 = tuple(v / math.sqrt(6) for v in (1.0, 1.0, -2.0))
+        part = BoxPart((10.0, 40.0, 280.0), (a0, a1, a2))
+        volume = orientation.BuildVolume((300.0, 50.0, 300.0), 0.0, orientation.ORIENTATIONS)
+        with part.measured():
+            _, found, _ = orientation.fit(mock.Mock(), volume)
+        self.assertEqual((found.method, found.orientation), ("oriented", "oriented"))
+        assert_vectors(self, list(found.size_mm), [280.0, 40.0, 10.0], places=9)
+        self.assertTrue(orientation.fits(found.size_mm, volume.usable_mm))
+        self.assertTrue(orientation.is_proper(found.rotation))
+
+    def test_a_declared_volume_reads_from_the_product_record(self) -> None:
+        self.assertIsNone(orientation.BuildVolume.declared({"id": "x"}))
+        volume = orientation.BuildVolume.declared({"build_volume": {"x_mm": 256, "y_mm": 200, "z_mm": 100,
+                                                                    "margin_mm": 5, "orientations": ["xyz", "zyx"]}})
+        self.assertEqual((volume.usable_mm, volume.orientations), ((246.0, 190.0, 90.0), ("xyz", "zyx")))
+        with self.assertRaises(ValueError):
+            orientation.BuildVolume.declared({"build_volume": {"x_mm": "wide", "y_mm": 1, "z_mm": 1}})
+
+
+class ManufactureRuleTests(unittest.TestCase):
+    """Which parts get manufacturing outputs and which declarations are refused; needs no OCP."""
+
+    @staticmethod
+    def part(pn: str, **fields) -> dict:
+        return {"PN": pn, "rev": "X1", "title": "Part", "material": "PETG", "process": "fdm", "finish": "none",
+                "mass_target": 1, "make_buy": "make", "supplier": None, **fields}
+
+    def test_custom_made_parts_are_planned_and_catalogue_buys_are_not(self) -> None:
+        records = {"TST-0001": self.part("TST-0001"),
+                   "TST-0002": self.part("TST-0002", make_buy="buy", process="cnc",
+                                         procurement={"mode": "made_to_drawing"}),
+                   "TST-0003": self.part("TST-0003", make_buy="buy", process="purchased", procurement={"mode": "catalog"})}
+        plans, refused = manufacture.plan(records)
+        self.assertEqual((sorted(plans), refused), (["TST-0001", "TST-0002"], []))
+        self.assertEqual(plans["TST-0001"].policy.outputs, ("part.step", "part.stl", "manufacturing.json"))
+        self.assertEqual(plans["TST-0002"].policy.outputs, ("part.step", "manufacturing.json"))
+        self.assertEqual((plans["TST-0001"].policy.relationship, plans["TST-0001"].policy.volume_tolerance_mm3(1000.0)),
+                         ("same", 1000.0 * 1e-9))
+
+    def test_a_different_state_needs_its_declaration_and_a_positive_tolerance(self) -> None:
+        state = {"relationship": "different", "state": "flat", "reason": "elastic_bending", "decision": "DR-001"}
+        records = {"TST-0001": self.part("TST-0001", manufacture=state),
+                   "TST-0002": self.part("TST-0002", manufacture={**state, "decision": None, "volume_rel_tolerance": 1e-6}),
+                   "TST-0003": self.part("TST-0003", manufacture={**state, "volume_rel_tolerance": 0.0}),
+                   "TST-0004": self.part("TST-0004", manufacture={**state, "volume_abs_tolerance_mm3": 0.5})}
+        plans, refused = manufacture.plan(records)
+        self.assertEqual(sorted(plans), ["TST-0004"])
+        reasons = dict(refused)
+        self.assertIn("without a volume tolerance", reasons["TST-0001"])
+        self.assertIn("also needs decision", reasons["TST-0002"])
+        self.assertIn("tolerance refused", reasons["TST-0003"])
+        self.assertEqual(plans["TST-0004"].policy.volume_tolerance_mm3(100.0), 0.5)
+
+    def test_diff_names_a_manufacturing_only_change(self) -> None:
+        entry = {"state": {"relationship": "different", "name": "flat"}, "tolerance": {"volume_rel": 1e-6, "volume_abs_mm3": 0.0},
+                 "mesh": {"linear_deflection_mm": 0.05}, "build_volume": None,
+                 "native": {"kernel_volume_mm3": 100.0, "kernel_solids": 1},
+                 "placement": {"method": "axis_aligned", "orientation": "xzy", "transform": [[1.0, 0.0, 0.0, 0.0]] * 3}}
+        looser = {**entry, "tolerance": {"volume_rel": 2e-6, "volume_abs_mm3": 0.0}}
+        result = diff.compare_manufacturing({"TST-0001": entry, "TST-0002": entry}, {"TST-0001": looser, "TST-0003": entry})
+        self.assertEqual(result["changed"], ["TST-0001", "TST-0002", "TST-0003"])
+        self.assertEqual(result["parts"]["TST-0001"]["changed"], ["tolerance"])
+        self.assertEqual((result["parts"]["TST-0002"]["status"], result["parts"]["TST-0003"]["status"]), ("removed", "added"))
+        self.assertFalse(diff.compare_manufacturing(None, {})["available"])
+
+    def test_latest_names_each_manufacturing_folder(self) -> None:
+        manifest = {"parts": {"TST-0001": {"step": "parts/TST-0001.step"}},
+                    "manufacturing": {"TST-0001": {"path": "manufacturing/TST-0001"}, "TST-0002": {"path": None}}}
+        latest = build.latest_pointer("v3", manifest)
+        self.assertEqual(latest["manufacturing"], {"TST-0001": "versions/v3/manufacturing/TST-0001"})
+        self.assertEqual(latest["parts"], {"TST-0001": "versions/v3/parts/TST-0001.step"})
 
 
 class VersionLabelTests(unittest.TestCase):

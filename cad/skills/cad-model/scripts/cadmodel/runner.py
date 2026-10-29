@@ -5,7 +5,8 @@ orchestrator (`cad_model.py run`) sends one JSON request on stdin, naming the fi
 
     {"result": "/abs/tmp/cadquery.json",
      "parts": [{"pn": "LMP-0003", "name": "LMP-0003 Upper link", "model_frame": "assembly_zero",
-                "model": "/abs/hw/parts/LMP-0003/model.py", "step": "/abs/out/LMP-0003.step"}]}
+                "model": "/abs/hw/parts/LMP-0003/model.py", "step": "/abs/out/LMP-0003.step",
+                "manufacture": "different", "manufacture_step": "/abs/states/LMP-0003.step"}]}
 
 and reads one JSON result from that file once the runner exits, identical in shape for every kernel:
 
@@ -13,7 +14,9 @@ and reads one JSON result from that file once the runner exits, identical in sha
      "import_s": 3.7,
      "parts": {"LMP-0003": {"ok": true, "params": {...}, "kernel_volume_mm3": 1234.5,
                             "kernel_solids": 1, "kernel_valid": true, "kernel_errors": [], "build_s": 0.4,
-                            "drawing_features": {"elbow_bore": {...}} or null},
+                            "drawing_features": {"elbow_bore": {...}} or null,
+                            "manufacture": {"kernel_volume_mm3": 1234.5, "kernel_solids": 1,
+                                            "kernel_valid": true, "kernel_errors": []} or null},
                "LMP-0004": {"ok": false, "error": {"type": "SafeEditError", "message": "...",
                                                    "where": "model.py:42 in build"}}}}
 
@@ -21,6 +24,12 @@ and reads one JSON result from that file once the runner exits, identical in sha
 `feature_locators`: JSON primitives only, never a kernel object; null when the model has no hook.
 Each locator's `frame` must be the part's `model_frame` (part.yaml; `assembly_zero` when the
 request omits it), the frame build returns its shape in and the per-part STEP keeps.
+
+`manufacture` is part.yaml `manufacture.relationship` of a custom-made part (`same` or
+`different`), absent or null otherwise. The optional `build_manufacture(params)` hook builds the
+manufacturing state, such as a bent strap's flat blank, and runs exactly when it is `different`:
+the runner writes that shape to `manufacture_step` and reports its kernel facts under `manufacture`
+(null without the hook). The orchestrator places and exports it; the hook writes no files.
 
 A part that fails never stops the others. stdout and stderr are console output only: model output
 and OCCT's console messages land there and never reach the result, whenever they are flushed.
@@ -174,7 +183,32 @@ def feature_locators(value: Any, frame: str = "assembly_zero") -> dict[str, Any]
     return features
 
 
-def build_part(kernel: str, request: Mapping[str, str]) -> dict[str, Any]:
+def _shape(value: Any, kernel: str, hook: str) -> tuple[Any, int]:
+    """The TopoDS_Shape a hook returned and its solid count; ContractError when it is no solid shape."""
+    shape = occ.to_topods(value)
+    if shape is None or shape.IsNull():
+        raise ContractError(f"{hook} returned {type(value).__name__}, not a {kernel} shape")
+    solids = occ.count(shape, "SOLID")
+    if solids == 0:
+        raise ContractError(f"{hook} returned a shape with no solid")
+    return shape, solids
+
+
+def _manufacture_hook(module: Any, declared: str | None) -> Any:
+    """`build_manufacture`, required exactly when part.yaml declares a different manufacturing state."""
+    hook = getattr(module, "build_manufacture", None)
+    if hook is not None and not callable(hook):
+        raise ContractError("build_manufacture is defined but not callable; expected build_manufacture(params) -> shape")
+    if declared == "different" and hook is None:
+        raise ContractError("part.yaml declares manufacture.relationship: different, but model.py defines no "
+                            "build_manufacture(params)")
+    if hook is not None and declared != "different":
+        raise ContractError("model.py defines build_manufacture(params), but part.yaml does not declare "
+                            "manufacture.relationship: different with its state, reason, decision and volume tolerance")
+    return hook
+
+
+def build_part(kernel: str, request: Mapping[str, Any]) -> dict[str, Any]:
     pose = load_pose()
     started = time.perf_counter()
     module = _load_model(request["pn"], Path(request["model"]))
@@ -187,21 +221,24 @@ def build_part(kernel: str, request: Mapping[str, str]) -> dict[str, Any]:
     hook = getattr(module, "drawing_features", None)
     if hook is not None and not callable(hook):
         raise ContractError("drawing_features is defined but not callable; expected drawing_features(params, shape)")
+    manufacture_hook = _manufacture_hook(module, request.get("manufacture"))
     value = build(json.loads(json.dumps(params)))  # a private copy: build may not alter the record
-    shape = occ.to_topods(value)
-    if shape is None or shape.IsNull():
-        raise ContractError(f"build returned {type(value).__name__}, not a {kernel} shape")
-    solids = occ.count(shape, "SOLID")
-    if solids == 0:
-        raise ContractError("build returned a shape with no solid")
+    shape, solids = _shape(value, kernel, "build")
     # The hook sees build's own result, after every cut and fillet, and its own copy of the parameters.
     frame = request.get("model_frame", "assembly_zero")
     features = feature_locators(hook(json.loads(json.dumps(params)), value), frame) if hook is not None else None
     pose.write_part_step(Path(request["step"]), pose.Part(request["pn"], request["name"], shape))
     errors = occ.check_statuses(shape)  # STEP export can hide an invalid solid (an open shell becomes a surface model)
+    manufacture = None
+    if manufacture_hook is not None:
+        state, state_solids = _shape(manufacture_hook(json.loads(json.dumps(params))), kernel, "build_manufacture")
+        pose.write_part_step(Path(request["manufacture_step"]), pose.Part(request["pn"], request["name"], state))
+        state_errors = occ.check_statuses(state)
+        manufacture = {"kernel_volume_mm3": occ.volume(state), "kernel_solids": state_solids,
+                       "kernel_valid": not state_errors, "kernel_errors": state_errors}
     return {"ok": True, "params": params, "kernel_volume_mm3": occ.volume(shape), "kernel_solids": solids,
             "kernel_valid": not errors, "kernel_errors": errors, "build_s": round(time.perf_counter() - started, 3),
-            "drawing_features": features}
+            "drawing_features": features, "manufacture": manufacture}
 
 
 def _failure(error: BaseException, model: str) -> dict[str, Any]:
