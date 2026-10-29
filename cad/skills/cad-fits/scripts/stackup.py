@@ -33,11 +33,23 @@ Exit 0 = requirement met by the governing method, 1 = not met,
 from __future__ import annotations
 
 import argparse
+import hashlib
+import importlib.util
 import json
 import math
 import sys
 from pathlib import Path
 from typing import Any
+
+LAYOUT_PATH = Path(__file__).resolve().parents[2] / "cad-record" / "scripts" / "layout.py"
+_SPEC = importlib.util.spec_from_file_location("cad_record_layout", LAYOUT_PATH)
+if _SPEC is None or _SPEC.loader is None:
+    raise ImportError(f"{LAYOUT_PATH} not found")
+LAYOUT = sys.modules.get("cad_record_layout")
+if LAYOUT is None:
+    LAYOUT = importlib.util.module_from_spec(_SPEC)
+    sys.modules["cad_record_layout"] = LAYOUT
+    _SPEC.loader.exec_module(LAYOUT)
 
 METHODS = ("worst_case", "rss")
 RESULT_DECIMALS = 6
@@ -159,28 +171,76 @@ def load_stack(path: Path) -> Any:
             return yaml.safe_load(handle)
         except yaml.YAMLError as error:
             raise StackError(f"invalid YAML: {error}") from error
+def _scratch_hw(path: Path) -> Path:
+    """Locate the project anchor of a standalone .cad-work output for layout.scratch_path."""
+    parts = path.resolve().parts
+    index = parts.index(".cad-work") if ".cad-work" in parts else len(parts) - 1
+    return Path(*parts[:index]) / "hw"
+
+
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="1D worst-case and RSS tolerance stack-up")
     parser.add_argument("stack", type=Path, help="stack definition YAML")
+    parser.add_argument("--hw", type=Path, help="hardware project hw/; required with --version")
+    parser.add_argument("--version", help="built version to bind into hw/analysis/vN/<stack-id>/")
+    parser.add_argument("--replace", action="store_true", help="retain and replace a different recipe")
+    parser.add_argument("--out", type=Path, help="scratch result JSON path, only under .cad-work")
     args = parser.parse_args(argv)
+    if bool(args.hw) != bool(args.version):
+        parser.error("--hw and --version must be provided together")
     try:
-        result = compute(load_stack(args.stack))
+        stack_path = args.stack.resolve()
+        stack = load_stack(stack_path)
+        result = compute(stack)
+        requirement = result["requirement"]
+        status = "fail" if requirement is not None and not requirement["pass"] else "pass"
+        if args.hw:
+            result["status"] = status
+        if args.hw:
+            version, _, _ = LAYOUT.built_version(args.hw, args.version)
+            stack_id = result.get("id")
+            if not isinstance(stack_id, str) or not stack_id:
+                raise StackError("stack id is required for versioned publication")
+            params = {"V": version, "S": stack_id}
+            if args.out is not None:
+                raise StackError("--out is only allowed for standalone scratch output")
+            recipe = {
+                "source_yaml_sha256": hashlib.sha256(stack_path.read_bytes()).hexdigest(),
+                "options": {"result_decimals": RESULT_DECIMALS,
+                            "method": (stack.get("requirement") or {}).get("method", "worst_case")},
+            }
+            reused = LAYOUT.reusable(args.hw, "bundle.analysis", params, recipe, replace=args.replace)
+            if reused is not None:
+                result = json.loads((reused / "results.json").read_text(encoding="utf-8"))
+                result["bundle"] = str(reused)
+                result["reused"] = True
+                status = result["status"]
+            else:
+                stage = LAYOUT.staging(args.hw, "bundle.analysis")
+                output = stage / "results.json"
+                output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+                published = LAYOUT.publish(args.hw, "bundle.analysis", params, stage,
+                                           recipe=recipe, producer="cad-fits stackup.py", status=status,
+                                           replace=args.replace)
+                result["bundle"] = str(published.path)
+                result["reused"] = published.reused
+        elif args.out is not None:
+            target = LAYOUT.scratch_path(_scratch_hw(args.out), args.out, "--out")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+        json.dump(result, sys.stdout, indent=2)
+        sys.stdout.write("\n")
+        if status == "fail":
+            print(f"stackup: requirement not met ({requirement['method']})", file=sys.stderr)
+        return 1 if status == "fail" else 0
     except OSError as error:
         print(f"stackup: cannot read {args.stack}: {error}", file=sys.stderr)
         return 2
-    except StackError as error:
+    except (StackError, LAYOUT.LayoutError) as error:
         print(f"stackup: {args.stack}: {error}", file=sys.stderr)
         return 2
-    json.dump(result, sys.stdout, indent=2)
-    sys.stdout.write("\n")
-    requirement = result["requirement"]
-    if requirement is not None and not requirement["pass"]:
-        print(f"stackup: requirement not met ({requirement['method']})", file=sys.stderr)
-        return 1
-    return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())

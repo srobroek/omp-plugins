@@ -8,12 +8,16 @@ import hashlib
 import importlib.util
 import json
 import os
-from pathlib import Path
+import contextlib
+import io
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
+from pathlib import Path
+from unittest import mock
+
 
 HERE = Path(__file__).parent
 BOM_SCRIPT = HERE / "scripts" / "bom.py"
@@ -177,6 +181,38 @@ class StepRoundTripTests(unittest.TestCase):
         self.assertEqual(rows[("1", "SCR-0001")]["qty"], "2")  # phantom "fasteners" group merged up
         self.assertEqual(summary["total_qty"]["PIN-0001"], 3)
 
+
+    def test_version_reconciles_from_snapshot_not_current_parts(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            hw = Path(directory) / "hw"
+            snapshot = Path(directory) / "snapshot"
+            hw.mkdir()
+            snapshot.mkdir()
+            write_parts(hw, {"PIN-0001": "title: Current title\n"})
+            write_parts(snapshot, {"PIN-0001": "title: Snapshot title\n"})
+            step = self.step
+            output = io.StringIO()
+            with mock.patch.object(bom.LAYOUT, "built_version", return_value=("v1", hw, snapshot)), \
+                 mock.patch.object(bom, "read_step_tree", return_value=[bom.Node("PIN-0001", False)]), \
+                 contextlib.redirect_stdout(output):
+                status = bom.main([str(step), "--hw", str(hw), "--version", "v1"])
+            summary = json.loads(output.getvalue())
+            self.assertEqual(status, 0)
+            self.assertEqual(summary["reconciled_against"], "v1")
+            self.assertEqual(rows_by_level_pn(hw / "bom.csv")[("0", "PIN-0001")]["title"], "Snapshot title")
+
+    def test_output_outside_cad_work_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            hw = Path(directory) / "hw"
+            hw.mkdir()
+            outside = Path(directory) / "elsewhere.csv"
+            proc = subprocess.run(
+                ["uv", "run", "--quiet", "--script", str(BOM_SCRIPT), str(Path(directory) / "unused.step"),
+                 "--hw", str(hw), "--out", str(outside)],
+                capture_output=True, text=True, check=False, timeout=900,
+            )
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("--out", proc.stderr)
     def test_mismatches_are_reported_both_ways(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             hw = Path(directory)

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["pyyaml>=6.0"]
+# dependencies = ["pyyaml>=6.0", "jsonschema>=4.23"]
 # ///
 """Write or verify the CAD design recheck record for the staged index."""
 
@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import platform
 import shutil
@@ -21,22 +22,62 @@ from typing import Any
 import yaml
 
 
-STAGES = (
-    "ground",
-    "intent",
-    "specify",
-    "concept",
-    "layout",
-    "parts",
-    "detail",
-    "bom",
-    "analysis",
-    "critique",
-    "reconcile",
-    "design_freeze",
-    "release",
-)
+def cad_record_root() -> Path:
+    installed = Path(__file__).resolve().parent / "cad-record"
+    skill_tree = Path(__file__).resolve().parents[2] / "cad-record"
+    for candidate in (installed, skill_tree):
+        if (candidate / "scripts" / "validate.py").is_file():
+            return candidate
+    raise RuntimeError(f"cannot find cad-record/scripts/validate.py; checked {installed} and {skill_tree}")
 
+
+CAD_RECORD_ROOT = cad_record_root()
+CAD_RECORD_SCRIPTS = CAD_RECORD_ROOT / "scripts"
+
+
+def _load_module(name: str, path: Path):
+    if name not in sys.modules:
+        spec = importlib.util.spec_from_file_location(name, path)
+        if spec is None or spec.loader is None:
+            raise ImportError(f"cannot load {path}")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        spec.loader.exec_module(module)
+    return sys.modules[name]
+
+layout = _load_module("cad_record_layout", CAD_RECORD_SCRIPTS / "layout.py")
+validate = _load_module("cad_record_validate", CAD_RECORD_SCRIPTS / "validate.py")
+
+
+
+
+def staged_product(root: Path, stage: str | None = None) -> dict[str, Any]:
+    """Read the index version of product.yaml to grade layout paths at the staged stage."""
+    try:
+        raw = git("show", ":hw/product.yaml", cwd=root).decode("utf-8")
+        product = yaml.safe_load(raw)
+    except (RuntimeError, UnicodeError, yaml.YAMLError) as error:
+        if stage is None:
+            raise RuntimeError(f"cannot read staged hw/product.yaml: {error}") from error
+        product = {"flow": {"stage": stage}}
+    return product if isinstance(product, dict) else {}
+
+
+def require_clean_layout(root: Path, product: dict[str, Any]) -> None:
+    part_records = {}
+    for part_path in sorted((root / "hw" / "parts").glob("*/part.yaml")):
+        try:
+            part = yaml.safe_load(part_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, yaml.YAMLError) as error:
+            raise RuntimeError(f"cannot read {part_path}: {error}") from error
+        if isinstance(part, dict) and isinstance(part.get("PN"), str):
+            part_records[part["PN"]] = (part, str(part_path))
+    findings: list[dict[str, str]] = []
+    validate.check_layout(root / "hw", product, part_records, findings)
+    blocking = validate.blocking(findings)
+    if blocking:
+        first = blocking[0]
+        raise RuntimeError(f"CAD layout has {len(blocking)} blocking finding(s): {first['path']}: {first['message']}")
 
 def git(*args: str, cwd: Path) -> bytes:
     result = subprocess.run(
@@ -101,8 +142,9 @@ def load_checks(path: Path) -> Any:
 
 
 def record(stage: str, checks_path: Path, passed: bool, root: Path) -> dict[str, Any]:
-    if stage not in STAGES:
-        raise RuntimeError(f"unknown stage {stage!r}; expected one of: {', '.join(STAGES)}")
+    if stage not in validate.stages():
+        raise RuntimeError(f"unknown stage {stage!r}; expected one of: {', '.join(validate.stages())}")
+    require_clean_layout(root, staged_product(root, stage))
     checks = load_checks(checks_path)
     return {
         "tree_hash": staged_tree_hash(root),
@@ -131,7 +173,7 @@ def write_record(data: dict[str, Any], root: Path) -> Path:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--stage", choices=STAGES, help="stage for a newly written recheck stamp")
+    parser.add_argument("--stage", choices=validate.stages(), help="stage for a newly written recheck stamp")
     parser.add_argument("--checks", type=Path, help="JSON check results")
     parser.add_argument("--passed", action="store_true", help="record that every required check passed")
     parser.add_argument("--verify", action="store_true", help="verify the staged stamp against the current staged hash")
@@ -159,16 +201,19 @@ def main() -> int:
                 product = yaml.safe_load(product_data)
             except yaml.YAMLError as error:
                 raise RuntimeError(f"cannot parse staged hw/product.yaml: {error}") from error
-            flow = product.get("flow") if isinstance(product, dict) else None
+            if not isinstance(product, dict):
+                raise RuntimeError("staged hw/product.yaml must be a mapping")
+            flow = product.get("flow")
             if not isinstance(flow, dict):
                 raise RuntimeError("staged hw/product.yaml is missing flow")
             current_stage = flow.get("stage")
             threshold = flow.get("recheck_from")
-            if not isinstance(current_stage, str) or current_stage not in STAGES:
+            if not isinstance(current_stage, str) or current_stage not in validate.stages():
                 raise RuntimeError("staged hw/product.yaml has a missing or unknown flow.stage")
-            if not isinstance(threshold, str) or threshold not in STAGES:
+            if not isinstance(threshold, str) or threshold not in validate.stages():
                 raise RuntimeError("staged hw/product.yaml has a missing or unknown flow.recheck_from")
-            if STAGES.index(current_stage) < STAGES.index(threshold):
+            require_clean_layout(root, product)
+            if validate.stages().index(current_stage) < validate.stages().index(threshold):
                 print(json.dumps({"passed": True, "required": False, "stage": current_stage}))
                 return 0
             try:
@@ -180,7 +225,7 @@ def main() -> int:
             actual_hash = staged_tree_hash(root)
             if record_data.get("stage") != current_stage:
                 raise RuntimeError("the recheck stamp stage does not match staged hw/product.yaml flow.stage")
-            if record_data.get("stage") not in STAGES:
+            if record_data.get("stage") not in validate.stages():
                 raise RuntimeError("recheck stamp has an unknown stage")
             if record_data.get("passed") is not True:
                 raise RuntimeError("the recheck stamp does not say passed: true")

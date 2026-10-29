@@ -12,14 +12,28 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import importlib.util
+from unittest.mock import patch
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts/fea_static.py"
 OCCURRENCE_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "build_occurrence_step.py"
 POSE_PATH = Path(__file__).resolve().parents[2] / "cad-motion" / "scripts" / "pose.py"
 FREECADCMD = Path("/Applications/FreeCAD.app/Contents/Resources/bin/freecadcmd")
 SPIKE = Path("/tmp/cad-spike-freecad")
 sys.path.insert(0, str(SCRIPT.parent))
-from fea_part_selection import select_occurrence, select_solid_index
+
+import fea_static
 from fea_static import CaseError, apply_required_safety_factor, error, load_case, result_exit_code, run_directory
+from fea_part_selection import select_occurrence, select_solid_index
+OCCURRENCE_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "build_occurrence_step.py"
+LAYOUT_PATH = SCRIPT.parents[2] / "cad-record" / "scripts" / "layout.py"
+LAYOUT_SPEC = importlib.util.spec_from_file_location("cad_record_layout", LAYOUT_PATH)
+assert LAYOUT_SPEC and LAYOUT_SPEC.loader
+LAYOUT = sys.modules.get("cad_record_layout")
+if LAYOUT is None:
+    LAYOUT = importlib.util.module_from_spec(LAYOUT_SPEC)
+    sys.modules["cad_record_layout"] = LAYOUT
+    LAYOUT_SPEC.loader.exec_module(LAYOUT)
+
 
 CASE_TAIL = """material: {name: Aluminium 6061, E: 69000, nu: 0.33, density: 2700, yield: 276}
 fixed_faces: {plane: {axis: y, value: 50, tolerance: 0.000001}}
@@ -431,6 +445,139 @@ mesh_size: 5
             result = subprocess.run([sys.executable, str(SCRIPT), str(case)], capture_output=True, text=True)
             self.assertEqual(result.returncode, 2)
             self.assertEqual(json.loads(result.stdout)["error"]["code"], "invalid_case")
+
+
+class VersionedPublicationTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.project = Path(self.temporary.name) / "project"
+        self.hw = self.project / "hw"
+        self.case_dir = self.hw / "analysis" / "cases" / "cantilever"
+        self.case_dir.mkdir(parents=True)
+        self.step = self.case_dir / "beam.step"
+        self.step.write_bytes(b"STEP geometry")
+        self.case = self.case_dir / "case.yaml"
+        self.case.write_text("step: beam.step\n" + CASE_TAIL, encoding="utf-8")
+        version = self.hw / "versions" / "v1"
+        record = version / "record"
+        record.mkdir(parents=True)
+        for name in ("product.yaml", "interfaces.yaml", "assembly.yaml"):
+            (record / name).write_text("{}\n", encoding="utf-8")
+        files = {path.relative_to(version).as_posix(): fea_static.hashlib.sha256(path.read_bytes()).hexdigest()
+                 for path in version.rglob("*") if path.is_file()}
+        (version / "manifest.json").write_text(json.dumps({"label": "v1", "files": files}), encoding="utf-8")
+
+    def call(self, replace: bool = False, tools_root: str = "/opt/freecad-a") -> tuple[int, dict]:
+        argv = [str(self.case), "--hw", str(self.hw), "--version", "v1"]
+        if replace:
+            argv.append("--replace")
+        tools = {"freecad": {"path": f"{tools_root}/freecadcmd", "version": "1.1.4"},
+                 "gmsh": {"path": f"{tools_root}/gmsh", "version": "4.15.0"},
+                 "calculix": {"path": f"{tools_root}/ccx", "version": "2.23"}}
+        output = __import__("io").StringIO()
+        with patch("fea_static.find_freecad", return_value=Path("/fake/freecadcmd")), \
+             patch("fea_static.solver_versions", return_value=tools), \
+             patch("fea_static.run_job", side_effect=self.run_job), \
+             patch("sys.stdout", output):
+            status = fea_static.main(argv)
+        return status, json.loads(output.getvalue())
+
+    @staticmethod
+    def run_job(case_path: Path, case: dict, **kwargs) -> tuple[dict, int]:
+        output = kwargs["result_path"]
+        run_dir = Path(kwargs["scratch_root"]) / "jobs" / "fea_static" / "run"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        (run_dir / "solver.dat").write_text("solver output\n", encoding="utf-8")
+        result = {"status": "pass", "run_directory": str(run_dir), "retained_files": ["solver.dat"],
+                  "solver_versions": kwargs["solver_versions"]}
+        output.write_text(json.dumps(result), encoding="utf-8")
+        return result, 0
+
+    def test_rerun_reuses_bundle_without_running_solver(self) -> None:
+        first_status, first = self.call()
+        self.assertEqual(first_status, 0)
+        bundle = self.hw / "analysis" / "v1" / "cantilever"
+        before = {path.relative_to(bundle).as_posix(): path.read_bytes() for path in bundle.rglob("*") if path.is_file()}
+        with patch("fea_static.run_job", side_effect=AssertionError("reused bundle should skip solver")):
+            status, second = self.call()
+        self.assertEqual(status, 0)
+        self.assertFalse(first["reused"])
+        self.assertTrue(second["reused"])
+        self.assertEqual(before, {path.relative_to(bundle).as_posix(): path.read_bytes()
+                                  for path in bundle.rglob("*") if path.is_file()})
+
+    def test_same_solver_versions_at_another_install_path_reuse_the_bundle(self) -> None:
+        self.assertEqual(self.call(tools_root="/opt/freecad-a")[0], 0)
+        manifest = json.loads((self.hw / "analysis" / "v1" / "cantilever" / "manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["recipe"]["solver_versions"], {"freecad": "1.1.4", "gmsh": "4.15.0", "calculix": "2.23"})
+        with patch("fea_static.run_job", side_effect=AssertionError("same tool versions should reuse")):
+            status, report = self.call(tools_root="/home/other/squashfs-root/usr/bin")
+        self.assertEqual((status, report["reused"]), (0, True))
+
+    def test_changed_case_recipe_is_refused_then_replaced_immutably(self) -> None:
+        self.call()
+        bundle = self.hw / "analysis" / "v1" / "cantilever"
+        original = {path.relative_to(bundle).as_posix(): path.read_bytes() for path in bundle.rglob("*") if path.is_file()}
+        self.case.write_text(self.case.read_text(encoding="utf-8").replace("mesh_size: 5", "mesh_size: 6"), encoding="utf-8")
+        status, report = self.call()
+        self.assertEqual(status, 2)
+        self.assertIn("--replace", report["error"]["message"])
+        self.assertEqual(original, {path.relative_to(bundle).as_posix(): path.read_bytes()
+                                    for path in bundle.rglob("*") if path.is_file()})
+        status, report = self.call(replace=True)
+        self.assertEqual(status, 0)
+        replaced_path = json.loads((bundle / "manifest.json").read_text(encoding="utf-8"))["replaces"]["moved_to"]
+        replaced_bundle = self.project / replaced_path
+        self.assertTrue(replaced_bundle.is_dir())
+        self.assertEqual(original, {path.relative_to(replaced_bundle).as_posix(): path.read_bytes()
+                                    for path in replaced_bundle.rglob("*") if path.is_file()})
+
+    def test_standalone_output_override_outside_cad_work_is_refused(self) -> None:
+        with patch("fea_static.find_freecad", return_value=Path("/fake/freecadcmd")):
+            output = __import__("io").StringIO()
+            with patch("sys.stdout", output):
+                status = fea_static.main([str(self.case), "--out", str(self.project / "results.json")])
+        self.assertEqual(status, 2)
+        self.assertIn("--out must be under", json.loads(output.getvalue())["error"]["message"])
+
+    def test_solver_evidence_excludes_python_bytecode_and_cache_dirs(self) -> None:
+        for path in ("result.frd", "nested/result.inp"):
+            with self.subTest(path=path):
+                self.assertTrue(fea_static._is_solver_evidence(path))
+        for path in ("module.pyc", "__pycache__/module.cpython-313.pyc", "nested/__pycache__/module.pyc",
+                     "fea_job.py", "fea_static_123.json"):
+            with self.subTest(path=path):
+                self.assertFalse(fea_static._is_solver_evidence(path))
+
+    def test_generated_job_name_is_deterministic(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            step = root / "beam.step"
+            step.touch()
+            case = {"_step": str(step), "material": {"E": 1, "nu": 0.3, "density": 1, "yield": 1},
+                    "fixed_faces": {"indices": [1]}, "loads": [], "mesh_size": 1}
+            with patch("fea_static.find_freecad", return_value=Path("/fake/freecadcmd")), \
+                 patch("fea_static.subprocess.run", side_effect=subprocess.TimeoutExpired("freecadcmd", 0.01)) as run:
+                fea_static.run_job(root / "case.yaml", case, scratch_root=root, timeout=0.01)
+            self.assertEqual(Path(run.call_args.args[0][1]).name, "fea_job.py")
+
+    def test_solver_versions_resolve_tools_beside_freecad_and_record_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory)
+            freecad, gmsh, ccx = (folder / name for name in ("freecadcmd", "gmsh", "ccx"))
+            for command in (freecad, gmsh, ccx):
+                command.write_text("", encoding="utf-8")
+                command.chmod(0o755)
+            def result(command, *args, **kwargs):
+                version = {"freecadcmd": "FreeCAD 1.1.4", "gmsh": "4.15.0", "ccx": "This is Version 2.23"}[Path(command[0]).name]
+                return subprocess.CompletedProcess(command, 201 if Path(command[0]).name == "ccx" else 0, version, "")
+            with patch("fea_static.find_freecad", return_value=freecad), \
+                 patch("fea_static.subprocess.run", side_effect=result):
+                versions = fea_static.solver_versions()
+        self.assertEqual(versions["freecad"], {"path": str(freecad.resolve()), "version": "1.1.4"})
+        self.assertEqual(versions["gmsh"], {"path": str(gmsh.resolve()), "version": "4.15.0"})
+        self.assertEqual(versions["calculix"], {"path": str(ccx.resolve()), "version": "2.23"})
 
 
 if __name__ == "__main__":
