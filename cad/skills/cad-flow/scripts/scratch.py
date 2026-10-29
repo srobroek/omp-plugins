@@ -3,7 +3,33 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""Worker-owned CAD scratch copy, build, and source-record delivery."""
+"""Scratch workspace of one cad-flow worker unit: copy hw/, build and check the copy, deliver the unit's parts.
+
+Usage:
+    uv run --script scratch.py init    --hw HW --unit UNIT --part PN [--part PN ...] [--reset]
+    uv run --script scratch.py build   --hw HW --unit UNIT --fidelity F0|F1|F2|F3 [--kernel auto|cadquery|build123d]
+    uv run --script scratch.py deliver --hw HW --unit UNIT
+
+The workspace is <project>/.cad-work/<UNIT>/, <project> being the directory that holds HW.
+
+init    copies HW into <workspace>/hw/ without versions/, renders/, releases/, .git/ and
+        __pycache__/, then records the unit's PNs and the sha256 of every copied file in
+        <workspace>/baseline.json. An existing workspace is kept unless --reset replaces it.
+build   runs cad-model `run` on the scratch hw/ under the next scratch label, cad-model `check`
+        on that version, and cad-design form_check at --fidelity. HW itself is never passed to
+        any of them, so HW/versions/ is neither created nor changed. Form findings are split
+        into the unit's own PNs and the rest; only the unit's own block it.
+deliver copies each unit PN's scratch hw/parts/<PN>/ over HW/parts/<PN>/ and lists every other
+        scratch file that differs from the baseline as a proposal for the lead. When any
+        HW/parts/<PN>/ changed since init it writes nothing and exits 1.
+
+stdout: one JSON document; every path in it is absolute. build writes each tool's diagnostics to
+<workspace>/<tool>-<label>.log and names the log in the JSON, so its output stays small.
+Exit codes: 0 pass; 1 build: a part failed to build, a blocking check failed, or the unit's
+parts have form findings; deliver: HW/parts/<PN>/ changed since init; 2 usage or
+infrastructure error.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -23,7 +49,7 @@ CAD_MODEL_SCRIPTS = SKILLS / "cad-model" / "scripts"
 CAD_RECORD_SCRIPTS = SKILLS / "cad-record" / "scripts"
 FORM_CHECK = SKILLS / "cad-design" / "scripts" / "form_check.py"
 sys.path.insert(0, str(CAD_MODEL_SCRIPTS))
-from cadmodel import scriptenv  # noqa: E402
+from cadmodel import scriptenv  # noqa: E402 - standard library only
 CAD_MODEL = CAD_MODEL_SCRIPTS / "cad_model.py"
 WORK_DIR = ".cad-work"
 NOT_COPIED = frozenset({"versions", "renders", "releases", ".git"})
@@ -52,7 +78,7 @@ class UsageError(Exception):
 
 
 def workspace(hw: Path, unit: str) -> Path:
-    if not UNIT.fullmatch(unit) or ".." in unit:
+    if not UNIT.match(unit) or ".." in unit:
         raise UsageError(f"unit {unit!r} must match {UNIT.pattern} without '..'")
     if not (hw / "parts").is_dir():
         raise UsageError(f"{hw} is not a design record: no parts/ directory")
@@ -60,6 +86,7 @@ def workspace(hw: Path, unit: str) -> Path:
 
 
 def skips(root: Path, top: frozenset[str] = NOT_COPIED):
+    """A copytree `ignore` that leaves out `top` directly below `root` and __pycache__ anywhere."""
     def ignore(directory: str, names: list[str]) -> set[str]:
         at_top = Path(directory) == root
         return {name for name in names if name == "__pycache__" or (at_top and name in top)}
@@ -67,12 +94,14 @@ def skips(root: Path, top: frozenset[str] = NOT_COPIED):
 
 
 def tree_hashes(root: Path, top: frozenset[str] = NOT_COPIED) -> dict[str, str]:
-    result = {}
+    """sha256 per file below `root`, keyed by POSIX path relative to it, skipping what `skips` leaves out."""
+    hashes = {}
     for path in sorted(root.rglob("*")):
         relative = path.relative_to(root)
-        if relative.parts[0] not in top and "__pycache__" not in relative.parts and path.is_file():
-            result[relative.as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
-    return result
+        if relative.parts[0] in top or "__pycache__" in relative.parts or not path.is_file():
+            continue
+        hashes[relative.as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return hashes
 
 
 def load_baseline(work: Path) -> dict[str, Any]:
@@ -83,9 +112,9 @@ def load_baseline(work: Path) -> dict[str, Any]:
 
 
 def init(hw: Path, unit: str, parts: list[str], reset: bool) -> tuple[int, dict[str, Any]]:
-    invalid = [pn for pn in parts if not PN.fullmatch(pn)]
-    if not parts or invalid:
-        raise UsageError(f"--part needs one or more PNs matching {PN.pattern}; got {invalid or 'none'}")
+    bad = [pn for pn in parts if not PN.match(pn)]
+    if not parts or bad:
+        raise UsageError(f"--part needs one or more PNs matching {PN.pattern}; got {bad or 'none'}")
     work = workspace(hw, unit)
     if work.exists() and not reset:
         baseline = load_baseline(work)
@@ -96,18 +125,18 @@ def init(hw: Path, unit: str, parts: list[str], reset: bool) -> tuple[int, dict[
     gitignore = work.parent / ".gitignore"
     if not gitignore.exists():
         gitignore.write_text("*\n", encoding="utf-8")
-    scratch_hw = work / "hw"
-    shutil.copytree(hw, scratch_hw, ignore=skips(hw))
+    shutil.copytree(hw, work / "hw", ignore=skips(hw))
     for pn in sorted(set(parts)):
         if not (hw / "parts" / pn).exists():
-            (scratch_hw / "parts" / pn).mkdir(parents=True, exist_ok=True)
-    baseline = {"unit": unit, "hw": str(hw), "parts": sorted(set(parts)), "files": tree_hashes(scratch_hw)}
+            (work / "hw" / "parts" / pn).mkdir(parents=True, exist_ok=True)
+    baseline = {"unit": unit, "hw": str(hw), "parts": sorted(set(parts)), "files": tree_hashes(work / "hw")}
     (work / "baseline.json").write_text(json.dumps(baseline, indent=2) + "\n", encoding="utf-8")
-    return 0, {"status": "created", "unit": unit, "workspace": str(work), "scratch_hw": str(scratch_hw),
+    return 0, {"status": "created", "unit": unit, "workspace": str(work), "scratch_hw": str(work / "hw"),
                "parts": baseline["parts"], "files": len(baseline["files"])}
 
 
 def run_tool(argv: list[str], log: Path) -> tuple[int, dict[str, Any] | None]:
+    """Run one CAD tool through its PEP 723 dependency-set environment and log stderr/output."""
     try:
         with log.open("w", encoding="utf-8") as stderr:
             done = subprocess.run(scriptenv.script_command(Path(argv[0]), *argv[1:]),
@@ -123,17 +152,19 @@ def run_tool(argv: list[str], log: Path) -> tuple[int, dict[str, Any] | None]:
 
 
 def next_label(scratch_hw: Path) -> str:
-    versions = [int(match.group(1)) for item in (scratch_hw / "versions").glob("v*")
-                if (match := LABEL.fullmatch(item.name)) and (item / "manifest.json").is_file()]
-    return f"v{max(versions, default=0) + 1}"
+    built = [int(m.group(1)) for d in (scratch_hw / "versions").glob("v*")
+             if (m := LABEL.match(d.name)) and (d / "manifest.json").is_file()]
+    return f"v{max(built, default=0) + 1}"
 
 
 def build(hw: Path, unit: str, kernel: str, fidelity: str) -> tuple[int, dict[str, Any]]:
     work = workspace(hw, unit)
-    own = set(load_baseline(work)["parts"])
+    baseline = load_baseline(work)
+    own = set(baseline["parts"])
     scratch_hw = work / "hw"
     label = next_label(scratch_hw)
     report: dict[str, Any] = {"unit": unit, "scratch_hw": str(scratch_hw), "label": label, "parts": sorted(own)}
+
     run_log = work / f"run-{label}.log"
     code, ran = run_tool([str(CAD_MODEL), "run", str(scratch_hw), "--label", label, "--kernel", kernel], run_log)
     report["run"] = {"exit": code, "log": str(run_log), "findings": (ran or {}).get("findings", [])}
@@ -143,12 +174,16 @@ def build(hw: Path, unit: str, kernel: str, fidelity: str) -> tuple[int, dict[st
     version = scratch_hw / "versions" / label
     report.update({"version_dir": str(version), "parts_dir": str(version / "parts"),
                    "metrics": str(version / "metrics.json"), "assembly_step": str(version / "assembly.step")})
-    check_out, check_log = work / f"check-{label}.json", work / f"check-{label}.log"
+
+    check_out = work / f"check-{label}.json"
+    check_log = work / f"check-{label}.log"
     code, checked = run_tool([str(CAD_MODEL), "check", label, "--hw", str(scratch_hw), "--out", str(check_out)], check_log)
     report["check"] = {"exit": code, "json": str(check_out), "log": str(check_log),
                        "blocking_failures": (checked or {}).get("blocking_failures"),
                        "warnings": (checked or {}).get("warnings")}
-    form_out, form_log = work / f"form-{label}.json", work / f"form-{label}.log"
+
+    form_out = work / f"form-{label}.json"
+    form_log = work / f"form-{label}.log"
     form_code, form = run_tool([str(FORM_CHECK), "--hw", str(scratch_hw), "--parts-dir", str(version / "parts"),
                                 "--fidelity", fidelity], form_log)
     findings = (form or {}).get("findings", [])
@@ -224,12 +259,14 @@ def deliver(hw: Path, unit: str) -> tuple[int, dict[str, Any]]:
     files, directories = delivery_tree(scratch_hw)
     authorized = set(baseline["parts"])
     validate_delivery(baseline, authorized, files, directories)
+    owned = [f"parts/{pn}/" for pn in authorized]
     baseline_files: dict[str, str] = baseline["files"]
     conflicts = []
     for pn in sorted(authorized):
         then = {path: digest for path, digest in baseline_files.items() if path.startswith(f"parts/{pn}/")}
         part_dir = hw / "parts" / pn
-        now = {f"parts/{pn}/{path}": digest for path, digest in tree_hashes(part_dir, frozenset()).items()} if part_dir.is_dir() else {}
+        now = {f"parts/{pn}/{path}": digest for path, digest in tree_hashes(part_dir, frozenset()).items()} \
+            if part_dir.is_dir() else {}
         if now != then:
             conflicts.append(str(part_dir))
     if conflicts:

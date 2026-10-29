@@ -21,7 +21,17 @@ from typing import Any
 
 import yaml
 
-CAD_RECORD_SCRIPTS = Path(__file__).resolve().parents[2] / "cad-record" / "scripts"
+
+def cad_record_scripts() -> Path:
+    installed = Path(__file__).resolve().parent / "cad-record" / "scripts"
+    skill_tree = Path(__file__).resolve().parents[2] / "cad-record" / "scripts"
+    for candidate in (installed, skill_tree):
+        if (candidate / "layout.py").is_file():
+            return candidate
+    raise RuntimeError(f"cannot find cad-record/scripts/layout.py; checked {installed} and {skill_tree}")
+
+
+CAD_RECORD_SCRIPTS = cad_record_scripts()
 
 
 def _load_module(name: str, path: Path):
