@@ -27,6 +27,7 @@ sys.path.insert(0, str(SCRIPTS))
 import drawing_contract  # noqa: E402
 import drawing_document  # noqa: E402
 import freecad_runtime  # noqa: E402
+import drawing_publication  # noqa: E402
 from drawing_document import (CompositionError, CoverageReport, SheetMetadata, SvgAnnotation, SvgNote,  # noqa: E402
                               SvgTable, compose_page, page_layout, publish_package, sheet_specs)
 from freecad_views import Circle, ViewGeometry  # noqa: E402
@@ -430,6 +431,47 @@ class FreeCadViewsAndPackage(unittest.TestCase):
         self.assertEqual([p.name for p in stranger.iterdir()], ["notes.txt"])
         with self.assertRaises(ValueError):
             publish_package(context, [sheet, sheet], CoverageReport("pass"), output, FREECADCMD, 300)
+
+
+class DrawingPublication(unittest.TestCase):
+    def test_publish_reuse_conflict_replace_and_version_immutability(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="cad-drawing-bundle-") as temporary:
+            hw, version = write_project(Path(temporary))
+            api = drawing_publication.layout()
+            params = {"V": "v1", "S": PN}
+            recipe = {"part": PN, "input_sha256": "a" * 64}
+            target = api.bundle_dir(hw, "drawings", "v1", PN)
+            old_version_manifest = (version / "manifest.json").read_bytes()
+
+            def staged_bundle(value: bytes) -> Path:
+                staged = api.staging(hw, "bundle.drawings")
+                (staged / "coverage.json").write_text("{}\n", encoding="utf-8")
+                package = {"output_dir": str(staged), "sheets": [{"files": {"svg": "sheet-1.svg"}}]}
+                (staged / "package.json").write_text(json.dumps(package), encoding="utf-8")
+                for extension in ("svg", "pdf", "png"):
+                    (staged / f"sheet-1.{extension}").write_bytes(value)
+                return staged
+
+            self.assertEqual(drawing_publication.publish(hw, "v1", PN, staged_bundle(b"old"), recipe,
+                                                         "test drawing", False), target)
+            published = json.loads((target / "package.json").read_text(encoding="utf-8"))
+            self.assertEqual(published["output_dir"], str(target))
+            self.assertEqual(published["sheets"][0]["files"], {"svg": str(target / "sheet-1.svg")})
+            self.assertEqual(api.reusable(hw, "bundle.drawings", params, recipe), target)
+            original_manifest = (target / "manifest.json").read_bytes()
+            changed_recipe = {"part": PN, "input_sha256": "b" * 64}
+            with self.assertRaises(api.PublishConflict):
+                api.reusable(hw, "bundle.drawings", params, changed_recipe)
+            replacement = staged_bundle(b"new")
+            with self.assertRaises(api.PublishConflict):
+                api.publish(hw, "bundle.drawings", params, replacement, recipe=changed_recipe,
+                            producer="test drawing")
+            self.assertEqual((target / "manifest.json").read_bytes(), original_manifest)
+            replaced = api.publish(hw, "bundle.drawings", params, staged_bundle(b"new"),
+                                   recipe=changed_recipe, producer="test drawing", replace=True)
+            self.assertIsNotNone(replaced.replaced)
+            self.assertEqual(api.verify(replaced.path), [])
+            self.assertEqual((version / "manifest.json").read_bytes(), old_version_manifest)
 
 
 if __name__ == "__main__":

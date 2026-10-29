@@ -165,10 +165,44 @@ class PinDrawingGate(unittest.TestCase):
     def tearDownClass(cls) -> None:
         cls.tmp.cleanup()
 
-    def draw(self, label: str, out: str, pn: str = "LMP-0005") -> tuple[int, dict]:
-        proc = run(UV, "run", "--script", str(DRAWING), str(self.hw), "--version", label, "--part", pn,
-                   "--output-dir", str(Path(self.tmp.name) / out), timeout=900)
+    def draw(self, label: str, out: str, pn: str = "LMP-0005", *, output: bool = True) -> tuple[int, dict]:
+        command = [UV, "run", "--script", str(DRAWING), str(self.hw), "--version", label, "--part", pn]
+        if output:
+            command += ["--output-dir", str(Path(self.tmp.name) / ".cad-work" / out)]
+        proc = run(*command, timeout=900)
         return proc.returncode, json.loads(proc.stdout)["parts"][0]
+
+    def test_default_output_publishes_and_reuses_the_bundle(self) -> None:
+        code, result = self.draw("v1", "unused", output=False)
+        self.assertEqual((code, result["status"]), (0, "pass"), result.get("findings"))
+        package = Path(result["output_dir"])
+        self.assertEqual(package, self.hw / "drawings" / "v1" / "LMP-0005")
+        manifest = (package / "manifest.json").read_bytes()
+        package_json = json.loads((package / "package.json").read_text(encoding="utf-8"))
+        self.assertEqual(package_json["output_dir"], str(package))
+        self.assertTrue(all(Path(path).is_file() for sheet in package_json["sheets"]
+                            for path in sheet["files"].values()))
+        code, reused = self.draw("v1", "unused", output=False)
+        self.assertEqual((code, reused.get("cache"), reused["output_dir"]), (0, "hit", str(package)))
+        self.assertEqual((package / "manifest.json").read_bytes(), manifest)
+
+    def test_explicit_output_outside_cad_work_is_refused(self) -> None:
+        outside = Path(self.tmp.name) / "outside"
+        proc = run(UV, "run", "--script", str(DRAWING), str(self.hw), "--version", "v1", "--part", "LMP-0005",
+                   "--output-dir", str(outside))
+        self.assertEqual(proc.returncode, 2)
+        self.assertFalse(outside.exists())
+        self.assertIn("--output-dir must be under", proc.stdout)
+
+    def test_existing_explicit_output_is_never_overwritten(self) -> None:
+        output = Path(self.tmp.name) / ".cad-work" / "preserved"
+        output.mkdir(parents=True)
+        marker = output / "keep.txt"
+        marker.write_text("untouched\n", encoding="utf-8")
+        proc = run(UV, "run", "--script", str(DRAWING), str(self.hw), "--version", "v1", "--part", "LMP-0005",
+                   "--output-dir", str(output))
+        self.assertEqual(proc.returncode, 2)
+        self.assertEqual(marker.read_text(encoding="utf-8"), "untouched\n")
 
     def test_pin_passes_with_measured_values_and_fit_limits(self) -> None:
         code, result = self.draw("v1", "pass")

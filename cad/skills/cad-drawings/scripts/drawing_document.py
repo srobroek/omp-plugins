@@ -683,11 +683,16 @@ def publish_package(context: DrawingContext, sheets: Sequence[ComposedSheet], re
     drawing_number = sheets[0].metadata.drawing_number
     provenance = context.provenance(drawing_number)
     output_dir = output_dir.resolve()
-    output_dir.mkdir(parents=True, exist_ok=True)
-    if any(output_dir.iterdir()):
-        raise ValueError(f"{output_dir} must be an empty draft folder")
-    scratch = output_dir.parent / f".drawing-draft-{run_id}"
-    staging = scratch
+    if output_dir.exists():
+        if not output_dir.is_dir() or any(output_dir.iterdir()):
+            raise ValueError(f"{output_dir} must be an empty draft folder")
+    else:
+        output_dir.mkdir(parents=True)
+    run_id = uuid.uuid4().hex
+    retained = context.hw.parent / ".cad-work" / "rejected-drawings" / run_id
+    output_dir.parent.mkdir(parents=True, exist_ok=True)
+    staging = output_dir.parent / f".drawing-draft-{run_id}"
+    staging.mkdir(parents=True, exist_ok=False)
     try:
         findings: list[dict[str, Any]] = [dict(f) for f in report.findings]
         layout_ok = True
@@ -741,7 +746,6 @@ def publish_package(context: DrawingContext, sheets: Sequence[ComposedSheet], re
         return result
     finally:
         if (staging / "rejected.json").is_file():
-            retained = output_dir.parent.parent / ".cad-work" / "rejected-drawings" / run_id
             retained.parent.mkdir(parents=True, exist_ok=True)
             os.replace(staging, retained)
         else:

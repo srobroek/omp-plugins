@@ -123,8 +123,10 @@ def write_project(root: Path, regime: str = "iso", bom_pin_qty: int = 2) -> Path
     return hw
 
 
-def run_cli(hw: Path, out: Path, jobs: int | None = None) -> tuple[int, dict]:
-    command = [CLI, str(hw), "--version", "v1", "--output-dir", str(out), "--timeout", "600"]
+def run_cli(hw: Path, out: Path | None = None, jobs: int | None = None) -> tuple[int, dict]:
+    command = [CLI, str(hw), "--version", "v1", "--timeout", "600"]
+    if out is not None:
+        command += ["--output-dir", str(out)]
     if jobs is not None:
         command += ["--jobs", str(jobs)]
     proc = subprocess.run(scriptenv.script_command(*command), capture_output=True, text=True, timeout=1800)

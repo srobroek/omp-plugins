@@ -655,24 +655,33 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(fail("invalid_input", "--part values must be unique because each part has one output package"), indent=2))
         return 2
     hw = args.hw.resolve()
-    freecadcmd = freecad_runtime.find_freecadcmd()
-    if freecadcmd is None or not freecadcmd.is_file():
-        print(json.dumps(fail("freecad_unavailable", "freecadcmd not found; set FREECADCMD or put freecadcmd on PATH")))
-        return 2
     api = drawing_publication.layout()
     try:
         label, version_dir, _ = api.built_version(hw, args.version or "latest")
         context = drawing_contract.load_context(hw, version_dir)
         output_root = api.scratch_path(hw, args.output_dir, "--output-dir") if args.output_dir else None
+        if output_root is not None and output_root.exists():
+            raise api.LayoutError(f"--output-dir already exists and will not be overwritten: {output_root}")
     except (api.LayoutError, drawing_contract.ContractError, OSError, KeyError, ValueError) as exc:
         print(json.dumps(fail(getattr(exc, "code", "invalid_input"), str(exc),
                               findings=[dict(f) for f in getattr(exc, "findings", ())]), indent=2))
         return 1 if getattr(exc, "code", None) == "invalid_drawing_intent" else 2
+    freecadcmd = freecad_runtime.find_freecadcmd()
+    if freecadcmd is None or not freecadcmd.is_file():
+        print(json.dumps(fail("freecad_unavailable", "freecadcmd not found; set FREECADCMD or put freecadcmd on PATH")))
+        return 2
+    if output_root is not None and len(args.part) > 1:
+        try:
+            output_root.mkdir(parents=True, exist_ok=False)
+        except OSError as exc:
+            print(json.dumps(fail("io_error", str(exc)), indent=2))
+            return 2
     jobs = freecad_runtime.jobs_for(args.jobs, len(args.part), freecad_runtime.FREECAD_JOB_PEAK_RSS_BYTES)
 
     def draw_part(pn: str) -> tuple[dict[str, Any], int]:
         subject = pn
         recipe = {"part": pn, "provenance": context.provenance(pn)}
+        draft: Path | None = None
         try:
             if output_root is None:
                 existing = api.reusable(hw, "bundle.drawings", {"V": label, "S": subject}, recipe,
@@ -680,19 +689,36 @@ def main(argv: list[str] | None = None) -> int:
                 if existing is not None:
                     return {"pn": pn, "status": "pass", "cache": "hit", "output_dir": str(existing)}, 0
                 draft = api.staging(hw, "bundle.drawings")
+            else:
+                draft = output_root if len(args.part) == 1 else output_root / pn
+                if draft.exists():
+                    return fail("output_exists", f"--output-dir already exists and will not be overwritten: {draft}",
+                                pn=pn), 2
+                draft.parent.mkdir(parents=True, exist_ok=True)
+                draft.mkdir()
             result, code = run_part(context, pn, draft, freecadcmd, args.timeout)
-            if code == 0 and output_root is None:
+            if code == 0 and result.get("status") == "pass" and output_root is None:
                 published = drawing_publication.publish(hw, label, subject, draft, recipe,
                                                         "cad-drawings drawing.py", args.replace)
                 result["output_dir"] = str(published)
+            elif output_root is None:
+                drawing_publication.discard_empty(draft)
             return result, code
         except api.PublishConflict as exc:
+            if output_root is None and draft is not None:
+                drawing_publication.discard_empty(draft)
             return fail("publish_conflict", str(exc), pn=pn), 2
         except drawing_contract.ContractError as exc:
+            if output_root is None and draft is not None:
+                drawing_publication.discard_empty(draft)
             return fail(exc.code, str(exc), pn=pn), 2
         except DrawingError as exc:
+            if output_root is None and draft is not None:
+                drawing_publication.discard_empty(draft)
             return fail(exc.code, str(exc), pn=pn), exc.exit_code
         except (OSError, ValueError, KeyError) as exc:
+            if output_root is None and draft is not None:
+                drawing_publication.discard_empty(draft)
             return fail("io_error", str(exc), pn=pn), 2
 
     try:

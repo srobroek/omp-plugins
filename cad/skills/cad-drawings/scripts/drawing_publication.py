@@ -46,6 +46,8 @@ def publish(hw: Path, label: str, subject: str, draft: Path, recipe: Mapping[str
     package = draft / "package.json"
     data = json.loads(package.read_text(encoding="utf-8"))
     data["output_dir"] = str(target)
+    for sheet in data.get("sheets", []):
+        sheet["files"] = {kind: str(target / name) for kind, name in sheet.get("files", {}).items()}
     package.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
     result = api.publish(hw, "bundle.drawings", {"V": label, "S": subject}, draft, recipe=recipe,
                          producer=producer, status="pass", replace=replace)

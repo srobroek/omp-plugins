@@ -339,7 +339,7 @@ def run(args: argparse.Namespace, freecadcmd: Path, jobs: int = 1) -> tuple[dict
         output_dir = api.staging(hw, "bundle.drawings")
     else:
         output_dir = api.scratch_path(hw, args.output_dir, "--output-dir")
-        output_dir.mkdir(parents=True, exist_ok=True)
+        output_dir.mkdir(parents=True, exist_ok=False)
     work_root = hw.parent / ".cad-work" / "assembly-drawing"
     work_root.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="cad-assembly-drawing-", dir=work_root) as work:
@@ -392,8 +392,10 @@ def main(argv: list[str] | None = None) -> int:
                 print(json.dumps({"status": "pass", "cache": "hit", "output_dir": str(existing)}, indent=2))
                 return 0
         else:
-            api.scratch_path(hw, args.output_dir, "--output-dir")
-    except (drawing_contract.ContractError, assembly_check.IntentError, OSError, ValueError, KeyError) as exc:
+            output = api.scratch_path(hw, args.output_dir, "--output-dir")
+            if output.exists():
+                raise api.LayoutError(f"--output-dir already exists and will not be overwritten: {output}")
+    except (drawing_contract.ContractError, assembly_check.IntentError, api.LayoutError, OSError, ValueError, KeyError) as exc:
         findings = [dict(f) for f in getattr(exc, "findings", ())]
         if not findings:
             findings = [assembly_check.finding(getattr(exc, "code", "invalid_input"), str(exc))]

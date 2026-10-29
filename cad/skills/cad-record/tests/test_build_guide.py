@@ -70,6 +70,7 @@ class BuildGuide(unittest.TestCase):
         hw = self.copy_lamp_example()
         self.make_version(hw, "v1")
         self.copy_coverage(hw)
+        self.assertTrue((hw / "drawings" / "v1" / "assembly" / "coverage.json").is_file())
         guide = self.generate(hw)
         self.assertIn('<parts src="../hw/bom.csv" />', guide)
         for heading in ("Overview", "Parts to make", "Parts to buy", "Tools and consumables",
