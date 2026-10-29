@@ -891,10 +891,10 @@ def layout_view(view: ViewData, presentation: Presentation, size: float, regime:
         for number_, dim in enumerate(rows):
             y = above - FIRST_ROW - number_ * ROW_PITCH if side > 0 else below + FIRST_ROW + number_ * ROW_PITCH
             annotations.append(_dimension_markup(dim, y, size, regime))
+            # the text above the line; a row below the view also reaches the extension lines' overshoot
             footprint = footprint.union(Box(min(dim.origin[0], dim.target[0]) - text_width(dim.text, size),
-                                            min(y, dim.origin[1], dim.target[1]) - size - 1.5,
-                                            max(dim.origin[0], dim.target[0]) + text_width(dim.text, size),
-                                            max(y, dim.origin[1], dim.target[1]) + EXT_OVERSHOOT))
+                                            y - size - 1.5, max(dim.origin[0], dim.target[0]) + text_width(dim.text, size),
+                                            y + (EXT_OVERSHOOT if side < 0 else 0.0)))
     x = right_edge + FIRST_ROW
     for dim in sorted((d for d in mine_linear if not d.horizontal and d.side > 0),
                       key=lambda d: abs(d.target[1] - d.origin[1])):
