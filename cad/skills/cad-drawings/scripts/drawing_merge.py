@@ -14,7 +14,7 @@ it was, when:
 - the block still holds a ``REVIEW`` placeholder (``draft_unreviewed``);
 - the version has no ``drawing_features`` hook for the part (``drawing_intent_missing``), or the hook
   returns no locator for a feature the block names in ``features``, ``datum_features``,
-  ``views[].feature``, ``dimensions[].features`` or ``geometric_tolerances[].features``
+  ``views[].feature``, ``dimensions[].features`` and ``.at`` or ``geometric_tolerances[].features``
   (``feature_not_found``): write the hook and rebuild first, then draft again for its names;
 - the merged record fails cad-record's validator (``invalid_drawing_intent``), or the version no longer
   matches its sources (``source_mismatch``, exit 2), as ``drawing_contract.load_context`` checks it.
@@ -72,7 +72,7 @@ def named_features(block: Mapping[str, Any]) -> dict[str, list[str]]:
             add(f"views.{view.get('id')}", view["feature"])
     for group in ("dimensions", "geometric_tolerances"):
         for entry in block.get(group) or []:
-            for name in entry.get("features") or []:
+            for name in [*(entry.get("features") or []), *([entry["at"]] if entry.get("at") else [])]:
                 add(f"{group}.{entry.get('id')}", name)
     return named
 

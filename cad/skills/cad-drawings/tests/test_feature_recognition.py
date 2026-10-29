@@ -17,6 +17,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 SCRIPTS = HERE.parent / "scripts"
 sys.path.insert(0, str(SCRIPTS))
+import drawing_intent  # noqa: E402
 import feature_coverage  # noqa: E402
 import freecad_runtime  # noqa: E402
 from drawing_intent import Characteristic, DatumFrame, Measured  # noqa: E402
@@ -126,6 +127,66 @@ class Recognition_(unittest.TestCase):
                                                       details={"features": [bound.owner[a], bound.owner[b]]}))
         report = feature_coverage.check(recognition, bound, located, faces)
         self.assertFalse(any(f["feature"] == wall.id for f in report.findings), report.findings)
+
+    def test_drafted_walls_inclined_flanks_and_a_dish_are_sized_at_their_planes(self) -> None:
+        recognition, faces = self.fixtures["drafted_dish"]
+        drafted = [item for item in recognition.features if item.category == "wall" and item.details.get("drafted")]
+        self.assertEqual(len(drafted), 2, recognition.features)
+        for wall in drafted:   # 3 thick at the rim, not at the 3 deg drafted faces' mean
+            thickness = next(s for s in wall.sizes if s.name == "thickness")
+            self.assertAlmostEqual(thickness.value, 3.0, places=6)
+            self.assertEqual([round(faces[i].point[2], 6) for i in thickness.at], [20.0])
+            self.assertAlmostEqual(next(s.value for s in wall.sizes if s.name == "angle"), 3.0, places=4)
+        self.assertEqual(sizes(recognition, "dish"), [{"radius": 40.4, "depth": 0.8, "instances": 1}])
+        dovetail = next(item for item in recognition.features if item.category == "boss" and any(s.at for s in item.sizes))
+        width = next(s for s in dovetail.sizes if s.at)
+        self.assertAlmostEqual(width.value, 20.0, places=6)
+        self.assertEqual([round(faces[i].point[2], 6) for i in width.at], [-8.0], "at the bed, between the flanks")
+
+    def test_a_drafted_wall_flank_width_or_dish_needs_its_size_at_a_plane_not_a_profile(self) -> None:
+        recognition, faces = self.fixtures["drafted_dish"]
+        # every face its own feature: the frame's planes located, inclined planes and the sphere model-defined
+        features = {f"f{i}": ResolvedFeature(f"f{i}", "plane_face" if face.support_type == "plane" and any(
+            abs(abs(c) - 1.0) < 1e-9 for c in face.normal) else "surface", (i,)) for i, face in faces.items()}
+        bound = Binding(features, {i: f"f{i}" for i in faces}, ())
+        targets = [item for item in recognition.features if item.category == "dish" or any(s.at for s in item.sizes)]
+        self.assertEqual(sorted(item.category for item in targets), ["boss", "dish", "wall", "wall"])
+        report = feature_coverage.check(recognition, bound, Measured(frame=FRAME), faces)
+        missing = {f["feature"]: f["message"] for f in report.findings}
+        for item in targets:
+            self.assertIn(item.id, missing)
+        dish = next(t.id for t in targets if t.category == "dish")
+        self.assertIn("SR 40.4", missing[dish])
+        self.assertIn("depth 0.8", missing[dish])
+        for item in targets:
+            if item.category != "dish":
+                self.assertIn("at the plane of face", missing[item.id])
+            if item.category == "wall":   # the drafted face is a controlled-model surface: its profile is not the draft
+                self.assertIn("angle 3", missing[item.id])
+        dimensions = []
+        for item in targets:
+            plane = next((s.at[0] for s in item.sizes if s.at), None)
+            for size in item.sizes:
+                name = f"{item.id}_{size.name}"
+                if size.at:
+                    dimensions.append({"id": name, "operation": "thickness" if size.name == "thickness" else "width",
+                                       "features": sorted({f"f{size.between[0][0]}", f"f{size.between[1][0]}"}),
+                                       "at": f"f{plane}"})
+                elif size.name == "angle":   # from the reference plane: 87° states a 3° draft, 70° a flank
+                    dimensions.append({"id": name, "operation": "angle", "features": [f"f{size.faces[0]}", f"f{plane}"]})
+                elif item.category == "dish":   # SR, and the depth from the plane it opens through
+                    entry = [f"f{size.between[0][0]}"] if size.name == "depth" else []
+                    dimensions.append({"id": name, "operation": size.name, "features": [f"f{item.faces[0]}", *entry]})
+        measurer = drawing_intent.Measurer("TST-0002", {"drawing": {"type": "detail", "dimensions": dimensions}}, {}, [],
+                                           bound, list(faces.values()))
+        measurer._requests(FRAME)
+        self.assertEqual(measurer.result.findings, [])
+        self.assertTrue(next(c for c in measurer.result.characteristics if c.operation == "radius").details["spherical"])
+        report = feature_coverage.check(recognition, bound, Measured(FRAME, measurer.result.characteristics), faces)
+        left = [m for f in report.findings if f["feature"] in {t.id for t in targets} for m in f["missing"]]
+        # the dovetail's own length, height and position are other requests; nothing at a plane, no angle, no SR
+        self.assertEqual([m for m in left if "at the plane" in m or m.startswith(("angle", "SR", "depth"))], [], left)
+        self.assertNotIn(next(t.id for t in targets if t.category == "dish"), {f["feature"] for f in report.findings})
 
 
 if __name__ == "__main__":

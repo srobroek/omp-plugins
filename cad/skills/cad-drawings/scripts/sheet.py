@@ -396,6 +396,9 @@ class Linear:
     boxed: bool = False                  # a basic (theoretically exact) dimension
     reference: bool = False
     characteristics: list[str] = field(default_factory=list)
+    # thin lines extending outlines to a theoretical sharp corner a foot stands on (ISO 129-1, a chamfered edge)
+    construction: list[tuple[tuple[float, float], tuple[float, float]]] = field(default_factory=list)
+    side: int = 1                        # +1 above or right of the view, -1 below or left (feet on that edge)
 
 
 @dataclass
@@ -409,8 +412,13 @@ class Presentation:
 LINEAR_OPERATIONS = ("location", "axis_location", "floor_location", "plane_separation", "thickness", "distance")
 
 
+def is_linear(char: Characteristic) -> bool:
+    """Drawn as a linear dimension: a location or separation, or any size stated at a reference plane."""
+    return char.operation in LINEAR_OPERATIONS or bool(char.details.get("at"))
+
+
 def _preferred(char: Characteristic, plans: Sequence[ViewPlan]) -> list[ViewPlan]:
-    if char.operation in LINEAR_OPERATIONS:
+    if is_linear(char):
         # a dimension from a datum needs both ends on the sheet: projected views, then sections; presentation
         # section puts the sections first, so interior sizes leave the principal view
         order = ("section", "part") if char.presentation == "section" else ("part", "section")
@@ -506,7 +514,7 @@ def build_presentation(chars: Sequence[Characteristic], frame: DatumFrame, bindi
         if char.presentation == GENERAL_NOTE and char.operation in ("radius", "chamfer"):
             result.placed[char.id] = {"annotation": GENERAL_NOTE_ID, "view": None, "anchor": None}
             continue
-        if char.operation in LINEAR_OPERATIONS:
+        if is_linear(char):
             same = stated.get(dimension_key(char))
             if same is not None:   # features on one centre line or plane share the dimension that locates it
                 same.characteristics.append(char.id)
@@ -644,12 +652,12 @@ def _callout_text(char: Characteristic, regime: str) -> str | None:
     asme = regime == "asme"
     op = char.operation
     if op == "diameter":
-        text = size_text(char, regime, "⌀")
+        text = size_text(char, regime, "S⌀" if char.details.get("spherical") else "⌀")
         if char.details.get("groove_root"):
             text = ("GROOVE " if asme else "groove ") + text
         return text
     if op == "radius":
-        return size_text(char, regime, "R")
+        return size_text(char, regime, "SR" if char.details.get("spherical") else "R")
     if op == "chamfer":
         nominal, suffix = tolerance_text(char.tolerance, char.value, regime)
         return (f"{count_prefix(char.quantity, regime)}{nominal}{suffix} {times(regime)} "
@@ -712,6 +720,8 @@ def _callout_text(char: Characteristic, regime: str) -> str | None:
 def _linear(char: Characteristic, frame: DatumFrame, binding: Mapping[str, ResolvedFeature],
             faces: Mapping[int, Face], view: ViewData, regime: str) -> Linear | None:
     """A baseline dimension from the datum to a plane or axis, when this view shows both edge-on."""
+    if char.details.get("at"):
+        return _at_linear(char, binding, faces, view, regime)
     if char.axis is None:
         return None
     vector = frame.vector(char.axis)
@@ -747,6 +757,48 @@ def _linear(char: Characteristic, frame: DatumFrame, binding: Mapping[str, Resol
     return Linear(id=f"dim-{char.id}".replace(".", "-").replace("_", "-"), view=plan.id, origin=origin, target=target,
                   horizontal=horizontal, text=text, boxed=boxed, reference=char.reference,
                   characteristics=[char.id])
+
+
+CORNER_MIN_MM = 0.3   # a foot this far from both faces' outlines stands on a theoretical sharp corner
+
+
+def _at_linear(char: Characteristic, binding: Mapping[str, ResolvedFeature], faces: Mapping[int, Face],
+               view: ViewData, regime: str) -> Linear | None:
+    """A width or wall thickness stated at a reference plane, between the lines where its two planes meet that
+    plane, in a view that sees those lines end-on and both planes' outlines. A foot on a theoretical sharp
+    corner (the edge chamfered or rounded away) gets thin lines extending both outlines to it (ISO 129-1)."""
+    trace, plan = char.details["trace"], view.plan
+    if not fg.parallel(trace["along"], plan.direction):
+        return None
+    horizontal = fg.parallel(trace["across"], plan.x_direction)
+    if not horizontal and not fg.parallel(trace["across"], plan.up):
+        return None
+    first, second = char.details["pairs"][0]
+    if not all(visible_anchors([faces[i]], view) for i in (first, second)):
+        return None
+    reference = [faces[i] for i in binding[char.details["at"]].faces]
+    feet, construction = [], []
+    for point, side in ((trace["first"], first), (trace["second"], second)):
+        foot = view.project(point)
+        feet.append(foot)
+        for outline in ([faces[side]], reference):
+            ends = [view.project(p) for face in outline for p in face.boundary_points()]
+            nearest = min(ends, key=lambda p: math.hypot(p[0] - foot[0], p[1] - foot[1]), default=foot)
+            if math.hypot(nearest[0] - foot[0], nearest[1] - foot[1]) > CORNER_MIN_MM:
+                construction.append((nearest, foot))
+    # on the side of the view the feet are nearer: a reference plane on the left or bottom edge of the view (a
+    # rim, a bed) keeps its extension lines outside the view
+    box = view.bounds()
+    if horizontal:
+        side = -1 if sum(y for _, y in feet) / 2 > (box.y0 + box.y1) / 2 else 1
+    else:
+        side = -1 if sum(x for x, _ in feet) / 2 < (box.x0 + box.x1) / 2 else 1
+    nominal, suffix = tolerance_text(char.tolerance, abs(char.value), regime)
+    text = count_prefix(char.quantity, regime) + (f"({nominal})" if char.reference else nominal + suffix)
+    return Linear(id=f"dim-{char.id}".replace(".", "-").replace("_", "-"), view=plan.id, origin=feet[0],
+                  target=feet[1], horizontal=horizontal, text=text,
+                  boxed=char.tolerance is not None and char.tolerance.kind == "basic", reference=char.reference,
+                  characteristics=[char.id], construction=construction, side=side)
 
 
 # --- layout ------------------------------------------------------------------------------------------
@@ -808,8 +860,8 @@ def layout_view(view: ViewData, presentation: Presentation, size: float, regime:
                  children: Sequence[ViewPlan] = ()) -> ViewLayout:
     """Place this view's dimensions, callouts and child-view marks around it; return the markup and occupied box.
 
-    ``children`` are the section and detail views based on this view: their cutting-plane lines and
-    detail circles are drawn here, and callout columns keep clear of their letters.
+    ``children`` are the section, detail and lettered views based on this view: their cutting-plane lines,
+    detail circles and reference arrows are drawn here, and callout columns keep clear of their letters.
     """
     box = view.bounds()
     annotations: list[SvgAnnotation] = []
@@ -818,32 +870,49 @@ def layout_view(view: ViewData, presentation: Presentation, size: float, regime:
     marks: list[Box] = []
     for child in children:
         markup, boxes = (section_marks(view, child, size, regime) if child.kind == "section"
-                         else detail_marks(view, child, size))
+                         else detail_marks(view, child, size) if child.kind == "detail"
+                         else view_marks(view, child, size))
         annotations.append(markup)
         marks.extend(boxes)
         for mark in boxes:
             footprint = footprint.union(mark)
     # parallel dimensions: horizontal ones stack above the view, vertical ones to its right, both beyond the
-    # cutting-plane and detail letters on that side, so no dimension text lands on a letter
+    # cutting-plane and detail letters on that side, so no dimension text lands on a letter; a dimension stated
+    # at a reference plane on the view's left or bottom edge (``Linear.side``) stacks on that side instead, so
+    # its extension lines never run through the view
     above = min([box.y0] + [m.y0 for m in marks if m.y1 < box.y0 + 1.0])
+    below = max([box.y1] + [m.y1 for m in marks if m.y0 > box.y1 - 1.0])
     right_edge = max([box.x1] + [m.x1 for m in marks if m.x0 > box.x1 - 1.0])
-    rows = sorted((d for d in presentation.linears if d.view == view.plan.id and d.horizontal),
-                  key=lambda d: abs(d.target[0] - d.origin[0]))
-    columns = sorted((d for d in presentation.linears if d.view == view.plan.id and not d.horizontal),
-                     key=lambda d: abs(d.target[1] - d.origin[1]))
-    for number_, dim in enumerate(rows):
-        y = above - FIRST_ROW - number_ * ROW_PITCH
-        annotations.append(_dimension_markup(dim, y, size, regime))
-        footprint = footprint.union(Box(min(dim.origin[0], dim.target[0]) - text_width(dim.text, size),
-                                        y - size - 1.5, max(dim.origin[0], dim.target[0]) + text_width(dim.text, size), y))
+    left_edge = min([box.x0] + [m.x0 for m in marks if m.x1 < box.x0 + 1.0])
+    mine_linear = [d for d in presentation.linears if d.view == view.plan.id]
+    for side in (1, -1):
+        rows = sorted((d for d in mine_linear if d.horizontal and d.side == side),
+                      key=lambda d: abs(d.target[0] - d.origin[0]))
+        for number_, dim in enumerate(rows):
+            y = above - FIRST_ROW - number_ * ROW_PITCH if side > 0 else below + FIRST_ROW + number_ * ROW_PITCH
+            annotations.append(_dimension_markup(dim, y, size, regime))
+            # the text above the line; a row below the view also reaches the extension lines' overshoot
+            footprint = footprint.union(Box(min(dim.origin[0], dim.target[0]) - text_width(dim.text, size),
+                                            y - size - 1.5, max(dim.origin[0], dim.target[0]) + text_width(dim.text, size),
+                                            y + (EXT_OVERSHOOT if side < 0 else 0.0)))
     x = right_edge + FIRST_ROW
-    for dim in columns:
+    for dim in sorted((d for d in mine_linear if not d.horizontal and d.side > 0),
+                      key=lambda d: abs(d.target[1] - d.origin[1])):
         annotations.append(_dimension_markup(dim, x, size, regime))
         # ISO 129-1 aligns the text with the line; ASME Y14.5 reads it horizontally, right of the line
         right_edge = x + (size + 1.5 if regime == "iso" else 1.0 + text_width(dim.text, size))
         footprint = footprint.union(Box(x - 1.0, min(dim.origin[1], dim.target[1]) - text_width(dim.text, size),
                                         right_edge, max(dim.origin[1], dim.target[1]) + text_width(dim.text, size)))
         x = max(x + ROW_PITCH, right_edge + 2.0)
+    x, left_dims = left_edge - FIRST_ROW, box.x0
+    for dim in sorted((d for d in mine_linear if not d.horizontal and d.side < 0),
+                      key=lambda d: abs(d.target[1] - d.origin[1])):
+        annotations.append(_dimension_markup(dim, x, size, regime))
+        # the text left of the line in both regimes, away from the view
+        left_dims = x - (size + 1.5 if regime == "iso" else 1.0 + text_width(dim.text, size))
+        footprint = footprint.union(Box(left_dims, min(dim.origin[1], dim.target[1]) - text_width(dim.text, size),
+                                        x + 1.0, max(dim.origin[1], dim.target[1]) + text_width(dim.text, size)))
+        x = min(x - ROW_PITCH, left_dims - 2.0)
     label = _view_label(view, size, regime)
     # callout columns, left and right of the view
     mine = [c for c in presentation.callouts if c.view == view.plan.id]
@@ -852,7 +921,7 @@ def layout_view(view: ViewData, presentation: Presentation, size: float, regime:
         column = [c for c in mine if (c.anchor[0] > middle + 0.5) == (side > 0)]
         if not column:
             continue
-        edge = (box.x0 - COLUMN_GAP) if side < 0 else (right_edge + COLUMN_GAP)
+        edge = (left_dims - COLUMN_GAP) if side < 0 else (right_edge + COLUMN_GAP)
         reserved = [(m.y0, m.y1) for m in marks if (m.x1 < box.x0 + 1.0) == (side < 0) and
                     (m.x1 < box.x0 + 1.0 or m.x0 > box.x1 - 1.0)]
         if label is not None and (label[1].x0 < edge if side < 0 else label[1].x1 > edge):
@@ -950,7 +1019,7 @@ def _dimension_markup(dim: Linear, at: float, size: float, regime: str) -> SvgAn
     extension = []
     if dim.horizontal:
         for x, y in ((ox, oy), (tx, ty)):
-            extension.append(_line(x, y - EXT_GAP if y > at else y + EXT_GAP, x, at - EXT_OVERSHOOT))
+            extension.append(_line(x, y - EXT_GAP if y > at else y + EXT_GAP, x, at - dim.side * EXT_OVERSHOOT))
         x0, x1 = sorted((ox, tx))
         parts.append(_line(x0, at, x1, at))
         parts.append(_arrow((ox, at), (tx, at)))
@@ -967,7 +1036,7 @@ def _dimension_markup(dim: Linear, at: float, size: float, regime: str) -> SvgAn
                                baseline + TEXT_DESCENT * size + 0.4))
     else:
         for x, y in ((ox, oy), (tx, ty)):
-            extension.append(_line(x + EXT_GAP if x < at else x - EXT_GAP, y, at + EXT_OVERSHOOT, y))
+            extension.append(_line(x + EXT_GAP if x < at else x - EXT_GAP, y, at + dim.side * EXT_OVERSHOOT, y))
         y0, y1 = sorted((oy, ty))
         parts.append(_line(at, y0, at, y1))
         parts.append(_arrow((at, oy), (at, ty)))
@@ -984,11 +1053,20 @@ def _dimension_markup(dim: Linear, at: float, size: float, regime: str) -> SvgAn
                 h = TEXT_ASCENT * size
                 parts.append(_rect(at - 1.0 - h - 0.6, mid - width / 2 - 0.8, at - 1.0 + TEXT_DESCENT * size + 0.4,
                                    mid + width / 2 + 0.8))
-        else:
+        elif dim.side > 0:
             parts.append(_text(dim.text, at + 1.0, mid + (TEXT_ASCENT - TEXT_DESCENT) * size / 2, size))
             if dim.boxed:
                 parts.append(_rect(at + 0.4, mid - TEXT_ASCENT * size / 2 - 1.0, at + 1.6 + width,
                                    mid + TEXT_ASCENT * size / 2 + 1.0))
+        else:   # a column left of the view reads leftward, away from it
+            parts.append(_text(dim.text, at - 1.0, mid + (TEXT_ASCENT - TEXT_DESCENT) * size / 2, size, "end"))
+            if dim.boxed:
+                parts.append(_rect(at - 1.6 - width, mid - TEXT_ASCENT * size / 2 - 1.0, at - 0.4,
+                                   mid + TEXT_ASCENT * size / 2 + 1.0))
+    for (sx, sy), (fx, fy) in dim.construction:   # the outlines extended, crossing just past the sharp corner
+        length = math.hypot(fx - sx, fy - sy)
+        past = EXT_OVERSHOOT / length
+        extension.append(_line(sx, sy, fx + (fx - sx) * past, fy + (fy - sy) * past))
     markup = "".join(parts) + f'<g class="extension">{"".join(extension)}</g>'
     return SvgAnnotation(id=dim.id, kind="dimension", markup=markup,
                          provenance={"characteristics": ",".join(dim.characteristics)})
@@ -1225,3 +1303,34 @@ def detail_marks(base: ViewData, plan: ViewPlan, size: float) -> tuple[SvgAnnota
     markup = f'<g class="detail-boundary">{"".join(parts)}</g>' + _text(plan.label, lx, ly, letter_size, "middle")
     return (SvgAnnotation(id=f"detail-mark-{plan.id}".replace("_", "-"), kind="detail-boundary", markup=markup),
             [Box(lx - half - 0.5, ly - TEXT_ASCENT * letter_size - 0.5, lx + half + 0.5, ly + TEXT_DESCENT * letter_size + 0.5)])
+
+
+VIEW_ARROW_GAP, VIEW_ARROW_LENGTH = 4.0, 10.0
+
+
+def view_marks(base: ViewData, plan: ViewPlan, size: float) -> tuple[SvgAnnotation, list[Box]]:
+    """The reference arrow of a lettered view (ISO 128-3, ASME Y14.3 view indicator) on the view that carries it:
+    outside the view on the side its viewer stands, pointing at the part, the letter beyond its tail; and the
+    arrow's and letter's box."""
+    direction = plan.direction
+    sx, sy = fg.dot(direction, base.plan.x_direction), -fg.dot(direction, base.plan.up)
+    length = math.hypot(sx, sy) or 1.0
+    ux, uy = sx / length, sy / length   # on the sheet, from the view toward the lettered view's viewer
+    box = base.bounds()
+    cx, cy = (box.x0 + box.x1) / 2, (box.y0 + box.y1) / 2
+    reach = min((box.x1 - box.x0) / 2 / abs(ux) if abs(ux) > 1e-9 else math.inf,
+                (box.y1 - box.y0) / 2 / abs(uy) if abs(uy) > 1e-9 else math.inf)
+    tip = (cx + ux * (reach + VIEW_ARROW_GAP), cy + uy * (reach + VIEW_ARROW_GAP))
+    tail = (tip[0] + ux * VIEW_ARROW_LENGTH, tip[1] + uy * VIEW_ARROW_LENGTH)
+    letter_size = size + 1.5
+    half = text_width(plan.label, letter_size) / 2
+    reach_letter = half if abs(ux) > abs(uy) else letter_size * (TEXT_ASCENT + TEXT_DESCENT) / 2
+    lx, ly = tail[0] + ux * (2.0 + reach_letter), tail[1] + uy * (2.0 + reach_letter)
+    baseline = ly + (TEXT_ASCENT - TEXT_DESCENT) * letter_size / 2
+    parts = [_line(tail[0], tail[1], tip[0], tip[1], 0.35), _arrow(tip, tail)]
+    markup = f'<g class="section-line">{"".join(parts)}</g>' + _text(plan.label, lx, baseline, letter_size, "middle")
+    extent = Box(min(tip[0], tail[0], lx - half) - 0.5, min(tip[1], tail[1], baseline - TEXT_ASCENT * letter_size) - 0.5,
+                 max(tip[0], tail[0], lx + half) + 0.5, max(tip[1], tail[1], baseline + TEXT_DESCENT * letter_size) + 0.5)
+    # never a ``view-`` id: layout_check reads those groups as view geometry
+    return (SvgAnnotation(id=f"reference-arrow-{plan.id}".replace("_", "-"), kind="reference-arrow", markup=markup),
+            [extent])

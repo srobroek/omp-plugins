@@ -274,6 +274,39 @@ class Publication(TempProject):
         with self.assertRaisesRegex(layout.LayoutError, "v2 is not a built version"):
             publish(self.hw, "bundle.renders", {"V": "v2", "S": "assembly"}, {"iso.png": "x"})
 
+    def test_reusable_answers_before_a_producer_runs(self) -> None:
+        params = self.params
+        self.assertIsNone(layout.reusable(self.hw, "bundle.renders", params, {"size": 800}))
+        publish(self.hw, "bundle.renders", params, {"iso.png": "png\n"}, recipe={"size": 800})
+        self.assertEqual(layout.reusable(self.hw, "bundle.renders", params, {"size": 800}), self.target)
+        with self.assertRaisesRegex(layout.PublishConflict, "--replace"):
+            layout.reusable(self.hw, "bundle.renders", params, {"size": 1600})
+        self.assertIsNone(layout.reusable(self.hw, "bundle.renders", params, {"size": 1600}, replace=True))
+        write(self.target / "iso.png", "edited\n")
+        with self.assertRaises(layout.PublishConflict):
+            layout.reusable(self.hw, "bundle.renders", params, {"size": 800})
+
+    def test_built_version_needs_a_verified_manifest_and_a_record_snapshot(self) -> None:
+        write(self.hw / "versions" / "v2" / "record" / "product.yaml")
+        seal_version(self.hw, "v2")
+        write(self.hw / "versions" / "latest.json", json.dumps({"label": "v2"}))
+        self.assertEqual(layout.built_version(self.hw, "latest"),
+                         ("v2", self.hw / "versions" / "v2", self.hw / "versions" / "v2" / "record"))
+        with self.assertRaisesRegex(layout.LayoutError, "no record snapshot"):
+            layout.built_version(self.hw, "v1")
+        with self.assertRaisesRegex(layout.LayoutError, "v3 is not a built version"):
+            layout.built_version(self.hw, "v3")
+        write(self.hw / "versions" / "v2" / "record" / "product.yaml", "edited\n")
+        with self.assertRaisesRegex(layout.LayoutError, "fails its manifest"):
+            layout.built_version(self.hw, "v2")
+
+    def test_scratch_path_accepts_only_cad_work(self) -> None:
+        inside = self.project / ".cad-work" / "unit" / "out.json"
+        self.assertEqual(layout.scratch_path(self.hw, inside, "--out"), inside.resolve())
+        for outside in (self.hw / "motion" / "out.json", self.project / ".cad-work", self.root / "elsewhere"):
+            with self.subTest(str(outside)), self.assertRaisesRegex(layout.LayoutError, "--out must be under"):
+                layout.scratch_path(self.hw, outside, "--out")
+
 
 class TreeAudit(TempProject):
     def codes(self, **references: str) -> dict[str, str]:
