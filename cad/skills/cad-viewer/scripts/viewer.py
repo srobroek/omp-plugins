@@ -223,10 +223,10 @@ def run(args: argparse.Namespace) -> int:
     if args.command == "stop":
         emit(session.stop(path))
         return 0
+    if args.command == "capture" and args.out is not None:
+        args.out = args.out.resolve()
     live = session.require_session(path)
     method, route, body = request_body(args)
-    if args.command == "capture" and args.out is not None:
-        args.out.resolve().parent.mkdir(parents=True, exist_ok=True)
     answer = summarise(args.command, session.call(live, method, route, body), live["url"])
     answer.setdefault("status", "pass")
     emit(answer)

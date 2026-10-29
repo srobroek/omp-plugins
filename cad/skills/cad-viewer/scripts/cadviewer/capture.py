@@ -462,6 +462,7 @@ def capture(host: Any, page: Any, request: dict[str, Any]) -> dict[str, Any]:
         if host.user_connected():  # the user's tab follows the refit, as it follows every camera change
             for slot in slots:
                 host.set_camera(slot, host.camera(slot), ("user",))
+    cameras = {slot: host.camera(slot, "presenter") for slot in slots}
     for slot in slots:
         if slot not in frames:
             png = driver.settle(slot, minimum_s=0.6)

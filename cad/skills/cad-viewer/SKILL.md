@@ -60,9 +60,10 @@ Session identity:
    and naming a coupled joint exits 2 with its driver.
 6. `capture --view V [--out .cad-work/unit/.../capture.png] [--replace]` -> V is iso, front, side, top,
    exploded, `isolate:<PN|group>`, `section --joint J-00x` (plane along the joint axis), or current
-   (the state as left, no refit). By default captures publish immutable bundles at
-   `hw/captures/<vN>/<view>/`; `--out` is accepted only under `.cad-work/`. `--replace` retains a
-   conflicting prior bundle. The bundle's capture.json binds the displayed version and viewer state.
+   (the state as left, no refit). By default captures publish an immutable `bundle.captures` at
+   `hw/captures/<vN>/<subject>/`; `--out` is accepted only under `.cad-work/` and an existing file
+   is never overwritten. `--replace` retains a conflicting prior bundle. `capture.json` records the
+   displayed version, view and viewer state; the recipe binds view, state and viewport size.
    `current` takes the user's camera when their tab is open (`camera_from: user`). Every view but section
    and current is refitted, and the user's view follows the refit: `frames.a.in_frame` true and `fill`
    near 0.84 mean the whole product is in frame. While a capture runs, every other command or panel
@@ -102,12 +103,13 @@ to the live 3D viewer.
 | section | source | caption |
 |---|---|---|
 | Renders | `hw/renders/<vN>/<subject>/{render.json,*.png,manifest.json}` (`skill://cad-render`) | view quality, retry strategy, and material/input decisions from render.json |
-| Viewer captures | `hw/captures/<vN>/<subject>/{capture.json,*.png,manifest.json}` | captured view and state bound to one version |
-| Drawings | `hw/drawings/<vN>/<subject>/` drawing bundles | status, scale, projection, warnings, Open PDF with its absolute path |
+| Viewer captures | `hw/captures/<vN>/<subject>/{capture.json,<view>.png,manifest.json}` | captured view and state bound to one version |
+| Drawings | `hw/drawings/<vN>/<subject>/{package.json,sheet-1.png,sheet-1.pdf,manifest.json}` | status, scale, projection and Open PDF with its absolute path |
 | Concept screenshots | `hw/concept/screenshots/` (`skill://cad-concept`) | scene and variant |
 
-The version picker uses only built labels from cad-record layout, with renders and captures grouped by
-version. The file route serves only PNG, JPEG, and PDF files inside the open `hw/`.
+The version picker uses built labels from cad-record layout. Each option includes the build date and part
+count, plus counts of valid render sets, capture bundles and drawing preview bundles; choose Gallery to
+see the actual images. The file route serves only PNG, JPEG, and PDF files inside the open `hw/`.
 
 ## Rules
 

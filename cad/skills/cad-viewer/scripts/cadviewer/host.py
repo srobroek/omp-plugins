@@ -801,18 +801,21 @@ class Host:
         size = [self.viewport[0], self.viewport[1]]
         recipe = {"view": view, "viewer_state": viewer_state, "size": size}
 
+        filename_view = view.replace(":", "-")
+        subject = filename_view.lower()
+        staged: Path | None = None
         try:
             if requested is None:
                 existing = api.reusable(hw, "bundle.captures", {"V": label, "S": subject}, recipe,
                                         replace=bool(body.get("replace")))
                 if existing is not None:
-                    return {"status": "pass", "cache": "hit", "out": str(existing / f"{view}.png"),
+                    return {"status": "pass", "cache": "hit", "out": str(existing / f"{filename_view}.png"),
                             "version": label, "view": view, "viewer_state": viewer_state}
                 staged = api.staging(hw, "bundle.captures")
-                target = staged / f"{view}.png"
+                target = staged / f"{filename_view}.png"
             else:
-                staged = None
                 target = api.scratch_path(hw, requested, "--out")
+                target.parent.mkdir(parents=True, exist_ok=True)
                 if target.exists() or target.is_symlink():
                     raise ViewerError(f"{target} already exists; capture outputs are never overwritten")
             body["out"] = str(target)
@@ -836,7 +839,8 @@ class Host:
                                         replace=bool(body.get("replace")))
             except api.LayoutError as error:
                 raise ViewerError(str(error)) from error
-            result["out"] = str(published.path / f"{view}.png")
+            result["out"] = str(published.path / f"{filename_view}.png")
+            result["cache"] = "hit" if published.reused else "miss"
         return result
 
     def serve(self) -> None:

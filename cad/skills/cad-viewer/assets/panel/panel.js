@@ -148,16 +148,23 @@ const optionSignatures = {}; // version key -> the options its select lists, reb
 
 const selectionKey = (selected) => (selected ? `${selected.version}|${selected.label}` : "");
 
-const builtAt = (iso) => (iso
-  ? new Date(iso).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23" })
-  : "build time not recorded");
+const builtAt = (iso) => (iso ? iso.slice(0, 10) : "build time not recorded");
 
-function versionText(entry) {
-  if (entry.error) return `${entry.label} · incomplete build`;
-  const parts = entry.parts === null ? "" : ` · ${entry.parts} part${entry.parts === 1 ? "" : "s"}`;
-  return `${entry.label} · ${builtAt(entry.built_utc)}${parts}`;
+function previewCounts(previews) {
+  const labels = { renders: "render set", captures: "capture", drawings: "drawing preview" };
+  return Object.entries(labels).flatMap(([kind, label]) => {
+    const count = previews?.[kind]?.length ?? 0;
+    return count ? [`${count} ${label}${count === 1 ? "" : "s"}`] : [];
+  });
 }
 
+function versionText(entry) {
+  const counts = previewCounts(entry.previews);
+  const preview = counts.length ? ` · ${counts.join(", ")}` : "";
+  if (entry.error) return `${entry.label} · incomplete build${preview}`;
+  const parts = entry.parts === null ? "" : ` · ${entry.parts} part${entry.parts === 1 ? "" : "s"}`;
+  return `${entry.label} · ${builtAt(entry.built_utc)}${parts}${preview}`;
+}
 // [value, text] per option: latest (vN), then every built version, newest first
 function versionOptions(selected) {
   if (!selected) return [["", "Nothing shown"]];

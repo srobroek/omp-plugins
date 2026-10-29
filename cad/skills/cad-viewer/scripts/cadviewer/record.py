@@ -250,8 +250,50 @@ def version_list(hw: Path) -> list[dict[str, Any]]:
     return [_version_entry(hw, label) for label in reversed(_layout().versions(hw))]
 
 
+def version_bundles(hw: Path, kind: str, label: str) -> list[Path]:
+    """Bundle directories for a built version, resolved and validated by cad-record layout."""
+    api = _layout()
+    try:
+        root = api.bundle_dir(hw, kind, label, "assembly").parent
+    except api.LayoutError:
+        return []
+    if not root.is_dir():
+        return []
+    folders = []
+    for path in sorted(root.iterdir(), key=lambda entry: entry.name):
+        if not path.is_dir() or path.is_symlink():
+            continue
+        try:
+            folders.append(api.bundle_dir(hw, kind, label, path.name))
+        except api.LayoutError:
+            continue
+    return folders
+
+
+def version_previews(hw: Path, label: str) -> dict[str, list[dict[str, Any]]]:
+    """Verified bundle subjects and relative image paths for this version's preview picker."""
+    api = _layout()
+    previews: dict[str, list[dict[str, Any]]] = {kind: [] for kind in ("renders", "captures", "drawings")}
+    for kind in previews:
+        for folder in version_bundles(hw, kind, label):
+            if not (folder / "manifest.json").is_file() or api.verify(folder):
+                continue
+            if kind == "drawings":
+                images = [folder / "sheet-1.png"]
+            elif kind == "captures":
+                images = sorted(folder.glob("*.png"), key=lambda path: path.name)
+            else:
+                images = sorted(folder.glob("*.png"), key=lambda path: path.name)
+            files = [image.relative_to(hw).as_posix() for image in images if image.is_file()]
+            if files:
+                previews[kind].append({"subject": folder.name, "files": files,
+                                       "views": [Path(path).stem for path in files]})
+    return previews
+
+
 def _version_entry(hw: Path, label: str) -> dict[str, Any]:
-    entry: dict[str, Any] = {"label": label, "built_utc": None, "parts": None, "error": None}
+    entry: dict[str, Any] = {"label": label, "built_utc": None, "parts": None, "error": None,
+                             "previews": version_previews(hw, label)}
     api = _layout()
     try:
         folder = api.version_dir(hw, label)

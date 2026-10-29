@@ -123,8 +123,7 @@ def index(hw: Path, version: str = "latest", showing: str | None = None) -> dict
     product = _product_title(hw)
     return {"hw": str(hw), "product": product, "version": chosen, "latest": latest, "versions": known,
             "viewer": {"url": "/", "showing": showing},
-            "sections": [_renders(hw, chosen), _captures(hw, chosen, known), _drawings(hw, chosen, known),
-                         _concept(hw)]}
+            "sections": [_renders(hw, chosen), _captures(hw, chosen), _drawings(hw, chosen), _concept(hw)]}
 
 
 def summary(model: dict[str, Any]) -> dict[str, Any]:
@@ -144,10 +143,10 @@ def _section(sid: str, title: str, source: Path, tiles: list[dict[str, Any]], em
 
 def _renders(hw: Path, version: str) -> dict[str, Any]:
     api = record._layout()
-    root = hw / "renders" / version
+    root = api.bundle_dir(hw, "renders", version, "assembly").parent
     tiles: list[dict[str, Any]] = []
     notes: list[str] = []
-    folders = sorted((path for path in root.iterdir() if path.is_dir()), key=lambda path: path.name) if root.is_dir() else []
+    folders = record.version_bundles(hw, "renders", version)
     for folder in folders:
         data_path, manifest_path = folder / "render.json", folder / "manifest.json"
         if not manifest_path.is_file():
@@ -200,55 +199,64 @@ def _retry(value: Any) -> dict[str, Any] | None:
             "note": str(value["note"]) if value.get("note") else None}
 
 
-def _captures(hw: Path, version: str, known: list[str]) -> dict[str, Any]:
-    root = hw / "captures" / version
-    tiles = []
-    notes = []
-    folders = sorted((path for path in root.iterdir() if path.is_dir()), key=lambda path: path.name) if root.is_dir() else []
-    for folder in folders:
-        if not (folder / "manifest.json").is_file() or not (folder / "capture.json").is_file():
+def _captures(hw: Path, version: str) -> dict[str, Any]:
+    api = record._layout()
+    root = api.bundle_dir(hw, "captures", version, "assembly").parent
+    tiles: list[dict[str, Any]] = []
+    notes: list[str] = []
+    for folder in record.version_bundles(hw, "captures", version):
+        metadata_path, manifest_path = folder / "capture.json", folder / "manifest.json"
+        if not manifest_path.is_file():
             continue
-        data = _json(folder / "capture.json")
-        problems = record._layout().verify(folder)
+        problems = api.verify(folder)
         if problems:
             notes.append(f"{folder} fails its bundle inventory: {'; '.join(problems)}")
             continue
-        for png in sorted(folder.glob("*.png")):
-            if tile := _tile(hw, png, str(data.get("view") or folder.name)):
-                tiles.append({**tile, "version_recorded": data.get("version") == version,
-                              "state": data.get("viewer_state"), "bundle": str(folder)})
+        data = _json(metadata_path) if metadata_path.is_file() else None
+        if not isinstance(data, dict):
+            notes.append(f"{folder} has no readable capture.json")
+            continue
+        view = data.get("view")
+        if not isinstance(view, str):
+            notes.append(f"{folder} capture.json has no view")
+            continue
+        png = folder / f"{view.replace(':', '-')}.png"
+        if tile := _tile(hw, png, view):
+            tiles.append({**tile, "version_recorded": data.get("version") == version,
+                          "state": data.get("viewer_state"), "bundle": str(folder)})
     empty = f"No viewer captures for {version}: run `viewer.py capture --view iso` to publish a bundle."
     return _section("captures", "Viewer captures", root, tiles, empty, notes)
 
 
-def _drawings(hw: Path, version: str, known: list[str]) -> dict[str, Any]:
-    root = hw / "drawings" / version
+def _drawings(hw: Path, version: str) -> dict[str, Any]:
+    api = record._layout()
+    root = api.bundle_dir(hw, "drawings", version, "assembly").parent
     tiles: list[dict[str, Any]] = []
     notes: list[str] = []
-    if root.is_dir():
-        for bundle in sorted((path for path in root.iterdir() if path.is_dir()), key=lambda path: path.name):
-            manifest, package_path = bundle / "manifest.json", bundle / "package.json"
-            if not manifest.is_file() or not package_path.is_file():
-                continue
-            problems = record._layout().verify(bundle)
-            if problems:
-                notes.append(f"{bundle} fails its bundle inventory: {'; '.join(problems)}")
-                continue
-            package = _json(package_path)
-            if not isinstance(package, dict):
-                continue
-            for sheet in package.get("sheets") or []:
-                files = sheet.get("files") if isinstance(sheet, dict) and isinstance(sheet.get("files"), dict) else {}
-                if not files.get("png"):
-                    continue
-                png = bundle / files["png"]
-                pdf = bundle / files["pdf"] if files.get("pdf") else None
-                tile = _tile(hw, png, f"{bundle.name} sheet {sheet.get('sheet')}")
-                if tile is not None:
-                    tile.update({"status": package.get("status", "unknown"), "kind": "package",
-                                 "source": str(package_path), "version_recorded": True,
-                                 "pdf": _link(hw, pdf) if pdf else None, "bundle": str(bundle)})
-                    tiles.append(tile)
+    for bundle in record.version_bundles(hw, "drawings", version):
+        manifest = bundle / "manifest.json"
+        if not manifest.is_file():
+            continue
+        problems = api.verify(bundle)
+        if problems:
+            notes.append(f"{bundle} fails its bundle inventory: {'; '.join(problems)}")
+            continue
+        package_path = bundle / "package.json"
+        package = _json(package_path) if package_path.is_file() else None
+        if not isinstance(package, dict):
+            continue
+        png = bundle / "sheet-1.png"
+        pdf = bundle / "sheet-1.pdf"
+        tile = _tile(hw, png, f"{bundle.name} sheet 1")
+        if tile is None:
+            notes.append(f"{bundle} preview PNG resolves outside hw")
+            continue
+        tile.update({"status": package.get("status", "unknown"), "kind": "package",
+                     "source": str(package_path), "version_recorded": True,
+                     "pdf": _link(hw, pdf) if pdf.is_file() else None, "bundle": str(bundle),
+                     "scale": package.get("scale"),
+                     "projection": package.get("projection") or package.get("projection_method")})
+        tiles.append(tile)
     empty = f"No drawing bundles for {version}: run cad-drawings drawing.py or assembly_drawing.py."
     return _section("drawings", "Drawings", root, tiles, empty, notes)
 

@@ -10,6 +10,7 @@ Run: python3 -m unittest discover -s cad/skills/cad-viewer/tests -v  (needs PyYA
 
 from __future__ import annotations
 
+import hashlib
 import contextlib
 import importlib.util
 import io
@@ -77,8 +78,14 @@ def make_version(hw: Path, label: str, products: dict[str, str] | None = None, l
     groups = {member: g.id for g in motion.pose_module().load_assembly(hw).groups for member in g.members}
     titles = {pn: record.read_yaml(hw / "parts" / pn / "part.yaml")["title"] for pn in PNS}
     products = products or {pn: f"{pn} {titles[pn]}" for pn in PNS}
+    (hw / "versions").mkdir(exist_ok=True)
     folder = hw / "versions" / label
-    (folder / "parts").mkdir(parents=True)
+    folder.mkdir()
+    (folder / "record").mkdir()
+    for name in ("product.yaml", "interfaces.yaml", "assembly.yaml"):
+        shutil.copyfile(hw / name, folder / "record" / name)
+    shutil.copytree(hw / "parts", folder / "record" / "parts")
+    (folder / "parts").mkdir()
     for name in ("assembly.step", "assembly.glb"):
         (folder / name).write_text("", encoding="utf-8")
     nodes = {oid: i for i, oid in enumerate(chain.ids, start=1)}
@@ -91,12 +98,14 @@ def make_version(hw: Path, label: str, products: dict[str, str] | None = None, l
              "bbox_mm": {"min": [0, 0, 0], "max": [10 * i, 5, 5], "size": [10 * i, 5, 5]}}
         for i, pn in enumerate(PNS, start=1)}, "totals": {"volume_mm3": 28000.0, "mass_g": 75.6}}),
         encoding="utf-8")
-    (folder / "manifest.json").write_text(json.dumps({
-        "schema_version": 2, "label": label, "product_id": "lamp-arm",
-        "occurrences": {oid: {"PN": chain.pn(oid), "ref": chain.ref(oid), "group": groups.get(oid),
-                              "rest": chain.rests[oid].rows()} for oid in chain.ids},
-        "pose": {"transforms": rows, "motions": {oid: r.rows() for oid, r in chain.motions(values).items()}}}),
-        encoding="utf-8")
+    manifest = {"schema_version": 2, "label": label, "product_id": "lamp-arm"}
+    manifest.update(occurrences={oid: {"PN": chain.pn(oid), "ref": chain.ref(oid), "group": groups.get(oid),
+                                      "rest": chain.rests[oid].rows()} for oid in chain.ids},
+                    pose={"transforms": rows, "motions": {oid: r.rows() for oid, r in chain.motions(values).items()}})
+    files = [path.relative_to(folder).as_posix() for path in folder.rglob("*")
+             if path.is_file() and path.name != "manifest.json"]
+    manifest["files"] = {name: hashlib.sha256((folder / name).read_bytes()).hexdigest() for name in files}
+    (folder / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
     if latest:
         (hw / "versions" / "latest.json").write_text(json.dumps({
             "label": label, "assembly_step": f"versions/{label}/assembly.step",
@@ -365,7 +374,9 @@ class HostApi(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.tmp, True)
         self.port = session.free_port()
         self.host = host.Host(self.tmp / "session.json", self.port, PORTS)
-        self.host.slots["a"].showing = "A"
+        self.host.gallery.open(TEMPLATE_HW)
+        self.host.versions["A"] = host.Loaded(
+            types.SimpleNamespace(hw=TEMPLATE_HW, label="v1"), None, {}, {}, {}, "v1")
         self.host.presenter = StubPresenter()
         server = host.make_server(self.host)
         threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -377,12 +388,14 @@ class HostApi(unittest.TestCase):
         return api_request(self.port, method, route, body, headers)
 
     def test_a_change_during_a_capture_is_refused_and_state_still_answers(self) -> None:
+        self.host.gallery.open(TEMPLATE_HW)
         started, release = threading.Event(), threading.Event()
-
+        self.host.versions["A"] = host.Loaded(
+            types.SimpleNamespace(hw=TEMPLATE_HW, label="v1"), None, {}, {}, {}, "v1")
         def slow_capture(_host, _page, body: dict) -> dict:
             started.set()
             release.wait(10)
-            return {"status": "pass", "view": body["view"]}
+            return {"status": "pass", "view": body["view"], "viewer_state": {}}
 
         answers: dict[str, tuple[int, dict]] = {}
         with mock.patch.object(capture, "capture", slow_capture):
@@ -398,9 +411,56 @@ class HostApi(unittest.TestCase):
             self.assertEqual(self.calls, [], "a refused request reached a viewer")
             release.set()
             worker.join(10)
-        self.assertEqual(answers["capture"], (200, {"status": "pass", "view": "section"}))
+        self.assertEqual(answers["capture"], (200, {"status": "pass", "view": "section", "viewer_state": {}}))
         self.assertEqual(self.request("POST", "/api/studio", {"environment": "studio"})[0], 200)
         self.assertEqual(sorted(port for port, _ in self.calls), [1001, 2001])
+
+    def test_capture_reuses_and_publishes_a_versioned_bundle(self) -> None:
+        hw = TEMPLATE_HW
+        self.host.gallery.open(hw)
+        self.host.versions["A"] = host.Loaded(
+            types.SimpleNamespace(hw=hw, label="v1"), None, {}, {}, {}, "v1")
+
+        def fake_capture(_host, _page, body):
+            Path(body["out"]).write_bytes(b"PNG")
+            return {"status": "pass", "view": body["view"], "viewer_state": body["viewer_state"]}
+
+        api = record._layout()
+        with mock.patch.object(capture, "capture", fake_capture), \
+             mock.patch.object(self.host.presenter, "submit", side_effect=lambda work: StubPresenter.submit(work)), \
+             mock.patch.object(api, "reusable", wraps=api.reusable) as reusable_mock, \
+             mock.patch.object(api, "publish", wraps=api.publish) as publish_mock:
+            first = self.host.capture({"view": "iso", "out": None})
+            second = self.host.capture({"view": "iso", "out": None})
+        self.assertEqual((first["cache"], second["cache"]), ("miss", "hit"))
+        self.assertEqual(reusable_mock.call_count, 2)
+        self.assertEqual(publish_mock.call_count, 1)
+        bundle_path = hw / "captures" / "v1" / "iso"
+        self.assertEqual(api.verify(bundle_path), [])
+        self.assertEqual((bundle_path / "iso.png").read_bytes(), b"PNG")
+        metadata = json.loads((bundle_path / "capture.json").read_text(encoding="utf-8"))
+        self.assertEqual((metadata["version"], metadata["view"]), ("v1", "iso"))
+        model = self.host.gallery.index("v1")
+        self.assertEqual(model["sections"][1]["tiles"][0]["title"], "iso")
+
+    def test_capture_explicit_scratch_output_is_never_overwritten(self) -> None:
+        hw = TEMPLATE_HW
+        self.host.gallery.open(hw)
+        self.host.versions["A"] = host.Loaded(
+            types.SimpleNamespace(hw=hw, label="v1"), None, {}, {}, {}, "v1")
+        output = TEMPLATE_HW.parent / ".cad-work" / "test-viewer-capture-no-overwrite.png"
+        body = {"view": "iso", "out": str(output)}
+
+        def fake_capture(_host, _page, request):
+            Path(request["out"]).write_bytes(b"new")
+            return {"status": "pass", "view": request["view"], "viewer_state": {}}
+
+        with mock.patch.object(capture, "capture", fake_capture):
+            self.host.capture(body)
+            output.write_bytes(b"keep")
+            with self.assertRaisesRegex(ViewerError, "capture outputs are never overwritten"):
+                self.host.capture(body)
+            self.assertEqual(output.read_bytes(), b"keep")
 
     def test_requests_from_another_site_are_refused(self) -> None:
         body = {"environment": "studio"}
@@ -419,7 +479,7 @@ class HostApi(unittest.TestCase):
         target = self.tmp / "new" / "x.png"
         status, answer = self.request("POST", "/api/capture", {"view": "iso", "out": str(target)})
         self.assertEqual(status, 400)
-        self.assertIn("not a directory", answer["error"])
+        self.assertIn("nothing shown yet", answer["error"])
         self.assertFalse(target.parent.exists())
         (self.tmp / "elsewhere.png").write_bytes(b"")
         (self.tmp / "link.png").symlink_to(self.tmp / "elsewhere.png")
@@ -475,7 +535,7 @@ class PartMapLoading(Fixture):
             record.load_version(self.hw, "../v1")
 
     def test_no_build_yet(self) -> None:
-        with self.assertRaisesRegex(ViewerError, "cad-model run"):
+        with self.assertRaisesRegex(ViewerError, "no built version"):
             record.load_version(self.hw, "latest")
 
 
@@ -713,9 +773,11 @@ class VersionList(Fixture):
         (self.hw / "versions" / "v3").mkdir()  # a version folder without its build files
         (self.hw / "versions" / ".v11-partial").mkdir()  # a build in progress
         listed = record.version_list(self.hw)
-        self.assertEqual([entry["label"] for entry in listed], ["v10", "v3", "v2", "v1"])
-        self.assertEqual(listed[2], {"label": "v2", "built_utc": "2026-10-28T09:15:00Z",
-                                     "parts": len(data["occurrences"]), "error": None})
+        self.assertEqual([entry["label"] for entry in listed], ["v10", "v2", "v1"])
+        self.assertEqual(listed[1], {"label": "v2", "built_utc": "2026-10-28T09:15:00Z",
+                                     "parts": len(data["occurrences"]), "error": None,
+                                     "previews": {"renders": [], "captures": [], "drawings": []}})
+        self.assertIsNone(next(entry for entry in listed if entry["label"] == "v3")["parts"])
         self.assertRegex(listed[0]["built_utc"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")  # the manifest's mtime
         self.assertEqual((listed[1]["built_utc"], listed[1]["parts"]), (None, None))
         self.assertIn("v3", listed[1]["error"])
