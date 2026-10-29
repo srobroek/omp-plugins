@@ -76,24 +76,21 @@ class ValidateProject(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         project = Path(temporary.name) / "project"
         shutil.copytree(TEMPLATE, project)
-        product = project / "hw" / "product.yaml"
-
-        (project / "hw" / "parts").mkdir()
-        product.write_text(product.read_text(encoding="utf-8").replace("stage: layout", "stage: ground"),
-                            encoding="utf-8")
         result = subprocess.run([sys.executable, str(VALIDATOR), str(project)], capture_output=True,
                                 text=True, timeout=60)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(json.loads(result.stdout), {"ok": True, "findings": []})
 
+        product = project / "hw" / "product.yaml"
         product.write_text(product.read_text(encoding="utf-8").replace("stage: ground", "stage: layout"),
                             encoding="utf-8")
         result = subprocess.run([sys.executable, str(VALIDATOR), str(project)], capture_output=True,
                                 text=True, timeout=60)
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("no part records found", result.stdout)
+
         product.write_text(product.read_text(encoding="utf-8").replace("stage: layout", "stage: design_freeze")
-                            .replace("  recheck_from: layout", "  recheck_from: layout\n  frozen:\n    version: v1\n    manifest_sha256: '" + "0" * 64 + "'\n    decision: DR-001"),
+                            .replace("  recheck_from: ground", "  recheck_from: ground\n  frozen:\n    version: v1\n    manifest_sha256: '" + "0" * 64 + "'\n    decision: DR-001"),
                             encoding="utf-8")
         (project / "hw" / "decisions").mkdir()
         (project / "hw" / "decisions" / "DR-001.md").write_text("# DR-001\n", encoding="utf-8")
