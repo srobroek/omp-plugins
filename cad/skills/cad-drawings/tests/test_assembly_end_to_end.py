@@ -117,16 +117,31 @@ def write_project(root: Path, regime: str = "iso", bom_pin_qty: int = 2) -> Path
     (version / "metrics.json").write_text(json.dumps({"parts": {pn: {"volume_mm3": 1.0, "holes": []} for pn in PARTS}}),
                                           encoding="utf-8")
     files = ["assembly.step", "metrics.json", *(b["step"] for b in built.values())]
-    manifest = {"label": "v1", "product_id": "pin-plate", "assembly_yaml_sha256": sha(hw / "assembly.yaml"),
-                "parts": built, "files": {name: sha(version / name) for name in files}}
+    manifest = {"schema_version": 2, "label": "v1", "product_id": "pin-plate",
+                "assembly_yaml_sha256": sha(hw / "assembly.yaml"), "parts": built,
+                "record": {"record/product.yaml": sha(hw / "product.yaml"),
+                           "record/interfaces.yaml": sha(hw / "interfaces.yaml"),
+                           "record/assembly.yaml": sha(hw / "assembly.yaml"),
+                           **{f"record/parts/{pn}/part.yaml": sha(hw / "parts" / pn / "part.yaml") for pn in PARTS}},
+                "manufacturing": {}, "files": {name: sha(version / name) for name in files}}
+    for relative in manifest["record"]:
+        source = hw / relative.removeprefix("record/")
+        target = version / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
+    manifest["files"].update({name: sha(version / name) for name in manifest["record"]})
     (version / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
     return hw
 
 
-def run_cli(hw: Path, out: Path, jobs: int | None = None) -> tuple[int, dict]:
-    command = [CLI, str(hw), "--version", "v1", "--output-dir", str(out), "--timeout", "600"]
+def run_cli(hw: Path, out: Path | None = None, jobs: int | None = None, replace: bool = False) -> tuple[int, dict]:
+    command = [CLI, str(hw), "--version", "v1", "--timeout", "600"]
+    if out is not None:
+        command += ["--output-dir", str(out)]
     if jobs is not None:
         command += ["--jobs", str(jobs)]
+    if replace:
+        command.append("--replace")
     proc = subprocess.run(scriptenv.script_command(*command), capture_output=True, text=True, timeout=1800)
     try:
         return proc.returncode, json.loads(proc.stdout)
@@ -146,15 +161,16 @@ class EndToEnd(unittest.TestCase):
             with self.subTest(regime=regime):
                 root = self.root / regime
                 hw = write_project(root, regime)
-                status, result = run_cli(hw, root / "out")
+                status, result = run_cli(hw)
                 self.assertEqual((status, result["status"]), (0, "pass"), result.get("findings"))
-                package = json.loads((root / "out" / "package.json").read_text(encoding="utf-8"))
+                package_path = Path(result["output_dir"])
+                package = json.loads((package_path / "package.json").read_text(encoding="utf-8"))
                 sheets = [row for row in package["coverage"]["rows"] if row["kind"] == "assembly_sheet"]
                 self.assertEqual([(s["sheet"], s["scope"]) for s in sheets], [(1, "top"), (2, "pins")])
                 self.assertEqual(sheets[0]["items"]["2"], {"PN": PIN, "qty": 2, "occurrences": ["pin-a", "pin-b"]})
                 exploded = sheets[0]["views"]["exploded_iso"]
                 balloons = {b["item"]: b for b in assembly_check.read_balloons(
-                    assembly_check.SafeET.fromstring((root / "out" / "sheet-1.svg").read_text(encoding="utf-8")))}
+                    assembly_check.SafeET.fromstring((package_path / "sheet-1.svg").read_text(encoding="utf-8")))}
                 self.assertEqual(sorted(balloons), ["1", "2"])
                 # Each leader dot sits on the measured visible point of its own occurrence, inside the view.
                 for item, occurrence in (("1", PLATE), ("2", "pin-a")):
@@ -165,17 +181,17 @@ class EndToEnd(unittest.TestCase):
                 self.assertLess(operation["measured"]["gap"], 0.01)
                 for record in package["sheets"]:
                     for kind in ("svg", "pdf", "png"):
-                        self.assertTrue((root / "out" / record["files"][kind]).is_file())
+                        self.assertTrue(Path(record["files"][kind]).is_file())
                     self.assertEqual(record["export"]["pdf_fonts"], ["osifont"])
-                self.assertEqual(assembly_check.check_package(root / "out")["status"], "pass")
+                self.assertEqual(assembly_check.check_package(package_path)["status"], "pass")
 
-                # Removing one balloon from the published SVG fails the package re-check.
                 tampered = root / "tampered"
-                shutil.copytree(root / "out", tampered)
-                svg = (tampered / "sheet-1.svg").read_text(encoding="utf-8")
+                shutil.copytree(package_path, tampered)
+                svg_path = tampered / "sheet-1.svg"
+                svg = svg_path.read_text(encoding="utf-8")
                 start = svg.index('<g id="balloon-exploded_iso-2"')
                 end = svg.index("</g></g>", start) + len("</g></g>")
-                (tampered / "sheet-1.svg").write_text(svg[:start] + svg[end:], encoding="utf-8")
+                svg_path.write_text(svg[:start] + svg[end:], encoding="utf-8")
                 rechecked = assembly_check.check_package(tampered)
                 self.assertEqual(rechecked["status"], "fail")
                 self.assertIn("item 2 has 0 balloons in view exploded_iso; expected one",
@@ -183,31 +199,33 @@ class EndToEnd(unittest.TestCase):
 
     def test_parallel_assembly_sheets_match_sequential_report_order(self) -> None:
         hw = write_project(self.root / "parallel")
-        sequential_status, sequential = run_cli(hw, self.root / "out-sequential", jobs=1)
-        parallel_status, parallel = run_cli(hw, self.root / "out-parallel", jobs=2)
+        sequential_status, sequential = run_cli(hw, jobs=1)
+        parallel_status, parallel = run_cli(hw, jobs=2)
         self.assertEqual((sequential_status, sequential["status"]), (0, "pass"), sequential.get("findings"))
         self.assertEqual((parallel_status, parallel["status"]), (0, "pass"), parallel.get("findings"))
-        sequential_package = json.loads((self.root / "out-sequential" / "package.json").read_text())
-        parallel_package = json.loads((self.root / "out-parallel" / "package.json").read_text())
+        sequential_package = json.loads((Path(sequential["output_dir"]) / "package.json").read_text())
+        parallel_package = json.loads((Path(parallel["output_dir"]) / "package.json").read_text())
         self.assertEqual([row["sheet"] for row in sequential_package["sheets"]], [1, 2])
         self.assertEqual([row["sheet"] for row in parallel_package["sheets"]], [1, 2])
-        self.assertEqual(sequential["coverage"]["rows"], parallel["coverage"]["rows"])
+        self.assertEqual(sequential_package["coverage"]["rows"], parallel_package["coverage"]["rows"])
 
-
-    def test_a_failed_run_replaces_the_earlier_package(self) -> None:
-        hw = write_project(self.root)
-        status, _ = run_cli(hw, self.root / "out")
-        self.assertEqual(status, 0)
+    def test_a_failed_run_never_replaces_the_sealed_bundle(self) -> None:
+        hw = write_project(self.root / "failed")
+        status, first = run_cli(hw)
+        self.assertEqual((status, first["status"]), (0, "pass"), first.get("findings"))
+        bundle = Path(first["output_dir"])
+        sealed = {p.relative_to(bundle).as_posix(): p.read_bytes() for p in bundle.rglob("*") if p.is_file()}
         with (hw / "bom.csv").open(encoding="utf-8") as stream:
             rows = list(csv.reader(stream))
-        rows[2][3] = "3"
+        rows[2][3] = "3"  # the parts list no longer matches the two placed pins
         with (hw / "bom.csv").open("w", newline="", encoding="utf-8") as stream:
             csv.writer(stream, lineterminator="\n").writerows(rows)
-        status, result = run_cli(hw, self.root / "out")
+        status, result = run_cli(hw, replace=True)  # --replace: a failure must still leave the bundle alone
         self.assertNotEqual(status, 0)
-        self.assertFalse((self.root / "out" / "package.json").exists())
-        self.assertTrue((self.root / "out" / "rejected.json").is_file())
         self.assertNotEqual(result["status"], "pass")
+        self.assertIn("BOM quantity of TST-0102 is 3", json.dumps(result["findings"]))
+        self.assertEqual(sealed, {p.relative_to(bundle).as_posix(): p.read_bytes() for p in bundle.rglob("*") if p.is_file()})
+        self.assertEqual(list((hw.parent / ".cad-work" / "replaced").glob("*")) if (hw.parent / ".cad-work" / "replaced").exists() else [], [])
 
 
 if __name__ == "__main__":

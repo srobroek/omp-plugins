@@ -5,16 +5,10 @@
 # ///
 """Generate checked, producer-ready part drawings from a built cad-model version.
 
-Usage: drawing.py HW [--version vN] --part PN [--part PN ...] --output-dir DIR [--timeout S]
+Usage: drawing.py HW [--version vN|latest] --part PN [--part PN ...] [--output-dir DIR] [--replace]
 
-For each part: verify the record and the version (``drawing_contract``), bind the model's
-``drawing_features`` locators to the part STEP in FreeCAD and recognise its manufacturing features
-(``feature_recognition``), measure every required characteristic in the datum frame
-(``drawing_intent``), plan and project the views (``part_views``, ``techdraw_job.py``), place
-dimensions and callouts (``sheet``), run the completeness gate (``completeness``, with
-``feature_coverage`` for the recognised features) and publish ``DIR/<PN>/`` through
-``drawing_document.publish_package``. A part with no drawing intent or no ``drawing_features`` hook
-gets no sheet: it fails with one finding per recognised feature it leaves undimensioned.
+Without --output-dir, publish each passing part package as an immutable drawing bundle at
+hw/drawings/vN/<PN>/. An explicit --output-dir is accepted only under .cad-work/.
 
 A catalogue part with a ``vendor_specification`` or ``source_control`` drawing gets a specification
 sheet: its procurement identity, the critical interface dimensions measured from the vendor
@@ -31,8 +25,8 @@ import argparse
 import json
 import shutil
 import sys
-import uuid
 from collections.abc import Mapping, Sequence
+import uuid
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -461,7 +455,7 @@ def sourcing_note(record: Mapping[str, Any]) -> SvgNote | None:
 # --- one part -------------------------------------------------------------------------------------------
 
 def run_part(context: drawing_contract.DrawingContext, pn: str, output_dir: Path, freecadcmd: Path,
-             timeout: float) -> tuple[dict[str, Any], int]:
+             timeout: float, bundle_path: Path | None = None) -> tuple[dict[str, Any], int]:
     part = context.part(pn)
     record = part.record
     drawing = record.get("drawing")
@@ -497,8 +491,10 @@ def run_part(context: drawing_contract.DrawingContext, pn: str, output_dir: Path
                                            recognition=recognition, faces=face_map)
             return {"pn": pn, "status": "fail", "coverage": report.to_dict()}, 1
         plans = part_views.plan_views(drawing, measured.frame, binding.features, face_map)
-        return compose_and_publish(context, part, drawing, regime, binding, face_map, measured, plans, procurement,
-                                   vendor, output_dir, freecadcmd, timeout, work, recognition)
+        result, code = compose_and_publish(context, part, drawing, regime, binding, face_map, measured, plans,
+                                           procurement, vendor, output_dir, freecadcmd, timeout, work, recognition,
+                                           bundle_path)
+        return result, code
     except drawing_intent.IntentError as exc:
         return fail(exc.code, str(exc), pn=pn), 1
     finally:
@@ -509,8 +505,8 @@ def compose_and_publish(context: drawing_contract.DrawingContext, part: drawing_
                         drawing: Mapping[str, Any], regime: str, binding: fg.Binding, faces: Mapping[int, fg.Face],
                         measured: drawing_intent.Measured, plans: list[part_views.ViewPlan],
                         procurement: list[dict[str, Any]], vendor: bool, output_dir: Path, freecadcmd: Path,
-                        timeout: float, work: Path,
-                        recognition: feature_recognition.Recognition) -> tuple[dict[str, Any], int]:
+                        timeout: float, work: Path, recognition: feature_recognition.Recognition,
+                        bundle_path: Path | None = None) -> tuple[dict[str, Any], int]:
     record = part.record
     sizes = (drawing.get("sheet") or {}).get("sizes") or \
         ((context.product.get("drawing") or {}).get("default_sheet") or {}).get("sizes") or \
@@ -632,19 +628,17 @@ def compose_and_publish(context: drawing_contract.DrawingContext, part: drawing_
     except (CompositionError, ValueError) as exc:
         return fail(getattr(exc, "code", "layout_check_failed"), str(exc), pn=part.pn), 1
     package = drawing_document.publish_package(context, pages, report, output_dir, freecadcmd, timeout,
-                                               completeness.release_blockers(record))
+                                               completeness.release_blockers(record),
+                                               bundle_path=bundle_path if report.status == "pass" else output_dir)
     summary = {"pn": part.pn, "status": package.status, "type": drawing["type"], "sheet": spec.size,
-               "sheets": len(numbers), "scale": drawing_document.scale_text(regime, scale), "output_dir": str(output_dir),
+               "sheets": len(numbers), "scale": drawing_document.scale_text(regime, scale), "output_dir": str(package.output_dir),
                "views": [p.id for p in plans], "characteristics": len(measured.characteristics),
                "findings": [dict(f) for f in package.findings],
                "release": {"ready": not package.release, "blockers": [dict(r) for r in package.release]},
-               "previews": sorted(str(p) for p in output_dir.glob("*.png"))}
+               "previews": sorted(str(package.output_dir / p.name) for p in output_dir.glob("*.png"))}
     return summary, package.exit_code
 
 
-def latest_label(hw: Path) -> str:
-    latest = json.loads((hw / "versions" / "latest.json").read_text(encoding="utf-8"))
-    return latest["label"]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -652,43 +646,77 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("hw", type=Path, help="the hardware project's hw/ folder")
     parser.add_argument("--version", help="built version label (default: versions/latest.json)")
     parser.add_argument("--part", action="append", required=True, help="part number; repeat for several parts")
-    parser.add_argument("--output-dir", required=True, type=Path, help="packages go to OUTPUT_DIR/<PN>/")
+    parser.add_argument("--output-dir", type=Path, help="write scratch packages under .cad-work only")
+    parser.add_argument("--replace", action="store_true", help="retain and replace conflicting bundles")
     parser.add_argument("--timeout", type=float, default=300.0, help="seconds per FreeCAD job")
     parser.add_argument("--jobs", type=int, help="maximum concurrent FreeCAD jobs (default: CPU and memory bound)")
     args = parser.parse_args(argv)
     if args.jobs is not None and args.jobs < 1:
         parser.error("--jobs must be a positive integer")
+    if len(set(args.part)) != len(args.part):
+        print(json.dumps(fail("invalid_input", "--part values must be unique because each part has one output package"), indent=2))
+        return 2
+    hw = args.hw.resolve()
+    api = drawing_contract.layout_api()
+    try:
+        label, version_dir, _ = api.built_version(hw, args.version or "latest")
+        context = drawing_contract.load_context(hw, version_dir)
+        output_root = api.scratch_path(hw, args.output_dir, "--output-dir") if args.output_dir else None
+        if output_root is not None and output_root.exists():
+            raise api.LayoutError(f"--output-dir already exists and will not be overwritten: {output_root}")
+    except (api.LayoutError, drawing_contract.ContractError, OSError, KeyError, ValueError) as exc:
+        print(json.dumps(fail(getattr(exc, "code", "invalid_input"), str(exc),
+                              findings=[dict(f) for f in getattr(exc, "findings", ())]), indent=2))
+        return 1 if getattr(exc, "code", None) == "invalid_drawing_intent" else 2
     freecadcmd = freecad_runtime.find_freecadcmd()
     if freecadcmd is None or not freecadcmd.is_file():
         print(json.dumps(fail("freecad_unavailable", "freecadcmd not found; set FREECADCMD or put freecadcmd on PATH")))
         return 2
-    hw = args.hw.resolve()
-    try:
-        label = args.version or latest_label(hw)
-        context = drawing_contract.load_context(hw, hw / "versions" / label)
-    except drawing_contract.ContractError as exc:
-        print(json.dumps(fail(exc.code, str(exc), findings=[dict(f) for f in exc.findings]), indent=2))
-        return 1 if exc.code == "invalid_drawing_intent" else 2
-    except (OSError, KeyError, ValueError) as exc:
-        print(json.dumps(fail("invalid_input", str(exc)), indent=2))
-        return 2
-    output_root = args.output_dir.resolve()
-    if len(set(args.part)) != len(args.part):
-        print(json.dumps(fail("invalid_input", "--part values must be unique because each part has one output package"), indent=2))
-        return 2
+    if output_root is not None and len(args.part) > 1:
+        try:
+            output_root.mkdir(parents=True, exist_ok=False)
+        except OSError as exc:
+            print(json.dumps(fail("io_error", str(exc)), indent=2))
+            return 2
     jobs = freecad_runtime.jobs_for(args.jobs, len(args.part), freecad_runtime.FREECAD_JOB_PEAK_RSS_BYTES)
-    results, status = [], 0
 
     def draw_part(pn: str) -> tuple[dict[str, Any], int]:
+        subject = pn
+        recipe = {"part": pn, "provenance": context.provenance(pn)}
         try:
-            return run_part(context, pn, output_root / pn, freecadcmd, args.timeout)
+            if output_root is None:
+                existing = api.reusable(hw, "bundle.drawings", {"V": label, "S": subject}, recipe,
+                                        replace=args.replace)
+                if existing is not None:
+                    return {"pn": pn, "status": "pass", "cache": "hit", "output_dir": str(existing)}, 0
+                draft = api.staging(hw, "bundle.drawings")
+            else:
+                draft = output_root if len(args.part) == 1 else output_root / pn
+                if draft.exists():
+                    return fail("output_exists", f"--output-dir already exists and will not be overwritten: {draft}",
+                                pn=pn), 2
+                draft.parent.mkdir(parents=True, exist_ok=True)
+                draft.mkdir()
+            bundle_path = api.bundle_dir(hw, "drawings", label, subject) if output_root is None else draft
+            result, code = run_part(context, pn, draft, freecadcmd, args.timeout, bundle_path)
+            if code != 0:
+                result.setdefault("output_dir", str(draft))
+                rejected = draft / "rejected.json"
+                if not rejected.exists():
+                    rejected.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+            elif result.get("status") == "pass" and output_root is None:
+                result["output_dir"] = str(api.publish(
+                    hw, "bundle.drawings", {"V": label, "S": subject}, draft, recipe=recipe,
+                    producer="cad-drawings drawing.py", replace=args.replace).path)
+            return result, code
+        except api.PublishConflict as exc:
+            return fail("publish_conflict", str(exc), pn=pn), 2
         except drawing_contract.ContractError as exc:
             return fail(exc.code, str(exc), pn=pn), 2
         except DrawingError as exc:
             return fail(exc.code, str(exc), pn=pn), exc.exit_code
         except (OSError, ValueError, KeyError) as exc:
             return fail("io_error", str(exc), pn=pn), 2
-
     try:
         with freecad_runtime.terminate_jobs_on_signal():
             outcomes = freecad_runtime.map_jobs(args.part, jobs, draw_part)

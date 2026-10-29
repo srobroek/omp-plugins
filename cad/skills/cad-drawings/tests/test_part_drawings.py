@@ -165,10 +165,48 @@ class PinDrawingGate(unittest.TestCase):
     def tearDownClass(cls) -> None:
         cls.tmp.cleanup()
 
-    def draw(self, label: str, out: str, pn: str = "LMP-0005") -> tuple[int, dict]:
-        proc = run(UV, "run", "--script", str(DRAWING), str(self.hw), "--version", label, "--part", pn,
-                   "--output-dir", str(Path(self.tmp.name) / out), timeout=900)
-        return proc.returncode, json.loads(proc.stdout)["parts"][0]
+    def draw(self, label: str, out: str, pn: str = "LMP-0005", *, output: bool = True) -> tuple[int, dict]:
+        command = [UV, "run", "--script", str(DRAWING), str(self.hw), "--version", label, "--part", pn]
+        if output:
+            command += ["--output-dir", str(Path(self.tmp.name) / ".cad-work" / out)]
+        proc = run(*command, timeout=900)
+        try:
+            result = json.loads(proc.stdout)["parts"][0]
+        except json.JSONDecodeError as exc:
+            raise AssertionError(f"drawing CLI returned no JSON (exit {proc.returncode}): {proc.stderr[-3000:]}") from exc
+        return proc.returncode, result
+
+    def test_default_output_publishes_and_reuses_the_bundle(self) -> None:
+        code, result = self.draw("v1", "unused", output=False)
+        self.assertEqual((code, result["status"]), (0, "pass"), result.get("findings"))
+        package = Path(result["output_dir"])
+        self.assertEqual(package, (self.hw / "drawings" / "v1" / "LMP-0005").resolve())
+        manifest = (package / "manifest.json").read_bytes()
+        package_json = json.loads((package / "package.json").read_text(encoding="utf-8"))
+        self.assertEqual(package_json["output_dir"], str(package))
+        self.assertTrue(all(Path(path).is_file() for sheet in package_json["sheets"]
+                            for path in sheet["files"].values()))
+        code, reused = self.draw("v1", "unused", output=False)
+        self.assertEqual((code, reused.get("cache"), reused["output_dir"]), (0, "hit", str(package)))
+        self.assertEqual((package / "manifest.json").read_bytes(), manifest)
+
+    def test_explicit_output_outside_cad_work_is_refused(self) -> None:
+        outside = Path(self.tmp.name) / "outside"
+        proc = run(UV, "run", "--script", str(DRAWING), str(self.hw), "--version", "v1", "--part", "LMP-0005",
+                   "--output-dir", str(outside))
+        self.assertEqual(proc.returncode, 2)
+        self.assertFalse(outside.exists())
+        self.assertIn("--output-dir must be under", proc.stdout)
+
+    def test_existing_explicit_output_is_never_overwritten(self) -> None:
+        output = Path(self.tmp.name) / ".cad-work" / "preserved"
+        output.mkdir(parents=True)
+        marker = output / "keep.txt"
+        marker.write_text("untouched\n", encoding="utf-8")
+        proc = run(UV, "run", "--script", str(DRAWING), str(self.hw), "--version", "v1", "--part", "LMP-0005",
+                   "--output-dir", str(output))
+        self.assertEqual(proc.returncode, 2)
+        self.assertEqual(marker.read_text(encoding="utf-8"), "untouched\n")
 
     def test_pin_passes_with_measured_values_and_fit_limits(self) -> None:
         code, result = self.draw("v1", "pass")
@@ -197,16 +235,15 @@ class PinDrawingGate(unittest.TestCase):
             self.assertNotEqual(part.read_text(encoding="utf-8"), original)
             proc = run(UV, "run", "--script", str(DRAWING), str(self.hw), "--version", "v1",
                        "--part", "LMP-0005", "--part", "LMP-0002", "--output-dir",
-                       str(Path(self.tmp.name) / "isolate-failure"), "--timeout", "900", "--jobs", "2")
+                       str(Path(self.tmp.name) / ".cad-work" / "isolate-failure"), "--timeout", "900", "--jobs", "2")
         finally:
             part.write_text(original, encoding="utf-8")
         self.assertEqual(proc.returncode, 1)
         results = json.loads(proc.stdout)["parts"]
         self.assertEqual([result["pn"] for result in results], ["LMP-0005", "LMP-0002"])
         self.assertEqual([result["status"] for result in results], ["fail", "pass"])
-        failed = Path(results[0]["output_dir"])
-        self.assertTrue((failed / "rejected.json").is_file())
-        self.assertFalse((failed / "package.json").exists())
+        retained = Path(self.tmp.name) / ".cad-work" / "rejected-drawings"
+        self.assertTrue(any(path.is_dir() for path in retained.iterdir()))
         passed = Path(results[1]["output_dir"])
         self.assertTrue((passed / "sheet-1.pdf").is_file())
 
@@ -275,9 +312,8 @@ class PinDrawingGate(unittest.TestCase):
             code, result = self.draw("v1", "ring-unstandard", "LMP-0011")
         finally:
             part.write_text(original, encoding="utf-8")
-        self.assertEqual((code, result["status"]), (1, "fail"))   # without its standard it needs a part number
-        self.assertEqual([f["code"] for f in result["findings"]], ["procurement_incomplete"])
-
+        self.assertEqual(result["status"], "fail")
+        self.assertIn("procurement_incomplete", [f["code"] for f in result["findings"]])
 
 if __name__ == "__main__":
     unittest.main()

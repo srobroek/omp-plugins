@@ -686,12 +686,16 @@ def check_package(package: Path) -> dict[str, Any]:
     findings: list[dict[str, Any]] = []
     for sheet in evidence:
         number = sheet["sheet"]
-        svg = next((p for p in (package / f"sheet-{number}.svg", package / f"sheet-{number}.rejected.svg") if p.is_file()),
-                   None)
-        if svg is None:
-            findings.append(finding("assembly_item_unidentified", f"sheet {number} SVG is missing", sheet=number))
-            continue
-        findings.extend(check_sheet(svg.read_text(encoding="utf-8"), sheet))
+        filename = record.get("sheets", [])[number - 1].get("files", {}).get("svg", f"sheet-{number}.svg")
+        svg_path = package / Path(filename).name
+        if not svg_path.is_file():
+            rejected = package / f"sheet-{number}.rejected.svg"
+            if rejected.is_file():
+                svg_path = rejected
+            else:
+                findings.append(finding("assembly_item_unidentified", f"sheet {number} SVG is missing", sheet=number))
+                continue
+        findings.extend(check_sheet(svg_path.read_text(encoding="utf-8"), sheet))
     return {"status": "pass" if not findings else "fail", "package": str(package), "sheets": len(evidence),
             "findings": findings}
 

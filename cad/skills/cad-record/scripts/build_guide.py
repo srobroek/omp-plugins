@@ -129,9 +129,8 @@ def release_manifest(hw: Path, product_id: str, version: str) -> Path | None:
 
 def guide_measurements(hw: Path, version_dir: Path, version: str, product_id: str,
                        operation_ids: set[str]) -> dict[str, Mapping[str, Any]]:
-    """Use this version's drawing coverage, never recompute an assembly measurement here."""
-    reports = {(path, False) for path in version_dir.rglob("coverage.json")}
-    reports.update((path, False) for path in version_dir.rglob("package.json"))
+    bundle = hw / "drawings" / version / "assembly"
+    reports = {(bundle / name, False) for name in ("coverage.json", "package.json")}
     releases = hw / "releases"
     if releases.is_dir():
         for manifest_path in releases.glob("*/manifest.json"):
