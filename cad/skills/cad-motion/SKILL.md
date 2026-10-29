@@ -73,8 +73,10 @@ record with couplings (exit 2). Verify coupled motion with `pose.py` and `sweep.
    `max_horizontal_reach` (default; collision-free poses, the end effector's cantilever arm),
    `minimum_clearance` (smallest margin: a pair's distance minus its tightest requirement), or
    `maximum_interference` (largest undeclared overlap). One-driver engine over 720 degrees at 5
-   degree steps:
-   `uv run --script skill://cad-flow/scripts/run.py cad-motion/scripts/sweep.py --hw hw --version vN --steps 145 --grid 0 --worst-criterion minimum_clearance --worst-step worst.step`
+   degree steps, published as `hw/motion/vN/engine-cycle/`:
+   `uv run --script skill://cad-flow/scripts/run.py cad-motion/scripts/sweep.py --hw hw --version vN --case engine-cycle --steps 145 --grid 0 --worst-criterion minimum_clearance`
+   The same sweep on scratch geometry writes its worst-case STEP to a new `.cad-work/` path:
+   `... sweep.py --hw hw --parts-dir .cad-work/UNIT/parts --steps 145 --grid 0 --worst-criterion minimum_clearance --worst-step .cad-work/UNIT/worst.step`
    Pair requirements: the sweep measures every clearance requirement in `hw/interfaces.yaml`
    (`type: clearance`, `pair: [REF, REF]`, `min_clearance_mm`, such as valve-to-piston >= 1 mm) at
    every sample. `--pair-clearance REF:REF=MM` adds a requirement for one run or overrides the
