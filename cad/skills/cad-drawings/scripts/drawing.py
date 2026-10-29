@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import shutil
 import sys
 import uuid
 from collections.abc import Mapping, Sequence
@@ -42,7 +41,6 @@ import feature_geometry as fg  # noqa: E402
 import feature_recognition  # noqa: E402
 import freecad_runtime  # noqa: E402
 import part_views  # noqa: E402
-import drawing_publication  # noqa: E402
 import sheet  # noqa: E402
 from drawing_document import CompositionError, SheetMetadata, SvgAnnotation, SvgNote, SvgTable  # noqa: E402
 from freecad_views import ViewGeometry  # noqa: E402
@@ -456,7 +454,7 @@ def sourcing_note(record: Mapping[str, Any]) -> SvgNote | None:
 # --- one part -------------------------------------------------------------------------------------------
 
 def run_part(context: drawing_contract.DrawingContext, pn: str, output_dir: Path, freecadcmd: Path,
-             timeout: float) -> tuple[dict[str, Any], int]:
+             timeout: float, bundle_path: Path | None = None) -> tuple[dict[str, Any], int]:
     part = context.part(pn)
     record = part.record
     drawing = record.get("drawing")
@@ -493,7 +491,7 @@ def run_part(context: drawing_contract.DrawingContext, pn: str, output_dir: Path
             return {"pn": pn, "status": "fail", "coverage": report.to_dict()}, 1
         plans = part_views.plan_views(drawing, measured.frame, binding.features, face_map)
         return compose_and_publish(context, part, drawing, regime, binding, face_map, measured, plans, procurement,
-                                   vendor, output_dir, freecadcmd, timeout, work, recognition)
+                                   vendor, output_dir, freecadcmd, timeout, work, recognition, bundle_path)
     except drawing_intent.IntentError as exc:
         return fail(exc.code, str(exc), pn=pn), 1
     finally:
@@ -504,8 +502,8 @@ def compose_and_publish(context: drawing_contract.DrawingContext, part: drawing_
                         drawing: Mapping[str, Any], regime: str, binding: fg.Binding, faces: Mapping[int, fg.Face],
                         measured: drawing_intent.Measured, plans: list[part_views.ViewPlan],
                         procurement: list[dict[str, Any]], vendor: bool, output_dir: Path, freecadcmd: Path,
-                        timeout: float, work: Path,
-                        recognition: feature_recognition.Recognition) -> tuple[dict[str, Any], int]:
+                        timeout: float, work: Path, recognition: feature_recognition.Recognition,
+                        bundle_path: Path | None = None) -> tuple[dict[str, Any], int]:
     record = part.record
     sizes = (drawing.get("sheet") or {}).get("sizes") or \
         ((context.product.get("drawing") or {}).get("default_sheet") or {}).get("sizes") or \
@@ -627,13 +625,13 @@ def compose_and_publish(context: drawing_contract.DrawingContext, part: drawing_
     except (CompositionError, ValueError) as exc:
         return fail(getattr(exc, "code", "layout_check_failed"), str(exc), pn=part.pn), 1
     package = drawing_document.publish_package(context, pages, report, output_dir, freecadcmd, timeout,
-                                               completeness.release_blockers(record))
+                                               completeness.release_blockers(record), bundle_path=bundle_path)
     summary = {"pn": part.pn, "status": package.status, "type": drawing["type"], "sheet": spec.size,
-               "sheets": len(numbers), "scale": drawing_document.scale_text(regime, scale), "output_dir": str(output_dir),
+               "sheets": len(numbers), "scale": drawing_document.scale_text(regime, scale), "output_dir": str(package.output_dir),
                "views": [p.id for p in plans], "characteristics": len(measured.characteristics),
                "findings": [dict(f) for f in package.findings],
                "release": {"ready": not package.release, "blockers": [dict(r) for r in package.release]},
-               "previews": sorted(str(p) for p in output_dir.glob("*.png"))}
+               "previews": sorted(str(package.output_dir / p.name) for p in output_dir.glob("*.png"))}
     return summary, package.exit_code
 
 
@@ -655,7 +653,7 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(fail("invalid_input", "--part values must be unique because each part has one output package"), indent=2))
         return 2
     hw = args.hw.resolve()
-    api = drawing_publication.layout()
+    api = drawing_contract.layout_api()
     try:
         label, version_dir, _ = api.built_version(hw, args.version or "latest")
         context = drawing_contract.load_context(hw, version_dir)
@@ -696,29 +694,20 @@ def main(argv: list[str] | None = None) -> int:
                                 pn=pn), 2
                 draft.parent.mkdir(parents=True, exist_ok=True)
                 draft.mkdir()
-            result, code = run_part(context, pn, draft, freecadcmd, args.timeout)
+            bundle_path = api.bundle_dir(hw, "drawings", label, subject) if output_root is None else draft
+            result, code = run_part(context, pn, draft, freecadcmd, args.timeout, bundle_path)
             if code == 0 and result.get("status") == "pass" and output_root is None:
-                published = drawing_publication.publish(hw, label, subject, draft, recipe,
-                                                        "cad-drawings drawing.py", args.replace)
-                result["output_dir"] = str(published)
-            elif output_root is None:
-                drawing_publication.discard_empty(draft)
+                result["output_dir"] = str(api.publish(
+                    hw, "bundle.drawings", {"V": label, "S": subject}, draft, recipe=recipe,
+                    producer="cad-drawings drawing.py", replace=args.replace).path)
             return result, code
         except api.PublishConflict as exc:
-            if output_root is None and draft is not None:
-                drawing_publication.discard_empty(draft)
             return fail("publish_conflict", str(exc), pn=pn), 2
         except drawing_contract.ContractError as exc:
-            if output_root is None and draft is not None:
-                drawing_publication.discard_empty(draft)
             return fail(exc.code, str(exc), pn=pn), 2
         except DrawingError as exc:
-            if output_root is None and draft is not None:
-                drawing_publication.discard_empty(draft)
             return fail(exc.code, str(exc), pn=pn), exc.exit_code
         except (OSError, ValueError, KeyError) as exc:
-            if output_root is None and draft is not None:
-                drawing_publication.discard_empty(draft)
             return fail("io_error", str(exc), pn=pn), 2
 
     try:

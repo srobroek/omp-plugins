@@ -117,8 +117,19 @@ def write_project(root: Path, regime: str = "iso", bom_pin_qty: int = 2) -> Path
     (version / "metrics.json").write_text(json.dumps({"parts": {pn: {"volume_mm3": 1.0, "holes": []} for pn in PARTS}}),
                                           encoding="utf-8")
     files = ["assembly.step", "metrics.json", *(b["step"] for b in built.values())]
-    manifest = {"label": "v1", "product_id": "pin-plate", "assembly_yaml_sha256": sha(hw / "assembly.yaml"),
-                "parts": built, "files": {name: sha(version / name) for name in files}}
+    manifest = {"schema_version": 2, "label": "v1", "product_id": "pin-plate",
+                "assembly_yaml_sha256": sha(hw / "assembly.yaml"), "parts": built,
+                "record": {"record/product.yaml": sha(hw / "product.yaml"),
+                           "record/interfaces.yaml": sha(hw / "interfaces.yaml"),
+                           "record/assembly.yaml": sha(hw / "assembly.yaml"),
+                           **{f"record/parts/{pn}/part.yaml": sha(hw / "parts" / pn / "part.yaml") for pn in PARTS}},
+                "manufacturing": {}, "files": {name: sha(version / name) for name in files}}
+    for relative in manifest["record"]:
+        source = hw / relative.removeprefix("record/")
+        target = version / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
+    manifest["files"].update({name: sha(version / name) for name in manifest["record"]})
     (version / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
     return hw
 

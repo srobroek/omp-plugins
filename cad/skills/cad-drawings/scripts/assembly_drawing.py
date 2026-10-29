@@ -50,8 +50,6 @@ import assembly_sheet  # noqa: E402
 import drawing_contract  # noqa: E402
 import drawing_document  # noqa: E402
 import freecad_runtime  # noqa: E402
-import drawing_publication  # noqa: E402
-from assembly_check import DIRECTIONS, AssemblyPlan, SheetPlan  # noqa: E402
 from assembly_sheet import BalloonTarget, MeasuredView  # noqa: E402
 from drawing_document import ComposedSheet, CompositionError, CoverageReport, SheetMetadata  # noqa: E402
 from freecad_views import ViewGeometry  # noqa: E402
@@ -326,7 +324,7 @@ def reject(output_dir: Path, findings: Sequence[Mapping[str, Any]], status: int)
 
 def run(args: argparse.Namespace, freecadcmd: Path, jobs: int = 1) -> tuple[dict[str, Any], int]:
     hw = args.hw.resolve()
-    api = drawing_publication.layout()
+    api = drawing_contract.layout_api()
     label, version_dir, _ = api.built_version(hw, args.version)
     context = drawing_contract.load_context(hw, version_dir)
     intent = assembly_check.read_intent(context.assembly)
@@ -345,18 +343,22 @@ def run(args: argparse.Namespace, freecadcmd: Path, jobs: int = 1) -> tuple[dict
     with tempfile.TemporaryDirectory(prefix="cad-assembly-drawing-", dir=work_root) as work:
         try:
             with ThreadPoolExecutor(max_workers=jobs, thread_name_prefix="cad-assembly") as executor:
+                bundle_path = api.bundle_dir(hw, "drawings", label, "assembly") if args.output_dir is None else None
                 _, sheets, report = build(args, freecadcmd, Path(work), jobs, executor)
                 package = drawing_document.publish_package(context, sheets, report, output_dir, freecadcmd,
-                                                           args.timeout, jobs=jobs, executor=executor)
+                                                           args.timeout, jobs=jobs, executor=executor,
+                                                           bundle_path=bundle_path)
         except Failure as failure:
             return reject(output_dir, failure.findings, failure.status), failure.status
     result = package.to_dict()
     if package.exit_code == 0 and args.output_dir is None:
-        output_dir = drawing_publication.publish(hw, label, "assembly", output_dir, recipe,
-                                                 "cad-drawings assembly_drawing.py", args.replace)
+        output_dir = api.publish(hw, "bundle.drawings", {"V": label, "S": "assembly"}, output_dir,
+                                 recipe=recipe, producer="cad-drawings assembly_drawing.py",
+                                 replace=args.replace).path
         result["output_dir"] = str(output_dir)
     result["files"] = [{"sheet": s["sheet"], "size": s["size"],
-                        **{kind: str(output_dir / name) for kind, name in s["files"].items()}} for s in package.sheets]
+                        **{kind: str(Path(name)) for kind, name in s["files"].items()}}
+                        for s in package.sheets]
     return result, package.exit_code
 
 
@@ -380,7 +382,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     try:
         hw = args.hw.resolve()
-        api = drawing_publication.layout()
+        api = drawing_contract.layout_api()
         label, version_dir, _ = api.built_version(hw, args.version)
         context = drawing_contract.load_context(hw, version_dir)
         intent = assembly_check.read_intent(context.assembly)

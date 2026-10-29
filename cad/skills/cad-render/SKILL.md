@@ -21,10 +21,9 @@ TRIGGER
 ## Workflow
 
 1. Build first: `skill://cad-model` `run` writes `hw/versions/vN/` and `latest.json`.
-2. Render: `uv run --script skill://cad-flow/scripts/run.py cad-render/scripts/render.py hw [--version latest|vN] [--views ...] [--size WxH] [--subject S] [--replace] [--out-dir .cad-work/...]`
-   -> immutable `hw/renders/<vN>/<subject>/` with requested PNGs, `render.json`, and `manifest.json`.
-   `--out-dir` is scratch-only under `.cad-work/`. `render.json` holds quality, retry, material and input
-   decisions; the layout manifest seals its files and binds it to the version manifest.
+2. Render: `uv run --script skill://cad-flow/scripts/run.py cad-render/scripts/render.py hw [--version latest|vN] [--views iso front side exploded closeup-<PN> part-<PN>] [--jobs N]`
+   -> `hw/renders/<vN>/<view>.png` and `manifest.json` (version, camera per attempt, quality metrics,
+   retry strategy, material applied per PN, three and Chromium versions, phase timings); JSON summary on stdout.
    `--jobs` uses 1-8 dedicated pages in one Chromium process (default 1). Each page loads the scene once
    and renders its assigned views serially, while pages capture concurrently. On CPU-only SwiftShader, keep
    the default: SwiftShader already multithreads. Pace measured 11s at jobs=1, 12s at 2, and 17s at 4

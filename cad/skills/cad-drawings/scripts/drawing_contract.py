@@ -27,6 +27,7 @@ from typing import Any
 import yaml
 
 VALIDATOR = Path(__file__).resolve().parents[2] / "cad-record" / "scripts" / "validate.py"
+LAYOUT = VALIDATOR.with_name("layout.py")
 
 
 class ContractError(ValueError):
@@ -112,6 +113,24 @@ def _validator() -> Any:
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
+    return module
+
+@cache
+def layout_api() -> Any:
+    """Load cad-record's authoritative path and bundle API once per process."""
+    name = "cad_record_layout"
+    if name in sys.modules:
+        return sys.modules[name]
+    spec = importlib.util.spec_from_file_location(name, LAYOUT)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load cad-record layout API at {LAYOUT}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        del sys.modules[name]
+        raise
     return module
 
 

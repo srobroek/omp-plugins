@@ -17,13 +17,12 @@ One sheet contract generates every page, so sizes differ only in their dimension
 
 from __future__ import annotations
 
-import json
 import math
 import os
+import json
 import re
 import shutil
 import uuid
-from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
@@ -34,7 +33,7 @@ from defusedxml import ElementTree as SafeET
 import freecad_runtime
 
 import sheet_export
-from drawing_contract import DrawingContext, sha256
+from drawing_contract import DrawingContext, layout_api, sha256
 from freecad_views import ViewGeometry
 from layout_check import SVG_NS, TEXT_ADVANCE, TEXT_ASCENT, TEXT_DESCENT, Box, SheetRegions, check_layout
 
@@ -325,8 +324,11 @@ class PackageReport:
         return {"pass": 0, "fail": 1, "error": 2}[self.status]
 
     def to_dict(self) -> dict[str, Any]:
+        sheets = [{**dict(sheet), "files": {kind: str(self.output_dir / Path(name).name)
+                                             for kind, name in sheet.get("files", {}).items()}}
+                  for sheet in self.sheets]
         return {"status": self.status, "run_id": self.run_id, "output_dir": str(self.output_dir),
-                "provenance": dict(self.provenance), "sheets": [dict(s) for s in self.sheets],
+                "provenance": dict(self.provenance), "sheets": sheets,
                 "coverage": dict(self.coverage), "findings": [dict(f) for f in self.findings],
                 "release": {"ready": not self.release, "blockers": [dict(r) for r in self.release]}}
 
@@ -675,13 +677,17 @@ PACKAGE_MARKERS = ("package.json", "rejected.json")
 
 def publish_package(context: DrawingContext, sheets: Sequence[ComposedSheet], report: CoverageReport,
                     output_dir: Path, freecadcmd: Path, timeout: float,
-                    release: Sequence[Mapping[str, Any]] = (), jobs: int = 1, executor: Any = None) -> PackageReport:
-    """Check and export one drawing into an empty draft folder; never replaces old content."""
+                    release: Sequence[Mapping[str, Any]] = (), jobs: int = 1, executor: Any = None,
+                    bundle_path: Path | None = None) -> PackageReport:
+    """Check and export one drawing into an empty draft folder; rejected output stays in .cad-work."""
     _check_identity(sheets)
     if timeout <= 0:
         raise ValueError("timeout must be positive")
     drawing_number = sheets[0].metadata.drawing_number
     provenance = context.provenance(drawing_number)
+    if bundle_path is None:
+        subject = "assembly" if sheets[0].metadata.document_type in ("Assembly drawing", "ASSEMBLY DRAWING") else drawing_number
+        bundle_path = layout_api().bundle_dir(context.hw, "drawings", context.label, subject)
     output_dir = output_dir.resolve()
     if output_dir.exists():
         if not output_dir.is_dir() or any(output_dir.iterdir()):
@@ -724,9 +730,10 @@ def publish_package(context: DrawingContext, sheets: Sequence[ComposedSheet], re
                 elif record is not None:
                     records.append(record)
         status = "pass" if not findings else ("error" if any(f["code"] == "export_failed" for f in findings) else "fail")
-        result = PackageReport(status=status, run_id=run_id, output_dir=output_dir, provenance=provenance,
-                               sheets=tuple(records), coverage=report.to_dict(), findings=tuple(findings),
-                               release=tuple(dict(r) for r in release))
+        result = PackageReport(status=status, run_id=run_id,
+                               output_dir=bundle_path if status == "pass" and bundle_path is not None else output_dir,
+                               provenance=provenance, sheets=tuple(records), coverage=report.to_dict(),
+                               findings=tuple(findings), release=tuple(dict(r) for r in release))
         if status == "pass":
             (staging / "coverage.json").write_text(json.dumps(report.to_dict(), indent=2) + "\n", encoding="utf-8")
             (staging / "package.json").write_text(json.dumps(result.to_dict(), indent=2) + "\n", encoding="utf-8")

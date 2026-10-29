@@ -140,11 +140,10 @@ def build_parser() -> argparse.ArgumentParser:
                  "--ao-intensity"):
         studio.add_argument(flag, type=float)
 
-    capture = sub.add_parser("capture", help="capture the displayed version into an immutable bundle")
+    capture = sub.add_parser("capture", help="drive the browser, refit the camera, and write a PNG")
     add_session(capture)
     capture.add_argument("--view", type=view_arg, required=True)
-    capture.add_argument("--out", type=Path, help="explicit PNG path under .cad-work only")
-    capture.add_argument("--replace", action="store_true", help="retain and replace a conflicting capture bundle")
+    capture.add_argument("--out", type=Path, required=True, help="PNG path; its folder is created")
     capture.add_argument("--joint", help="section plane through this joint's axis (--view section)")
     capture.add_argument("--zoom", type=float, help=f"section close-up zoom (default {SECTION_ZOOM:g})")
     capture.add_argument("--crop", choices=("page", "viewer", "canvas"), default="page")
@@ -188,8 +187,7 @@ def request_body(args: argparse.Namespace) -> tuple[str, str, dict[str, Any]]:
                                         "steps": args.steps, "seconds": args.seconds, "at": args.at}
     if args.command == "capture":
         return "POST", "/api/capture", {"view": args.view, "out": path(args.out), "crop": args.crop,
-                                        "joint": args.joint, "zoom": args.zoom, "refit": args.refit,
-                                        "replace": args.replace}
+                                        "joint": args.joint, "zoom": args.zoom, "refit": args.refit}
     if args.command == "studio":
         keys = ("environment", "tone_mapping", "background", "texture_mapping", "exposure", "env_intensity",
                 "env_rotation", "shadow_intensity", "shadow_softness", "ao_intensity")
@@ -225,7 +223,7 @@ def run(args: argparse.Namespace) -> int:
         return 0
     live = session.require_session(path)
     method, route, body = request_body(args)
-    if args.command == "capture" and args.out is not None:
+    if args.command == "capture":  # the host writes only into an existing folder
         args.out.resolve().parent.mkdir(parents=True, exist_ok=True)
     answer = summarise(args.command, session.call(live, method, route, body), live["url"])
     answer.setdefault("status", "pass")

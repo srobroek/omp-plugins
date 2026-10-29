@@ -8,7 +8,6 @@ Pillow is only needed by the standalone image comparator's tests.
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import base64
 import importlib.util
 import json
@@ -389,7 +388,7 @@ class Cache(unittest.TestCase):
         out.mkdir(parents=True)
         png = b"\x89PNG fake"
         (out / "iso.png").write_bytes(png)
-        (out / "render.json").write_text(json.dumps({
+        (out / "manifest.json").write_text(json.dumps({
             "status": status, "cache_key": self.key,
             "views": {"iso": {"png": "iso.png", "sha256": render.sha256(png)}}}))
 
@@ -430,15 +429,10 @@ class CacheKey(unittest.TestCase):
         self.write(folder / "part-map.json", {"parts": {pn: {"node_indices": [i]} for i, pn in enumerate(pns)}})
         self.write(folder / "metrics.json", {"parts": {pn: {"bbox_mm": {"min": [0, 0, 0], "max": [10, 10, 10],
                                                                         "size": [10, 10, 10]}} for pn in pns}})
-        (folder / "record" / "parts").mkdir(parents=True)
-        for pn in pns:
-            (folder / "record" / "parts" / pn).mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(self.hw / "parts" / pn / "part.yaml", folder / "record" / "parts" / pn / "part.yaml")
-        files = {p.relative_to(folder).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
-                 for p in folder.rglob("*") if p.is_file() and p.name != "manifest.json"}
-        self.write(folder / "manifest.json", {"label": "v1", "files": files,
-                                               "ground": pns[0], "pose": {"transforms": {pn: IDENTITY for pn in pns}}})
-        self.write(self.hw / "versions" / "latest.json", {"label": "v1"})
+        self.write(folder / "manifest.json", {"ground": pns[0], "pose": {"transforms": {pn: IDENTITY for pn in pns}}})
+        self.write(self.hw / "versions" / "latest.json", {
+            "label": "v1", **{k: f"versions/v1/{name}" for k, name in render.version_layout.FILES.items()}})
+
     def tearDown(self) -> None:
         self.tmp.cleanup()
 
@@ -540,16 +534,8 @@ class OccurrenceScene(unittest.TestCase):
                      "motions": {oid: IDENTITY for oid in occurrences}},
             "joints": [{"id": f"J-00{n}", "type": "fixed", "parent": "LMP-0001", "child": oid, "axis": [0, 0, 1],
                         "origin": [0, 0, 0]} for n, oid in enumerate(("ring-a", "ring-b"), start=1)]})
-        for pn in ("LMP-0001", "LMP-0011"):
-            (folder / "record" / "parts" / pn).mkdir(parents=True)
-            shutil.copyfile(self.hw / "parts" / pn / "part.yaml", folder / "record" / "parts" / pn / "part.yaml")
-        files = {p.relative_to(folder).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
-                 for p in folder.rglob("*") if p.is_file() and p.name != "manifest.json"}
-        data = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
-        data["files"] = files
-        write(folder / "manifest.json", data)
         write(self.hw / "versions" / "latest.json", {
-            "label": "v1"})
+            "label": "v1", **{k: f"versions/v1/{name}" for k, name in render.version_layout.FILES.items()}})
 
     def test_each_occurrence_is_its_own_scene_part_with_its_pn_material(self) -> None:
         version = render.resolve_version(self.hw, "latest")

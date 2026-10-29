@@ -15,12 +15,6 @@ import sys
 from pathlib import Path
 from typing import Any
 from PIL import Image, ImageChops
-def _render_data(directory: Path) -> tuple[Path, dict[str, Any]]:
-    """Read immutable bundle metadata or legacy direct-render manifests."""
-    bundle = directory / "render.json"
-    manifest = directory / "manifest.json"
-    selected = bundle if bundle.is_file() else manifest
-    return selected, json.loads(selected.read_text(encoding="utf-8"))
 
 _parity_spec = importlib.util.spec_from_file_location(
     "cad_render_parity_policy", Path(__file__).resolve().with_name("parity_policy.py"))
@@ -91,8 +85,8 @@ def compare_images(left: Path, right: Path) -> dict[str, int | float | bool]:
 
 
 def compare(left: Path, right: Path) -> dict[str, Any]:
-    _, left_manifest = _render_data(left)
-    _, right_manifest = _render_data(right)
+    left_manifest = json.loads((left / "manifest.json").read_text(encoding="utf-8"))
+    right_manifest = json.loads((right / "manifest.json").read_text(encoding="utf-8"))
     left_views = left_manifest["views"]
     right_views = right_manifest["views"]
     if set(left_views) != set(right_views):
@@ -102,10 +96,16 @@ def compare(left: Path, right: Path) -> dict[str, Any]:
     left_decisions = decisions(left_manifest)
     right_decisions = decisions(right_manifest)
     decision_mismatch = [name for name in left_views if left_decisions[name] != right_decisions[name]]
-    reports = {name: compare_images(left / left_views[name]["png"], right / right_views[name]["png"])
-               for name in left_views}
-    return {"pass": not decision_mismatch and all(report["pass"] for report in reports.values()),
-            "view_count": len(reports), "decision_mismatch_views": decision_mismatch, "views": reports}
+    reports = {
+        name: compare_images(left / left_views[name]["png"], right / right_views[name]["png"])
+        for name in left_views
+    }
+    return {
+        "pass": not decision_mismatch and all(report["pass"] for report in reports.values()),
+        "view_count": len(reports),
+        "decision_mismatch_views": decision_mismatch,
+        "views": reports,
+    }
 
 
 def main(argv: list[str] | None = None) -> int:

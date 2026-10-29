@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Any, Iterator
 from urllib.parse import parse_qs, quote, urlsplit
 
-from . import LimitError, ViewerError, capture, gallery, motion, record, publication
+from . import LimitError, ViewerError, capture, gallery, motion, record
 from .capture import Presenter
 from .session import HOST, port_open
 
@@ -781,37 +781,10 @@ class Host:
         return {"status": "stopping", "pid": os.getpid()}
 
     def capture(self, body: dict[str, Any]) -> dict[str, Any]:
-        """Capture once, then seal its pixels and displayed state as an immutable version bundle."""
+        """One capture on the presenter; the guard holds until the presenter has finished it,
+        even when this request has given up waiting."""
         if self.presenter is None:
             raise ViewerError("presenter browser is not running")
-        state = self.state()
-        selected = state.get("selected", {}).get("A")
-        with self.lock:
-            shown = self.versions.get("A")
-        if not selected or not selected.get("label") or shown is None:
-            raise ViewerError("nothing shown yet; run `viewer.py show` first")
-        hw, label = shown.version.hw, selected["label"]
-        api = record._layout()
-        requested = Path(str(body["out"])) if body.get("out") else None
-        view = str(body.get("view"))
-        subject = view.replace("isolate:", "isolate-") if view.startswith("isolate:") else view
-        recipe = {"view": view, "crop": body.get("crop") or "page", "joint": body.get("joint"),
-                  "zoom": body.get("zoom"), "refit": body.get("refit"), "selected": selected,
-                  "viewer_state": {"mode": state["mode"], "view": state["view"], "animation": state["animation"]}}
-        try:
-            existing = None if requested else publication.reusable(hw, label, subject, recipe, bool(body.get("replace")))
-        except api.PublishConflict as error:
-            raise ViewerError(str(error)) from error
-        if existing is not None:
-            return {"status": "pass", "cache": "hit", "out": str(existing / f"{view}.png"), "version": label}
-        if requested is None:
-            staged = publication.staging(hw)
-            target = staged / f"{view}.png"
-            body["out"] = str(target)
-        else:
-            staged = None
-            target = api.scratch_path(hw, requested, "--out")
-            body["out"] = str(target)
         self.guard.begin_capture()
         try:
             job = self.presenter.submit(lambda page: capture.capture(self, page, body))
@@ -819,12 +792,7 @@ class Host:
             self.guard.end_capture()
             raise
         job.add_done_callback(lambda _: self.guard.end_capture())
-        result = self.presenter.result(job, CAPTURE_TIMEOUT_S, "capture")
-        if staged is not None:
-            (staged / "capture.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
-            result["out"] = str(publication.publish(hw, label, subject, staged, recipe,
-                                                    bool(body.get("replace"))) / f"{view}.png")
-        return result
+        return self.presenter.result(job, CAPTURE_TIMEOUT_S, "capture")
 
     def serve(self) -> None:
         """Start the viewers, the API, and the presenter; serve until /api/stop or SIGTERM.

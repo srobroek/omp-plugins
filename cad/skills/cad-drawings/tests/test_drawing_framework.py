@@ -27,7 +27,6 @@ sys.path.insert(0, str(SCRIPTS))
 import drawing_contract  # noqa: E402
 import drawing_document  # noqa: E402
 import freecad_runtime  # noqa: E402
-import drawing_publication  # noqa: E402
 from drawing_document import (CompositionError, CoverageReport, SheetMetadata, SvgAnnotation, SvgNote,  # noqa: E402
                               SvgTable, compose_page, page_layout, publish_package, sheet_specs)
 from freecad_views import Circle, ViewGeometry  # noqa: E402
@@ -92,10 +91,23 @@ def write_project(root: Path, *, features: bool = True) -> tuple[Path, Path]:
                                                      "parts": {PN: LOCATORS}}).encode()
     for name, data in files.items():
         (version / name).write_bytes(data)
-    manifest = {"label": "v1", "product_id": PRODUCT["id"],
-                "assembly_yaml_sha256": sha((hw / "assembly.yaml").read_bytes()),
+    snapshot = version / "record"
+    (snapshot / "parts" / PN).mkdir(parents=True)
+    record_files = {"product.yaml": (hw / "product.yaml").read_bytes(),
+                    "interfaces.yaml": (hw / "interfaces.yaml").read_bytes(),
+                    "assembly.yaml": (hw / "assembly.yaml").read_bytes(),
+                    f"parts/{PN}/part.yaml": (hw / "parts" / PN / "part.yaml").read_bytes()}
+    for name, data in record_files.items():
+        target = snapshot / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+    assembly_sha = sha((hw / "assembly.yaml").read_bytes())
+    manifest = {"schema_version": 2, "label": "v1", "product_id": PRODUCT["id"], "assembly_yaml_sha256": assembly_sha,
                 "parts": {PN: {"model": f"parts/{PN}/model.py", "source_sha256": sha(model), "step": f"parts/{PN}.step"}},
-                "files": {name: sha(data) for name, data in files.items()}}
+                "record": {f"record/{name}": sha(data) for name, data in record_files.items()},
+                "manufacturing": {},
+                "files": {**{name: sha(data) for name, data in files.items()},
+                          **{f"record/{name}": sha(data) for name, data in record_files.items()}}}
     if features:
         manifest["drawing_features"] = "drawing-features.json"
     (version / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
@@ -402,7 +414,7 @@ class FreeCadViewsAndPackage(unittest.TestCase):
         self.assertEqual(check_layout(sheet.svg, sheet.regions, sheet.placeholders), [])
         output = self.root / "package"
         report = publish_package(context, [sheet], CoverageReport("pass", rows=({"feature": "bed_face"},)), output,
-                                 FREECADCMD, 300)
+                                 FREECADCMD, 300, bundle_path=self.root / "record" / "hw" / "drawings" / "v1" / PN)
         self.assertEqual((report.status, report.exit_code, report.findings), ("pass", 0, ()), report.findings)
         self.assertEqual(sorted(p.name for p in output.iterdir()),
                          ["coverage.json", "package.json", "sheet-1.pdf", "sheet-1.png", "sheet-1.svg"])
@@ -413,15 +425,18 @@ class FreeCadViewsAndPackage(unittest.TestCase):
         self.assertEqual(package["sheets"][0]["sha256"]["pdf"], sha((output / "sheet-1.pdf").read_bytes()))
 
         crossing = SvgAnnotation("over-view", "label", '<text x="100" y="77" font-size="3.5" font-family="osifont">ON THE PART</text>')
-        failed = publish_package(context, [self.compose([crossing])], CoverageReport("pass"), output, FREECADCMD, 300)
+        rejected_draft = self.root / "rejected-draft"
+        failed = publish_package(context, [self.compose([crossing])], CoverageReport("pass"),
+                                 rejected_draft, FREECADCMD, 300)
         self.assertEqual((failed.status, failed.exit_code, [f["code"] for f in failed.findings]),
                          ("fail", 1, ["layout_check_failed"]))
-        self.assertEqual(sorted(p.name for p in output.iterdir()), ["rejected.json", "sheet-1.rejected.svg"])
-
+        retained = self.root / "record" / "project" / ".cad-work" / "rejected-drawings"
+        self.assertEqual(len(list(retained.iterdir())), 1)
+        incomplete_output = self.root / "incomplete"
         incomplete = CoverageReport("fail", findings=({"code": "dimension_coverage_incomplete", "message": "bore depth"},))
-        refused = publish_package(context, [sheet], incomplete, output, FREECADCMD, 300)
+        refused = publish_package(context, [sheet], incomplete, incomplete_output, FREECADCMD, 300)
         self.assertEqual([f["code"] for f in refused.findings], ["dimension_coverage_incomplete"])
-        self.assertFalse((output / "package.json").exists())
+        self.assertTrue(retained.is_dir())
 
         stranger = self.root / "not-a-package"
         stranger.mkdir()
@@ -437,7 +452,7 @@ class DrawingPublication(unittest.TestCase):
     def test_publish_reuse_conflict_replace_and_version_immutability(self) -> None:
         with tempfile.TemporaryDirectory(prefix="cad-drawing-bundle-") as temporary:
             hw, version = write_project(Path(temporary))
-            api = drawing_publication.layout()
+            api = drawing_contract.layout_api()
             params = {"V": "v1", "S": PN}
             recipe = {"part": PN, "input_sha256": "a" * 64}
             target = api.bundle_dir(hw, "drawings", "v1", PN)
@@ -446,14 +461,14 @@ class DrawingPublication(unittest.TestCase):
             def staged_bundle(value: bytes) -> Path:
                 staged = api.staging(hw, "bundle.drawings")
                 (staged / "coverage.json").write_text("{}\n", encoding="utf-8")
-                package = {"output_dir": str(staged), "sheets": [{"files": {"svg": "sheet-1.svg"}}]}
+                package = {"output_dir": str(target),
+                           "sheets": [{"files": {"svg": str(target / "sheet-1.svg")}}]}
                 (staged / "package.json").write_text(json.dumps(package), encoding="utf-8")
                 for extension in ("svg", "pdf", "png"):
                     (staged / f"sheet-1.{extension}").write_bytes(value)
                 return staged
-
-            self.assertEqual(drawing_publication.publish(hw, "v1", PN, staged_bundle(b"old"), recipe,
-                                                         "test drawing", False), target)
+            api.publish(hw, "bundle.drawings", params, staged_bundle(b"old"), recipe=recipe,
+                        producer="test drawing")
             published = json.loads((target / "package.json").read_text(encoding="utf-8"))
             self.assertEqual(published["output_dir"], str(target))
             self.assertEqual(published["sheets"][0]["files"], {"svg": str(target / "sheet-1.svg")})
@@ -469,7 +484,9 @@ class DrawingPublication(unittest.TestCase):
             self.assertEqual((target / "manifest.json").read_bytes(), original_manifest)
             replaced = api.publish(hw, "bundle.drawings", params, staged_bundle(b"new"),
                                    recipe=changed_recipe, producer="test drawing", replace=True)
-            self.assertIsNotNone(replaced.replaced)
+            self.assertTrue(replaced.replaced.is_dir())
+            self.assertEqual((replaced.replaced / "sheet-1.svg").read_bytes(), b"old")
+            self.assertEqual((target / "sheet-1.svg").read_bytes(), b"new")
             self.assertEqual(api.verify(replaced.path), [])
             self.assertEqual((version / "manifest.json").read_bytes(), old_version_manifest)
 
