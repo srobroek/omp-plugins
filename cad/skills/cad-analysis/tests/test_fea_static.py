@@ -531,10 +531,11 @@ class VersionedPublicationTests(unittest.TestCase):
         self.assertIn("--out must be under", json.loads(output.getvalue())["error"]["message"])
 
     def test_solver_evidence_excludes_python_bytecode_and_cache_dirs(self) -> None:
-        for path in ("result.frd", "fea_job.py", "nested/result.inp"):
+        for path in ("result.frd", "nested/result.inp"):
             with self.subTest(path=path):
                 self.assertTrue(fea_static._is_solver_evidence(path))
-        for path in ("module.pyc", "__pycache__/module.cpython-313.pyc", "nested/__pycache__/module.pyc"):
+        for path in ("module.pyc", "__pycache__/module.cpython-313.pyc", "nested/__pycache__/module.pyc",
+                     "fea_job.py", "fea_static_123.json"):
             with self.subTest(path=path):
                 self.assertFalse(fea_static._is_solver_evidence(path))
 

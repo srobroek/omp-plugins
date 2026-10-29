@@ -485,7 +485,9 @@ def _snapshot_record_hashes(record_dir: Path, case: dict[str, Any]) -> dict[str,
 
 def _is_solver_evidence(relative_path: str) -> bool:
     path = Path(relative_path)
-    return path.suffix != ".pyc" and "__pycache__" not in path.parts
+    return (path.suffix != ".pyc" and "__pycache__" not in path.parts
+            and path.name != "fea_job.py"
+            and not (path.name.startswith("fea_static_") and path.suffix == ".json"))
 
 
 def _producer_code_hashes() -> dict[str, str]:
