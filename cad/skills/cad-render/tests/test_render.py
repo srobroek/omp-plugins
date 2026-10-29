@@ -82,11 +82,10 @@ class VersionManifestSchema(unittest.TestCase):
     def test_schema_two_requires_record_and_manufacturing_maps(self) -> None:
         reader = render.version_reader
         for key in ("record", "manufacturing"):
+            invalid = {"schema_version": 2, "record": {}, "manufacturing": {}}
+            invalid[key] = None
             with self.subTest(key=key), self.assertRaisesRegex(reader.VersionError, key):
-                invalid = {"schema_version": 2, "record": {}, "manufacturing": {}}
-                invalid[key] = None
-                with self.assertRaisesRegex(reader.VersionError, key):
-                    reader.validate_version_manifest(invalid)
+                reader.validate_version_manifest(invalid)
         reader.validate_version_manifest({"schema_version": 2, "record": {}, "manufacturing": {}})
 
     def test_schema_one_version_manifest_is_rejected(self) -> None:
@@ -457,7 +456,10 @@ class CacheKey(unittest.TestCase):
         folder.mkdir(parents=True)
         (folder / "assembly.step").write_text("", encoding="utf-8")
         (folder / "assembly.glb").write_bytes(b"glTF v1")
-        self.write(folder / "part-map.json", {"parts": {pn: {"node_indices": [i]} for i, pn in enumerate(pns)}})
+        part_occurrences = {pn: {"PN": pn, "node_indices": [i]} for i, pn in enumerate(pns)}
+        self.write(folder / "part-map.json", {"schema_version": 2,
+                                              "parts": {pn: {"node_indices": [i]} for i, pn in enumerate(pns)},
+                                              "occurrences": part_occurrences})
         self.write(folder / "metrics.json", {"parts": {pn: {"bbox_mm": {"min": [0, 0, 0], "max": [10, 10, 10],
                                                                         "size": [10, 10, 10]}} for pn in pns}})
         record = folder / "record"
@@ -474,10 +476,12 @@ class CacheKey(unittest.TestCase):
         files = {p.relative_to(folder).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
                  for p in folder.rglob("*") if p.is_file() and p.name != "manifest.json"}
         record = {name: digest for name, digest in files.items() if name.startswith("record/")}
+        records = {pn: {"PN": pn, "ref": pn, "rest": IDENTITY, "group": None} for pn in pns}
         CacheKey.write(folder / "manifest.json", {"schema_version": 2, "label": "v1", "files": files,
                                                    "record": record, "manufacturing": {},
-                                                   "ground": pns[0],
-                                                   "pose": {"transforms": {pn: IDENTITY for pn in pns}},
+                                                   "ground": pns[0], "occurrences": records, "joints": [],
+                                                   "pose": {"transforms": {pn: IDENTITY for pn in pns},
+                                                           "motions": {pn: IDENTITY for pn in pns}},
                                                    "assembly_yaml_sha256": files["record/assembly.yaml"]})
     @staticmethod
     def refresh(folder: Path) -> None:
@@ -519,7 +523,7 @@ class CacheKey(unittest.TestCase):
             self.refresh(folder)
 
         edits = {
-            "glb": lambda: (folder / "assembly.glb").write_bytes(b"glTF v2"),
+            "part-map occurrences": lambda: edit_json("part-map.json", lambda d: d["occurrences"]["LMP-0001"].update(node_indices=[9])),
             "part map": lambda: edit_json("part-map.json", lambda d: d["parts"]["LMP-0002"].update(node_indices=[9])),
             "manifest pose": lambda: edit_json("manifest.json", lambda d: d["pose"]["transforms"]["LMP-0002"][0].__setitem__(3, 5.0)),
             "metrics bbox": lambda: edit_json("metrics.json", lambda d: d["parts"]["LMP-0003"]["bbox_mm"].update(size=[10, 10, 99])),
@@ -545,8 +549,12 @@ class CacheKey(unittest.TestCase):
         self.assertEqual(self.key(), before)
 
     def test_a_malformed_latest_json_is_an_infra_error(self) -> None:
+        latest = self.hw / "versions" / "latest.json"
+        original = latest.read_text(encoding="utf-8")
+        latest.write_text('{"glb": "versions/v1/assembly.glb"}', encoding="utf-8")
         with self.assertRaisesRegex(render.InfraError, "label"):
             render.resolve_version(self.hw, "latest")
+        latest.write_text(original, encoding="utf-8")
         self.assertEqual(render.resolve_version(self.hw, "v1").label, "v1")
 
 
@@ -638,7 +646,7 @@ class OccurrenceScene(unittest.TestCase):
             with mock.patch.object(render, "resolve_version") as resolve:
                 with self.assertRaisesRegex(render.InfraError, "refusing to overwrite"):
                     render.run(args)
-                resolve.assert_called_once()
+                resolve.assert_not_called()
 
 
 class RendererPage(unittest.TestCase):
