@@ -89,6 +89,21 @@ Expose `replace` as the command's `--replace` flag. After a failure the staging 
 Before you use a bundle or a version as input, call `verify(directory)`. It returns a list of
 problems against the manifest inventory. An empty list means the folder verifies.
 
+## Write a producer command
+
+A command that publishes a bundle from a built version uses three more calls, so producers share
+one behaviour:
+
+- `built_version(hw, requested)` takes `--version` (a label or `latest`) and returns
+  `(label, version folder, record snapshot folder)`. It raises `LayoutError` when the version is not
+  built, fails its manifest or has no `record/` snapshot. Read part, interface and assembly records
+  from the snapshot, not from the current `hw/` files.
+- `reusable(hw, entry_id, params, recipe, replace=False)` runs before the expensive work. It returns
+  the bundle `publish` would return unchanged, or `None` when there is nothing to reuse. Another
+  recipe raises `PublishConflict` unless `replace`.
+- `scratch_path(hw, path, option)` checks an explicit output override such as `--out`. It accepts
+  only a path under `.cad-work/`; `option` names the flag in the error.
+
 ## Read the manufacturing contract
 
 `custom_made(part)` is true when `make_buy` is `make` or `procurement.mode` is `made_to_drawing`.

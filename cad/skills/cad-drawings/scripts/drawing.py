@@ -145,10 +145,31 @@ def detail_setup(plan: part_views.ViewPlan, base: sheet.ViewData, measured: draw
 def plan_layout(plans: Sequence[part_views.ViewPlan], probe: Mapping[str, sheet.ViewData],
                 details: Mapping[str, Mapping[str, Any]], presentation_for: Any, spec: drawing_document.SheetSpec,
                 scale: float, text: float, regime: str, notes: Sequence[SvgNote], tables: Sequence[SvgTable],
-                ) -> tuple[dict[str, tuple[float, float]], dict[str, float]] | None:
-    """View centres, each on its own sheet's ``spec`` at ``scale``, when every sheet's views, annotations and
-    furniture fit; the notes and tables go on sheet 1. One presentation over every view assigns each
-    characteristic to one view, so a dimension appears once in the whole package."""
+                reserved: Sequence[str] = (), relax: bool = False,
+                ) -> tuple[list[part_views.ViewPlan], dict[str, tuple[float, float]], dict[str, float]] | None:
+    """The plans and view centres, each view on its own sheet's ``spec`` at ``scale``, when every sheet's views,
+    annotations and furniture fit; the notes and tables go on sheet 1. One presentation over every view assigns
+    each characteristic to one view, so a dimension appears once in the whole package.
+
+    With ``relax`` a sheet that does not fit is relieved one view at a time (``_relieve``) until every sheet
+    fits: more sheets of this size rather than a larger, emptier one."""
+    plans = list(plans)
+    while True:
+        planned = _layout_sheets(plans, probe, details, presentation_for, spec, scale, text, regime, notes, tables)
+        if isinstance(planned, tuple):
+            return plans, *planned
+        relieved = _relieve(plans, planned, spec.projection, reserved) if relax and planned is not None else None
+        if relieved is None:
+            return None
+        plans = relieved
+
+
+def _layout_sheets(plans: Sequence[part_views.ViewPlan], probe: Mapping[str, sheet.ViewData],
+                   details: Mapping[str, Mapping[str, Any]], presentation_for: Any, spec: drawing_document.SheetSpec,
+                   scale: float, text: float, regime: str, notes: Sequence[SvgNote], tables: Sequence[SvgTable],
+                   ) -> tuple[dict[str, tuple[float, float]], dict[str, float]] | int | None:
+    """The view centres and scales when every sheet fits; else the number of the first sheet that does not, or
+    None when the sheet furniture itself does not fit."""
     scales, placed = {}, {}
     for plan in plans:
         if plan.kind == "detail":
@@ -161,12 +182,13 @@ def plan_layout(plans: Sequence[part_views.ViewPlan], probe: Mapping[str, sheet.
         else:
             view_scale = part_views.parse_scale(plan.scale) or scale
             scales[plan.id] = view_scale
-            placed[plan.id] = probe[plan.id].placed(view_scale, (0.0, 0.0))
+            placed[plan.id] = probe[plan.id].placed(view_scale, (0.0, 0.0), plan=plan)
     presentation = presentation_for(placed)
     footprints = {view_id: sheet.layout_view(view, presentation, text, regime,
                                              [p for p in plans if p.base == view_id]).footprint
                   for view_id, view in placed.items()}
     centres: dict[str, tuple[float, float]] = {}
+    principal = next(p.id for p in plans if p.relation == "front")
     for number in sorted({p.sheet for p in plans}):
         try:
             layout = drawing_document.page_layout(spec, tables if number == 1 else [], notes if number == 1 else [])
@@ -174,11 +196,34 @@ def plan_layout(plans: Sequence[part_views.ViewPlan], probe: Mapping[str, sheet.
             return None
         region = Box(layout.drawing_area.x0, layout.drawing_area.y0, layout.drawing_area.x1,
                      min(o.y0 for o in layout.obstacles) - VIEW_GAP / 2)
-        placed_here = arrange([p for p in plans if p.sheet == number], footprints, spec.projection, region)
+        here = [p for p in plans if p.sheet == number]
+        placed_here = arrange(here, footprints, spec.projection, region, any(p.id == principal for p in here))
         if placed_here is None:
-            return None
+            return number
         centres.update(placed_here)
     return centres, scales
+
+
+def _relieve(plans: Sequence[part_views.ViewPlan], number: int, projection: str, reserved: Sequence[str]
+             ) -> list[part_views.ViewPlan] | None:
+    """One step toward fitting sheet ``number``: on the principal's sheet a projected view not next to the
+    principal (the rear view) leaves the projection grid, lettered with a reference arrow, so it can be packed;
+    else the sheet's last other view moves to the next sheet. Views next to the principal keep their
+    projected places on its sheet. None when the sheet holds one view, or only views that cannot move."""
+    if sum(1 for p in plans if p.sheet == number) < 2:
+        return None   # a view that fits no sheet of this size alone
+    here = [p for p in plans if p.sheet == number and p.relation != "front"]
+    if number == next(p.sheet for p in plans if p.relation == "front"):
+        for plan in here:
+            cell = part_views.grid_cell(plan.relation, projection)
+            moved = part_views.relocated(plans, plan.id, reserved) if cell and sum(map(abs, cell)) > 1 else None
+            if moved is not None:
+                return moved
+    for plan in reversed(here):
+        moved = part_views.relocated(plans, plan.id, reserved, sheet=number + 1)
+        if moved is not None:
+            return moved
+    return None
 
 
 def _detail_scale(scale: float, radius_model: float) -> float:
@@ -191,47 +236,71 @@ def _detail_scale(scale: float, radius_model: float) -> float:
 
 
 def arrange(plans: Sequence[part_views.ViewPlan], footprints: Mapping[str, Box], projection: str,
-            region: Box) -> dict[str, tuple[float, float]] | None:
-    """Projection-aligned grid placement: adjacent views share the principal's rows and columns."""
+            region: Box, principal: bool = True) -> dict[str, tuple[float, float]] | None:
+    """Projection-aligned grid placement, the views out of it packed beside the grid, the whole centred.
+
+    On the principal's sheet adjacent projected views share the principal's rows and columns; every other
+    view (a lettered view, a section or detail with no projected place, or any view on another sheet) goes
+    to the free place nearest the top left, largest first, so the views fill the sheet."""
     cells: dict[str, tuple[int, int]] = {}
-    used: set[tuple[int, int]] = set()
     for plan in plans:
-        cell = part_views.grid_cell(plan.relation, projection)
-        if cell is not None and cell not in used:
+        cell = part_views.grid_cell(plan.relation, projection) if principal else None
+        if cell is not None and cell not in cells.values():
             cells[plan.id] = cell
-            used.add(cell)
-    free = [(1, 1), (-1, 1), (2, 1), (1, -1), (-1, -1), (2, 0), (2, -1), (0, 2), (1, 2), (-1, 2), (2, 2), (3, 0), (3, 1)]
-    for plan in plans:
-        if plan.id in cells:
-            continue
-        for cell in free:
-            if cell not in used:
-                cells[plan.id] = cell
-                used.add(cell)
-                break
-        else:
+    occupied: list[Box] = []
+    centres: dict[str, tuple[float, float]] = {}
+    if cells:
+        columns = sorted({c for c, _ in cells.values()})
+        rows = sorted({r for _, r in cells.values()})
+        left = {c: max(-footprints[v].x0 for v, (cc, _) in cells.items() if cc == c) for c in columns}
+        right = {c: max(footprints[v].x1 for v, (cc, _) in cells.items() if cc == c) for c in columns}
+        top = {r: max(-footprints[v].y0 for v, (_, rr) in cells.items() if rr == r) for r in rows}
+        bottom = {r: max(footprints[v].y1 for v, (_, rr) in cells.items() if rr == r) for r in rows}
+        column_x, row_y, x, y = {}, {}, region.x0, region.y0
+        for c in columns:
+            column_x[c] = x + left[c]
+            x += left[c] + right[c] + VIEW_GAP
+        for r in rows:
+            row_y[r] = y + top[r]
+            y += top[r] + bottom[r] + VIEW_GAP
+        for view, (c, r) in cells.items():
+            centres[view] = (column_x[c], row_y[r])
+            occupied.append(_shifted(footprints[view], centres[view]))
+    free = sorted((p.id for p in plans if p.id not in cells),
+                  key=lambda v: -(footprints[v].x1 - footprints[v].x0) * (footprints[v].y1 - footprints[v].y0))
+    for view in free:
+        corner = _free_corner(footprints[view], occupied, region)
+        if corner is None:
             return None
-    columns = sorted({c for c, _ in cells.values()})
-    rows = sorted({r for _, r in cells.values()})
-    left = {c: max(-footprints[v].x0 for v, (cc, _) in cells.items() if cc == c) for c in columns}
-    right = {c: max(footprints[v].x1 for v, (cc, _) in cells.items() if cc == c) for c in columns}
-    top = {r: max(-footprints[v].y0 for v, (_, rr) in cells.items() if rr == r) for r in rows}
-    bottom = {r: max(footprints[v].y1 for v, (_, rr) in cells.items() if rr == r) for r in rows}
-    width = sum(left[c] + right[c] for c in columns) + VIEW_GAP * (len(columns) - 1)
-    height = sum(top[r] + bottom[r] for r in rows) + VIEW_GAP * (len(rows) - 1)
-    if width > region.x1 - region.x0 or height > region.y1 - region.y0:
+        centres[view] = (corner[0] - footprints[view].x0, corner[1] - footprints[view].y0)
+        occupied.append(_shifted(footprints[view], centres[view]))
+    used = occupied[0]
+    for box in occupied[1:]:
+        used = used.union(box)
+    if used.x1 > region.x1 + 1e-6 or used.y1 > region.y1 + 1e-6:
         return None
-    x = region.x0 + (region.x1 - region.x0 - width) / 2
-    column_x = {}
-    for c in columns:
-        column_x[c] = x + left[c]
-        x += left[c] + right[c] + VIEW_GAP
-    y = region.y0 + (region.y1 - region.y0 - height) / 2
-    row_y = {}
-    for r in rows:
-        row_y[r] = y + top[r]
-        y += top[r] + bottom[r] + VIEW_GAP
-    return {view: (column_x[c], row_y[r]) for view, (c, r) in cells.items()}
+    dx = region.x0 + (region.x1 - region.x0 - (used.x1 - used.x0)) / 2 - used.x0
+    dy = region.y0 + (region.y1 - region.y0 - (used.y1 - used.y0)) / 2 - used.y0
+    return {view: (x + dx, y + dy) for view, (x, y) in centres.items()}
+
+
+def _shifted(box: Box, centre: tuple[float, float]) -> Box:
+    return Box(box.x0 + centre[0], box.y0 + centre[1], box.x1 + centre[0], box.y1 + centre[1])
+
+
+def _free_corner(footprint: Box, occupied: Sequence[Box], region: Box) -> tuple[float, float] | None:
+    """The top-left corner nearest the region's top left where ``footprint`` fits clear of the occupied boxes by
+    VIEW_GAP: candidates at the region's corner and beside or below each occupied box."""
+    width, height = footprint.x1 - footprint.x0, footprint.y1 - footprint.y0
+    xs = {region.x0, *(b.x1 + VIEW_GAP for b in occupied)}
+    ys = {region.y0, *(b.y1 + VIEW_GAP for b in occupied)}
+    for y, x in sorted((y, x) for x in xs for y in ys):
+        if x + width > region.x1 + 1e-6 or y + height > region.y1 + 1e-6:
+            continue
+        if all(x + width + VIEW_GAP <= b.x0 or b.x1 + VIEW_GAP <= x or y + height + VIEW_GAP <= b.y0
+               or b.y1 + VIEW_GAP <= y for b in occupied):
+            return x, y
+    return None
 
 
 def text_size(spec: drawing_document.SheetSpec) -> float:
@@ -491,17 +560,26 @@ def compose_and_publish(context: drawing_contract.DrawingContext, part: drawing_
     product_scale = ((context.product.get("drawing") or {}).get("default_sheet") or {}).get("scale")
     candidates = scale_candidates((drawing.get("sheet") or {}).get("scale"), product_scale)
     fallback = None
+    reserved = list(measured.frame.datums)
     for spec in specs:
         text = text_size(spec)
-        for scale in candidates:
-            planned = plan_layout(plans, probe, details, presentation_for, spec, scale, text, regime, notes, tables)
-            if planned is None:
-                continue
-            extent = max(max(b.x1 - b.x0, b.y1 - b.y0) for b in (probe[p.id].bounds() for p in probe_plans)) * scale
-            fallback = fallback or (spec, scale, planned)
-            if extent >= READABLE_EXTENT_MM or scale >= MAX_AUTO_SCALE - 1e-9 or len(candidates) == 1:
-                chosen = (spec, scale, planned)
-            break
+        # every view in its projected place first; only when no allowed scale fits that way, more sheets of
+        # this size (``plan_layout`` relax) before a larger, emptier sheet
+        for relax in (False, True):
+            fitted = False
+            for scale in candidates:
+                planned = plan_layout(plans, probe, details, presentation_for, spec, scale, text, regime, notes,
+                                      tables, reserved, relax)
+                if planned is None:
+                    continue
+                fitted = True
+                extent = max(max(b.x1 - b.x0, b.y1 - b.y0) for b in (probe[p.id].bounds() for p in probe_plans)) * scale
+                fallback = fallback or (spec, scale, planned)
+                if extent >= READABLE_EXTENT_MM or scale >= MAX_AUTO_SCALE - 1e-9 or len(candidates) == 1:
+                    chosen = (spec, scale, planned)
+                break
+            if fitted:
+                break
         if chosen is not None:
             break
     chosen = chosen or fallback
@@ -511,7 +589,8 @@ def compose_and_publish(context: drawing_contract.DrawingContext, part: drawing_
         return {"pn": part.pn, "status": "fail", "error": {"code": "sheet_no_fit", "message":
                 f"no allowed sheet {sizes} and scale fits the views and annotations"},
                 "coverage": coverage.to_dict()}, 1
-    spec, scale, (centres, scales) = chosen
+    spec, scale, (plans, centres, scales) = chosen
+    plans_by_id = {p.id: p for p in plans}
     page = work / "page.svg"
     page.write_text(spec.page_template_svg(), encoding="utf-8")
     final_details = {}
