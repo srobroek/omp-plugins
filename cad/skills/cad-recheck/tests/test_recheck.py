@@ -27,8 +27,7 @@ class RecheckHookTests(unittest.TestCase):
         self.git("config", "user.name", "CAD Recheck Test")
         self.git("config", "user.email", "cad-recheck@example.invalid")
         self.write_product("specify", "layout")
-        (self.root / "hw" / "parts").mkdir(parents=True)
-        (self.root / "hw" / "parts" / "part.txt").write_text("dimension=10\n", encoding="utf-8")
+        self.add_part()
         self.git("add", "hw")
         self.git("commit", "-qm", "initial design")
         hooks_dir = self.root / ".git" / "hooks"
@@ -64,6 +63,13 @@ class RecheckHookTests(unittest.TestCase):
             env=env,
         )
 
+    def add_part(self) -> Path:
+        part = self.root / "hw" / "parts" / "PRT-0001"
+        part.mkdir(parents=True, exist_ok=True)
+        (part / "part.yaml").write_text(
+            "PN: PRT-0001\nrev: X1\ntitle: Fixture\nmaterial: Steel\nprocess: cnc\n"
+            "finish: As machined\nmass_target: null\nmake_buy: make\n", encoding="utf-8")
+        return part
     def write_product(self, stage: str, threshold: str) -> None:
         product = self.root / "hw" / "product.yaml"
         product.parent.mkdir(parents=True, exist_ok=True)
@@ -105,9 +111,9 @@ class RecheckHookTests(unittest.TestCase):
         self.write_product("specify", "layout")
         self.git("add", "hw/product.yaml")
         self.write_product("release", "layout")
-        part = self.root / "hw" / "parts" / "part.txt"
-        part.write_text("dimension=11\n", encoding="utf-8")
-        self.git("add", "hw/parts/part.txt")
+        part = self.add_part() / "part.yaml"
+        part.write_text(part.read_text(encoding="utf-8").replace("title: Fixture", "title: Staged edit"), encoding="utf-8")
+        self.git("add", "hw/parts/PRT-0001/part.yaml")
         result = self.commit()
         self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -179,12 +185,72 @@ class RecheckHookTests(unittest.TestCase):
         result = self.commit()
         self.assertEqual(result.returncode, 0, result.stderr)
 
+
+    def test_untracked_stray_is_refused_even_below_recheck_threshold(self) -> None:
+        stray = self.root / "hw" / "parts" / "PRT-0001" / ".cad-work" / "generated.step"
+        stray.parent.mkdir()
+        stray.write_bytes(b"hidden generated payload")
+        self.stage_product("design_freeze", "layout")
+        result = self.commit()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("CAD layout has", result.stderr)
+
+    def test_frozen_pre_freeze_stage_refuses_a_stray_file(self) -> None:
+        product_path = self.root / "hw" / "product.yaml"
+        version = self.root / "hw" / "versions" / "v1"
+        version.mkdir(parents=True)
+        version_files = {
+            "assembly.step": "step\n",
+            "assembly.glb": "glb\n",
+            "part-map.json": "{}\n",
+            "metrics.json": "{}\n",
+            "parts/PRT-0001.step": "part\n",
+        }
+        for relative, content in version_files.items():
+            target = version / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+        manifest = {"label": "v1", "files": {key: hashlib.sha256((version / key).read_bytes()).hexdigest()
+                                                  for key in version_files}}
+        manifest_path = version / "manifest.json"
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        product_path.parent.mkdir(parents=True, exist_ok=True)
+        frozen_product = {
+            "id": "test-project", "rigor": "pro", "units": "mm", "regime": "iso",
+            "general_tolerance": "ISO 2768-m",
+            "flow": {"stage": "specify", "recheck_from": "release", "frozen": {
+                "version": "v1", "manifest_sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+                "decision": "DR-001",
+            }},
+        }
+        product_path.write_text(json.dumps(frozen_product), encoding="utf-8")
+        stray = self.root / "hw" / "stray.md"
+        stray.write_text("stray\n", encoding="utf-8")
+        self.git("add", "hw/product.yaml", "hw/versions", "hw/stray.md")
+
+        result = self.commit()
+
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("stray.md", result.stderr)
+
+    def test_stamp_refuses_staged_stray_before_recording(self) -> None:
+        self.stage_product("design_freeze", "layout")
+        stray = self.root / "hw" / "parts" / "PRT-0001" / ".cad-work" / "generated.step"
+        stray.parent.mkdir()
+        stray.write_bytes(b"hidden generated payload")
+        self.git("add", "hw/parts/PRT-0001/.cad-work/generated.step")
+        checks = self.root / ".checks.json"
+        checks.write_text(json.dumps({"all_passed": True, "checks": []}), encoding="utf-8")
+        result = self.run_python(STAMP, "--stage", "design_freeze", "--checks", str(checks), "--passed", cwd=self.root)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("CAD layout has", result.stderr)
+        self.assertFalse((self.root / "hw" / ".cad" / "recheck.json").exists())
     def test_editing_staged_file_makes_stamp_stale(self) -> None:
         self.stage_product("detail")
         self.stamp(passed=True, stage="detail")
-        part = self.root / "hw" / "parts" / "part.txt"
-        part.write_text("dimension=12\n", encoding="utf-8")
-        self.git("add", "hw/parts/part.txt")
+        part = self.add_part() / "part.yaml"
+        part.write_text(part.read_text(encoding="utf-8").replace("title: Fixture", "title: Edited"), encoding="utf-8")
+        self.git("add", "hw/parts/PRT-0001/part.yaml")
         result = self.commit()
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("stamp is stale", result.stderr)

@@ -48,7 +48,8 @@ class PlanTests(unittest.TestCase):
         self.recent = environment(self.root, "run-cadquery-1111111111111111", "run_cadquery.py", cadquery, age_s=60)
         self.current = environment(self.root, "cad-model-2222222222222222", "cad_model.py",
                                    ("cadquery_ocp_novtk-8.0.1.1.0", "PyYAML-6.0.3", "trimesh-4.9.0", "numpy-2.3.0"))
-        self.hook = environment(self.root, "cad-recheck-stamp-3333333333333333", "cad-recheck-stamp.py", ("PyYAML-6.0.3",))
+        self.hook = environment(self.root, "cad-recheck-stamp-3333333333333333", "cad-recheck-stamp.py",
+                                ("PyYAML-6.0.3", "jsonschema-4.26.0"))  # stamp.py runs validate.py's layout check
         # Not the plugin's: another tool's validate.py, an unshipped name, and a shared environment.
         environment(self.root, "validate-4444444444444444", "validate.py", ("requests-2.32.0",))
         environment(self.root, "unshipped-5555555555555555", "unshipped.py", ())

@@ -21,6 +21,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import uuid
 import unittest
 from unittest import mock
 
@@ -618,12 +619,37 @@ class StepTests(unittest.TestCase):
         (folder / "assembly.yaml").write_text(PLANAR_YAML.format(j2_max=j2_max), encoding="utf-8")
         return folder
 
-    def run_script(self, script: str, *args: str) -> tuple[subprocess.CompletedProcess[str], dict]:
-        """`script` with `args`; a sweep gets a pair cache of its own unless `args` name one."""
+    def run_script(self, script: str, *args: str, adapt_outputs: bool = True) -> tuple[subprocess.CompletedProcess[str], dict]:
+        """Run one CLI with scratch-only output paths; mirror test artifacts to requested fixture paths."""
         if script == "sweep.py" and not {"--cache", "--no-cache"} & set(args):
             args = (*args, "--cache", tempfile.mkdtemp(dir=self.root))
-        proc = subprocess.run(["uv", "run", "--quiet", "--script", str(SCRIPTS / script), *args],
+        values = list(args)
+        hw = Path(values[values.index("--hw") + 1])
+        mirrors: list[tuple[Path, Path]] = []
+        if adapt_outputs:
+            for option in ("--out", "--worst-step", "--job-dir"):
+                if option not in values:
+                    continue
+                index = values.index(option) + 1
+                requested = Path(values[index])
+                try:
+                    requested.resolve().relative_to((hw.parent / ".cad-work").resolve())
+                except ValueError:
+                    # a fresh folder per call: the CLIs refuse to overwrite an existing scratch output
+                    run_dir = hw.parent / ".cad-work" / "test-output" / hw.name
+                    run_dir.mkdir(parents=True, exist_ok=True)
+                    scratch = Path(tempfile.mkdtemp(dir=run_dir)) / f"{script}-{len(mirrors)}-{requested.name}"
+                    values[index] = str(scratch)
+                    mirrors.append((scratch, requested))
+        proc = subprocess.run(["uv", "run", "--quiet", "--script", str(SCRIPTS / script), *values],
                               capture_output=True, text=True, check=False, timeout=900)
+        for scratch, requested in mirrors:
+            if scratch.is_file():
+                requested.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(scratch, requested)
+            sidecar = scratch.with_name(scratch.name + ".json")
+            if sidecar.is_file():
+                shutil.copyfile(sidecar, requested.with_name(requested.name + ".json"))
         return proc, json.loads(proc.stdout) if proc.stdout.strip() else {}
 
     def assert_same_sweeps(self, runs: list[tuple[Path, dict]]) -> None:
@@ -633,12 +659,14 @@ class StepTests(unittest.TestCase):
         def comparable(folder: Path, result: dict) -> tuple[str, str, str]:
             worst = {k: v for k, v in result["worst_case"].items() if k != "step_sha256"}  # the STEP header has a time
             kept = {**{k: v for k, v in result.items() if k != "timings_s"}, "worst_case": worst}
+            # each run's own folder, then the scratch folder run_script mirrors its outputs from
+            text = json.dumps(kept).replace(str(folder), "OUT").replace(str(folder.parent), "OUT_PARENT")
+            text = re.sub(r"/\.cad-work/test-output/[^/\"]+/[^/\"]+/", "/.cad-work/test-output/HW/RUN/", text)
             evidence = json.loads((folder / "worst.step.json").read_text(encoding="utf-8"))
             step = re.sub(r"FILE_NAME\(.*?\);", "", (folder / "worst.step").read_text(encoding="utf-8"), count=1,
                           flags=re.S)
             self.assertTrue(step)
-            return (json.dumps(kept).replace(str(folder), "OUT"),
-                    json.dumps({k: v for k, v in evidence.items() if k not in ("step", "inputs", "command")}), step)
+            return (text, json.dumps({k: v for k, v in evidence.items() if k not in ("step", "inputs", "command")}), step)
 
         first, *others = [comparable(folder, result) for folder, result in runs]
         for other in others:
@@ -664,6 +692,13 @@ class StepTests(unittest.TestCase):
             self.assertIn(f"PRODUCT('{name}'", text)
         # 90 degrees about Z through (200, 0, 0): x' = 200 - y, y' = x - 200.
         self.assertEqual(result["placements"]["TST-0003"], [[0.0, -1.0, 0.0, 200.0], [1.0, 0.0, 0.0, -200.0], [0.0, 0.0, 1.0, 0.0]])
+    def test_pose_step_declares_millimetre_units(self) -> None:
+        out = self.root / "posed-mm.step"
+        proc, _ = self.run_script("pose.py", "--hw", str(self.hw(180)), "--parts-dir", str(self.planar),
+                                  "--set", "J-002=90", "--out", str(out))
+        self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+        text = out.read_text(encoding="utf-8")
+        self.assertIn("SI_UNIT(.MILLI.,.METRE.)", text)
 
     def test_overlapping_links_are_a_collision(self) -> None:
         proc, result = self.run_script("sweep.py", "--hw", str(self.hw(180)), "--parts-dir", str(self.planar),
@@ -675,7 +710,6 @@ class StepTests(unittest.TestCase):
         hit = folded[0]["pairs"][0]
         self.assertEqual(hit["pair"], ["TST-0001", "TST-0003"])
         self.assertAlmostEqual(hit["volume_mm3"], 5000.0, places=1)  # x 50..100 x 10 x 10 overlap
-        self.assertEqual(result["pairs"]["checked"], [["TST-0001", "TST-0003"]])
 
     def test_a_part_buried_in_a_solid_or_a_compound_part_is_a_collision(self) -> None:
         hw = Path(tempfile.mkdtemp(dir=self.root))
@@ -706,7 +740,244 @@ class StepTests(unittest.TestCase):
 
     def test_assembly_step_input_poses_the_lamp_arm(self) -> None:
         out = self.root / "lamp-posed.step"
-        proc, result = self.run_script("pose.py", "--hw", str(TEMPLATE_HW), "--step", str(self.lamp / "lamp-arm.step"),
+        hw = shutil.copytree(TEMPLATE_HW, Path(tempfile.mkdtemp(dir=self.root)) / "hw")  # scratch lands beside it
+        proc, result = self.run_script("pose.py", "--hw", str(hw), "--step", str(self.lamp / "lamp-arm.step"),
+                                       "--set", "J-002=-90", "--out", str(out))
+        self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+        self.assertEqual(sorted(result["placements"]),
+                         [f"LMP-{n:04d}" for n in range(1, 11)] + ["ring-base", "ring-elbow", "ring-head"])
+        self.assertEqual({oid: pn for oid, pn in result["occurrences"].items() if pn == "LMP-0011"},
+                         {"ring-base": "LMP-0011", "ring-elbow": "LMP-0011", "ring-head": "LMP-0011"})
+        text = out.read_text(encoding="utf-8")
+        self.assertIn("PRODUCT('LMP-0003 Upper link'", text)
+        self.assertEqual(text.count("PRODUCT('LMP-0011 Retaining ring DIN 471 - 5x0.6'"), 1)
+        probe = self.probe(out)
+        rings = sorted(c["occurrence"] for c in probe["components"] if c["pn"] == "LMP-0011")
+        self.assertEqual(rings, ["ring-base", "ring-elbow", "ring-head"])
+        boxes = {c["occurrence"]: c["bbox"] for c in probe["components"] if c["occurrence"]}
+        assert_close(self, boxes["ring-elbow"][0], (156.8, -11.605, 36.8), places=3)
+        assert_close(self, boxes["ring-elbow"][1], (163.2, -11.005, 43.2), places=3)
+        assert_close(self, boxes["ring-head"][0], (156.8, -9.105, 236.8), places=3)
+        assert_close(self, boxes["ring-head"][1], (163.2, -8.505, 243.2), places=3)
+
+    def probe(self, step: Path) -> dict:
+        proc = subprocess.run(["uv", "run", "--quiet", "--script", str(HERE / "fixtures" / "probe_step.py"), str(step)],
+                              capture_output=True, text=True, check=False, timeout=900)
+        self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+        return json.loads(proc.stdout)
+
+    def test_the_bounds_hold_and_the_broad_phase_containment_skip_and_threads_change_no_measured_value(self) -> None:
+        proc = subprocess.run(["uv", "run", "--quiet", "--script", str(HERE / "fixtures" / "measure_probe.py"),
+                               str(self.root / "fx")], capture_output=True, text=True, check=False, timeout=900)
+        self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+        report = json.loads(proc.stdout)
+        self.assertEqual((report["bound_violations"], report["mismatches"], report["thread_mismatches"],
+                          report["prune_violations"]), ([], [], [], []))
+        self.assertGreater(report["wrapped"], report["compared"] // 2, report)
+        self.assertGreater(report["pruned"], report["requests"] // 10, report)
+        self.assertEqual(report["buried"]["gap"], 0.0)
+        self.assertEqual(report["buried"]["result"][0], 0.0)
+        self.assertAlmostEqual(report["buried"]["result"][1], 8.0, places=6)
+
+    def twins(self, assembly: str) -> Path:
+        """A record over the twins fixture: TST-0201 assembly_zero, TST-0202 part_local."""
+        hw = Path(tempfile.mkdtemp(dir=self.root))
+        (hw / "assembly.yaml").write_text(assembly, encoding="utf-8")
+        for pn, title, frame in (("TST-0201", "Ground plate", None), ("TST-0202", "Arm", "part_local")):
+            (hw / "parts" / pn).mkdir(parents=True)
+            (hw / "parts" / pn / "part.yaml").write_text(
+                f"PN: {pn}\ntitle: {title}\n" + (f"model_frame: {frame}\n" if frame else ""), encoding="utf-8")
+        return hw
+
+    def test_an_asymmetric_part_local_occurrence_is_placed_once_rotation_first(self) -> None:
+        hw = self.twins(PLACED_YAML)
+        out = self.root / "placed.step"
+        proc, result = self.run_script("pose.py", "--hw", str(hw), "--parts-dir", str(self.root / "fx" / "twins"),
+                                       "--out", str(out))
+        self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+        self.assertEqual(result["placements"]["arm-p"],
+                         [[0.0, -1.0, 0.0, 40.0], [1.0, 0.0, 0.0, 10.0], [0.0, 0.0, 1.0, 0.0]])
+        arm = next(c for c in self.probe(out)["components"] if c["occurrence"] == "arm-p")
+        self.assertEqual(arm["name"], "TST-0202 Arm [@arm-p]")
+        assert_close(self, arm["bbox"][0], (30.0, 10.0, 0.0), places=5)
+        assert_close(self, arm["bbox"][1], (45.0, 60.0, 5.0), places=5)
+
+    def test_moving_one_sibling_leaves_the_other_at_its_rest_placement(self) -> None:
+        hw = self.twins(TWINS_YAML)
+        out = self.root / "twins.step"
+        proc, result = self.run_script("pose.py", "--hw", str(hw), "--parts-dir", str(self.root / "fx" / "twins"),
+                                       "--set", "J-001=90", "--out", str(out))
+        self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+        self.assertEqual(result["placements"]["arm-a"],
+                         [[0.0, -1.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]])
+        self.assertEqual(result["placements"]["arm-b"],
+                         [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 30.0], [0.0, 0.0, 1.0, 0.0]])
+        boxes = {c["occurrence"]: c["bbox"] for c in self.probe(out)["components"] if c["occurrence"]}
+        assert_close(self, boxes["arm-a"][0], (-10.0, 0.0, 0.0), places=5)
+        assert_close(self, boxes["arm-b"][0], (0.0, 25.0, 0.0), places=5)
+        assert_close(self, boxes["arm-b"][1], (50.0, 40.0, 5.0), places=5)
+
+    def test_two_occurrences_of_one_part_collide_in_a_sweep(self) -> None:
+        hw = self.twins(TWINS_YAML)
+        proc, result = self.run_script("sweep.py", "--hw", str(hw), "--parts-dir", str(self.root / "fx" / "twins"),
+                                       "--steps", "2", "--grid", "0", "--end-effector", "@arm-a",
+                                       "--worst-step", str(self.root / "w-twins.step"))
+        self.assertEqual(proc.returncode, 1, proc.stderr[-2000:])
+        self.assertEqual(result["pairs"]["checked"], [["@arm-a", "@arm-b"]])
+        self.assertEqual([c["pose"] for c in result["collisions"]], [{"J-001": 90.0, "J-002": 0.0}])
+        hit = result["collisions"][0]["pairs"][0]
+        self.assertEqual(hit["pair"], ["@arm-a", "@arm-b"])
+        self.assertAlmostEqual(hit["volume_mm3"], 375.0, places=2)
+
+    def test_a_bare_part_number_placed_twice_is_ambiguous(self) -> None:
+        hw = self.twins(TWINS_YAML)
+        proc, result = self.run_script("sweep.py", "--hw", str(hw), "--parts-dir", str(self.root / "fx" / "twins"),
+                                       "--steps", "2", "--grid", "0", "--end-effector", "TST-0202",
+                                       "--worst-step", str(self.root / "w-ambiguous.step"))
+        self.assertEqual((proc.returncode, result), (2, {}))
+        self.assertIn("ambiguous", proc.stderr)
+        self.assertIn("@arm-a, @arm-b", proc.stderr)
+
+    def twins_sweep(self, assembly: str, interfaces: list[dict], *options: str):
+        """Sweep twins geometry and return pair clearance rows by pair."""
+        import yaml
+
+        hw = self.twins(assembly)
+        (hw / "interfaces.yaml").write_text(yaml.safe_dump({"interfaces": interfaces}), encoding="utf-8")
+        proc, result = self.run_script("sweep.py", "--hw", str(hw), "--parts-dir", str(self.root / "fx" / "twins"),
+                                       "--steps", "3", "--grid", "0", *options,
+                                       "--worst-step", str(hw / "worst.step"))
+        return proc, result, {tuple(row["pair"]): row for row in result.get("pair_clearance", [])}
+
+    def gap_sweep(self, between: float | None, plate: float | None, *options: str):
+        """Sweep twins with optional arm-gap and ground-plate clearance requirements."""
+        declared = [(1, ["@arm-a", "@arm-b"], between), (2, ["TST-0201", "@arm-a"], plate)]
+        return self.twins_sweep(GAP_YAML, [clearance_interface(n, pair, minimum) for n, pair, minimum in declared
+                                           if minimum is not None], *options)
+
+    def test_a_pair_requirement_above_the_gap_fails_and_one_below_it_passes(self) -> None:
+        proc, result, rows = self.gap_sweep(1.0, 1.0)
+        self.assertEqual(proc.returncode, 1, proc.stderr[-2000:])
+        self.assertEqual((result["status"], result["collisions"], result["clearance_findings"]), ("fail", [], []))
+        self.assertEqual(result["pairs"]["excluded_adjacent"], [["TST-0201", "@arm-a"], ["TST-0201", "@arm-b"]])
+        for pair, (angle, index) in ((("@arm-a", "@arm-b"), (0.0, 2)), (("TST-0201", "@arm-a"), (-10.0, 0))):
+            with self.subTest(pair=pair):
+                row = rows[pair]
+                self.assertEqual((row["status"], row["required_mm"], row["clearance_mm"], row["samples_below"]),
+                                 ("fail", 1.0, 0.8, 3))
+                self.assertEqual((row["independent_pose"], row["pose"]), ({"J-001": angle},) * 2)
+                self.assertEqual(row["sample"], {"index": index, "source": "sweep:J-001"})
+        self.assertEqual((rows[("@arm-a", "@arm-b")]["interface"], rows[("@arm-a", "@arm-b")]["source"]),
+                         ("IF-001", "interfaces.yaml#/interfaces/0"))
+        proc, result, rows = self.gap_sweep(0.5, 0.5)
+        self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+        self.assertEqual(result["status"], "pass")
+        self.assertEqual({pair: (row["status"], row["clearance_mm"], row["samples_below"]) for pair, row in rows.items()},
+                         {("@arm-a", "@arm-b"): ("pass", 0.8, 0), ("TST-0201", "@arm-a"): ("pass", 0.8, 0)})
+
+    def test_a_pair_clearance_option_overrides_the_record_or_adds_a_requirement(self) -> None:
+        proc, _, rows = self.gap_sweep(0.5, None, "--pair-clearance", "@arm-a:@arm-b=1.0",
+                                       "--pair-clearance", "TST-0201:@arm-a=0.75")
+        self.assertEqual(proc.returncode, 1, proc.stderr[-2000:])
+        between, plate = rows[("@arm-a", "@arm-b")], rows[("TST-0201", "@arm-a")]
+        self.assertEqual((between["status"], between["required_mm"], between["clearance_mm"]), ("fail", 1.0, 0.8))
+        self.assertEqual((between["source"], between["overrides"]),
+                         ("--pair-clearance @arm-a:@arm-b=1.0", "interfaces.yaml#/interfaces/0"))
+        self.assertEqual((plate["status"], plate["required_mm"], plate["source"]),
+                         ("pass", 0.75, "--pair-clearance TST-0201:@arm-a=0.75"))
+        self.assertNotIn("overrides", plate)
+
+    def test_an_unresolved_requirement_reference_is_a_usage_error(self) -> None:
+        proc, result, _ = self.gap_sweep(0.5, None, "--pair-clearance", "@arm-a:@arm-z=1.0")
+        self.assertEqual((proc.returncode, result), (2, {}), proc.stderr[-2000:])
+        self.assertIn("--pair-clearance @arm-a:@arm-z=1.0", proc.stderr)
+        self.assertIn("@arm-z", proc.stderr)
+
+    def test_a_fitted_pair_inherits_no_min_clearance_but_keeps_its_own_requirement(self) -> None:
+        proc, result, _ = self.twins_sweep(TOUCH_YAML, [], "--min-clearance", "0.5")
+        self.assertEqual(proc.returncode, 1, proc.stderr[-2000:])
+        self.assertEqual([(f["pair"], f["clearance_mm"]) for f in result["clearance_findings"]],
+                         [(["@arm-a", "@arm-b"], 0.0)])
+        proc, result, _ = self.twins_sweep(TOUCH_YAML, [HEAT_SET], "--min-clearance", "0.5")
+        self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+        self.assertEqual((result["status"], result["clearance_findings"], result["collisions"]), ("pass", [], []))
+        self.assertEqual((result["pairs"]["checked"], result["pairs"]["declared_fit"]),
+                         ([["@arm-a", "@arm-b"]], [["@arm-a", "@arm-b"]]))
+        self.assertEqual(result["min_clearance"][0]["clearance_mm"], 0.0)
+        proc, result, rows = self.twins_sweep(TOUCH_YAML, [HEAT_SET, clearance_interface(2, ["@arm-a", "@arm-b"], 0.5)],
+                                              "--min-clearance", "0.5")
+        self.assertEqual(proc.returncode, 1, proc.stderr[-2000:])
+        self.assertEqual(result["clearance_findings"], [])
+        row = rows[("@arm-a", "@arm-b")]
+        self.assertEqual((row["status"], row["required_mm"], row["clearance_mm"], row["independent_pose"]),
+                         ("fail", 0.5, 0.0, {"J-001": 0.0}))
+
+    def test_the_minimum_clearance_worst_case_follows_the_tightest_requirement(self) -> None:
+        proc, result, _ = self.gap_sweep(None, None, "--worst-criterion", "minimum_clearance")
+        self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+        worst = result["worst_case"]
+        self.assertEqual((worst["pair"], worst["independent_pose"], worst["clearance_mm"], worst["required_mm"],
+                          worst["requirement"], worst["margin_mm"]),
+                         (["@arm-a", "@arm-b"], {"J-001": 0.0}, 0.8, 0.0, "--min-clearance", 0.8))
+
+    def test_an_incomplete_sweep_does_not_publish_a_version_bundle(self) -> None:
+        hw, _ = self.sealed_planar_version()
+        args = ("--hw", str(hw), "--version", "v1", "--case", "incomplete", "--steps", "5", "--grid", "0",
+                "--time-limit", "0")
+        proc, result = self.run_script("sweep.py", *args)
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("sweep incomplete", proc.stderr)
+        self.assertFalse((hw / "motion" / "v1" / "incomplete").exists())
+
+    def test_pose_refuses_a_dependent_joint(self) -> None:
+        out = self.root / "v6-dependent.step"
+        proc, _ = self.run_script("pose.py", "--hw", str(self.v6_hw(None)), "--parts-dir", str(self.v6),
+                                  "--set", "J-013=-1", "--out", str(out))
+        self.assertEqual(proc.returncode, 2, proc.stderr[-2000:])
+        self.assertIn("J-013 follows J-001 (slider_crank cylinder-3 displacement) and cannot be set", proc.stderr)
+        self.assertFalse(out.exists())
+
+    def test_pose_does_not_overwrite_an_existing_scratch_output(self) -> None:
+        hw = self.hw(90)
+        output = hw.parent / ".cad-work" / "motion-tests" / "posed.step"
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_bytes(b"original")
+        proc, _ = self.run_script("pose.py", "--hw", str(hw), "--parts-dir", str(self.planar),
+                                  "--set", "J-001=30", "--out", str(output), adapt_outputs=False)
+        self.assertEqual(proc.returncode, 2)
+        self.assertEqual(output.read_bytes(), b"original")
+
+    def test_a_part_buried_in_a_solid_or_a_compound_part_is_a_collision(self) -> None:
+        hw = Path(tempfile.mkdtemp(dir=self.root))
+        (hw / "assembly.yaml").write_text(NEST_YAML, encoding="utf-8")
+        for container in ("solid", "compound"):
+            with self.subTest(container=container):
+                parts = self.root / "fx" / "nest" / container
+                proc, result = self.run_script("sweep.py", "--hw", str(hw), "--parts-dir", str(parts), "--steps", "3",
+                                               "--grid", "0", "--include-pair", "TST-0301:TST-0302",
+                                               "--worst-step", str(hw / "worst.step"))
+                self.assertEqual(proc.returncode, 1, proc.stderr[-2000:])
+                self.assertEqual(result["collision_pose_count"], 3, result["collisions"])
+                for collision in result["collisions"]:
+                    self.assertEqual([hit["pair"] for hit in collision["pairs"]], [["TST-0301", "TST-0302"]])
+                    self.assertAlmostEqual(collision["pairs"][0]["volume_mm3"], 8.0, places=3)
+                self.assertEqual([row["clearance_mm"] for row in result["min_clearance"]], [0.0])
+
+    def test_clear_range_has_positive_clearance_and_no_collision(self) -> None:
+        worst = self.root / "w2.step"
+        proc, result = self.run_script("sweep.py", "--hw", str(self.hw(90)), "--parts-dir", str(self.planar),
+                                       "--steps", "5", "--grid", "3", "--worst-step", str(worst))
+        self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+        self.assertEqual((result["status"], result["collisions"]), ("pass", []))
+        self.assertTrue(all(item["clearance_mm"] > 0 for item in result["min_clearance"]), result["min_clearance"])
+        self.assertEqual(result["reach_envelope"]["part"], "TST-0003")
+        self.assertEqual(result["worst_case"]["criterion"], "max_horizontal_reach")
+        self.assertIn("AP242_MANAGED_MODEL_BASED_3D_ENGINEERING", worst.read_text(encoding="utf-8")[:2000])
+
+    def test_assembly_step_input_poses_the_lamp_arm(self) -> None:
+        out = self.root / "lamp-posed.step"
+        hw = shutil.copytree(TEMPLATE_HW, Path(tempfile.mkdtemp(dir=self.root)) / "hw")  # scratch lands beside it
+        proc, result = self.run_script("pose.py", "--hw", str(hw), "--step", str(self.lamp / "lamp-arm.step"),
                                        "--set", "J-002=-90", "--out", str(out))
         self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
         self.assertEqual(sorted(result["placements"]),
@@ -935,35 +1206,113 @@ class StepTests(unittest.TestCase):
         (hw / "versions" / "latest.json").write_text(json.dumps({"label": "v1", "parts": {}}), encoding="utf-8")
         return hw
 
-    def test_a_cad_model_assembly_step_posed_at_nominal_is_refused(self) -> None:
-        hw = self.cad_model_version()
-        proc, result = self.run_script("sweep.py", "--hw", str(hw), "--step", str(hw / "versions" / "v1" / "assembly.step"),
-                                       "--steps", "5", "--grid", "0", "--worst-step", str(self.root / "w3.step"))
-        self.assertEqual((proc.returncode, result), (2, {}), proc.stderr[-2000:])
-        self.assertIn("--version v1", proc.stderr)
+    def sealed_planar_version(self) -> tuple[Path, Path]:
+        """A verified v1 version with the canonical record snapshot and zero-pose definitions."""
+        import hashlib
+
+        hw = self.hw(90)
+        version = hw / "versions" / "v1"
+        shutil.copytree(self.planar, version / "parts")
+        record = version / "record"
+        record.mkdir(parents=True)
+        (record / "product.yaml").write_text("id: planar-test\n", encoding="utf-8")
+        (record / "assembly.yaml").write_text(PLANAR_YAML.format(j2_max=90), encoding="utf-8")
+        (record / "interfaces.yaml").write_text("interfaces: []\n", encoding="utf-8")
+        parts = record / "parts"
+        for pn, title in (("TST-0001", "Ground link"), ("TST-0002", "Middle link"), ("TST-0003", "Tip link")):
+            (parts / pn).mkdir(parents=True)
+            (parts / pn / "part.yaml").write_text(f"PN: {pn}\ntitle: {title}\nmodel_frame: assembly_zero\n",
+                                                   encoding="utf-8")
+        files = {path.relative_to(version).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+                 for path in sorted(version.rglob("*")) if path.is_file()}
+        (version / "manifest.json").write_text(json.dumps({"label": "v1", "files": files}), encoding="utf-8")
+        (hw / "versions" / "latest.json").write_text(json.dumps({"label": "v1"}), encoding="utf-8")
+        return hw, version
+
+    def test_versioned_sweep_reuses_and_replaces_without_changing_old_bundle(self) -> None:
+        hw, version = self.sealed_planar_version()
+        common = ("--hw", str(hw), "--version", "v1", "--case", "sweep-test", "--steps", "3", "--grid", "0")
+        first, published = self.run_script("sweep.py", *common)
+        self.assertEqual(first.returncode, 0, first.stderr[-2000:])
+        bundle = hw / "motion" / "v1" / "sweep-test"
+        self.assertEqual(published["bundle"], str(bundle))
+        before = {path.relative_to(bundle).as_posix(): path.read_bytes() for path in bundle.rglob("*") if path.is_file()}
+        second, reused = self.run_script("sweep.py", *common)
+        self.assertEqual(second.returncode, 0, second.stderr[-2000:])
+        self.assertTrue(reused["reused"])
+        conflict, _ = self.run_script("sweep.py", *common, "--steps", "5")
+        self.assertEqual(conflict.returncode, 2)
+        self.assertIn("--replace", conflict.stderr)
+        replaced, summary = self.run_script("sweep.py", *common, "--steps", "5", "--replace")
+        self.assertEqual(replaced.returncode, 0, replaced.stderr[-2000:])
+        replaced_files = {path.relative_to(bundle).as_posix(): path.read_bytes() for path in bundle.rglob("*")
+                          if path.is_file()}
+        self.assertNotEqual(before["manifest.json"], replaced_files["manifest.json"])
+        manifest = json.loads(replaced_files["manifest.json"])
+        self.assertTrue(manifest["replaces"]["moved_to"].startswith(".cad-work/replaced/"))
+        old = hw.parent / manifest["replaces"]["moved_to"]
+        old_files = {path.relative_to(old).as_posix(): path.read_bytes() for path in old.rglob("*") if path.is_file()}
+        self.assertEqual(old_files, before)
+        layout_path = Path(__file__).resolve().parents[2] / "cad-record" / "scripts" / "layout.py"
+        spec = importlib.util.spec_from_file_location("cad_record_layout", layout_path)
+        self.assertIsNotNone(spec)
+        layout = sys.modules.get("cad_record_layout")
+        if layout is None:
+            layout = importlib.util.module_from_spec(spec)
+            sys.modules["cad_record_layout"] = layout
+            spec.loader.exec_module(layout)
+        self.assertEqual(layout.verify(bundle), [])
+        self.assertEqual(summary["status"], "pass")
+
+    def test_versioned_pose_publishes_and_reuses_bundle(self) -> None:
+        hw, _ = self.sealed_planar_version()
+        common = ("--hw", str(hw), "--version", "v1", "--case", "TST-0001", "--set", "J-001=30")
+        first, published = self.run_script("pose.py", *common)
+        self.assertEqual(first.returncode, 0, first.stderr[-2000:])
+        self.assertEqual((hw / "motion" / "v1" / "TST-0001" / "pose.step").is_file(), True)
+        second, reused = self.run_script("pose.py", *common)
+        self.assertEqual(second.returncode, 0, second.stderr[-2000:])
+        self.assertTrue(reused["reused"])
+        self.assertEqual(published["bundle"], reused["bundle"])
+
+    def test_explicit_motion_outputs_outside_cad_work_are_refused(self) -> None:
+        hw = self.hw(90)
+        outside = self.root / "outside.step"
+        pose_run, _ = self.run_script("pose.py", "--hw", str(hw), "--parts-dir", str(self.planar),
+                                      "--set", "J-001=30", "--out", str(outside), adapt_outputs=False)
+        self.assertEqual(pose_run.returncode, 2)
+        self.assertFalse(outside.exists())
+        sweep_run, _ = self.run_script("sweep.py", "--hw", str(hw), "--parts-dir", str(self.planar),
+                                       "--steps", "3", "--grid", "0", "--worst-step", str(outside),
+                                       adapt_outputs=False)
+        self.assertEqual(sweep_run.returncode, 2)
+        self.assertFalse(outside.exists())
 
     def test_a_version_sweeps_like_its_parts_dir(self) -> None:
-        hw = self.cad_model_version()
+        hw, _ = self.sealed_planar_version()
         common = ("--hw", str(hw), "--steps", "5", "--grid", "3")
-        runs = [self.run_script("sweep.py", *common, *source, "--worst-step", str(self.root / f"w-{n}.step"))
-                for n, source in enumerate((("--version", "v1"), ("--parts-dir", str(hw / "versions" / "v1" / "parts"))))]
-        (by_version, a), (by_dir, b) = runs
-        self.assertEqual((by_version.returncode, by_dir.returncode), (0, 0), by_version.stderr[-2000:] + by_dir.stderr[-2000:])
+        by_version, a = self.run_script("sweep.py", *common, "--version", "v1", "--case", "version-test")
+        by_dir, b = self.run_script("sweep.py", *common, "--parts-dir", str(hw / "versions" / "v1" / "parts"),
+                                    "--worst-step", str(self.root / "version-parts.step"))
+        self.assertEqual((by_version.returncode, by_dir.returncode), (0, 0),
+                         by_version.stderr[-2000:] + by_dir.stderr[-2000:])
         for key in ("status", "poses", "pairs", "collisions", "min_clearance", "reach_envelope"):
             self.assertEqual(a[key], b[key], key)
-        self.assertEqual((a["worst_case"]["pose"], a["worst_case"]["reach_mm"]), (b["worst_case"]["pose"], b["worst_case"]["reach_mm"]))
+        self.assertEqual((a["worst_case"]["pose"], a["worst_case"]["reach_mm"]),
+                         (b["worst_case"]["pose"], b["worst_case"]["reach_mm"]))
         self.assertIn("--version v1", a["worst_case"]["command"])
 
     def test_latest_resolves_through_latest_json_and_an_unbuilt_version_is_refused(self) -> None:
-        hw = self.cad_model_version()
-        posed = [self.run_script("pose.py", "--hw", str(hw), *source, "--set", "J-002=90", "--out", str(self.root / f"l-{n}.step"))
-                 for n, source in enumerate((("--version", "latest"), ("--parts-dir", str(self.planar))))]
-        (latest, a), (by_dir, b) = posed
+        hw, _ = self.sealed_planar_version()
+        latest, latest_result = self.run_script("pose.py", "--hw", str(hw), "--version", "latest",
+                                                "--set", "J-002=90", "--case", "latest-pose")
+        by_dir, dir_result = self.run_script("pose.py", "--hw", str(hw), "--parts-dir", str(self.planar),
+                                             "--set", "J-002=90", "--out", str(self.root / "latest-scratch.step"))
         self.assertEqual((latest.returncode, by_dir.returncode), (0, 0), latest.stderr[-2000:])
-        self.assertEqual(a["placements"], b["placements"])
-        proc, _ = self.run_script("pose.py", "--hw", str(hw), "--version", "v2", "--out", str(self.root / "v2.step"))
+        self.assertEqual(latest_result["placements"], dir_result["placements"])
+        proc, _ = self.run_script("pose.py", "--hw", str(hw), "--version", "v2", "--case", "unbuilt")
         self.assertEqual(proc.returncode, 2)
-        self.assertIn("not a built cad-model version", proc.stderr)
+        self.assertIn("not a built version", proc.stderr)
 
     def v6_hw(self, misphased: int | None) -> Path:
         """A record over the v6 fixture: v6_record.record(misphased) and part records with their frames."""
@@ -1036,8 +1385,8 @@ class StepTests(unittest.TestCase):
         self.assertAlmostEqual(worst["volume_mm3"], 18.0, places=3)  # 2 mm deep into the crown, 3 x 3 mm head
         self.assertEqual(worst["pose"]["J-043"], 3.0)
         self.assertAlmostEqual(worst["pose"]["J-013"], 0.0, places=6)
-        self.assertTrue(worst["command"].endswith(f"--set J-001=240.0 --out {hw / 'worst.step'}"), worst["command"])
-        self.assertEqual(worst["command"].count("--set"), 1)  # independent settings only
+        self.assertIn("/.cad-work/test-output/", worst["command"])
+        self.assertEqual(worst["command"].count("--set"), 1)
 
         # Valve 3 breaks its 1 mm requirement wherever lift + displacement > 0, the 11 samples around
         # its TDC; deepest, 18 mm^3 at crank 240, where 0 mm ties the other overlaps. At crank 600, its
@@ -1125,23 +1474,23 @@ class StepTests(unittest.TestCase):
         self.assertIn("J-013 follows J-001 (slider_crank cylinder-3 displacement) and cannot be set", proc.stderr)
         self.assertFalse(out.exists())
 
-    def test_an_incomplete_sweep_after_a_complete_one_leaves_no_worst_artifact(self) -> None:
-        worst = self.root / "w-stale.step"
-        evidence = worst.with_name("w-stale.step.json")
-        common = ("--hw", str(self.hw(90)), "--parts-dir", str(self.planar), "--steps", "5", "--grid", "0",
-                  "--worst-step", str(worst))
-        proc, result = self.run_script("sweep.py", *common)
-        self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
-        recorded = json.loads(evidence.read_text(encoding="utf-8"))
-        self.assertEqual(recorded["step"]["sha256"], hashlib.sha256(worst.read_bytes()).hexdigest())
-        self.assertEqual(recorded["independent_pose"], recorded["pose"])  # no couplings: every joint is set
-        self.assertEqual(result["worst_case"]["command"].count("--set"), 2)
-        for jobs in ("1", "2"):
-            with self.subTest(jobs=jobs):
-                proc, result = self.run_script("sweep.py", *common, "--time-limit", "0", "--jobs", jobs)
-                self.assertEqual(proc.returncode, 2, proc.stderr[-2000:])
-                self.assertEqual((result["status"], result["worst_case"]), ("incomplete", None))
-                self.assertFalse(worst.exists() or evidence.exists())
+    def test_scratch_outputs_cannot_be_overwritten(self) -> None:
+        hw = self.hw(90)
+        outside = self.root / "w-stale.step"
+        outside.write_bytes(b"original")
+        proc, _ = self.run_script("sweep.py", "--hw", str(hw), "--parts-dir", str(self.planar),
+                                  "--steps", "5", "--grid", "0", "--worst-step", str(outside),
+                                  adapt_outputs=False)
+        self.assertEqual(proc.returncode, 2)
+        self.assertEqual(outside.read_bytes(), b"original")
+        scratch = hw.parent / ".cad-work" / "motion-tests" / "w-stale.step"
+        scratch.parent.mkdir(parents=True, exist_ok=True)
+        scratch.write_bytes(b"original")
+        proc, _ = self.run_script("sweep.py", "--hw", str(hw), "--parts-dir", str(self.planar),
+                                  "--steps", "5", "--grid", "0", "--worst-step", str(scratch),
+                                  adapt_outputs=False)
+        self.assertEqual(proc.returncode, 2)
+        self.assertEqual(scratch.read_bytes(), b"original")
 
     @unittest.skipUnless(freecad_assembly.find_freecad(None), "freecadcmd not found")
     def test_freecad_simulation_moves_within_limits(self) -> None:
