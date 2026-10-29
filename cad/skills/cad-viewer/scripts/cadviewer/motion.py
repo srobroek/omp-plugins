@@ -1,7 +1,8 @@
 """Joint animation and section planes from cad-motion's kinematic chain; kernel-free.
 
 cad-motion owns the joint record and its limits: `pose.py` is loaded as a module and its
-`Chain` validates values and computes part transforms. OCP is never imported here.
+`Chain` validates values and computes part transforms; `plan.py` expands a motion plan case
+into frames through the same Chain. OCP is never imported here.
 """
 
 from __future__ import annotations
@@ -17,21 +18,33 @@ from typing import Any
 from . import LimitError, ViewerError
 
 POSE_PATH = Path(__file__).resolve().parents[3] / "cad-motion" / "scripts" / "pose.py"
+PLAN_PATH = POSE_PATH.with_name("plan.py")
 MODULE_NAME = "cad_motion_pose"
+PLAN_MODULE_NAME = "cad_motion_plan"
 IDENTITY_EPS = 1e-9
+
+
+def _module(name: str, path: Path) -> ModuleType:
+    """A cad-motion module, loaded once per process."""
+    if name in sys.modules:
+        return sys.modules[name]
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise ViewerError(f"cannot load {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def pose_module() -> ModuleType:
     """cad-motion's pose.py, loaded once per process."""
-    if MODULE_NAME in sys.modules:
-        return sys.modules[MODULE_NAME]
-    spec = importlib.util.spec_from_file_location(MODULE_NAME, POSE_PATH)
-    if spec is None or spec.loader is None:
-        raise ViewerError(f"cannot load {POSE_PATH}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[MODULE_NAME] = module
-    spec.loader.exec_module(module)
-    return module
+    return _module(MODULE_NAME, POSE_PATH)
+
+
+def plan_module() -> ModuleType:
+    """cad-motion's plan.py (motion plans and their frames), loaded once per process."""
+    return _module(PLAN_MODULE_NAME, PLAN_PATH)
 
 
 def load_chain(hw: Path) -> Any:
@@ -71,6 +84,52 @@ class AnimationPlan:
     def value_at(self, fraction: float) -> float:
         return self.start + (self.end - self.start) * fraction
 
+    def summary(self, at: float | None) -> dict[str, Any]:
+        """What the host reports for this animation, held at fraction `at` when given."""
+        return {"joint": self.joint, "unit": self.unit, "from": self.start, "to": self.end,
+                "value_at": None if at is None else self.value_at(at)}
+
+
+@dataclass(frozen=True)
+class CaseAnimation:
+    """A motion plan case played as one clip: every independent joint the plan moves drives its parts."""
+
+    case: str
+    fps: int
+    segments: tuple[str, ...]
+    drivers: tuple[str, ...]
+    coverage: str
+    settings: tuple[dict[str, float], ...]
+    times: tuple[float, ...]
+    tracks: tuple[Track, ...]
+
+    def summary(self, at: float | None) -> dict[str, Any]:
+        """What the host reports for this animation; `at` names the nearest frame's joint settings."""
+        frame = None if at is None else round(at * (len(self.times) - 1))
+        return {"case": self.case, "fps": self.fps, "segments": list(self.segments), "drivers": list(self.drivers),
+                "coverage": self.coverage, "frame_at": frame,
+                "settings_at": None if frame is None else self.settings[frame]}
+
+
+def _tracks(chain: Any, shown: dict[str, Any], poses: list[dict[str, float]]) -> tuple[Track, ...]:
+    """Per moving occurrence, the keys that compose onto its shown placement: position + t and
+    quaternion * q, so t = t_pose - t_shown and q = R_shown^-1 R_pose."""
+    missing = [chain.ref(oid) for oid in chain.ids if oid not in shown]
+    if missing:
+        raise ViewerError(f"parts in assembly.yaml but not in the version: {missing}")
+    rows: dict[str, list[tuple[tuple[float, ...], tuple[float, ...]]]] = {oid: [] for oid in chain.ids}
+    for complete in poses:
+        transforms = chain.transforms(complete)
+        for oid in chain.ids:
+            target, base = transforms[oid], shown[oid]
+            turn = (base.inverse() @ target).quaternion()  # quaternion_shown * q = rotation_pose
+            rows[oid].append((tuple(target.trans[i] - base.trans[i] for i in range(3)), tuple(turn)))
+    return tuple(
+        Track(oid, tuple(t for t, _ in keys), tuple(q for _, q in keys))
+        for oid, keys in rows.items()
+        if any(max(abs(c) for c in t) > IDENTITY_EPS or abs(abs(q[3]) - 1.0) > IDENTITY_EPS for t, q in keys)
+    )
+
 
 def plan_animation(chain: Any, shown: dict[str, Any], joint_id: str, start: float, end: float,
                    steps: int = 13, seconds: float = 4.0) -> AnimationPlan:
@@ -109,23 +168,32 @@ def plan_animation(chain: Any, shown: dict[str, Any], joint_id: str, start: floa
     findings = [f for complete in poses for f in chain.limit_findings(complete)]
     if findings:
         raise LimitError("; ".join(dict.fromkeys(f["message"] for f in findings)), findings)
-    missing = [chain.ref(oid) for oid in chain.ids if oid not in shown]
-    if missing:
-        raise ViewerError(f"parts in assembly.yaml but not in the version: {missing}")
     times = tuple(seconds * i / (steps - 1) for i in range(steps))
-    rows: dict[str, list[tuple[tuple[float, ...], tuple[float, ...]]]] = {oid: [] for oid in chain.ids}
-    for complete in poses:
-        transforms = chain.transforms(complete)
-        for oid in chain.ids:
-            target, base = transforms[oid], shown[oid]
-            turn = (base.inverse() @ target).quaternion()  # quaternion_shown * q = rotation_pose
-            rows[oid].append((tuple(target.trans[i] - base.trans[i] for i in range(3)), tuple(turn)))
-    tracks = tuple(
-        Track(oid, tuple(t for t, _ in keys), tuple(q for _, q in keys))
-        for oid, keys in rows.items()
-        if any(max(abs(c) for c in t) > IDENTITY_EPS or abs(abs(q[3]) - 1.0) > IDENTITY_EPS for t, q in keys)
-    )
-    return AnimationPlan(joint_id, joint.unit, start, end, values, times, tracks)
+    return AnimationPlan(joint_id, joint.unit, start, end, values, times, _tracks(chain, shown, poses))
+
+
+def plan_case_animation(chain: Any, shown: dict[str, Any], hw: Path, case: str) -> CaseAnimation:
+    """The frames of motion plan `case` (plan.py: `default`, generated, or hw/motion/cases/<case>/plan.yaml)
+    as tracks, one key per frame at the plan's fps. Every independent joint the plan moves drives its
+    parts and every coupled joint follows. Raises LimitError when a frame puts a joint outside its limits;
+    a coverage gap still plays and is reported in `coverage`."""
+    plan = plan_module()
+    try:
+        effective = plan.load(chain, hw, pose_module().LAYOUT, case)
+    except plan.PlanError as error:
+        raise ViewerError(f"motion plan {case}: {error}") from error
+    except pose_module().LAYOUT.LayoutError as error:
+        raise ViewerError(str(error)) from error
+    frames = plan.expand(chain, effective)
+    report = plan.coverage(chain, effective, frames)
+    if report["limit_findings"]:
+        raise LimitError("; ".join(dict.fromkeys(f["message"] for f in report["limit_findings"])),
+                         report["limit_findings"])
+    tracks = _tracks(chain, shown, [frame.values for frame in frames])
+    drivers = tuple(row["joint"] for row in report["independent"] if row["segments"])
+    return CaseAnimation(effective["case"], effective["fps"], tuple(s["id"] for s in effective["segments"]), drivers,
+                         report["status"], tuple(dict(frame.settings) for frame in frames),
+                         tuple(frame.index / effective["fps"] for frame in frames), tracks)
 
 
 def section_plane(chain: Any, shown: dict[str, Any], joint_id: str) -> dict[str, Any]:
