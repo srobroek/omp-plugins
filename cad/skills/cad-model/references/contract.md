@@ -10,7 +10,9 @@
 | `drawing_features(params, shape)` | no | returns semantic feature locators for drawings; see below |
 | `build_manufacture(params)` | only with a declared state | returns the part in its manufacturing state, such as a bent strap's flat blank; see below |
 
-- `build` receives a private copy of `PARAMS`; the manifest records the values it received.
+`build` receives a private copy of `PARAMS`; the manifest records the declared values. A model that
+sets `REQUIRES_OSIFONT = True` additionally receives the resolved, verified `font_path` at build
+time; runner context is not persisted as a design parameter.
 - Accepted return values: CadQuery `Shape` or `Workplane` (every stack object; several become one
   compound), build123d `Shape`/`Part`/`Compound` or a `BuildPart` builder (`.part`).
 - Geometry is in the part's `model_frame` (part.yaml). `assembly_zero`, the default, is assembly
@@ -27,6 +29,33 @@
   and is not in the CadQuery environment.
 - `print` output and OCCT console messages are runner console output; the runner returns its result
   in a file the orchestrator names, so console output never corrupts it.
+
+### Text fonts
+
+Text geometry MUST use an explicit font file path. Opt in to the runner's verified FreeCAD TechDraw
+Osifont with `REQUIRES_OSIFONT = True`. The runner adds the resolved `font_path` to the private
+`build(params)` copy. It remains execution context and is excluded from the version manifest.
+
+Pass `font_path` to build123d or `fontPath` to CadQuery. Never choose only a family name. If FreeCAD
+or the pinned font bytes are unavailable, the runner fails the part. It never allows OCCT to use a
+host-default font. This hard failure prevents publishing geometry with unrepeatable text.
+
+The model source parser refuses `text()` and `Text()` calls without an explicit font file path.
+Any explicit font file is permitted. To use the shared TechDraw font, models set
+`REQUIRES_OSIFONT = True` and pass the injected `font_path` value.
+
+FreeCAD 1.1.4 bundles the same 114,764-byte `osifont-lgpl3fe.ttf` on macOS and Linux. Its SHA-256 is
+`f681b2419818198a8421b9db01602862367dbc3338c0e8e963fda73f545262b8`. `osifont.license` offers
+LGPL v3 with the GPL font exception, among its alternatives.
+
+Candidate inventory: the pinned CadQuery/OCP environment includes Matplotlib 3.11.2 and DejaVuSans
+(756,072 bytes, SHA-256 `3fdf69cabf06049ea70a00b5919340e2ce1e6d02b0cc3c4b44fb6801bd1e0d22`) on both
+hosts. Its Bitstream Vera / Arev license permits redistribution when notices are included. The
+build123d 0.13.0 environment includes ReliefSingleLineCAD (53,496 bytes, SHA-256
+`8b30ea7ea8a2b17fb9d5c70b5c7c37e6a9285b4f8aced4fbd646bc591dba59b3`), licensed under OFL-1.1.
+Neither option was selected: these are not the established drawing lettering face, and Osifont is
+available byte-identically through FreeCAD on both systems. The independent matplotlib fonts are
+not shared by the build123d environment; ReliefSingleLineCAD is not shared by CadQuery.
 
 ## Drawing feature locators
 

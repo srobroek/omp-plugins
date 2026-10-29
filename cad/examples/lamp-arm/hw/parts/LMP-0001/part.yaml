@@ -55,7 +55,7 @@ drawing:
   notes:
     - {kind: process, text: "FDM, printed boss-up with datum face A on the build plate."}
     - {kind: finish, text: "As printed, burrs and stringing removed; the bushing seat is drilled or reamed to its limits after printing."}
-    - {kind: general, text: "Engrave the text LMP in Arial Bold, centred on the stated position.", reference: engraving}
+    - {kind: general, text: "Engrave the text LMP in FreeCAD TechDraw Osifont Bold, centred on the stated position.", reference: engraving}
     - {kind: inspection, text: "Heat-set the LMP-0008 bushing flush with the boss top after drilling (DR-004)."}
   manufacturing:
     build_direction: {normal_to: A, toward: boss_top}

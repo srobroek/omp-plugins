@@ -24,6 +24,8 @@ from OCP.BRepAdaptor import BRepAdaptor_Surface
 from OCP.GeomAPI import GeomAPI_ProjectPointOnSurf
 
 KERNEL = "cadquery"
+
+REQUIRES_OSIFONT = True
 PARAMS = {
     "radius": 80.0,
     "height": 16.0,
@@ -130,7 +132,7 @@ def build(params: dict) -> cq.Shape:
     if p["engraving"]:
         text = (
             cq.Workplane("XY").workplane(offset=h).center(*p["text_at"])
-            .text(p["engraving"], p["text_size"], -p["text_depth"], combine=False, font="Arial", kind="bold")
+            .text(p["engraving"], p["text_size"], -p["text_depth"], combine=False, fontPath=p["font_path"], kind="bold")
         )
         body = safe_cut(body, text)
     return body.val()
