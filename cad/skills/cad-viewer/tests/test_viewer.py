@@ -87,6 +87,9 @@ def make_version(hw: Path, label: str, products: dict[str, str] | None = None, l
     shutil.copytree(hw / "parts", folder / "record" / "parts")
     (folder / "assembly.step").write_text("STEP", encoding="utf-8")
     (folder / "assembly.glb").write_text("GLB", encoding="utf-8")
+    (folder / "parts").mkdir()
+    for pn in PNS:
+        (folder / "parts" / f"{pn}.step").write_text("STEP", encoding="utf-8")
     nodes = {oid: i for i, oid in enumerate(chain.ids, start=1)}
     (folder / "part-map.json").write_text(json.dumps({"schema_version": 2, "glb": "assembly.glb", "parts": {
         pn: {"product": name, "node_indices": [nodes[o] for o in chain.ids if chain.pn(o) == pn]}
@@ -783,9 +786,10 @@ class VersionList(Fixture):
         updated = {**data, "created_utc": "2026-10-28T09:15:00Z"}
         version_manifest.write_text(json.dumps(updated), encoding="utf-8")
         (self.hw / "versions" / "v3").mkdir()
+        (self.hw / "versions" / "v3" / "manifest.json").write_text(json.dumps({"schema_version": 2, "label": "v3", "files": {}}))
         (self.hw / "versions" / ".v11-partial").mkdir()
         listed = record.version_list(self.hw)
-        self.assertEqual([entry["label"] for entry in listed], ["v10", "v2", "v1"])
+        self.assertEqual([entry["label"] for entry in listed], ["v10", "v3", "v2", "v1"])
         v2 = next(entry for entry in listed if entry["label"] == "v2")
         self.assertEqual(v2["built_utc"], "2026-10-28T09:15:00Z")
         self.assertEqual(v2["parts"], len(data["occurrences"]))
