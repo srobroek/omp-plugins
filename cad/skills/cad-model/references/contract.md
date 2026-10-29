@@ -45,8 +45,9 @@ Any explicit font file is permitted. To use the shared TechDraw font, models set
 `REQUIRES_OSIFONT = True` and pass the injected `font_path` value.
 
 FreeCAD 1.1.4 bundles the same 114,764-byte `osifont-lgpl3fe.ttf` on macOS and Linux. Its SHA-256 is
-`f681b2419818198a8421b9db01602862367dbc3338c0e8e963fda73f545262b8`. `osifont.license` offers
-LGPL v3 with the GPL font exception, among its alternatives.
+`f681b2419818198a8421b9db01602862367dbc3338c0e8e963fda73f545262b8`. The accompanying license file
+offers three alternatives: GPL v3 with the font exception, GPL v2 with the font exception, or LGPL
+v3 with the font exception.
 
 Candidate inventory: the pinned CadQuery/OCP environment includes Matplotlib 3.11.2 and DejaVuSans
 (756,072 bytes, SHA-256 `3fdf69cabf06049ea70a00b5919340e2ce1e6d02b0cc3c4b44fb6801bd1e0d22`) on both
@@ -156,9 +157,14 @@ part. cad-design's `build_reference.py` builds its reference models through the 
 | `safe_fuse(shape, *others)` | max V(inputs) <= V <= sum V(inputs) |
 | `safe_intersect(shape, *others)` | 0 < V <= min V(inputs) |
 
-Also refused: an invalid, null, non-solid, or non-positive-volume input; a kernel error; an
-invalid or solid-free result; a result whose solid members overlap. Bounds allow 1e-7 relative
-(at least 1e-6 mm^3) of kernel noise. The result keeps the first argument's type: CadQuery
-`Shape` → cast `Shape`, `Workplane` → new `Workplane`, build123d `Part` → `Part`, other build123d
-shapes → cast shape. A refusal raises `SafeEditError`; `run` reports it per part with the
-`model.py` line and writes no version.
+Refusal conditions:
+
+- An input is invalid, null, non-solid, or has non-positive volume.
+- A kernel error occurs.
+- The result is invalid or has no solids.
+- The result's solid members overlap.
+
+Bounds allow 1e-7 relative kernel noise, or at least 1e-6 mm^3. The result keeps the first
+argument's type: CadQuery `Shape` → cast `Shape`, `Workplane` → new `Workplane`, build123d `Part` →
+`Part`, other build123d shapes → cast shape. A refusal raises `SafeEditError`. `run` reports it per
+part with the `model.py` line. It writes no version.

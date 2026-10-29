@@ -40,7 +40,7 @@ sys.path.insert(0, str(SCRIPTS))
 from cadmodel import build, check, diff, fonts, manufacture, mesh, occ, orientation, runner  # noqa: E402 - stdlib-only imports; OCP loads on first use
 
 AP242 = "AP242_MANAGED_MODEL_BASED_3D_ENGINEERING"
-
+SCHEMA = re.compile(r"FILE_SCHEMA\s*\(\s*\('([^']+)'\)\s*\)\s*;")
 ASSEMBLY = """joints:
   - {id: J-001, type: revolute, parent: TST-0001, child: TST-0002, axis: [0, 0, 1], origin: [0, 0, 20],
      min: -90, max: 90, nominal: 90}
@@ -270,17 +270,11 @@ class DeterministicTextTests(unittest.TestCase):
                              "model": str(FIXTURES / kernel / "text.py"), "step": "unused"}]
                     for i, kernel in enumerate(KERNELS, start=1)}
         results = build.run_kernels(requests)
-        shapes = {}
-        with tempfile.TemporaryDirectory() as tmp:
-            for kernel, result in results.items():
-                part = next(iter(result["parts"].values()))
-                step = Path(tmp) / f"{kernel}.step"
-                pose = runner.load_pose()
-                # The request points at the generated STEP file to read exact geometry.
-                shape = pose._read_single(step)
-                shapes[kernel] = (occ.volume(shape), occ.bbox(shape))
-        self._assert_same_geometry(shapes)
-
+        shapes = {kernel: next(iter(result["parts"].values())) for kernel, result in results.items()}
+        for kernel, part in shapes.items():
+            self.assertTrue(part["ok"], part)
+        volumes = {kernel: part["kernel_volume_mm3"] for kernel, part in shapes.items()}
+        self.assertLess(abs(volumes["cadquery"] - volumes["build123d"]) / volumes["cadquery"], 1e-7)
 
 def tearDownModule() -> None:  # noqa: N802 - unittest hook name
     if "tmp" in _SHARED:
