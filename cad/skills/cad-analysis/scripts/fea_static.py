@@ -528,9 +528,8 @@ def main(argv: list[str] | None = None) -> int:
                 case_relative = case_path.relative_to(Path(args.hw).resolve())
             except ValueError as exc:
                 raise CaseError("versioned FEA case YAML must be under hw/analysis/cases/<case-id>/") from exc
-            case_dir = LAYOUT.resolve(args.hw, "analysis.case", ID=case_id)
-            if case_path != case_dir / "case.yaml":
-                raise CaseError("versioned FEA case YAML must be hw/analysis/cases/<case-id>/case.yaml")
+            if len(case_relative.parts) < 4 or case_relative.parts[:3] != ("analysis", "cases", case_id):
+                raise CaseError("versioned FEA case YAML must be under hw/analysis/cases/<case-id>/")
             if case.get("part") and not (record_dir / "parts" / case["part"] / "part.yaml").is_file():
                 raise CaseError(f"version {version}: record snapshot is missing part {case['part']}")
             if case.get("part"):
@@ -542,17 +541,10 @@ def main(argv: list[str] | None = None) -> int:
                     raise CaseError(f"version part snapshot for {case['part']} must contain a mapping")
                 case["material"].setdefault("name", part_record.get("material", "Case material"))
             recipe_inputs = {**_input_hashes(case), **_snapshot_record_hashes(record_dir, case)}
-            for name in ("product.yaml", "interfaces.yaml", "assembly.yaml"):
-                snapshot = record_dir / name
-                if snapshot.is_file():
-                    document = yaml.safe_load(snapshot.read_text(encoding="utf-8"))
-                    if not isinstance(document, dict):
-                        raise CaseError(f"version record snapshot {snapshot} must contain a mapping")
-                    case["_version_" + name[:-5]] = document
             if args.out is not None:
                 raise CaseError("--out is only allowed for standalone scratch analyses")
             recipe = {
-                "inputs": {**_input_hashes(case), **_snapshot_record_hashes(record_dir, case)},
+                "inputs": recipe_inputs,
                 "case_yaml_sha256": hashlib.sha256(case_path.read_bytes()).hexdigest(),
                 "solver_versions": solver_versions(),
                 "options": _case_options(case),
