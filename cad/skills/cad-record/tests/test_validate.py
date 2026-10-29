@@ -486,6 +486,14 @@ class ValidateProject(unittest.TestCase):
         self.assertTrue(any(path == case and severity == "error" and "case `default` is reserved" in message
                             for path, severity, message in findings))
 
+    def test_a_joint_without_nominal_is_reported_beside_an_authored_motion_case(self) -> None:
+        self.edit_assembly(self.ELBOW, "    min: -120\n    max: 0\n")
+        self.author_motion_case("reach-out", "{J-002: -60}")
+        result, report = self.validate()
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+        self.assertTrue(any(item["message"].startswith("joints/1: ") for item in report["findings"]))
+
 
 if __name__ == "__main__":
     unittest.main()
