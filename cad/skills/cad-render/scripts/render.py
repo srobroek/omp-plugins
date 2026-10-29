@@ -6,27 +6,24 @@
 #     "pyyaml>=6.0",
 # ]
 # ///
-"""Render a cad-model version to product PNGs through the static three.js PBR page.
+"""Render verified cad-model versions to product PNG bundles via the static three.js PBR page.
 
 Usage:
-    uv run --script skill://cad-flow/scripts/run.py cad-render/scripts/render.py HW [--version latest|vN] [--views iso front side exploded closeup-REF part-REF ...]
-        [--size 1600x1200] [--jobs N] [--cache-dir DIR]
+    uv run --script skill://cad-flow/scripts/run.py cad-render/scripts/render.py HW [--version latest|vN] [--views iso front side exploded] [--subject S]
+        [--size 1600x1200] [--jobs N] [--cache-dir DIR] [--replace] [--out-dir .cad-work/PATH]
 
-Resolves the version through HW/versions/latest.json (or HW/versions/vN/), maps each part's
-part.yaml material and finish to a MeshPhysicalMaterial through assets/materials.json, serves
-assets/renderer/ with the version GLB, and drives headless Chromium (SwiftShader WebGL) with
-Playwright. Each worker uses a dedicated page in one shared Chromium process; page loads and view
-captures are measured separately from renderer and PNG encoding time. Writes:
-
-    HW/renders/<version>/<view>.png   one per view
-    HW/renders/<version>/manifest.json
+Resolves a verified built version through cad-record's layout API, maps each part's part.yaml
+material and finish to a MeshPhysicalMaterial through assets/materials.json, serves assets/renderer/
+with the version GLB, and drives headless Chromium (SwiftShader WebGL) with Playwright. Published
+renders are immutable bundles at HW/renders/<version>/<subject>/; explicit output directories are
+scratch-only under .cad-work/.
 
 Scene objects are occurrences: one per placed instance, with its own GLB node; materials stay per
 PN. A close-up or part view names one occurrence: `closeup-@ring-head`, or `closeup-LMP-0004` for a
 PN placed once; a bare PN placed several times is ambiguous and refused.
 
 Each frame is graded from its pixels and subject mask. BLANK, CLIPPED, and close-up OCCLUDED (less than 25% of the subject's isolated visible pixels remain visible) make a view unusable; NO_SHADOW and INVERTED_SHADOW are cosmetic warnings and keep the PNG.
-A rerun uses a verified bundle for an identical recipe; `--replace` renders again while retaining the old bundle.
+A verified bundle for an identical recipe is reused, including with `--replace`; `--replace` only renders again when the recipe differs.
 
 stdout: one JSON summary. Exit 0 = every view is usable (pass or warn, including cache hits), 1 = an unusable view remains after its retry ladder (renders and manifest are still written), 2 = usage or infrastructure error (nothing written).
 """
@@ -44,13 +41,11 @@ import os
 import json
 import math
 import re
-import shutil
 import sys
 import threading
 import time
 from collections import Counter
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -174,15 +169,20 @@ def _json(path: Path) -> Any:
 
 def resolve_version(hw: Path, requested: str) -> Version:
     try:
-        label, folder, record = layout.built_version(hw, requested)
-        files = {"assembly_step": folder / "assembly.step", "glb": folder / "assembly.glb",
-                 "metrics": folder / "metrics.json", "part_map": folder / "part-map.json",
-                 "manifest": folder / "manifest.json"}
-        missing = [str(path) for path in files.values() if not path.is_file()]
-        if missing:
-            raise layout.LayoutError(f"{label} is missing renderer inputs {missing}")
+        built = layout.built_version(hw, requested)
     except layout.LayoutError as exc:
         raise InfraError(str(exc)) from exc
+    return load_version(hw, built)
+
+
+def load_version(hw: Path, built: tuple[str, Path, Path]) -> Version:
+    label, folder, record = built
+    files = {"assembly_step": folder / "assembly.step", "glb": folder / "assembly.glb",
+             "metrics": folder / "metrics.json", "part_map": folder / "part-map.json",
+             "manifest": folder / "manifest.json"}
+    missing = [str(path) for path in files.values() if not path.is_file()]
+    if missing:
+        raise InfraError(f"{label} is missing renderer inputs {missing}")
     part_map, manifest = _json(files["part_map"]), _json(files["manifest"])
     try:
         version_reader.validate_version_manifest(manifest)
@@ -922,6 +922,14 @@ def run(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         raise InfraError(f"--jobs must be between 1 and {MAX_JOBS}")
     hw = args.hw.resolve()
     size = parse_size(args.size)
+    out_dir = None
+    if args.out_dir is not None:
+        try:
+            out_dir = layout.scratch_path(hw, args.out_dir, "--out-dir")
+        except layout.LayoutError as exc:
+            raise InfraError(str(exc)) from exc
+        if out_dir.exists():
+            raise InfraError(f"--out-dir already exists; refusing to overwrite {out_dir}")
     version = resolve_version(hw, args.version)
     views = parse_views(args.views, {oid: o.pn for oid, o in version.occurrences.items()})
     try:
@@ -931,35 +939,21 @@ def run(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     scene, materials, keyed = build_scene(hw, version, views, size, table)
     recipe = {"views": views, "size": [*size], "renderer": {"name": "cad-render", "version": renderer_sha256()},
               "inputs": {"version_manifest_sha256": sha256(version.files["manifest"].read_bytes()),
-                         "cache_key": keyed["key"]}}
+                         "cache_key": keyed["key"], "parity_policy": keyed["key"]["parity"]}}
     params = {"V": version.label, "S": args.subject}
-    try:
-        existing = layout.reusable(hw, "bundle.renders", params, recipe,
-                                   replace=args.replace or args.force)
-        if args.force:
-            existing = None
-    except layout.PublishConflict as exc:
-        raise InfraError(str(exc)) from exc
+    existing = None
+    if out_dir is None:
+        try:
+            existing = layout.reusable(hw, "bundle.renders", params, recipe, replace=args.replace)
+        except layout.PublishConflict as exc:
+            raise InfraError(str(exc)) from exc
 
-    if existing:
+    if existing and out_dir is None:
         metadata = cache_hit(existing, keyed["key"], views)
-        if metadata is None:
-            existing = None
-        else:
+        if metadata is not None:
             return 0, {"status": metadata["status"], "cache": "hit", "version": version.label,
                        "out_dir": str(existing), "pngs": {v: str(existing / f"{v}.png") for v in views},
                        "wall_s": round(time.monotonic() - wall, 3)}
-
-    # An explicit scratch output is independent of the bundle destination and is never overwritten.
-    out_dir = None
-    if args.out_dir is not None:
-        try:
-            out_dir = layout.scratch_path(hw, args.out_dir, "--out-dir")
-        except layout.LayoutError as exc:
-            raise InfraError(str(exc)) from exc
-        if out_dir.exists():
-            raise InfraError(f"--out-dir already exists; refusing to overwrite {out_dir}")
-
     server = make_server(scene, version.files["glb"], args.cache_dir or default_cache_dir())
     thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.1}, daemon=True)
     thread.start()
@@ -979,6 +973,7 @@ def run(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         "version": version.label,
         "status": "fail" if not passed else ("warn" if any(r["quality"]["warnings"] for r in view_records.values()) else "pass"),
         "views": view_records, "materials": materials,
+        "retry": {name: record["retry"] for name, record in view_records.items()},
         "renderer": {"name": "cad-render three.js PBR", "three": THREE_VERSION, "three_revision": info["three"],
                      "playwright": importlib.metadata.version("playwright"), "chromium": info["chromium"],
                      "webgl": "SwiftShader (ANGLE)", "studio": info["studio"]},
@@ -992,22 +987,25 @@ def run(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
                    "total_s": round(time.monotonic() - wall, 3)}}
     if out_dir is not None:
         out_dir.mkdir(parents=True)
-        for name, data in pngs.items():
-            (out_dir / f"{name}.png").write_bytes(data)
+        for name, record in view_records.items():
+            image = Path(record["png"])
+            (out_dir / image).parent.mkdir(parents=True, exist_ok=True)
+            (out_dir / image).write_bytes(pngs[name])
         (out_dir / "render.json").write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
     else:
         staged = layout.staging(hw, "bundle.renders")
-        for name, data in pngs.items():
-            (staged / f"{name}.png").write_bytes(data)
+        for name, record in view_records.items():
+            image = Path(record["png"])
+            (staged / image).parent.mkdir(parents=True, exist_ok=True)
+            (staged / image).write_bytes(pngs[name])
         (staged / "render.json").write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
         try:
             published = layout.publish(hw, "bundle.renders", params, staged, recipe=recipe,
                                        producer="cad-render render.py", status=metadata["status"], replace=args.replace)
         except layout.PublishConflict as exc:
             raise InfraError(str(exc)) from exc
-        out_dir = published.path
     summary = {"status": metadata["status"], "cache": "miss", "version": version.label, "out_dir": str(out_dir),
-               "pngs": {v: str(out_dir / f"{v}.png") for v in views},
+               "pngs": {v: str(out_dir / view_records[v]["png"]) for v in views},
                "failures": {v: r["quality"]["failures"] for v, r in view_records.items() if r["quality"]["failures"]},
                "warnings": {v: r["quality"]["warnings"] for v, r in view_records.items() if r["quality"]["warnings"]},
                "strategies": {v: r["retry"]["strategy"] for v, r in view_records.items()},
@@ -1021,6 +1019,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--views", nargs="+", default=DEFAULT_VIEWS,
                         help="iso front side exploded closeup-<PN> part-<PN> (default: iso front side exploded)")
     parser.add_argument("--size", default="1600x1200", help="frame size WIDTHxHEIGHT")
+    parser.add_argument("--subject", default="assembly", help="bundle subject (default: assembly)")
     parser.add_argument("--jobs", type=int, default=DEFAULT_JOBS,
                         help=f"parallel Chromium pages (1-{MAX_JOBS}; default: {DEFAULT_JOBS})")
     parser.add_argument("--out-dir", type=Path, help="write scratch output under .cad-work only")

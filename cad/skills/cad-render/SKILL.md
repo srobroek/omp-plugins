@@ -24,8 +24,9 @@ TRIGGER
 2. Render: `uv run --script skill://cad-flow/scripts/run.py cad-render/scripts/render.py hw [--version latest|vN] [--views ...] [--size WxH] [--subject S] [--replace] [--out-dir .cad-work/...]`
    -> immutable `hw/renders/<vN>/<subject>/` bundles with requested PNGs, `render.json`, and `manifest.json`.
    The bundle manifest seals its files and binds the bundle to the version manifest. `render.json` holds
-   quality, retry, material and input decisions. `--out-dir` is scratch-only under `.cad-work/` and never
-   overwrites an existing path. `--replace` retains a bundle with a different recipe before publishing.
+   quality, retry, material and input decisions. A same-recipe bundle is reused, including with `--replace`;
+   use `--replace` only when a conflicting recipe should be retained and replaced. `--out-dir` is
+   scratch-only under `.cad-work/` and never overwrites an existing path.
    `--jobs` uses 1-8 dedicated pages in one Chromium process (default 1). Each page loads the scene once
    and renders its assigned views serially, while pages capture concurrently. On CPU-only SwiftShader, keep
    the default: SwiftShader already multithreads. Pace measured 11s at jobs=1, 12s at 2, and 17s at 4
@@ -67,8 +68,8 @@ the floor, plus a wide, faint softbox shadow whose penumbra grows and darkness f
 part's height. The key light shades the parts onto each other, never the floor.
 
 The cache key includes every version-bound scene input, resolved material and exact-parity policy.
-Repeating the same version and subject reuses its verified immutable bundle; use `--replace` to render
-again with a different recipe. Compare bundles or scratch directories through their `render.json` files.
+Repeating the same version and subject reuses its verified immutable bundle, including with `--replace`;
+`--replace` retains and replaces a bundle only when its recipe differs. Compare bundles or scratch directories through their `render.json` files.
 
 ## Rules
 

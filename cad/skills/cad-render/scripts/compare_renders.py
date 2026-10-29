@@ -17,7 +17,16 @@ from typing import Any
 from PIL import Image, ImageChops
 def _render_data(directory: Path) -> dict[str, Any]:
     """Read the decision metadata from a published bundle or a scratch render directory."""
-    return json.loads((directory / "render.json").read_text(encoding="utf-8"))
+    data = json.loads((directory / "render.json").read_text(encoding="utf-8"))
+    if not isinstance(data, dict) or not isinstance(data.get("views"), dict):
+        raise ValueError(f"{directory / 'render.json'}: expected an object with a views map")
+    for name, entry in data["views"].items():
+        if not isinstance(entry, dict) or not isinstance(entry.get("png"), str):
+            raise ValueError(f"{directory / 'render.json'}: view {name!r} has no PNG path")
+        png = Path(entry["png"])
+        if png.is_absolute() or ".." in png.parts:
+            raise ValueError(f"{directory / 'render.json'}: view {name!r} has an unsafe PNG path")
+    return data
 
 _parity_spec = importlib.util.spec_from_file_location(
     "cad_render_parity_policy", Path(__file__).resolve().with_name("parity_policy.py"))
@@ -99,8 +108,8 @@ def compare(left: Path, right: Path) -> dict[str, Any]:
     left_decisions = decisions(left_metadata)
     right_decisions = decisions(right_metadata)
     decision_mismatch = [name for name in left_views if left_decisions[name] != right_decisions[name]]
-    reports = {name: compare_images(left / left_views[name]["png"], right / right_views[name]["png"])
-               for name in left_views}
+    reports = {name: compare_images(left / Path(left_views[name]["png"]),
+                                    right / Path(right_views[name]["png"])) for name in left_views}
     return {"pass": not decision_mismatch and all(report["pass"] for report in reports.values()),
             "view_count": len(reports), "decision_mismatch_views": decision_mismatch, "views": reports}
 

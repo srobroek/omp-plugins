@@ -400,25 +400,32 @@ class Explode(unittest.TestCase):
 
 
 class Cache(unittest.TestCase):
-    key = {"source_sha256": "a", "materials_sha256": "b", "renderer_sha256": "c", "image": "1600x1200"}
+    key = {"source_sha256": "a", "materials_sha256": "b", "renderer_sha256": "c", "image": "1600x1200",
+           "parity": parity.cache_key()}
 
-    def write(self, out: Path, status: str = "pass") -> None:
-        out.mkdir(parents=True)
+    def write(self, hw: Path, status: str = "pass") -> Path:
+        params = {"V": "v1", "S": "assembly"}
+        version = hw / "versions" / "v1"
+        (version / "record").mkdir(parents=True)
+        (version / "manifest.json").write_text("version manifest\n", encoding="utf-8")
+        out = render.layout.staging(hw, "bundle.renders")
         png = b"\x89PNG fake"
         (out / "iso.png").write_bytes(png)
         render_json = {"status": status, "cache_key": self.key,
-                       "views": {"iso": {"png": "iso.png", "sha256": render.sha256(png)}}}
+                       "views": {"iso": {"png": "iso.png", "sha256": render.sha256(png),
+                                          "quality": {"status": status, "failures": [], "warnings": []},
+                                          "retry": {"strategy": "original", "attempts": []}}}}
         (out / "render.json").write_text(json.dumps(render_json), encoding="utf-8")
-        files = {name: render.sha256((out / name).read_bytes()) for name in ("iso.png", "render.json")}
-        (out / "manifest.json").write_text(json.dumps({
-            "schema_version": 1, "layout": "bundle.renders", "path": "hw/renders/v1/assembly",
-            "files": files}), encoding="utf-8")
+        return render.layout.publish(hw, "bundle.renders", params, out,
+                                     recipe={"views": ["iso"], "cache_key": self.key},
+                                     producer="test", status=status).path
 
     def test_hit_only_on_a_passing_manifest_with_the_same_key_and_intact_pngs(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            out = Path(tmp) / "hw" / "renders" / "v1" / "assembly"
+            hw = Path(tmp) / "hw"
+            out = hw / "renders" / "v1" / "assembly"
             self.assertIsNone(render.cache_hit(out, self.key, ["iso"]))
-            self.write(out)
+            out = self.write(hw)
             self.assertIsNotNone(render.cache_hit(out, self.key, ["iso"]))
             self.assertIsNone(render.cache_hit(out, {**self.key, "materials_sha256": "changed"}, ["iso"]))
             self.assertIsNone(render.cache_hit(out, self.key, ["iso", "front"]))
@@ -427,14 +434,14 @@ class Cache(unittest.TestCase):
 
     def test_a_failed_render_is_never_a_cache_hit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            out = Path(tmp) / "hw" / "renders" / "v1" / "assembly"
-            self.write(out, status="fail")
+            hw = Path(tmp) / "hw"
+            out = self.write(hw, status="fail")
             self.assertIsNone(render.cache_hit(out, self.key, ["iso"]))
 
     def test_warning_manifest_is_cacheable(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            out = Path(tmp) / "hw" / "renders" / "v1" / "assembly"
-            self.write(out, status="warn")
+            hw = Path(tmp) / "hw"
+            out = self.write(hw, status="warn")
             self.assertIsNotNone(render.cache_hit(out, self.key, ["iso"]))
 
 class CacheKey(unittest.TestCase):
@@ -538,10 +545,9 @@ class CacheKey(unittest.TestCase):
         self.assertEqual(self.key(), before)
 
     def test_a_malformed_latest_json_is_an_infra_error(self) -> None:
-        self.write(self.hw / "versions" / "latest.json", {"glb": "versions/v1/assembly.glb"})
         with self.assertRaisesRegex(render.InfraError, "label"):
             render.resolve_version(self.hw, "latest")
-        self.assertEqual(render.resolve_version(self.hw, "v1").label, "v1")  # the documented layout still resolves
+        self.assertEqual(render.resolve_version(self.hw, "v1").label, "v1")
 
 
 class Views(unittest.TestCase):
@@ -628,7 +634,7 @@ class OccurrenceScene(unittest.TestCase):
             scratch = Path(tmp) / ".cad-work" / "render"
             scratch.mkdir(parents=True)
             args = argparse.Namespace(hw=hw, version="v1", views=["iso"], size="800x600", jobs=1,
-                                      force=False, subject="assembly", out_dir=scratch, replace=False, cache_dir=None)
+                                      subject="assembly", out_dir=scratch, replace=False, cache_dir=None)
             with mock.patch.object(render, "resolve_version") as resolve:
                 with self.assertRaisesRegex(render.InfraError, "refusing to overwrite"):
                     render.run(args)
