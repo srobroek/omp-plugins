@@ -38,7 +38,6 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import drawing  # noqa: E402
 import drawing_contract  # noqa: E402
 from drawing_draft import REVIEW  # noqa: E402
 
@@ -149,10 +148,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--draft", type=Path, required=True)
     args = parser.parse_args(argv)
     hw = args.hw.resolve()
+    api = drawing_contract.layout_api()
     try:
+        _, version_dir, _ = api.built_version(hw, args.version or "latest")
         draft = yaml.safe_load(args.draft.read_text(encoding="utf-8"))
-        version_dir = hw / "versions" / (args.version or drawing.latest_label(hw))
-    except (OSError, ValueError, KeyError, yaml.YAMLError) as exc:
+    except (api.LayoutError, OSError, ValueError, KeyError, yaml.YAMLError) as exc:
         print(json.dumps({"status": "error", "part": args.part, "findings": [{"code": "invalid_input",
                                                                               "message": str(exc)}]}, indent=2))
         return 2

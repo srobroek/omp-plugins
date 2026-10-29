@@ -324,12 +324,15 @@ def main(argv: list[str] | None = None) -> int:
     freecadcmd = freecad_runtime.find_freecadcmd()
     if freecadcmd is None:
         return _error("freecad_unavailable", "no freecadcmd found")
-    output_root = args.output_dir.resolve()   # FreeCAD runs in its own working directory
+    api = drawing_contract.layout_api()
     try:
         hw = args.hw.resolve()
-        context = drawing_contract.load_context(hw, hw / "versions" / (args.version or drawing.latest_label(hw)))
-    except drawing_contract.ContractError as exc:
-        return _error(exc.code, str(exc))
+        _, version_dir, _ = api.built_version(hw, args.version or "latest")
+        context = drawing_contract.load_context(hw, version_dir)
+        output_root = api.scratch_path(hw, args.output_dir, "--output-dir")
+    except (api.LayoutError, drawing_contract.ContractError) as exc:
+        return _error(getattr(exc, "code", "invalid_input"), str(exc))
+    output_root.mkdir(parents=True, exist_ok=True)
     results = []
     for pn in args.part:
         try:

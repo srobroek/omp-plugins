@@ -310,6 +310,7 @@ class CoverageReport:
 class PackageReport:
     """The outcome of one publication run; ``package.json`` holds it only when it passed."""
 
+    hw: Path
     status: str                                   # "pass", "fail" (content) or "error" (infrastructure)
     run_id: str
     output_dir: Path
@@ -324,12 +325,14 @@ class PackageReport:
         return {"pass": 0, "fail": 1, "error": 2}[self.status]
 
     def to_dict(self) -> dict[str, Any]:
-        sheets = [{**dict(sheet), "files": {kind: str(self.output_dir / Path(name).name)
-                                             for kind, name in sheet.get("files", {}).items()}}
+        api = layout_api()
+        sheets = [{**dict(sheet), "files": {kind: api.relative(self.hw, self.output_dir / Path(name).name)
+                                              for kind, name in sheet.get("files", {}).items()}}
                   for sheet in self.sheets]
-        return {"status": self.status, "run_id": self.run_id, "output_dir": str(self.output_dir),
-                "provenance": dict(self.provenance), "sheets": sheets,
-                "coverage": dict(self.coverage), "findings": [dict(f) for f in self.findings],
+        target_rel = api.relative(self.hw, self.output_dir)
+        return {"status": self.status, "run_id": self.run_id, "output_dir": target_rel,
+                "provenance": dict(self.provenance), "sheets": sheets, "coverage": dict(self.coverage),
+                "findings": [dict(f) for f in self.findings],
                 "release": {"ready": not self.release, "blockers": [dict(r) for r in self.release]}}
 
 
@@ -731,8 +734,9 @@ def publish_package(context: DrawingContext, sheets: Sequence[ComposedSheet], re
                 elif record is not None:
                     records.append(record)
         status = "pass" if not findings else ("error" if any(f["code"] == "export_failed" for f in findings) else "fail")
-        result = PackageReport(status=status, run_id=run_id,
-                               output_dir=bundle_path if status == "pass" and bundle_path is not None else output_dir,
+        reported_output = retained if status != "pass" else (
+            bundle_path if bundle_path is not None else output_dir)
+        result = PackageReport(hw=context.hw, status=status, run_id=run_id, output_dir=reported_output,
                                provenance=provenance, sheets=tuple(records), coverage=report.to_dict(),
                                findings=tuple(findings), release=tuple(dict(r) for r in release))
         if status == "pass":

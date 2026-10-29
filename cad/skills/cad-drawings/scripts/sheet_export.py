@@ -32,8 +32,8 @@ TEXT_PROPERTIES = ("font-size", "font-family", "font-weight", "text-anchor", "fi
 _NUMBER = re.compile(r"[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?")
 OSIFONT_CODEPOINTS = frozenset(range(0x20, 0x7f))
 VECTOR_SYMBOLS = {
-    "⟂": '<path d="M -3 -3 H 3 M 0 -3 V 3" fill="none" stroke="currentColor" stroke-width="1"/>',
-    "⊥": '<path d="M -3 -3 H 3 M 0 -3 V 3" fill="none" stroke="currentColor" stroke-width="1"/>',
+    "⟂": '<path d="M -3 3 H 3 M 0 3 V -3" fill="none" stroke="currentColor" stroke-width="1"/>',
+    "⊥": '<path d="M -3 3 H 3 M 0 3 V -3" fill="none" stroke="currentColor" stroke-width="1"/>',
     "∥": '<path d="M -1.5 3 L 1.5 -3 M 0 3 L 3 -3" fill="none" stroke="currentColor" stroke-width="1"/>',
     "−": '<path d="M -3 0 H 3" fill="none" stroke="currentColor" stroke-width="1"/>',
     "×": '<path d="M -3 -3 L 3 3 M -3 3 L 3 -3" fill="none" stroke="currentColor" stroke-width="1"/>',

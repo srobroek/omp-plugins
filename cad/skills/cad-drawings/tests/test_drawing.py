@@ -278,6 +278,8 @@ class SheetExportParts(unittest.TestCase):
             content = sheet_export.read_pdf(pdf)
             runs = sheet_export.split_text(SafeET.fromstring(svg.read_text(encoding="utf-8")))
             self.assertEqual(runs[1]["segments"], [{"vector": character} for character in "⟂∥×−·"])
+            self.assertIn('d="M -3 3 H 3 M 0 3 V -3"', runs[1]["vector_markup"]["⟂"])
+            self.assertIn('d="M -3 3 H 3 M 0 3 V -3"', runs[1]["vector_markup"]["⊥"])
             self.assertTrue(all(set(run) == {"segments", "vector_advance", "vector_markup", "x", "y", "anchor", "size",
                                               "family", "bold", "fill", "matrix"} for run in runs))
         self.assertEqual(content.text, "Aa 0123")
