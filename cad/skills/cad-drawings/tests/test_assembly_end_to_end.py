@@ -209,7 +209,7 @@ class EndToEnd(unittest.TestCase):
         self.assertEqual([row["sheet"] for row in parallel_package["sheets"]], [1, 2])
         self.assertEqual(sequential_package["coverage"]["rows"], parallel_package["coverage"]["rows"])
 
-    def test_a_failed_run_keeps_the_sealed_bundle_and_retains_its_draft(self) -> None:
+    def test_a_failed_run_never_replaces_the_sealed_bundle(self) -> None:
         hw = write_project(self.root / "failed")
         status, first = run_cli(hw)
         self.assertEqual((status, first["status"]), (0, "pass"), first.get("findings"))
@@ -220,13 +220,12 @@ class EndToEnd(unittest.TestCase):
         rows[2][3] = "3"  # the parts list no longer matches the two placed pins
         with (hw / "bom.csv").open("w", newline="", encoding="utf-8") as stream:
             csv.writer(stream, lineterminator="\n").writerows(rows)
-        status, result = run_cli(hw, replace=True)
+        status, result = run_cli(hw, replace=True)  # --replace: a failure must still leave the bundle alone
         self.assertNotEqual(status, 0)
         self.assertNotEqual(result["status"], "pass")
+        self.assertIn("BOM quantity of TST-0102 is 3", json.dumps(result["findings"]))
         self.assertEqual(sealed, {p.relative_to(bundle).as_posix(): p.read_bytes() for p in bundle.rglob("*") if p.is_file()})
-        drafts = list((hw.parent / ".cad-work").rglob("rejected.json"))
-        self.assertEqual(len(drafts), 1, drafts)
-        self.assertFalse((drafts[0].parent / "package.json").exists())
+        self.assertEqual(list((hw.parent / ".cad-work" / "replaced").glob("*")) if (hw.parent / ".cad-work" / "replaced").exists() else [], [])
 
 
 if __name__ == "__main__":
