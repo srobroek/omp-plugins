@@ -15,9 +15,10 @@ TRIGGER
    material properties, fixed-face selector, face loads, mesh size, and optional `pose`; see the input
    shape below.
 2. Run `scripts/fea_static.py <case.yaml>` with FreeCAD 1.1.4, Gmsh, and CalculiX available. For a versioned case,
-   pass `--hw hw --version vN` (and optional `--case-id ID --replace`) to publish `results.json`, retained solver files,
-   and a manifest under `hw/analysis/vN/<case-id>/`. The source case belongs under `hw/analysis/cases/<case-id>/`.
-   Explicit `--out` is only allowed under `.cad-work`; solver scratch remains there.
+   pass `--hw hw --version vN` (and optional `--case-id ID --replace`) to publish `results.json`, the retained solver files
+   under `evidence/`, and a manifest under `hw/analysis/vN/<case-id>/`. The source case belongs under
+   `hw/analysis/cases/<case-id>/`. A matching rerun reuses its immutable bundle; changed case, input, solver versions,
+   or options require `--replace`. Explicit `--out` is only allowed under `.cad-work`; solver scratch remains there.
 3. For a versioned assembly sweep, set `step` and `evidence` to `hw/motion/vN/<case>/worst.step` and
    its `worst.step.json`; the analysis checks the STEP hash and complete pose, never re-poses it.
    Face selectors use the assembly coordinates of that STEP.

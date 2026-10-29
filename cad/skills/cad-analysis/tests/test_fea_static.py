@@ -12,14 +12,28 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import importlib.util
+from unittest.mock import patch
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts/fea_static.py"
 OCCURRENCE_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "build_occurrence_step.py"
 POSE_PATH = Path(__file__).resolve().parents[2] / "cad-motion" / "scripts" / "pose.py"
 FREECADCMD = Path("/Applications/FreeCAD.app/Contents/Resources/bin/freecadcmd")
 SPIKE = Path("/tmp/cad-spike-freecad")
 sys.path.insert(0, str(SCRIPT.parent))
-from fea_part_selection import select_occurrence, select_solid_index
+
+import fea_static
 from fea_static import CaseError, apply_required_safety_factor, error, load_case, result_exit_code, run_directory
+from fea_part_selection import select_occurrence, select_solid_index
+OCCURRENCE_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "build_occurrence_step.py"
+LAYOUT_PATH = SCRIPT.parents[2] / "cad-record" / "scripts" / "layout.py"
+LAYOUT_SPEC = importlib.util.spec_from_file_location("cad_record_layout", LAYOUT_PATH)
+assert LAYOUT_SPEC and LAYOUT_SPEC.loader
+LAYOUT = sys.modules.get("cad_record_layout")
+if LAYOUT is None:
+    LAYOUT = importlib.util.module_from_spec(LAYOUT_SPEC)
+    sys.modules["cad_record_layout"] = LAYOUT
+    LAYOUT_SPEC.loader.exec_module(LAYOUT)
+
 
 CASE_TAIL = """material: {name: Aluminium 6061, E: 69000, nu: 0.33, density: 2700, yield: 276}
 fixed_faces: {plane: {axis: y, value: 50, tolerance: 0.000001}}
@@ -431,6 +445,90 @@ mesh_size: 5
             result = subprocess.run([sys.executable, str(SCRIPT), str(case)], capture_output=True, text=True)
             self.assertEqual(result.returncode, 2)
             self.assertEqual(json.loads(result.stdout)["error"]["code"], "invalid_case")
+
+
+class VersionedPublicationTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.project = Path(self.temporary.name) / "project"
+        self.hw = self.project / "hw"
+        self.case_dir = self.hw / "analysis" / "cases" / "cantilever"
+        self.case_dir.mkdir(parents=True)
+        self.step = self.case_dir / "beam.step"
+        self.step.write_bytes(b"STEP geometry")
+        self.case = self.case_dir / "case.yaml"
+        self.case.write_text("step: beam.step\n" + CASE_TAIL, encoding="utf-8")
+        version = self.hw / "versions" / "v1"
+        record = version / "record"
+        record.mkdir(parents=True)
+        for name in ("product.yaml", "interfaces.yaml", "assembly.yaml"):
+            (record / name).write_text("{}\n", encoding="utf-8")
+        files = {path.relative_to(version).as_posix(): fea_static.hashlib.sha256(path.read_bytes()).hexdigest()
+                 for path in version.rglob("*") if path.is_file()}
+        (version / "manifest.json").write_text(json.dumps({"label": "v1", "files": files}), encoding="utf-8")
+
+    def call(self, replace: bool = False) -> tuple[int, dict]:
+        argv = [str(self.case), "--hw", str(self.hw), "--version", "v1"]
+        if replace:
+            argv.append("--replace")
+        output = __import__("io").StringIO()
+        with patch("fea_static.find_freecad", return_value=Path("/fake/freecadcmd")), \
+             patch("fea_static.solver_versions", return_value={"freecad": "1.1.4", "gmsh": "4.13", "calculix": "2.22"}), \
+             patch("fea_static.run_job", side_effect=self.run_job), \
+             patch("sys.stdout", output):
+            status = fea_static.main(argv)
+        return status, json.loads(output.getvalue())
+
+    @staticmethod
+    def run_job(case_path: Path, case: dict, **kwargs) -> tuple[dict, int]:
+        output = kwargs["result_path"]
+        run_dir = Path(kwargs["scratch_root"]) / "jobs" / "fea_static" / "run"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        (run_dir / "solver.dat").write_text("solver output\n", encoding="utf-8")
+        result = {"status": "pass", "run_directory": str(run_dir), "retained_files": ["solver.dat"],
+                  "solver_versions": kwargs["solver_versions"]}
+        output.write_text(json.dumps(result), encoding="utf-8")
+        return result, 0
+
+    def test_rerun_reuses_bundle_without_running_solver(self) -> None:
+        first_status, first = self.call()
+        self.assertEqual(first_status, 0)
+        bundle = self.hw / "analysis" / "v1" / "cantilever"
+        before = {path.relative_to(bundle).as_posix(): path.read_bytes() for path in bundle.rglob("*") if path.is_file()}
+        with patch("fea_static.run_job", side_effect=AssertionError("reused bundle should skip solver")):
+            status, second = self.call()
+        self.assertEqual(status, 0)
+        self.assertFalse(first["reused"])
+        self.assertTrue(second["reused"])
+        self.assertEqual(before, {path.relative_to(bundle).as_posix(): path.read_bytes()
+                                  for path in bundle.rglob("*") if path.is_file()})
+
+    def test_changed_case_recipe_is_refused_then_replaced_immutably(self) -> None:
+        self.call()
+        bundle = self.hw / "analysis" / "v1" / "cantilever"
+        original = {path.relative_to(bundle).as_posix(): path.read_bytes() for path in bundle.rglob("*") if path.is_file()}
+        self.case.write_text(self.case.read_text(encoding="utf-8").replace("mesh_size: 5", "mesh_size: 6"), encoding="utf-8")
+        status, report = self.call()
+        self.assertEqual(status, 2)
+        self.assertIn("--replace", report["error"]["message"])
+        self.assertEqual(original, {path.relative_to(bundle).as_posix(): path.read_bytes()
+                                    for path in bundle.rglob("*") if path.is_file()})
+        status, report = self.call(replace=True)
+        self.assertEqual(status, 0)
+        replaced_path = json.loads((bundle / "manifest.json").read_text(encoding="utf-8"))["replaces"]["moved_to"]
+        replaced_bundle = self.project / replaced_path
+        self.assertTrue(replaced_bundle.is_dir())
+        self.assertEqual(original, {path.relative_to(replaced_bundle).as_posix(): path.read_bytes()
+                                    for path in replaced_bundle.rglob("*") if path.is_file()})
+
+    def test_standalone_output_override_outside_cad_work_is_refused(self) -> None:
+        with patch("fea_static.find_freecad", return_value=Path("/fake/freecadcmd")):
+            output = __import__("io").StringIO()
+            with patch("sys.stdout", output):
+                status = fea_static.main([str(self.case), "--out", str(self.project / "results.json")])
+        self.assertEqual(status, 2)
+        self.assertIn("--out must be under", json.loads(output.getvalue())["error"]["message"])
 
 
 if __name__ == "__main__":
