@@ -29,7 +29,7 @@ from pathlib import Path
 from unittest import mock
 
 HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE.parents[2] / "cad-drawings" / "scripts"))
+sys.path.insert(0, str(HERE.parents[1] / "cad-drawings" / "scripts"))
 import freecad_runtime  # noqa: E402
 FREECADCMD = freecad_runtime.find_freecadcmd()
 FREECAD_PRESENT = FREECADCMD is not None and FREECADCMD.is_file() and os.access(FREECADCMD, os.X_OK)
