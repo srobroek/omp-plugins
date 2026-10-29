@@ -30,6 +30,7 @@ import argparse
 import base64
 import binascii
 import hashlib
+import importlib.util
 import ipaddress
 import json
 import os
@@ -41,13 +42,27 @@ import time
 from collections.abc import Callable
 import urllib.error
 import urllib.request
-from datetime import datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
-
 VIEWER_DIR = Path(__file__).resolve().parent.parent / "assets" / "viewer"
+CAD_RECORD_SCRIPTS = Path(__file__).resolve().parents[2] / "cad-record" / "scripts"
+
+
+def _load_layout():
+    name = "cad_record_layout"
+    if name not in sys.modules:
+        spec = importlib.util.spec_from_file_location(name, CAD_RECORD_SCRIPTS / "layout.py")
+        if spec is None or spec.loader is None:
+            raise ImportError(f"layout.py not found at {CAD_RECORD_SCRIPTS}")
+        sys.modules[name] = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(sys.modules[name])
+    return sys.modules[name]
+
+
+layout = _load_layout()
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 CDN_BASE = "https://cdn.jsdelivr.net/npm/"
 SCENE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*\.scene\.json$")
 IMPORT_MAP = re.compile(r'<script type="importmap">(.*?)</script>', re.S)
@@ -63,6 +78,7 @@ MAX_SCREENSHOT_BYTES = 32 * 1024 * 1024
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 HEARTBEAT_S = 15.0
 LOOPBACK_NAMES = ("127.0.0.1", "localhost", "[::1]")
+
 
 
 def is_loopback(host: str) -> bool:
@@ -255,6 +271,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._send(HTTPStatus.OK, file.read_bytes(), CONTENT_TYPES[".json"])
         elif path.startswith("/vendor/"):
+            if path not in self.vendor.integrity:
+                self._error(HTTPStatus.NOT_FOUND, f"{path} is not a pinned module")
+                return
             try:
                 data = self.vendor.get(path)
             except LookupError:
@@ -323,19 +342,41 @@ class Handler(BaseHTTPRequestHandler):
             header, _, b64 = str(body["png"]).partition(",")
             png = base64.b64decode(b64, validate=True)
         except (ValueError, KeyError, TypeError, binascii.Error) as exc:
-            self._error(HTTPStatus.BAD_REQUEST, f"expected JSON {{scene, png}}: {exc}")
+            self._error(HTTPStatus.BAD_REQUEST, f"expected JSON {{scene, png, capture}}: {exc}")
             return
-        if header != "data:image/png;base64" or not png.startswith(PNG_MAGIC) or not SCENE_NAME.match(scene):
+        if header != "data:image/png;base64" or not png.startswith(PNG_MAGIC) or not SCENE_NAME.fullmatch(scene):
             self._error(HTTPStatus.BAD_REQUEST, "png must be a PNG data URL and scene a *.scene.json name")
             return
-        out_dir = self.scene_dir / "screenshots"
-        out_dir.mkdir(exist_ok=True)
-        stem = f"{scene.removesuffix('.scene.json')}-{datetime.now().strftime('%Y%m%d-%H%M%S-%f')[:-3]}"
-        png_path = out_dir / f"{stem}.png"
-        png_path.write_bytes(png)
-        meta = {"scene": scene, "variant": body.get("variant"), "png": png_path.name}
-        (out_dir / f"{stem}.json").write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
-        self._json(HTTPStatus.CREATED, {"ok": True, "path": str(png_path)})
+        scene_path = self.scene_dir / scene
+        if not scene_path.is_file():
+            self._error(HTTPStatus.NOT_FOUND, f"no scene {scene!r} in {self.scene_dir}")
+            return
+        scene_sha = hashlib.sha256(scene_path.read_bytes()).hexdigest()
+        capture = body.get("capture")
+        if not isinstance(capture, dict) or capture.get("scene") != scene or capture.get("variant") != body.get("variant"):
+            self._error(HTTPStatus.BAD_REQUEST, "capture must bind the exact scene and selected variant")
+            return
+        if capture.get("scene_sha256") != scene_sha:
+            self._error(HTTPStatus.CONFLICT, "scene changed while the screenshot was being captured; capture it again")
+            return
+        try:
+            capture_sha = hashlib.sha256(layout.canonical_json(capture)).hexdigest()
+            staged = layout.staging(self.project_root / "hw", "concept.screenshot")
+            (staged / "preview.png").write_bytes(png)
+            published = layout.publish(
+                self.project_root / "hw", "concept.screenshot",
+                {"SCENE_SHA": scene_sha, "CAPTURE_SHA": capture_sha}, staged,
+                recipe={"scene_sha256": scene_sha, "scene": scene, "capture": capture,
+                        "capture_sha256": capture_sha, "png_sha256": hashlib.sha256(png).hexdigest()},
+                producer="cad-concept serve.py screenshot")
+        except layout.PublishConflict as error:
+            self._error(HTTPStatus.CONFLICT, str(error))
+            return
+        except (layout.LayoutError, OSError, ValueError) as error:
+            self._error(HTTPStatus.BAD_REQUEST, str(error))
+            return
+        path = published.path / "preview.png"
+        self._json(HTTPStatus.CREATED, {"ok": True, "path": str(path), "reused": published.reused})
 
 
 def default_cache_dir() -> Path:
@@ -348,6 +389,8 @@ def run(argv: list[str], *, idle_timeout_s: float | None = None,
         install_signals: bool = True,
         shutdown_callback: Callable[[Callable[[int, object], None]], None] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="serve.py", description=__doc__.splitlines()[0])
+    parser.add_argument("--project-root", type=Path, default=PROJECT_ROOT,
+                        help="project root that contains hw/ (defaults to the skill checkout root)")
     parser.add_argument("--scene-dir", type=Path, required=True, help="directory holding *.scene.json")
     parser.add_argument("--host", default="127.0.0.1", help="bind address; a non-loopback one needs --allow-remote")
     parser.add_argument("--port", type=int, default=0, help="port to listen on; 0 picks a free port")
@@ -387,9 +430,9 @@ def run(argv: list[str], *, idle_timeout_s: float | None = None,
         "BoundHandler",
         (Handler,),
         {
-            "scene_dir": scene_dir,
+            "project_root": args.project_root.resolve(),
             "watcher": watcher,
-            "vendor": VendorCache(args.cache_dir, integrity),
+            "scene_dir": scene_dir,
             "heartbeat_s": HEARTBEAT_S if timeout_s <= 0 else min(HEARTBEAT_S, timeout_s / 4),
         },
     )

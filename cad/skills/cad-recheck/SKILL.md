@@ -47,6 +47,8 @@ The installer refuses to replace a different `core.hooksPath` or ignore non-samp
 
 The stamp hashes the whole staged `hw/` tree, so any staged change needs a new stamp. This list decides only which checks to rerun before that stamp.
 
+The stamp command and its hook audit the complete `hw/` tree with cad-record's layout API. Any staged or untracked path whose layout finding blocks under `validate.blocking` prevents stamping or commit, including hidden generated subtrees under `parts/<PN>/`.
+
 ## Rules
 
 MUST Re-run the checks and stamp after any staged `hw/` file changes.

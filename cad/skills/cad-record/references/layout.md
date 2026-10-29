@@ -19,7 +19,7 @@ listed files and nothing else.
 | `{REV}` | `[A-HJ-NPRTUVWY]` | `A` | released revision letter |
 | `{DR}` | `DR-[0-9]{3}` | `DR-001` | decision record id |
 | `{N}` | `[1-9][0-9]*` | `1` | sheet number |
-| `{VIEW}` | `[a-z][a-z0-9_-]*` | `iso` | render or capture view name |
+| `{VIEW}` | `[a-z][A-Za-z0-9_-]*` | `part-LMP-0001` | render or capture view name; per-part views carry the PN |
 | `{PRODUCT}` | `[a-z0-9][a-z0-9-]*` | `lamp-arm` | product id from product.yaml |
 | `{SCENE_SHA}` | `[0-9a-f]{64}` | `1111111111111111111111111111111111111111111111111111111111111111` | sha256 of the concept scene file |
 | `{CAPTURE_SHA}` | `[0-9a-f]{64}` | `2222222222222222222222222222222222222222222222222222222222222222` | sha256 of the captured viewer state |

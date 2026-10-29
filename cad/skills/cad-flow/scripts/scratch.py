@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -45,6 +46,7 @@ from typing import Any
 
 SKILLS = Path(__file__).resolve().parents[2]
 CAD_MODEL_SCRIPTS = SKILLS / "cad-model" / "scripts"
+CAD_RECORD_SCRIPTS = SKILLS / "cad-record" / "scripts"
 FORM_CHECK = SKILLS / "cad-design" / "scripts" / "form_check.py"
 sys.path.insert(0, str(CAD_MODEL_SCRIPTS))
 from cadmodel import scriptenv  # noqa: E402 - standard library only
@@ -56,8 +58,23 @@ PN = re.compile(r"^[A-Z]{2,5}-[0-9]{4}$")
 LABEL = re.compile(r"^v([1-9][0-9]*)$")
 
 
+def load_layout():
+    name = "cad_record_layout"
+    if name not in sys.modules:
+        path = CAD_RECORD_SCRIPTS / "layout.py"
+        spec = importlib.util.spec_from_file_location(name, path)
+        if spec is None or spec.loader is None:
+            raise ImportError(f"layout.py not found at {path}")
+        sys.modules[name] = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(sys.modules[name])
+    return sys.modules[name]
+
+
+layout = load_layout()
+
+
 class UsageError(Exception):
-    """Bad arguments or a missing workspace: exit 2, nothing written."""
+    """Bad arguments or missing workspace; exit 2 and make no delivery writes."""
 
 
 def workspace(hw: Path, unit: str) -> Path:
@@ -109,6 +126,9 @@ def init(hw: Path, unit: str, parts: list[str], reset: bool) -> tuple[int, dict[
     if not gitignore.exists():
         gitignore.write_text("*\n", encoding="utf-8")
     shutil.copytree(hw, work / "hw", ignore=skips(hw))
+    for pn in sorted(set(parts)):
+        if not (hw / "parts" / pn).exists():
+            (work / "hw" / "parts" / pn).mkdir(parents=True, exist_ok=True)
     baseline = {"unit": unit, "hw": str(hw), "parts": sorted(set(parts)), "files": tree_hashes(work / "hw")}
     (work / "baseline.json").write_text(json.dumps(baseline, indent=2) + "\n", encoding="utf-8")
     return 0, {"status": "created", "unit": unit, "workspace": str(work), "scratch_hw": str(work / "hw"),
@@ -140,8 +160,8 @@ def next_label(scratch_hw: Path) -> str:
 def build(hw: Path, unit: str, kernel: str, fidelity: str) -> tuple[int, dict[str, Any]]:
     work = workspace(hw, unit)
     baseline = load_baseline(work)
-    scratch_hw = work / "hw"
     own = set(baseline["parts"])
+    scratch_hw = work / "hw"
     label = next_label(scratch_hw)
     report: dict[str, Any] = {"unit": unit, "scratch_hw": str(scratch_hw), "label": label, "parts": sorted(own)}
 
@@ -172,7 +192,6 @@ def build(hw: Path, unit: str, kernel: str, fidelity: str) -> tuple[int, dict[st
     report["form"] = {"exit": form_code, "fidelity": fidelity, "json": str(form_out), "log": str(form_log),
                       "own_findings": [f for f in findings if f.get("part") in own],
                       "other_findings": [f for f in findings if f.get("part") not in own]}
-
     if code == 2 or form is None or form_code == 2:
         report["status"] = "error"
         return 2, report
@@ -181,31 +200,81 @@ def build(hw: Path, unit: str, kernel: str, fidelity: str) -> tuple[int, dict[st
     return (0 if passed else 1), report
 
 
+def delivery_tree(root: Path) -> tuple[dict[str, str], set[str]]:
+    files, directories = {}, set()
+    for current, dirnames, filenames in os.walk(root, followlinks=False):
+        directory = Path(current)
+        for name in list(dirnames):
+            path = directory / name
+            if path.is_symlink():
+                raise UsageError(f"scratch contains a symlink at {path.relative_to(root)}")
+            directories.add(path.relative_to(root).as_posix())
+        for name in filenames:
+            path = directory / name
+            relative = path.relative_to(root).as_posix()
+            if path.is_symlink() or not path.is_file():
+                raise UsageError(f"scratch contains a symlink or special file at {relative}")
+            files[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return files, directories
+
+
+def is_record_path(path: str) -> bool:
+    match = layout.classify(f"hw/{path}")
+    return match is not None and match.entry.kind == "record" and match.role == "source"
+
+
+def validate_delivery(baseline: dict[str, Any], authorized: set[str], files: dict[str, str],
+                      directories: set[str]) -> None:
+    old_files: dict[str, str] = baseline["files"]
+    known_parts = {path.split("/")[1] for path in old_files if path.startswith("parts/")}
+    for path in files:
+        if path.startswith("parts/"):
+            pn = path.split("/")[1]
+            if PN.fullmatch(pn) and pn not in authorized and pn not in known_parts:
+                raise UsageError(f"unit is not authorized for new part {pn}; initialize it with --part {pn}")
+    for directory in directories:
+        if not any(path.startswith(f"{directory}/") for path in files) and not layout.load().known_directory(f"hw/{directory}"):
+            raise UsageError(f"cannot deliver an unrecognized empty directory {directory}")
+    for path in sorted(set(files) | set(old_files)):
+        if files.get(path) != old_files.get(path):
+            match = layout.classify(f"hw/{path}")
+            pn = path.split("/")[1] if path.startswith("parts/") else None
+            if match is None or match.entry.kind != "record" or match.params.get("PN") not in (None, pn):
+                raise UsageError(f"cannot deliver changed non-record or non-canonical path {path}")
+    for pn in authorized:
+        prefix = f"parts/{pn}/"
+        part_files = [path for path in files if path.startswith(prefix)]
+        if not part_files or f"parts/{pn}/part.yaml" not in part_files:
+            raise UsageError(f"scratch hw/parts/{pn}/ needs a canonical part.yaml before delivery")
+        if any(not is_record_path(path) for path in part_files):
+            raise UsageError(f"cannot deliver non-record or non-canonical part path under parts/{pn}/")
+
+
 def deliver(hw: Path, unit: str) -> tuple[int, dict[str, Any]]:
     work = workspace(hw, unit)
     baseline = load_baseline(work)
     if Path(baseline["hw"]) != hw:
         raise UsageError(f"{work} was initialised from {baseline['hw']}, not {hw}")
     scratch_hw = work / "hw"
-    files: dict[str, str] = baseline["files"]
-    owned = [f"parts/{pn}/" for pn in baseline["parts"]]
-
+    files, directories = delivery_tree(scratch_hw)
+    authorized = set(baseline["parts"])
+    validate_delivery(baseline, authorized, files, directories)
+    owned = [f"parts/{pn}/" for pn in authorized]
+    baseline_files: dict[str, str] = baseline["files"]
     conflicts = []
-    for pn in baseline["parts"]:
-        if not (scratch_hw / "parts" / pn).is_dir():
-            raise UsageError(f"scratch hw/parts/{pn}/ is missing; deliver never deletes a part")
-        then = {path: digest for path, digest in files.items() if path.startswith(f"parts/{pn}/")}
+    for pn in sorted(authorized):
+        then = {path: digest for path, digest in baseline_files.items() if path.startswith(f"parts/{pn}/")}
         part_dir = hw / "parts" / pn
         now = {f"parts/{pn}/{path}": digest for path, digest in tree_hashes(part_dir, frozenset()).items()} \
             if part_dir.is_dir() else {}
         if now != then:
-            conflicts.append(str(hw / "parts" / pn))
+            conflicts.append(str(part_dir))
     if conflicts:
         return 1, {"status": "conflict", "unit": unit, "changed_since_init": conflicts,
                    "note": "another actor changed these part directories; nothing was delivered"}
 
     delivered = []
-    for pn in baseline["parts"]:
+    for pn in sorted(authorized):
         target = hw / "parts" / pn
         staged = hw / "parts" / f".{pn}.deliver-{os.getpid()}"
         shutil.rmtree(staged, ignore_errors=True)
@@ -219,18 +288,17 @@ def deliver(hw: Path, unit: str) -> tuple[int, dict[str, Any]]:
         else:
             staged.rename(target)
         current = tree_hashes(target, frozenset())
-        delivered += [str(target / path) for path in current]
-        files = {path: digest for path, digest in files.items() if not path.startswith(f"parts/{pn}/")}
-        files.update({f"parts/{pn}/{path}": digest for path, digest in current.items()})
-    baseline["files"] = files
+        delivered.extend(str(target / path) for path in current)
+        baseline_files = {path: digest for path, digest in baseline_files.items()
+                          if not path.startswith(f"parts/{pn}/")}
+        baseline_files.update({f"parts/{pn}/{path}": digest for path, digest in current.items()})
+    baseline["files"] = baseline_files
     (work / "baseline.json").write_text(json.dumps(baseline, indent=2) + "\n", encoding="utf-8")
-
-    scratch = tree_hashes(scratch_hw)
     proposals = []
-    for path in sorted(set(scratch) | set(files)):
-        if any(path.startswith(prefix) for prefix in owned) or scratch.get(path) == files.get(path):
+    for path in sorted(set(files) | set(baseline_files)):
+        if any(path.startswith(f"parts/{pn}/") for pn in authorized) or files.get(path) == baseline_files.get(path):
             continue
-        change = "added" if path not in files else "removed" if path not in scratch else "modified"
+        change = "added" if path not in baseline_files else "removed" if path not in files else "modified"
         proposals.append({"path": str(hw / path), "scratch": str(scratch_hw / path), "change": change})
     return 0, {"status": "delivered", "unit": unit, "delivered": delivered, "proposals": proposals}
 
@@ -240,10 +308,10 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     for name in ("init", "build", "deliver"):
         command = sub.add_parser(name)
-        command.add_argument("--hw", type=Path, required=True, help="the project's hw/ design record")
-        command.add_argument("--unit", required=True, help="the unit id from the lead's brief")
+        command.add_argument("--hw", type=Path, required=True, help="project hw/ record")
+        command.add_argument("--unit", required=True, help="unit id from the lead's brief")
         if name == "init":
-            command.add_argument("--part", action="append", default=[], metavar="PN", help="a PN this unit owns (repeatable)")
+            command.add_argument("--part", action="append", default=[], metavar="PN", help="a PN this unit owns")
             command.add_argument("--reset", action="store_true", help="replace an existing workspace")
         if name == "build":
             command.add_argument("--fidelity", choices=("F0", "F1", "F2", "F3"), required=True)

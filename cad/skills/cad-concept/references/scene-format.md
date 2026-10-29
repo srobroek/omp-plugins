@@ -66,8 +66,7 @@ The viewer omits joint axis arrows. They indicate mechanism direction but show n
 | Route or call | Use |
 |---|---|
 | `/?scene=<file>` | open one scene; a picker appears when the dir holds several |
-| `window.cadConcept.select(variant)` | highlight a variant |
-| `window.cadConcept.save()` | the Save screenshot button: PNG with labels into `<scene-dir>/screenshots/` |
+| `window.cadConcept.save()` | the Save screenshot button: `hw/concept/screenshots/<scene-sha256>/<capture-sha256>/preview.png`; each bundle manifest records the scene and viewer-state digests |
 | `/events` | Server-Sent Events; `change` carries `{"files": [...]}` |
 
 The viewer shows all variants at their authored nominal configuration; joint fields remain in the

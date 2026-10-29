@@ -82,6 +82,18 @@ def install(project: Path, source: Path, stamp_source: Path, *, force: bool = Fa
         raise RuntimeError(f"refusing to overwrite existing hook with different contents: {hook}")
     shutil.copyfile(source, hook)
     shutil.copyfile(stamp_source, stamp)
+    record_root = source.parents[2] / "cad-record"
+    motion_scripts = source.parents[2] / "cad-motion" / "scripts"
+    hook_motion = hooks_dir / "cad-motion" / "scripts"
+    hook_motion.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(motion_scripts / "coupling.py", hook_motion / "coupling.py")
+    hook_layout = hooks_dir / "cad-record"
+    (hook_layout / "scripts").mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(record_root / "scripts" / "layout.py", hook_layout / "scripts" / "layout.py")
+    shutil.copyfile(record_root / "layout.json", hook_layout / "layout.json")
+    shutil.copytree(record_root / "schemas", hook_layout / "schemas", dirs_exist_ok=True)
+    shutil.copyfile(record_root / "scripts" / "validate.py", hook_layout / "scripts" / "validate.py")
+    shutil.copyfile(record_root / "scripts" / "assembly_data.py", hook_layout / "scripts" / "assembly_data.py")
     hook.chmod(hook.stat().st_mode | 0o111)
     stamp.chmod(stamp.stat().st_mode | 0o111)
     git("config", "core.hooksPath", ".githooks", cwd=root)

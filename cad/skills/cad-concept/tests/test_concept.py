@@ -23,11 +23,26 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+
 SKILL = Path(__file__).resolve().parent.parent
 EXAMPLE = SKILL / "assets" / "examples" / "lamp-arm.scene.json"
 CONCEPT_PY = SKILL / "scripts" / "concept.py"
 SERVE_PY = SKILL / "scripts" / "serve.py"
 
+def project_for_scene(temp: Path, scene_path: Path) -> Path:
+    """Make a minimal project whose layout owns this concept scene and part."""
+    template = SKILL.parent / "cad-record" / "assets" / "project-template"
+    project = temp / "project"
+    shutil.copytree(template, project)
+    hw = project / "hw"
+    (hw / "concept").mkdir(parents=True, exist_ok=True)
+    shutil.copy(scene_path, hw / "concept" / "lamp-arm.scene.json")
+    part = hw / "parts" / "PRT-0001"
+    part.mkdir(parents=True, exist_ok=True)
+    (part / "part.yaml").write_text(
+        "PN: PRT-0001\nrev: X1\ntitle: Placeholder part\nmaterial: Placeholder material\n"
+        "process: cnc\nfinish: As machined\nmass_target: null\nmake_buy: make\n", encoding="utf-8")
+    return project
 
 def load(name: str, path: Path):
     spec = importlib.util.spec_from_file_location(name, path)
@@ -253,19 +268,22 @@ class ServerLive(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.dir = Path(self.tmp.name)
-        shutil.copy(EXAMPLE, self.dir / EXAMPLE.name)
+        self.project = project_for_scene(self.dir, EXAMPLE)
+        self.hw = self.project / "hw"
+        self.scene_dir = self.hw / "concept"
+        self.scene_path = self.scene_dir / "lamp-arm.scene.json"
         self.proc, self.ready = self.start_server()
         self.url = self.ready["url"]
 
     def start_server(self, *extra: str) -> tuple[subprocess.Popen[str], dict]:
         proc = subprocess.Popen(
-            [sys.executable, str(SERVE_PY), "--scene-dir", str(self.dir), "--port", "0", "--poll", "0.1",
-             *extra, "--cache-dir", str(self.dir / "cache")],
+            [sys.executable, str(SERVE_PY), "--scene-dir", str(self.scene_dir), "--project-root", str(self.project),
+             "--port", "0", "--poll", "0.1", *extra, "--cache-dir", str(self.dir / "cache")],
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
         )
         assert proc.stdout
         ready = json.loads(proc.stdout.readline())
-        self.assertEqual(ready["scene_dir"], str(self.dir.resolve()))
+        self.assertEqual(ready["scene_dir"], str(self.scene_dir.resolve()))
         self.assertIn("idle_timeout_min", ready)
         return proc, ready
 
@@ -306,10 +324,10 @@ class ServerLive(unittest.TestCase):
     def test_routes(self) -> None:
         status, body = self.get("/api/scenes")
         self.assertEqual((status, json.loads(body)), (200, {"scenes": ["lamp-arm.scene.json"]}))
-        self.assertEqual(self.get("/scenes/lamp-arm.scene.json"), (200, EXAMPLE.read_bytes()))
+        self.assertEqual(self.get("/scenes/lamp-arm.scene.json"), (200, self.scene_path.read_bytes()))
         self.assertEqual(self.get("/scenes/..%2Fsecret.scene.json")[0], 404)
         self.assertEqual(self.get("/../../etc/passwd")[0], 404)
-        self.assertEqual(self.get("/vendor/three@0.186.1/build/not-pinned.js")[0], 404)
+        self.assertEqual(self.get("/no-such-viewer-asset.js")[0], 404)
         status, body = self.get("/")
         self.assertEqual(status, 200)
         self.assertIn(b'<script type="importmap">', body)
@@ -321,7 +339,7 @@ class ServerLive(unittest.TestCase):
         time.sleep(0.3)
         scene = example()
         scene["title"] = "Edited"
-        (self.dir / EXAMPLE.name).write_text(json.dumps(scene), encoding="utf-8")
+        self.scene_path.write_text(json.dumps(scene), encoding="utf-8")
         started = time.monotonic()
         lines = [resp.readline().strip() for _ in range(2)]
         resp.close()
@@ -329,17 +347,30 @@ class ServerLive(unittest.TestCase):
         self.assertEqual(json.loads(lines[1].removeprefix(b"data: ")), {"files": ["lamp-arm.scene.json"]})
         self.assertLess(time.monotonic() - started, 3)
 
-    def test_screenshot_upload(self) -> None:
+    def test_screenshot_upload_publishes_a_content_bound_layout_bundle(self) -> None:
         png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
-        body = {"scene": "lamp-arm.scene.json", "variant": "long-reach",
+        scene_sha = hashlib.sha256(self.scene_path.read_bytes()).hexdigest()
+        capture = {"scene": "lamp-arm.scene.json", "scene_sha256": scene_sha, "variant": "long-reach",
+                   "camera": {"position": [1, 2, 3]}, "labels": {"parts": True}}
+        body = {"scene": "lamp-arm.scene.json", "variant": "long-reach", "capture": capture,
                 "png": "data:image/png;base64," + base64.b64encode(png).decode()}
         status, result = self.post(body, origin=self.url.rstrip("/"))
         self.assertEqual(status, 201, result)
         saved = Path(result["path"])
+        capture_sha = hashlib.sha256(serve.layout.canonical_json(capture)).hexdigest()
+        bundle = self.hw / "concept" / "screenshots" / scene_sha / capture_sha
+        self.assertEqual(saved.resolve(), (bundle / "preview.png").resolve())
         self.assertEqual(saved.read_bytes(), png)
-        meta = json.loads(saved.with_suffix(".json").read_text(encoding="utf-8"))
-        self.assertEqual(meta, {"scene": "lamp-arm.scene.json", "variant": "long-reach", "png": saved.name})
-        self.assertNotIn("pose", meta)
+        manifest = json.loads((bundle / "manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["layout"], "concept.screenshot")
+        self.assertEqual(manifest["recipe"]["scene_sha256"], scene_sha)
+        self.assertEqual(manifest["recipe"]["capture_sha256"], capture_sha)
+        self.assertEqual(manifest["files"]["preview.png"], hashlib.sha256(png).hexdigest())
+        validator = SKILL.parent / "cad-record" / "scripts" / "validate.py"
+        checked = subprocess.run([sys.executable, str(validator), str(self.project)],
+                                 capture_output=True, text=True, timeout=60)
+        self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
+        self.assertEqual(json.loads(checked.stdout), {"ok": True, "findings": []})
         self.assertEqual(self.post(body, origin="http://evil.example")[0], 403)
         self.assertEqual(self.post({**body, "png": "data:image/png;base64,aGVsbG8="})[0], 400)
         self.assertEqual(self.post({**body, "scene": "../x.scene.json"})[0], 400)
@@ -348,7 +379,7 @@ class ServerLive(unittest.TestCase):
                 base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * 16).decode()}
         status, response = self.post(body, path="api/other")
         self.assertEqual(status, 404, response)
-        self.assertFalse((self.dir / "screenshots").exists())
+        self.assertFalse((self.scene_dir / "screenshots").exists())
 
     def test_a_rebound_host_name_is_refused(self) -> None:
         port = self.url.rstrip("/").rsplit(":", 1)[1]
@@ -359,7 +390,7 @@ class ServerLive(unittest.TestCase):
         body = {"scene": "lamp-arm.scene.json", "png": png}
         status, _ = self.post(body, origin=f"http://evil.example:{port}", host=f"evil.example:{port}")
         self.assertEqual(status, 403)
-        self.assertFalse((self.dir / "screenshots").exists())
+        self.assertFalse((self.scene_dir / "screenshots").exists())
 
     def test_sigterm_exits_cleanly(self) -> None:
         self.proc.send_signal(signal.SIGTERM)
@@ -397,7 +428,7 @@ class ServerTimeout(unittest.TestCase):
         def serve_forever() -> None:
             try:
                 serve.run([
-                    "--scene-dir", str(self.dir), "--port", "0", "--idle-timeout",
+                    "--scene-dir", str(self.dir), "--project-root", str(self.dir), "--port", "0", "--idle-timeout",
                     "1" if idle_timeout_s is not None else "0", "--poll", "0.1",
                     "--cache-dir", str(self.dir / "cache"),
                 ], idle_timeout_s=idle_timeout_s, ready_callback=ready, install_signals=False,
