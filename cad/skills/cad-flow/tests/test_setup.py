@@ -67,10 +67,22 @@ class PlanTests(unittest.TestCase):
         self.assertFalse(any(item.id.startswith("harness-") for item in implicit))
         self.assertIn("harness-opencode", [item.id for item in requested])
 
-    def test_linux_browser_library_plan_includes_manual_non_apt_guidance(self) -> None:
+    def test_linux_browser_libraries_offer_playwright_deps_for_debian_and_ubuntu_derivatives(self) -> None:
         check = setup.preflight.Check(
             "playwright-chromium", "Playwright Chromium", "fail", True,
-            "Could not launch Chromium: libfoo.so.1: cannot open shared object file", "install deps")
+            "Could not launch Chromium", "install deps")
+        for release in ({"ID": "ubuntu"}, {"ID": "linuxmint", "ID_LIKE": "ubuntu debian"}):
+            with self.subTest(release=release), \
+                    patch.object(setup.platform, "system", return_value="Linux"), \
+                    patch.object(setup, "_release_info", return_value=release):
+                items = setup.plan(setup.preflight.Report((check,)), self.root, self.home, self.env)
+            browser = next(item for item in items if item.id == "browser-libraries")
+            self.assertIn("playwright install-deps chromium", browser.command)
+
+    def test_linux_browser_libraries_keep_manual_advice_outside_debian_family(self) -> None:
+        check = setup.preflight.Check(
+            "playwright-chromium", "Playwright Chromium", "fail", True,
+            "Could not launch Chromium: libfoo.so.1", "install deps")
         with patch.object(setup.platform, "system", return_value="Linux"), \
                 patch.object(setup, "_release_info", return_value={"ID": "amzn"}):
             items = setup.plan(setup.preflight.Report((check,)), self.root, self.home, self.env)
@@ -78,7 +90,24 @@ class PlanTests(unittest.TestCase):
         self.assertIn("Debian/Ubuntu only", browser.command)
         self.assertIn("libfoo.so.1", browser.command)
 
+    def test_linux_manual_plan_includes_ocp_shared_libraries(self) -> None:
+        with patch.object(setup.platform, "system", return_value="Linux"):
+            items = setup.plan(report(), self.root, self.home, self.env)
+        manual = next(item for item in items if item.id == "manual-libraries")
+        for library in ("libglvnd-glx", "libX11", "expat"):
+            self.assertIn(library, manual.command)
 
+    def test_setup_imports_subprocess_for_run_and_exception_path(self) -> None:
+        self.assertIsNotNone(setup.subprocess)
+        with patch.object(setup.subprocess, "run", side_effect=FileNotFoundError("missing")):
+            with self.assertRaises(FileNotFoundError):
+                setup._run(["missing-command"])
+
+    def test_release_info_parses_id_like(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "os-release"
+            path.write_text('ID="linuxmint"\nID_LIKE="ubuntu debian"\n', encoding="utf-8")
+            self.assertTrue(setup._is_debian_family(setup._release_info(path)))
 class MainTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
