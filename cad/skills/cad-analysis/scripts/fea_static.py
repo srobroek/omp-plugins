@@ -10,9 +10,10 @@ import argparse
 import hashlib
 import json
 import math
-import os
+import re
 import subprocess
 import uuid
+import os
 from pathlib import Path
 from typing import Any
 
@@ -223,13 +224,14 @@ def run_directory(case_path: Path, run_id: str, scratch_root: Path | None = None
 
 
 def run_job(case_path: Path, case: dict[str, Any], timeout: float = 600.0, *, scratch_root: Path | None = None,
-            result_path: Path | None = None) -> tuple[dict[str, Any], int]:
+            result_path: Path | None = None, solver_versions: dict[str, str] | None = None) -> tuple[dict[str, Any], int]:
     run_id = uuid.uuid4().hex
     run_dir = run_directory(case_path, run_id, scratch_root)
     run_dir.mkdir(parents=True, exist_ok=True)
-    job_path = run_dir / f"fea_static_{run_id}.py"
+    job_path = run_dir / "fea_job.py"
     marker_path = run_dir / f"fea_static_{run_id}.json"
     output_path = result_path or case_path.parent.resolve() / "results.json"
+    versions = solver_versions or {}
     job = {
         "run_id": run_id,
         "step": case["_step"],
@@ -246,8 +248,8 @@ def run_job(case_path: Path, case: dict[str, Any], timeout: float = 600.0, *, sc
         "mesh_size": case["mesh_size"],
         "output": str(marker_path),
         "run_directory": str(run_dir),
+        "solver_versions": versions,
     }
-    # JSON is data, not Python source: the generated job loads it as a literal.
     job_json = json.dumps(job)
     script = f'''import json, os, re, shutil, sys, time, math
 import FreeCAD as App, Part, Import, ObjectsFem
@@ -369,7 +371,7 @@ def run():
         if problems: raise RuntimeError("CalculiX prerequisites failed: %r" % problems)
         fea.write_inp_file(); fea.ccx_run(); fea.load_results(); solve_seconds=time.perf_counter()-solver_started
         result={{"run_id":JOB["run_id"], "part":JOB.get("part"), "occurrence":JOB.get("occurrence"), "solid_index":JOB.get("solid_index"), "max_von_mises_mpa":max_stress, "max_displacement_mm":max_displacement, "safety_factor_yield":safety_factor, "node_count":nodes, "element_count":elements, "solve_time_seconds":solve_seconds}}
-        result["solver_versions"]={{"freecad":".".join(App.Version()[:3])}}
+        result["solver_versions"]=JOB["solver_versions"]
         result["warnings"]=[]
         result["worst_case_pose"]={{"step":JOB["step"], **({{"pose":JOB["pose"]}} if JOB.get("pose") is not None else {{}}), **({{"evidence":JOB["evidence"]}} if JOB.get("evidence") is not None else {{}})}}
         result["required_safety_factor"]=JOB.get("required_safety_factor")
@@ -377,7 +379,8 @@ def run():
         result["mesh_input_files"]=["GmshGeometry.brep", "GmshInput.geo"]
         result["status"]="fail" if result["required_safety_factor"] is not None and safety_factor is not None and safety_factor < result["required_safety_factor"] else "pass"
         result["retained_files"]=[os.path.relpath(os.path.join(root,name), JOB["run_directory"]).replace(os.sep,"/")
-                                  for root,dirs,files in os.walk(JOB["run_directory"]) for name in files]
+                                  for root,dirs,files in os.walk(JOB["run_directory"]) for name in files
+                                  if not name.endswith(".pyc") and "__pycache__" not in os.path.relpath(root, JOB["run_directory"]).split(os.sep)]
         with open(JOB["output"], "w", encoding="utf-8") as f: json.dump(result,f,indent=2); f.write("\\n")
     finally:
         App.closeDocument(doc.Name)
@@ -429,35 +432,96 @@ except Exception as e:
     output_path.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     return result, status
 
-
-def _version_inputs(hw: Path, requested: str) -> tuple[str, Path, Path]:
-    version = LAYOUT.latest(hw) if requested == "latest" else requested
-    version_dir = LAYOUT.version_dir(hw, version)
-    if not (version_dir / "manifest.json").is_file():
-        raise CaseError(f"--version {version}: {version_dir} is not a built version")
-    problems = LAYOUT.verify(version_dir)
-    if problems:
-        raise CaseError(f"--version {version}: integrity failure: {'; '.join(problems)}")
-    record = LAYOUT.resolve(hw, "version.record", V=version)
-    return version, version_dir, record
+def _solver_binary(freecad: Path, name: str) -> Path | None:
+    candidates = [freecad.resolve().parent / name]
+    candidates.extend(Path(path) / name for path in os.environ.get("PATH", "").split(os.pathsep) if path)
+    return next((path for path in candidates if path.is_file() and os.access(path, os.X_OK)), None)
 
 
-def _scratch_output(hw: Path | None, path: Path) -> Path:
-    target = path.resolve()
-    parts = target.parts
-    if ".cad-work" not in parts:
-        raise CaseError(f"--out must be under .cad-work, not {target}")
-    index = parts.index(".cad-work")
-    if index + 1 >= len(parts):
-        raise CaseError(f"--out must name a file under .cad-work, not {target}")
-    if hw is not None:
-        try:
-            relative = LAYOUT.relative(hw, target)
-        except LAYOUT.LayoutError as error:
-            raise CaseError(f"--out must be under {hw.parent / '.cad-work'}, not {target}") from error
-        if not relative.startswith(".cad-work/"):
-            raise CaseError(f"--out must be under {hw.parent / '.cad-work'}, not {target}")
-    return target
+def _tool_version(command: Path | None, args: tuple[str, ...]) -> str:
+    if command is None:
+        raise CaseError("required solver executable was not found")
+    try:
+        completed = subprocess.run([str(command), *args], capture_output=True, text=True, timeout=30, check=False)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise CaseError(f"cannot query solver version for {command}: {exc}") from exc
+    match = re.search(r"\b\d+(?:\.\d+){1,3}\b", completed.stdout + completed.stderr)
+    if match is None:
+        raise CaseError(f"cannot determine solver version for {command}")
+    return match.group(0)
+
+
+def solver_versions() -> dict[str, dict[str, str]]:
+    """Resolve tools beside FreeCAD first, then PATH; record each absolute path and version."""
+    freecad = find_freecad()
+    if freecad is None:
+        raise CaseError("freecadcmd not found; set FREECADCMD or add it to PATH")
+    gmsh = _solver_binary(freecad, "gmsh")
+    calculix = _solver_binary(freecad, "ccx")
+    return {
+        "freecad": {"path": str(freecad.resolve()), "version": _tool_version(freecad, ("--version",))},
+        "gmsh": {"path": str(gmsh), "version": _tool_version(gmsh, ("--version",))},
+        "calculix": {"path": str(calculix), "version": _tool_version(calculix, ("-v",))},
+    }
+
+
+def _snapshot_record_hashes(record_dir: Path, case: dict[str, Any]) -> dict[str, str]:
+    """Read build-time records relevant to analysis and bind their hashes into the recipe."""
+    names = ["product.yaml", "interfaces.yaml", "assembly.yaml"]
+    if case.get("part"):
+        names.append(f"parts/{case['part']}/part.yaml")
+    hashes = {}
+    for name in names:
+        path = record_dir / name
+        if path.is_file():
+            try:
+                document = yaml.safe_load(path.read_text(encoding="utf-8"))
+            except (OSError, yaml.YAMLError) as error:
+                raise CaseError(f"cannot read version record snapshot {path}: {error}") from error
+            if not isinstance(document, dict):
+                raise CaseError(f"version record snapshot {path} must contain a mapping")
+            hashes[f"record/{name}"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return hashes
+
+def _is_solver_evidence(relative_path: str) -> bool:
+    path = Path(relative_path)
+    return (path.suffix != ".pyc" and "__pycache__" not in path.parts
+            and path.name != "fea_job.py"
+            and not (path.name.startswith("fea_static_") and path.suffix == ".json"))
+
+
+def _producer_code_hashes() -> dict[str, str]:
+    paths = (Path(__file__), Path(__file__).with_name("fea_part_selection.py"))
+    return {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in paths}
+
+
+def _input_hashes(case: dict[str, Any]) -> dict[str, str]:
+    inputs = {"step_sha256": hashlib.sha256(Path(case["_step"]).read_bytes()).hexdigest()}
+    if case.get("_evidence"):
+        evidence = Path(case["_evidence"]["path"])
+        inputs["evidence_sha256"] = hashlib.sha256(evidence.read_bytes()).hexdigest()
+    return inputs
+
+
+def _case_options(case: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "part": case.get("part"), "occurrence": case.get("occurrence"), "solid_index": case.get("solid_index"),
+        "material": case["material"], "fixed_faces": case["fixed_faces"], "loads": case["loads"],
+        "mesh_size": case["mesh_size"], "pose": case.get("pose"),
+        "required_safety_factor": case.get("required_safety_factor"),
+        "mesh_settings": {
+            "threads": 1, "random_seed": 1, "random_factor_3d": 0,
+            "optimize": False, "optimize_netgen": False, "high_order_optimize": 2,
+            "calculix_matrix_solver": "spooles",
+        },
+    }
+
+
+def _scratch_hw(path: Path) -> Path:
+    """Locate the project anchor of a standalone .cad-work output for layout.scratch_path."""
+    parts = path.resolve().parts
+    index = parts.index(".cad-work") if ".cad-work" in parts else len(parts) - 1
+    return Path(*parts[:index]) / "hw"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -477,62 +541,87 @@ def main(argv: list[str] | None = None) -> int:
     try:
         case_path = args.case.resolve()
         case = load_case(case_path)
-        version = None
         if args.hw:
-            version, version_dir, record_dir = _version_inputs(args.hw, args.version)
+            version, version_dir, record_dir = LAYOUT.built_version(args.hw, args.version)
             case_id = args.case_id or case_path.parent.name
             if not case_id or case_id == "analysis":
                 raise CaseError("--case-id is required when the case file is not under hw/analysis/cases/<id>/")
-            LAYOUT.resolve(args.hw, "bundle.analysis", V=version, S=case_id)
+            params = {"V": version, "S": case_id}
             result_dir = LAYOUT.bundle_dir(args.hw, "analysis", version, case_id)
             try:
                 case_relative = case_path.relative_to(Path(args.hw).resolve())
-            except ValueError as error:
-                raise CaseError("versioned FEA case YAML must be under hw/analysis/cases/<case-id>/") from error
-            case_dir = LAYOUT.resolve(args.hw, "analysis.case", ID=case_id)
-            if len(case_relative.parts) < 4 or case_relative.parts[:4] != ("analysis", "cases", case_id, case_relative.parts[3]):
+            except ValueError as exc:
+                raise CaseError("versioned FEA case YAML must be under hw/analysis/cases/<case-id>/") from exc
+            if len(case_relative.parts) < 4 or case_relative.parts[:3] != ("analysis", "cases", case_id):
                 raise CaseError("versioned FEA case YAML must be under hw/analysis/cases/<case-id>/")
+            if case.get("part") and not (record_dir / "parts" / case["part"] / "part.yaml").is_file():
+                raise CaseError(f"version {version}: record snapshot is missing part {case['part']}")
+            if case.get("part"):
+                try:
+                    part_record = yaml.safe_load((record_dir / "parts" / case["part"] / "part.yaml").read_text(encoding="utf-8"))
+                except (OSError, yaml.YAMLError) as exc:
+                    raise CaseError(f"cannot read version part snapshot for {case['part']}: {exc}") from exc
+                if not isinstance(part_record, dict):
+                    raise CaseError(f"version part snapshot for {case['part']} must contain a mapping")
+                case["material"].setdefault("name", part_record.get("material", "Case material"))
+            recipe_inputs = {**_input_hashes(case), **_snapshot_record_hashes(record_dir, case)}
             if args.out is not None:
                 raise CaseError("--out is only allowed for standalone scratch analyses")
-            stage = LAYOUT.staging(args.hw, "bundle.analysis")
-            output = stage / "results.json"
-            job_scratch = Path(args.hw).parent / ".cad-work"
-            job_scratch.mkdir(parents=True, exist_ok=True)
-            result, status = run_job(case_path, case, scratch_root=job_scratch, result_path=output)
-            if status != 2:
-                run_dir = Path(result["run_directory"])
-                for rel in sorted(result.get("retained_files", [])):
-                    source = run_dir / rel
-                    if source.is_file():
+            tools = solver_versions()
+            recipe = {
+                "inputs": recipe_inputs,
+                "case_yaml_sha256": hashlib.sha256(case_path.read_bytes()).hexdigest(),
+                # tool identity is its version; the absolute install path differs per host and goes to results.json
+                "solver_versions": {name: tool["version"] for name, tool in tools.items()},
+                "options": _case_options(case),
+                "producer_code_sha256": _producer_code_hashes(),
+            }
+            reused = LAYOUT.reusable(args.hw, "bundle.analysis", params, recipe, replace=args.replace)
+            if reused is not None:
+                result = json.loads((reused / "results.json").read_text(encoding="utf-8"))
+                result["bundle"] = str(reused)
+                result["reused"] = True
+                status = result_exit_code(result)
+            else:
+                stage = LAYOUT.staging(args.hw, "bundle.analysis")
+                output = stage / "results.json"
+                job_scratch = Path(args.hw).parent / ".cad-work"
+                job_scratch.mkdir(parents=True, exist_ok=True)
+                result, status = run_job(case_path, case, scratch_root=job_scratch,
+                                         result_path=output, solver_versions=tools)
+                if status != 2:
+                    run_dir = Path(result["run_directory"])
+                    evidence_files = []
+                    evidence_names = [name for name in result.get("retained_files", []) if _is_solver_evidence(name)]
+                    for rel in sorted(evidence_names):
+                        source = run_dir / rel
+                        if not source.is_file():
+                            raise CaseError(f"FreeCAD listed a missing retained solver file: {rel}")
                         target = stage / "evidence" / rel
                         target.parent.mkdir(parents=True, exist_ok=True)
                         shutil.copyfile(source, target)
-                for extra in ("spec.json", "job.py"):
-                    source = run_dir / extra
-                    if source.is_file():
-                        shutil.copyfile(source, stage / "evidence" / extra)
-                result["run_directory"] = None
-                result["bundle"] = str(result_dir)
-                output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
-                recipe = {"case": case_id, "case_yaml_sha256": hashlib.sha256(case_path.read_bytes()).hexdigest(),
-                          "inputs": {"step_sha256": hashlib.sha256(Path(case["_step"]).read_bytes()).hexdigest()},
-                          "material": case["material"], "fixed_faces": case["fixed_faces"], "loads": case["loads"],
-                          "mesh_size": case["mesh_size"], "part": case.get("part"),
-                          "occurrence": case.get("occurrence"), "solid_index": case.get("solid_index"),
-                          "pose": case.get("pose"), "evidence": case.get("_evidence"),
-                          "required_safety_factor": case.get("required_safety_factor")}
-                published = LAYOUT.publish(args.hw, "bundle.analysis", {"V": version, "S": case_id}, stage,
-                                           recipe=recipe, producer="cad-analysis fea_static.py", status=result["status"],
-                                           replace=args.replace)
-                result["bundle"] = str(published.path)
-                result["reused"] = published.reused
-            else:
-                shutil.rmtree(stage, ignore_errors=True)
+                        evidence_files.append(target.relative_to(stage).as_posix())
+                    result["retained_files"] = evidence_files
+                    result["mesh_input_files"] = [f"evidence/{Path(name).name}"
+                                                   for name in result.get("mesh_input_files", [])]
+                    result["run_directory"] = None
+                    result["bundle"] = str(result_dir)
+                    output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+                    published = LAYOUT.publish(
+                        args.hw, "bundle.analysis", params, stage, recipe=recipe,
+                        producer="cad-analysis fea_static.py", status=result["status"], replace=args.replace,
+                    )
+                    result["bundle"] = str(published.path)
+                    result["reused"] = published.reused
+                else:
+                    shutil.rmtree(stage, ignore_errors=True)
         else:
-            output = _scratch_output(args.hw, args.out) if args.out is not None else None
-            scratch_root = (Path(args.hw).parent / ".cad-work" if args.hw else output.parent if output else None)
-            if scratch_root is not None:
-                scratch_root.mkdir(parents=True, exist_ok=True)
+            output = None
+            if args.out is not None:
+                output = LAYOUT.scratch_path(_scratch_hw(args.out), args.out, "--out")
+            scratch_root = output.parent if output is not None else None
+            if output is not None:
+                output.parent.mkdir(parents=True, exist_ok=True)
             result, status = run_job(case_path, case, scratch_root=scratch_root, result_path=output)
     except (CaseError, OSError, LAYOUT.LayoutError) as exc:
         print(json.dumps(error(str(exc), code="invalid_case")))

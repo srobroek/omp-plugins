@@ -171,6 +171,13 @@ def load_stack(path: Path) -> Any:
             return yaml.safe_load(handle)
         except yaml.YAMLError as error:
             raise StackError(f"invalid YAML: {error}") from error
+def _scratch_hw(path: Path) -> Path:
+    """Locate the project anchor of a standalone .cad-work output for layout.scratch_path."""
+    parts = path.resolve().parts
+    index = parts.index(".cad-work") if ".cad-work" in parts else len(parts) - 1
+    return Path(*parts[:index]) / "hw"
+
+
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -190,32 +197,37 @@ def main(argv: list[str] | None = None) -> int:
         requirement = result["requirement"]
         status = "fail" if requirement is not None and not requirement["pass"] else "pass"
         if args.hw:
-            version = LAYOUT.latest(args.hw) if args.version == "latest" else args.version
-            if version is None:
-                raise StackError("no built version: latest.json is absent")
-            version_dir = LAYOUT.version_dir(args.hw, version)
-            if not (version_dir / "manifest.json").is_file() or LAYOUT.verify(version_dir):
-                raise StackError(f"--version {version}: missing or invalid built version")
+            result["status"] = status
+        if args.hw:
+            version, _, _ = LAYOUT.built_version(args.hw, args.version)
             stack_id = result.get("id")
             if not isinstance(stack_id, str) or not stack_id:
                 raise StackError("stack id is required for versioned publication")
-            LAYOUT.resolve(args.hw, "bundle.analysis", V=version, S=stack_id)
+            params = {"V": version, "S": stack_id}
             if args.out is not None:
                 raise StackError("--out is only allowed for standalone scratch output")
-            stage = LAYOUT.staging(args.hw, "bundle.analysis")
-            output = stage / "results.json"
-            output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
-            recipe = {"case": stack_id, "source_yaml_sha256": hashlib.sha256(stack_path.read_bytes()).hexdigest(),
-                      "result": result}
-            published = LAYOUT.publish(args.hw, "bundle.analysis", {"V": version, "S": stack_id}, stage,
-                                       recipe=recipe, producer="cad-fits stackup.py", status=status,
-                                       replace=args.replace)
-            result["bundle"] = str(published.path)
-            result["reused"] = published.reused
+            recipe = {
+                "source_yaml_sha256": hashlib.sha256(stack_path.read_bytes()).hexdigest(),
+                "options": {"result_decimals": RESULT_DECIMALS,
+                            "method": (stack.get("requirement") or {}).get("method", "worst_case")},
+            }
+            reused = LAYOUT.reusable(args.hw, "bundle.analysis", params, recipe, replace=args.replace)
+            if reused is not None:
+                result = json.loads((reused / "results.json").read_text(encoding="utf-8"))
+                result["bundle"] = str(reused)
+                result["reused"] = True
+                status = result["status"]
+            else:
+                stage = LAYOUT.staging(args.hw, "bundle.analysis")
+                output = stage / "results.json"
+                output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+                published = LAYOUT.publish(args.hw, "bundle.analysis", params, stage,
+                                           recipe=recipe, producer="cad-fits stackup.py", status=status,
+                                           replace=args.replace)
+                result["bundle"] = str(published.path)
+                result["reused"] = published.reused
         elif args.out is not None:
-            target = args.out.resolve()
-            if ".cad-work" not in target.parts or target.parts.index(".cad-work") + 1 >= len(target.parts):
-                raise StackError(f"--out must be under .cad-work, not {target}")
+            target = LAYOUT.scratch_path(_scratch_hw(args.out), args.out, "--out")
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
         json.dump(result, sys.stdout, indent=2)
