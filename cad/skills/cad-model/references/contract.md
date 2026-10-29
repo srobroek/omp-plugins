@@ -32,22 +32,20 @@ time; runner context is not persisted as a design parameter.
 
 ### Text fonts
 
-Text geometry MUST use an explicit font file path. Opt in to the runner's verified FreeCAD TechDraw
-Osifont with `REQUIRES_OSIFONT = True`. The runner adds the resolved `font_path` to the private
-`build(params)` copy. It remains execution context and is excluded from the version manifest.
+Text geometry MUST use a path to a font file. Set `REQUIRES_OSIFONT = True` to use FreeCAD TechDraw Osifont.
+The runner asks cad-flow preflight for its FreeCAD command. It checks the bundled font's SHA-256 before the build.
+Then it passes `font_path` to the private copy of `build(params)`. That path is execution context, not a design parameter.
 
-Pass `font_path` to build123d or `fontPath` to CadQuery. Never choose only a family name. If FreeCAD
-or the pinned font bytes are unavailable, the runner fails the part. It never allows OCCT to use a
-host-default font. This hard failure prevents publishing geometry with unrepeatable text.
+Pass `font_path` to build123d or `fontPath` to CadQuery. Do not select a font by family name alone.
+The source parser refuses `text()` or `Text()` calls without an explicit font-file path.
+An explicit path may name another font, but only Osifont bytes are pinned by the runner.
 
-The model source parser refuses `text()` and `Text()` calls without an explicit font file path.
-Any explicit font file is permitted. To use the shared TechDraw font, models set
-`REQUIRES_OSIFONT = True` and pass the injected `font_path` value.
+If FreeCAD or the pinned font is missing, the runner fails the part. It does not use the host's default font.
+This fail-closed rule prevents publishing geometry with text that changes by host.
+The font is FreeCAD 1.1.4's 114,764-byte `osifont-lgpl3fe.ttf` file.
+Its SHA-256 is `f681b2419818198a8421b9db01602862367dbc3338c0e8e963fda73f545262b8`.
+The license allows LGPL v3, GPL v2, or GPL v3, each with the GPL font exception.
 
-FreeCAD 1.1.4 bundles the same 114,764-byte `osifont-lgpl3fe.ttf` on macOS and Linux. Its SHA-256 is
-`f681b2419818198a8421b9db01602862367dbc3338c0e8e963fda73f545262b8`. The accompanying license file
-offers three alternatives: GPL v3 with the font exception, GPL v2 with the font exception, or LGPL
-v3 with the font exception.
 
 Candidate inventory: the pinned CadQuery/OCP environment includes Matplotlib 3.11.2 and DejaVuSans
 (756,072 bytes, SHA-256 `3fdf69cabf06049ea70a00b5919340e2ce1e6d02b0cc3c4b44fb6801bd1e0d22`) on both
@@ -157,14 +155,16 @@ part. cad-design's `build_reference.py` builds its reference models through the 
 | `safe_fuse(shape, *others)` | max V(inputs) <= V <= sum V(inputs) |
 | `safe_intersect(shape, *others)` | 0 < V <= min V(inputs) |
 
-Refusal conditions:
+The runner rejects invalid, null, non-solid, or zero-volume inputs.
+It rejects kernel errors and invalid results.
+Results must contain solids that do not overlap.
 
-- An input is invalid, null, non-solid, or has non-positive volume.
-- A kernel error occurs.
-- The result is invalid or has no solids.
-- The result's solid members overlap.
+Volume bounds allow 1e-7 relative kernel noise, or at least 1e-6 mm^3.
+An operation preserves the first argument's type.
+CadQuery `Shape` and `Workplane` inputs keep their types.
+Build123d `Part` inputs remain `Part` values.
+Other build123d shapes return as shapes.
 
-Bounds allow 1e-7 relative kernel noise, or at least 1e-6 mm^3. The result keeps the first
-argument's type: CadQuery `Shape` → cast `Shape`, `Workplane` → new `Workplane`, build123d `Part` →
-`Part`, other build123d shapes → cast shape. A refusal raises `SafeEditError`. `run` reports it per
-part with the `model.py` line. It writes no version.
+On refusal, the operation raises `SafeEditError`.
+`run` reports the failure for that part and names its `model.py` line.
+It does not write a version.

@@ -241,11 +241,15 @@ class DeterministicTextTests(unittest.TestCase):
             font.parent.mkdir(parents=True)
             font.write_bytes(b"verified osifont test bytes")
             digest = hashlib.sha256(font.read_bytes()).hexdigest()
-            with (mock.patch.object(fonts, "_freecadcmds", return_value=[command]),
-                  mock.patch.object(fonts, "OSIFONT_SHA256", digest)):
-                resolved = Path(fonts.osifont_path.__wrapped__())
+            with mock.patch.object(fonts, "_freecadcmd", return_value=command), \
+                 mock.patch.object(fonts, "OSIFONT_SHA256", digest):
+                resolved = Path(fonts._osifont_for(command))
             self.assertEqual(resolved, font.resolve())
-            self.assertEqual(hashlib.sha256(resolved.read_bytes()).hexdigest(), digest)
+
+
+    def test_freecad_lookup_uses_the_preflight_candidate_order(self) -> None:
+        with mock.patch.dict(os.environ, {"FREECADCMD": "/selected/freecadcmd"}):
+            self.assertEqual(fonts._freecadcmd(), Path("/selected/freecadcmd"))
 
     def test_osifont_resolver_rejects_unexpected_font_bytes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -256,13 +260,13 @@ class DeterministicTextTests(unittest.TestCase):
             command.write_text("", encoding="utf-8")
             font.parent.mkdir(parents=True)
             font.write_bytes(b"unexpected font bytes")
-            with mock.patch.object(fonts, "_freecadcmds", return_value=[command]):
+            with mock.patch.object(fonts, "OSIFONT_SHA256", fonts.OSIFONT_SHA256):
                 with self.assertRaisesRegex(RuntimeError, "unsupported TechDraw Osifont"):
-                    fonts.osifont_path.__wrapped__()
+                    fonts._osifont_for(command)
 
     def test_missing_freecad_font_fails_instead_of_using_system_font(self) -> None:
-        with mock.patch.object(fonts, "_freecadcmds", return_value=[]):
-            with self.assertRaisesRegex(FileNotFoundError, "cannot find FreeCAD's TechDraw Osifont"):
+        with mock.patch.object(fonts, "_freecadcmd", return_value=None):
+            with self.assertRaisesRegex(FileNotFoundError, "cannot find the preflight-selected FreeCAD"):
                 fonts.osifont_path.__wrapped__()
 
     def test_text_fixtures_build_identically_in_both_kernels(self) -> None:

@@ -5,42 +5,39 @@ from __future__ import annotations
 import functools
 import hashlib
 import os
-import shutil
+import sys
 from pathlib import Path
+
 OSIFONT_SHA256 = "f681b2419818198a8421b9db01602862367dbc3338c0e8e963fda73f545262b8"
 OSIFONT_RELATIVE_PATH = Path("Mod/TechDraw/Resources/fonts/osifont-lgpl3fe.ttf")
-MACOS_FREECADCMD = Path("/Applications/FreeCAD.app/Contents/Resources/bin/freecadcmd")
-FREECAD_HOME_COMMAND = Path.home() / ".local/bin/freecadcmd"
 
-def _freecadcmds() -> list[Path]:
-    """Return FreeCAD's configured command before trying preflight's fallback candidates."""
-    configured = os.environ.get("FREECADCMD")
-    if configured:
-        return [Path(configured)]
-    for name in ("freecadcmd", "FreeCADCmd"):
-        found = shutil.which(name)
-        if found:
-            return [Path(found)]
-    if MACOS_FREECADCMD.is_file():
-        return [MACOS_FREECADCMD]
-    local = Path.home() / ".local/bin/freecadcmd"
-    if local.is_file() and os.access(local, os.X_OK):
-        return [local]
-    return []
+
+def _freecadcmd() -> Path | None:
+    """Use CAD preflight's selected FreeCAD command without running its other checks."""
+    preflight = Path(__file__).resolve().parents[4] / "skills" / "cad-flow" / "scripts"
+    if str(preflight) not in sys.path:
+        sys.path.insert(0, str(preflight))
+    import preflight as cad_preflight
+
+    return cad_preflight.find_freecadcmd(os.environ)
+
+
+def _osifont_for(command: Path) -> str:
+    font = command.resolve().parent.parent / "share" / OSIFONT_RELATIVE_PATH
+    if not font.is_file():
+        raise FileNotFoundError(f"FreeCAD's TechDraw Osifont is missing: {font}")
+    digest = hashlib.sha256(font.read_bytes()).hexdigest()
+    if digest != OSIFONT_SHA256:
+        raise RuntimeError(f"unsupported TechDraw Osifont at {font}: SHA-256 {digest}, "
+                           f"expected {OSIFONT_SHA256}")
+    return str(font.resolve())
 
 
 @functools.cache
 def osifont_path() -> str:
-    """Return FreeCAD's checked TechDraw Osifont path, or fail rather than use a host fallback."""
-    for command in _freecadcmds():
-        resource_dir = command.resolve().parent.parent / "share"
-        font = resource_dir / OSIFONT_RELATIVE_PATH
-        if not font.is_file():
-            continue
-        digest = hashlib.sha256(font.read_bytes()).hexdigest()
-        if digest != OSIFONT_SHA256:
-            raise RuntimeError(f"unsupported TechDraw Osifont at {font}: SHA-256 {digest}, "
-                               f"expected {OSIFONT_SHA256}")
-        return str(font.resolve())
-    raise FileNotFoundError("cannot find FreeCAD's TechDraw Osifont; install FreeCAD 1.1.4 or set FREECADCMD "
-                            "to its bundled freecadcmd executable")
+    """Return the preflight-selected FreeCAD TechDraw Osifont, verifying its pinned bytes."""
+    command = _freecadcmd()
+    if command is None or not command.is_file() or not os.access(command, os.X_OK):
+        raise FileNotFoundError("cannot find the preflight-selected FreeCAD freecadcmd; "
+                                "install FreeCAD 1.1.4 or set FREECADCMD")
+    return _osifont_for(command)
