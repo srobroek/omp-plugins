@@ -270,10 +270,11 @@ class DeterministicTextTests(unittest.TestCase):
                 fonts.osifont_path.__wrapped__()
 
     def test_text_fixtures_build_identically_in_both_kernels(self) -> None:
-        requests = {kernel: [{"pn": f"TXT-{i:04d}", "name": "Text fixture",
-                             "model": str(FIXTURES / kernel / "text.py"), "step": "unused"}]
-                    for i, kernel in enumerate(KERNELS, start=1)}
-        results = build.run_kernels(requests)
+        with tempfile.TemporaryDirectory() as tmp:  # run_kernels writes each part's STEP to its "step" path
+            requests = {kernel: [{"pn": f"TXT-{i:04d}", "name": "Text fixture",
+                                 "model": str(FIXTURES / kernel / "text.py"), "step": str(Path(tmp) / f"{kernel}.step")}]
+                        for i, kernel in enumerate(KERNELS, start=1)}
+            results = build.run_kernels(requests)
         shapes = {kernel: next(iter(result["parts"].values())) for kernel, result in results.items()}
         for kernel, part in shapes.items():
             self.assertTrue(part["ok"], part)
