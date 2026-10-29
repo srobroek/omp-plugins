@@ -1004,6 +1004,7 @@ def run(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
                                        producer="cad-render render.py", status=metadata["status"], replace=args.replace)
         except layout.PublishConflict as exc:
             raise InfraError(str(exc)) from exc
+        out_dir = published.path
     summary = {"status": metadata["status"], "cache": "miss", "version": version.label, "out_dir": str(out_dir),
                "pngs": {v: str(out_dir / view_records[v]["png"]) for v in views},
                "failures": {v: r["quality"]["failures"] for v, r in view_records.items() if r["quality"]["failures"]},
