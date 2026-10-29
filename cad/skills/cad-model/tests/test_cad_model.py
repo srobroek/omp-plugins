@@ -513,8 +513,13 @@ class ManufacturingStateTests(unittest.TestCase):
         base = {"size": 40.0, "height": 20.0, "bore": 6.0}
 
         def attempt(name: str, extra: tuple[str, ...] = ()) -> None:
+            """Run v2 with `extra` parts fixed to the base too, then remove them and their joints again."""
+            joints = [STRAP_JOINT.format(pn=pn).replace("J-001", f"J-{i:03d}") for i, pn in enumerate((STRAP, *extra), 1)]
+            (hw / "assembly.yaml").write_text("joints:\n" + "".join(j.removeprefix("joints:\n") for j in joints),
+                                              encoding="utf-8")
             cls.runs[name] = cli("run", str(hw), "--label", "v2")
             cls.states[name] = version_state(hw)
+            (hw / "assembly.yaml").write_text(STRAP_JOINT.format(pn=STRAP), encoding="utf-8")
             for pn in extra:
                 shutil.rmtree(hw / "parts" / pn)
 

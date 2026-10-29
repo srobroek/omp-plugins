@@ -201,9 +201,12 @@ def inspect(target: Path, entry: Mapping[str, Any], record: Mapping[str, Any], r
 
 
 def failure_message(row: Mapping[str, Any]) -> str:
-    """The failed conditions of a part row, for a run finding."""
-    return "; ".join(f"{name}: {', '.join(row['checks'][name]['failed']) or row['checks'][name].get('message', '')}"
-                     for name in row["blocking_failures"])
+    """The failed conditions of a part row, each check's message after them, for a run finding."""
+    parts = []
+    for name in row["blocking_failures"]:
+        check = row["checks"][name]
+        parts.append(f"{name}: " + "; ".join(filter(None, (", ".join(check["failed"]), check.get("message")))))
+    return "; ".join(parts)
 
 
 def _step(path: Path, entry: Mapping[str, Any]) -> tuple[Any, dict[str, Any]]:
