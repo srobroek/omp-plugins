@@ -1,7 +1,7 @@
-"""Normalize built-version occurrence records for render, viewer and model check.
+"""Normalize built-version occurrences for render, viewer and model check.
 
-cad-record's layout owns version paths and manifests. This module only handles the occurrence
-identity shared by consumers, including legacy schema-version-1 normalization.
+cad-record's layout owns version paths and manifests. This module validates their schema-2
+inventory keys and normalizes the occurrence identity shared by its consumers.
 """
 
 from __future__ import annotations
@@ -31,11 +31,21 @@ class BuiltOccurrence:
 
 
 def schema_version(document: Any, name: str) -> int:
-    """Version 1 and schema version 2 are readable; a newer format is refused."""
+    """Read the occurrence input schema version; legacy schema 1 remains normalizable."""
     version = document.get("schema_version", 1) if isinstance(document, dict) else None
     if version not in (1, 2):
         raise VersionError(f"{name}: schema_version {version!r} is not one this plugin reads (1 or 2)")
     return version
+
+
+def validate_version_manifest(document: Any, name: str = "manifest.json") -> None:
+    """Require the schema-2 built-version manifest and its record inventories."""
+    if not isinstance(document, dict) or document.get("schema_version") != 2:
+        version = document.get("schema_version") if isinstance(document, dict) else None
+        raise VersionError(f"{name}: schema_version {version!r} is not a supported version manifest (2)")
+    for key in ("record", "manufacturing"):
+        if not isinstance(document.get(key), dict):
+            raise VersionError(f"{name}: schema_version 2 requires a `{key}` object")
 
 
 def built_occurrences(part_map: dict[str, Any], manifest: dict[str, Any],

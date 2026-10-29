@@ -29,13 +29,12 @@ class CompareRenders(unittest.TestCase):
         directory.mkdir(parents=True)
         (directory / "iso.png").write_bytes(png_rgb(pixels))
         decision = {"status": status, "failures": failures or [], "warnings": warnings or [],
-                    "strategy": strategy, "attempts": [("original", failures or [], warnings or [])]}
-        (directory / "manifest.json").write_text(json.dumps({
+                    "strategy": strategy, "attempts": [{"strategy": strategy, "failures": failures or [],
+                                                          "warnings": warnings or []}]}
+        (directory / "render.json").write_text(json.dumps({
             "views": {"iso": {"png": "iso.png", "quality": {
                 "status": decision["status"], "failures": decision["failures"], "warnings": decision["warnings"]},
-                "retry": {"strategy": decision["strategy"], "attempts": [
-                    {"strategy": attempt, "failures": af, "warnings": aw}
-                    for attempt, af, aw in decision["attempts"]]}}}}))
+                "retry": {"strategy": decision["strategy"], "attempts": decision["attempts"]}}}}))
 
     @staticmethod
     def run_compare(left: Path, right: Path) -> subprocess.CompletedProcess[str]:
@@ -73,6 +72,20 @@ class CompareRenders(unittest.TestCase):
             result = self.run_compare(root / "a", root / "b")
             self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
             self.assertEqual(json.loads(result.stdout)["decision_mismatch_views"], ["iso"])
+    def test_image_path_comes_from_render_json(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            left, right = root / "a", root / "b"
+            self.write_run(left, [(10, 20, 30)])
+            self.write_run(right, [(10, 20, 30)])
+            for directory in (left, right):
+                metadata = json.loads((directory / "render.json").read_text())
+                metadata["views"]["iso"]["png"] = "images/iso.png"
+                (directory / "images").mkdir()
+                (directory / "images" / "iso.png").write_bytes((directory / "iso.png").read_bytes())
+                (directory / "render.json").write_text(json.dumps(metadata))
+            result = self.run_compare(left, right)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
 if __name__ == "__main__":

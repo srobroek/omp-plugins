@@ -3,7 +3,7 @@
 # requires-python = ">=3.11"
 # dependencies = ["pillow==13.0.0"]
 # ///
-"""Compare two cad-render directories by decisions and a bounded PNG pixel difference."""
+"""Compare two cad-render bundles or scratch directories by decisions and PNG pixel parity."""
 from __future__ import annotations
 
 import argparse
@@ -15,12 +15,9 @@ import sys
 from pathlib import Path
 from typing import Any
 from PIL import Image, ImageChops
-def _render_data(directory: Path) -> tuple[Path, dict[str, Any]]:
-    """Read immutable bundle metadata or legacy direct-render manifests."""
-    bundle = directory / "render.json"
-    manifest = directory / "manifest.json"
-    selected = bundle if bundle.is_file() else manifest
-    return selected, json.loads(selected.read_text(encoding="utf-8"))
+def _render_data(directory: Path) -> dict[str, Any]:
+    """Read the decision metadata from a published bundle or a scratch render directory."""
+    return json.loads((directory / "render.json").read_text(encoding="utf-8"))
 
 _parity_spec = importlib.util.spec_from_file_location(
     "cad_render_parity_policy", Path(__file__).resolve().with_name("parity_policy.py"))
@@ -91,16 +88,16 @@ def compare_images(left: Path, right: Path) -> dict[str, int | float | bool]:
 
 
 def compare(left: Path, right: Path) -> dict[str, Any]:
-    _, left_manifest = _render_data(left)
-    _, right_manifest = _render_data(right)
-    left_views = left_manifest["views"]
-    right_views = right_manifest["views"]
+    left_metadata = _render_data(left)
+    right_metadata = _render_data(right)
+    left_views = left_metadata["views"]
+    right_views = right_metadata["views"]
     if set(left_views) != set(right_views):
         return {"pass": False, "reason": "view sets differ",
                 "left_views": sorted(left_views), "right_views": sorted(right_views)}
 
-    left_decisions = decisions(left_manifest)
-    right_decisions = decisions(right_manifest)
+    left_decisions = decisions(left_metadata)
+    right_decisions = decisions(right_metadata)
     decision_mismatch = [name for name in left_views if left_decisions[name] != right_decisions[name]]
     reports = {name: compare_images(left / left_views[name]["png"], right / right_views[name]["png"])
                for name in left_views}

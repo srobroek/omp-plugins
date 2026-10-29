@@ -10,7 +10,7 @@
 
 Usage:
     uv run --script skill://cad-flow/scripts/run.py cad-render/scripts/render.py HW [--version latest|vN] [--views iso front side exploded closeup-REF part-REF ...]
-        [--size 1600x1200] [--jobs N] [--force] [--cache-dir DIR]
+        [--size 1600x1200] [--jobs N] [--cache-dir DIR]
 
 Resolves the version through HW/versions/latest.json (or HW/versions/vN/), maps each part's
 part.yaml material and finish to a MeshPhysicalMaterial through assets/materials.json, serves
@@ -26,7 +26,7 @@ PN. A close-up or part view names one occurrence: `closeup-@ring-head`, or `clos
 PN placed once; a bare PN placed several times is ambiguous and refused.
 
 Each frame is graded from its pixels and subject mask. BLANK, CLIPPED, and close-up OCCLUDED (less than 25% of the subject's isolated visible pixels remain visible) make a view unusable; NO_SHADOW and INVERTED_SHADOW are cosmetic warnings and keep the PNG.
-A rerun whose source (GLB, part map, manifest, metrics, assembly.yaml), materials, and renderer hashes match a passing or warning manifest is a cache hit.
+A rerun uses a verified bundle for an identical recipe; `--replace` renders again while retaining the old bundle.
 
 stdout: one JSON summary. Exit 0 = every view is usable (pass or warn, including cache hits), 1 = an unusable view remains after its retry ladder (renders and manifest are still written), 2 = usage or infrastructure error (nothing written).
 """
@@ -84,13 +84,6 @@ CONTENT_TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; c
                  ".css": "text/css; charset=utf-8", ".json": "application/json", ".glb": "model/gltf-binary"}
 STATIC = {"/concept-tokens.css": CONCEPT_TOKENS}  # served beside assets/renderer/, outside it
 SOURCE_FILES = ("glb", "part_map", "manifest", "metrics")  # version files the scene reads: cache key, inputs
-
-@dataclass(frozen=True)
-class VersionInputs:
-    label: str
-    folder: Path
-    record: Path
-    files: dict[str, Path]
 
 
 def _load_layout() -> Any:
@@ -192,15 +185,13 @@ def resolve_version(hw: Path, requested: str) -> Version:
         raise InfraError(str(exc)) from exc
     part_map, manifest = _json(files["part_map"]), _json(files["manifest"])
     try:
+        version_reader.validate_version_manifest(manifest)
         occurrences = version_reader.built_occurrences(part_map, manifest)
     except version_reader.VersionError as exc:
         raise InfraError(f"{label}: {exc}") from exc
     return Version(label, folder, record, files, part_map, manifest, _json(files["metrics"]), occurrences)
-
-
 def record_yaml(path: Path) -> dict[str, Any]:
     import yaml
-
     try:
         value = yaml.safe_load(path.read_text(encoding="utf-8"))
     except (OSError, yaml.YAMLError) as exc:
@@ -208,6 +199,7 @@ def record_yaml(path: Path) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise InfraError(f"{path}: expected a YAML mapping")
     return value
+
 
 
 def part_records(record_dir: Path, pns: list[str]) -> dict[str, dict[str, Any]]:
@@ -640,22 +632,25 @@ def build_scene(hw: Path, version: Version, views: list[str], size: tuple[int, i
     return scene, materials, {"key": key, **extra}
 
 def cache_hit(out_dir: Path, key: dict[str, Any], views: list[str]) -> dict[str, Any] | None:
-    """A cache hit requires complete, hash-verified render metadata and every requested PNG."""
+    """A cache hit requires a verified published bundle and every requested PNG hash."""
+    if layout.verify(out_dir):
+        return None
     path = out_dir / "render.json"
     if not path.is_file():
         return None
     try:
-        manifest = json.loads(path.read_text(encoding="utf-8"))
+        metadata = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
-    if manifest.get("status") not in {"pass", "warn"} or manifest.get("cache_key") != key:
+    if metadata.get("status") not in {"pass", "warn"} or metadata.get("cache_key") != key:
         return None
     for view in views:
-        entry = manifest.get("views", {}).get(view)
+        entry = metadata.get("views", {}).get(view)
         png = out_dir / f"{view}.png"
         if not entry or not png.is_file() or sha256(png.read_bytes()) != entry.get("sha256"):
             return None
-    return manifest
+    return metadata
+
 
 
 
@@ -934,18 +929,37 @@ def run(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     except material_rules.MaterialsError as exc:
         raise InfraError(str(exc)) from exc
     scene, materials, keyed = build_scene(hw, version, views, size, table)
-    recipe = {"views": views, "size": [*size], "cache_key": keyed["key"]}
+    recipe = {"views": views, "size": [*size], "renderer": {"name": "cad-render", "version": renderer_sha256()},
+              "inputs": {"version_manifest_sha256": sha256(version.files["manifest"].read_bytes()),
+                         "cache_key": keyed["key"]}}
     params = {"V": version.label, "S": args.subject}
     try:
-        existing = layout.reusable(hw, "bundle.renders", params, recipe, replace=args.replace)
+        existing = layout.reusable(hw, "bundle.renders", params, recipe,
+                                   replace=args.replace or args.force)
+        if args.force:
+            existing = None
     except layout.PublishConflict as exc:
         raise InfraError(str(exc)) from exc
-    out_dir = existing or (layout.scratch_path(hw, args.out_dir, "--out-dir") if args.out_dir else
-                           layout.bundle_dir(hw, "renders", version.label, args.subject))
+
     if existing:
-        return 0, {"status": "pass", "cache": "hit", "version": version.label, "out_dir": str(existing),
-                   "pngs": {v: str(existing / f"{v}.png") for v in views},
-                   "wall_s": round(time.monotonic() - wall, 3)}
+        metadata = cache_hit(existing, keyed["key"], views)
+        if metadata is None:
+            existing = None
+        else:
+            return 0, {"status": metadata["status"], "cache": "hit", "version": version.label,
+                       "out_dir": str(existing), "pngs": {v: str(existing / f"{v}.png") for v in views},
+                       "wall_s": round(time.monotonic() - wall, 3)}
+
+    # An explicit scratch output is independent of the bundle destination and is never overwritten.
+    out_dir = None
+    if args.out_dir is not None:
+        try:
+            out_dir = layout.scratch_path(hw, args.out_dir, "--out-dir")
+        except layout.LayoutError as exc:
+            raise InfraError(str(exc)) from exc
+        if out_dir.exists():
+            raise InfraError(f"--out-dir already exists; refusing to overwrite {out_dir}")
+
     server = make_server(scene, version.files["glb"], args.cache_dir or default_cache_dir())
     thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.1}, daemon=True)
     thread.start()
@@ -970,13 +984,14 @@ def run(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
                      "webgl": "SwiftShader (ANGLE)", "studio": info["studio"]},
         "image": {"width": size[0], "height": size[1]}, "cache_key": keyed["key"],
         "inputs": {**{name: str(version.files[name].relative_to(hw)) for name in SOURCE_FILES},
+                   "version_manifest_sha256": recipe["inputs"]["version_manifest_sha256"],
                    "assembly_yaml_sha256": keyed["assembly_yaml_sha256"],
                    "assembly_yaml_matches_version": keyed["assembly_yaml_matches_version"]},
         "explode_offsets_mm": keyed["explode_offsets_mm"],
         "wall_s": {**{k: v for k, v in timings.items() if k.endswith("_s")},
                    "total_s": round(time.monotonic() - wall, 3)}}
-    if args.out_dir is not None:
-        out_dir.mkdir(parents=True, exist_ok=True)
+    if out_dir is not None:
+        out_dir.mkdir(parents=True)
         for name, data in pngs.items():
             (out_dir / f"{name}.png").write_bytes(data)
         (out_dir / "render.json").write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
@@ -985,8 +1000,11 @@ def run(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         for name, data in pngs.items():
             (staged / f"{name}.png").write_bytes(data)
         (staged / "render.json").write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
-        published = layout.publish(hw, "bundle.renders", params, staged, recipe=recipe,
-                                   producer="cad-render render.py", status=metadata["status"], replace=args.replace)
+        try:
+            published = layout.publish(hw, "bundle.renders", params, staged, recipe=recipe,
+                                       producer="cad-render render.py", status=metadata["status"], replace=args.replace)
+        except layout.PublishConflict as exc:
+            raise InfraError(str(exc)) from exc
         out_dir = published.path
     summary = {"status": metadata["status"], "cache": "miss", "version": version.label, "out_dir": str(out_dir),
                "pngs": {v: str(out_dir / f"{v}.png") for v in views},
@@ -995,7 +1013,6 @@ def run(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
                "strategies": {v: r["retry"]["strategy"] for v, r in view_records.items()},
                "wall_s": metadata["wall_s"], "view_wall_s": timings}
     return (0 if passed else 1), summary
-
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="render.py", description=__doc__.splitlines()[0])
@@ -1006,8 +1023,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--size", default="1600x1200", help="frame size WIDTHxHEIGHT")
     parser.add_argument("--jobs", type=int, default=DEFAULT_JOBS,
                         help=f"parallel Chromium pages (1-{MAX_JOBS}; default: {DEFAULT_JOBS})")
-    parser.add_argument("--force", action="store_true", help="render even when the cache matches")
-    parser.add_argument("--subject", default="assembly", help="bundle subject for the rendered view set")
     parser.add_argument("--out-dir", type=Path, help="write scratch output under .cad-work only")
     parser.add_argument("--replace", action="store_true", help="retain and replace a conflicting bundle")
     parser.add_argument("--cache-dir", type=Path, help="pinned three.js module cache (default: cad-concept's)")

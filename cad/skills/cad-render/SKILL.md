@@ -22,26 +22,29 @@ TRIGGER
 
 1. Build first: `skill://cad-model` `run` writes `hw/versions/vN/` and `latest.json`.
 2. Render: `uv run --script skill://cad-flow/scripts/run.py cad-render/scripts/render.py hw [--version latest|vN] [--views ...] [--size WxH] [--subject S] [--replace] [--out-dir .cad-work/...]`
-   -> immutable `hw/renders/<vN>/<subject>/` with requested PNGs, `render.json`, and `manifest.json`.
-   `--out-dir` is scratch-only under `.cad-work/`. `render.json` holds quality, retry, material and input
-   decisions; the layout manifest seals its files and binds it to the version manifest.
+   -> immutable `hw/renders/<vN>/<subject>/` bundles with requested PNGs, `render.json`, and `manifest.json`.
+   The bundle manifest seals its files and binds the bundle to the version manifest. `render.json` holds
+   quality, retry, material and input decisions. `--out-dir` is scratch-only under `.cad-work/` and never
+   overwrites an existing path. `--replace` retains a bundle with a different recipe before publishing.
    `--jobs` uses 1-8 dedicated pages in one Chromium process (default 1). Each page loads the scene once
    and renders its assigned views serially, while pages capture concurrently. On CPU-only SwiftShader, keep
    the default: SwiftShader already multithreads. Pace measured 11s at jobs=1, 12s at 2, and 17s at 4
    for five 800x600 views. Use higher values when tests on the target hardware show a benefit.
-   The manifest records page-load, view-capture, renderer, and PNG-encoding times.
-   Per-view PNG SHA-256 values verify cache integrity. From this skill directory, run `uv run --script scripts/compare_renders.py DIR_A DIR_B` to compare retry/quality decisions and PNG pixels.
-   At default 1600x1200, Mac serial runs and pace serial-vs-serial / serial-vs-jobs2 runs (30 views) matched byte-for-byte. The comparator uses exact parity.
+   The render metadata records page-load, view-capture, renderer, and PNG-encoding times.
+   Per-view PNG SHA-256 values verify cache integrity. From this skill directory, run
+   `uv run --script scripts/compare_renders.py DIR_A DIR_B` to compare render decisions and PNG pixels.
+   At default 1600x1200, Mac serial runs and pace serial-vs-serial / serial-vs-jobs2 runs (30 views) matched
+   byte-for-byte. The comparator uses exact parity.
    Each capture seeds GTAO noise from the view and retry index. The floor-shadow bake key includes visible part transforms and sampling settings.
 3. Close-ups: add `closeup-<PN>` for each part/interface to show, or `part-<PN>` for a studio view of
    one part in stable resting orientation with the other assembly parts hidden.
 4. Read every PNG before describing it. Name the material each PN shows from
-   `manifest.json` `materials.<PN>` (`rule`, `label`, `applied`).
+   `render.json` `materials.<PN>` (`rule`, `label`, `applied`).
 5. Gate: put each PNG's absolute path in the gate report, one per line, with one line on what the image shows. Absolute paths are clickable in the terminal; a path relative to `hw/` is not.
 
-Exit codes: 0 every view usable (pass or warning), including cache hits; 1 an unusable view remains
-after its retry ladder, with PNGs and a `status: fail` manifest still written; 2 usage or
-infrastructure error, nothing written.
+Exit codes: 0 every view is usable (pass or warning, including cache hits); 1 an unusable view remains
+after its retry ladder, with PNGs and a `status: fail` render.json still written; 2 usage or
+infrastructure error (nothing written).
 
 | Finding | Classification | Meaning and action |
 |---|---|---|
@@ -63,9 +66,9 @@ The floor shows only a baked studio shadow: a dark contact shadow at the foot of
 the floor, plus a wide, faint softbox shadow whose penumbra grows and darkness falls with a
 part's height. The key light shades the parts onto each other, never the floor.
 
-The cache key is the GLB, `part-map.json`, `manifest.json` (pose, ground), `metrics.json`
-(bounding boxes), `assembly.yaml`, the resolved material per PN, and the renderer files with
-cad-concept's `tokens.css`. A rerun with the same key and intact PNGs prints `"cache": "hit"`.
+The cache key includes every version-bound scene input, resolved material and exact-parity policy.
+Repeating the same version and subject reuses its verified immutable bundle; use `--replace` to render
+again with a different recipe. Compare bundles or scratch directories through their `render.json` files.
 
 ## Rules
 
