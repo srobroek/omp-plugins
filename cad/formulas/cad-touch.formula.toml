@@ -1,5 +1,5 @@
 # cad-touch: ECO-style change to a released part, with an explicit revision bump.
-# Pour with product, scope, part, from_rev, to_rev, decision, and change vars.
+# Pour with product, scope, part, from_rev, to_rev, release_rev, decision, and change vars.
 # Revised parts and recheck cases fan out as bonded molecules; each batch ends in one lead integration and one gate.
 formula = "cad-touch"
 description = "ECO-style released-part change for {{product}} / {{part}}: record impact, bump revision, recheck affected design, and release"
@@ -27,6 +27,11 @@ description = "current released revision of the part"
 required = true
 pattern = "^[A-HJ-NPRTUVWY]$"
 description = "next valid released revision; must be the immediate revision successor"
+
+[vars.release_rev]
+required = true
+pattern = "^[A-HJ-NPRTUVWY]$"
+description = "product release revision letter to issue, an unused one; independent of the part's to_rev"
 
 [vars.decision]
 required = true
@@ -178,24 +183,24 @@ description = "Reconcile both critiques against the ECO delta and test evidence.
 skill_hints = "cad-record, cad-bom, cad-recheck"
 
 [[steps]]
-id = "release-package"
-title = "Assemble and validate ECO release {{to_rev}}"
+id = "release-gate"
+title = "RELEASE gate: approve ECO {{decision}} as release {{release_rev}}"
 type = "task"
 needs = ["reconcile"]
-labels = ["cad", "phase:release"]
-description = "Run `uv run --script skill://cad-record/scripts/release.py hw --rev {{to_rev}} --version <frozen-vN> --decision {{decision}}` to validate and seal the ECO release; never author an inventory or reuse a revision. Keep the frozen anchor bound to the exact new version and manifest SHA-256. A missing, stale or failed input, including any manufacturing failure, refuses; fix it, rebuild or republish, and retry. Use the cad-record layout API for all version and bundle paths. Preserve unchanged artifacts. Report print/make files, buy items with OPEN reasons, assembly steps, and checks in structured lists/tables with every referenced file on its own absolute-path line."
-
-[steps.metadata]
-skill_hints = "cad-record, cad-bom, cad-drawings"
-
-[[steps]]
-id = "release-gate"
-title = "RELEASE gate: approve ECO {{decision}}"
-type = "task"
-needs = ["release-package"]
 labels = ["cad", "phase:gate"]
-description = "Present the ECO record, immediate revision bump, impact set, revised artifacts, plus structured lists or tables of print/make files, buy items including OPEN identities and reasons, assembly steps, and checks. Give every referenced file on its own absolute-path line. Obtain explicit user approval to release the change; leave unresolved otherwise. Only bd gate resolve closes this human gate."
+description = "Run skill://cad-record `validate.py` on the record and confirm flow.frozen names the re-frozen ECO version. Present the ECO record, immediate revision bump, impact set, revised artifacts, that version and its manifest SHA-256, and release revision {{release_rev}}, plus structured lists or tables of print/make files, buy items including OPEN identities and reasons, assembly steps, and checks. Give every referenced file on its own absolute-path line. Obtain explicit user approval to release the change as {{release_rev}}; nothing is sealed before this gate, and the ECO record {{decision}} is not that approval. Leave unresolved otherwise. Only bd gate resolve closes this human gate."
 
 [steps.gate]
 type = "human"
 timeout = "72h"
+
+[[steps]]
+id = "release-package"
+title = "Seal ECO release {{release_rev}}"
+type = "task"
+needs = ["release-gate"]
+labels = ["cad", "phase:release"]
+description = "Record the RELEASE gate's approval as a new decisions/DR-###, then run `uv run --script skill://cad-record/scripts/release.py hw --rev {{release_rev}} --version <frozen-vN> --decision <DR-###>` to validate and seal the ECO release; never author an inventory or reuse a revision. Keep the frozen anchor bound to the exact new version and manifest SHA-256. A missing, stale or failed input, including any manufacturing failure, refuses and seals nothing; fix it, rebuild or republish, and retry. Use the cad-record layout API for all version and bundle paths. Preserve unchanged artifacts. Report print/make files, buy items with OPEN reasons, assembly steps, and checks in structured lists/tables with every referenced file on its own absolute-path line."
+
+[steps.metadata]
+skill_hints = "cad-record, cad-bom, cad-drawings"

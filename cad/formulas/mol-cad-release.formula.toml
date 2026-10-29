@@ -32,29 +32,18 @@ id = "gather-release-inputs"
 title = "Gather frozen release inputs for {{product}}"
 type = "task"
 labels = ["cad", "phase:release"]
-description = "Run skill://cad-record to collect the frozen product, requirements, interfaces, assembly, part revisions, BOM, drawings, verification evidence, and critique dispositions from {{scope}}. Confirm that all required checks passed for the release revision {{release_rev}}; a missing or stale input blocks packaging."
+description = "Run skill://cad-record to collect the frozen product, requirements, interfaces, assembly, part revisions, BOM, drawings, verification evidence, and critique dispositions from {{scope}}. Confirm that all required checks passed for the release revision {{release_rev}}; a missing or stale input blocks the gate."
 
 [steps.metadata]
 skill_hints = "cad-record, cad-recheck"
 
 [[steps]]
-id = "assemble-package"
-title = "Assemble STEP, drawings, EBOM, verification, and docs"
+id = "validate-package"
+title = "Validate the release contents before the gate"
 type = "task"
 needs = ["gather-release-inputs"]
 labels = ["cad", "phase:release"]
-description = "Run `uv run --script skill://cad-record/scripts/release.py hw --rev {{release_rev}} --version <frozen-vN> --decision <DR-###>` to validate the frozen version and seal its complete package. Do not author an inventory or write files into the release tree yourself. Missing, stale, failing, or tampered manufacturing/evidence refuses and makes no package. Use the canonical layout API; release.py selects exact version-bound manufacturing and bundles. Rebuild or republish the named failure and retry. Include docs before freeze. Report print/make files, buy identities with OPEN reasons, assembly steps and checks in structured lists/tables, with each referenced file on a separate absolute-path line. Never reuse a revision."
-
-[steps.metadata]
-skill_hints = "cad-drawings, cad-bom, cad-record"
-
-[[steps]]
-id = "validate-package"
-title = "Validate release manifest and package completeness"
-type = "task"
-needs = ["assemble-package"]
-labels = ["cad", "phase:release"]
-description = "Run skill://cad-record, skill://cad-bom, skill://cad-drawings, and skill://cad-analysis to validate revisions, manifest, STEP AP242, drawings, EBOM, verification, and docs. Static FEA uses `uv run --script skill://cad-flow/scripts/run.py cad-analysis/scripts/fea_static.py <case.yaml>`. Confirm the manifest references the frozen design. Record machine-checkable results and all failures, plus structured lists or tables of print/make files, buy items and OPEN reasons, assembly steps, and checks. Give every referenced file on a separate absolute-path line."
+description = "Run skill://cad-record, skill://cad-bom, skill://cad-drawings, and skill://cad-analysis to validate the frozen version's revisions, STEP AP242, drawings, EBOM, verification, and docs. Static FEA uses `uv run --script skill://cad-flow/scripts/run.py cad-analysis/scripts/fea_static.py <case.yaml>`. Confirm flow.frozen names that version and its manifest SHA-256. Record machine-checkable results and all failures, plus structured lists or tables of print/make files, buy items and OPEN reasons, assembly steps, and checks. Give every referenced file on a separate absolute-path line."
 
 [steps.metadata]
 skill_hints = "cad-record, cad-bom, cad-drawings, cad-analysis, cad-motion"
@@ -65,8 +54,19 @@ title = "RELEASE gate for {{product}} revision {{release_rev}}"
 type = "task"
 needs = ["validate-package"]
 labels = ["cad", "phase:gate"]
-description = "Present the release manifest and validated artifacts, with print/make files, buy items (including OPEN identity fields and reasons), assembly steps, and checks in structured lists or tables; give every referenced file on its own absolute-path line, never inline comma prose. Obtain explicit user approval to release revision {{release_rev}}. Missing artifacts or failed checks keep this human gate open; only bd gate resolve closes it."
+description = "Present the frozen version, its manifest SHA-256 and the validated release contents, with print/make files, buy items (including OPEN identity fields and reasons), assembly steps, and checks in structured lists or tables; give every referenced file on its own absolute-path line, never inline comma prose. Obtain explicit user approval to release revision {{release_rev}}; nothing is sealed before this gate. Missing artifacts or failed checks keep this human gate open; only bd gate resolve closes it."
 
 [steps.gate]
 type = "human"
 timeout = "72h"
+
+[[steps]]
+id = "assemble-package"
+title = "Seal STEP, drawings, EBOM, verification, and docs"
+type = "task"
+needs = ["release-gate"]
+labels = ["cad", "phase:release"]
+description = "Record the RELEASE gate's approval as decisions/DR-###, then run `uv run --script skill://cad-record/scripts/release.py hw --rev {{release_rev}} --version <frozen-vN> --decision <DR-###>` to validate the frozen version and seal its complete package. Do not author an inventory or write files into the release tree yourself. Missing, stale, failing, or tampered manufacturing/evidence refuses and makes no package. Use the canonical layout API; release.py selects exact version-bound manufacturing and bundles. Rebuild or republish the named failure and retry; a record or model change needs an ECO, a new version, a re-freeze and a new RELEASE gate. Include docs before freeze. Report print/make files, buy identities with OPEN reasons, assembly steps and checks in structured lists/tables, with each referenced file on a separate absolute-path line. Never reuse a revision."
+
+[steps.metadata]
+skill_hints = "cad-drawings, cad-bom, cad-record"

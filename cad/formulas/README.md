@@ -28,7 +28,7 @@ GROUND, INTENT, SPECIFY, LAYOUT, BOM, and RELEASE stay with the lead.
 | `mol-cad-analysis` | `analysis-<case>` | run-case | `cad-analyst` |
 | `mol-cad-concept` | another concept round | round-fanout, round-integrate, VARIANT gate, record-variant | lead, bonding `mol-cad-variant` |
 | `mol-cad-iterate` | a change after DESIGN freeze | classify, INTENT gate, reopen-fanout, reopen-integrate, DETAIL gate, analysis-fanout, analysis-integrate, DESIGN freeze gate | lead, bonding `mol-cad-detail` and `mol-cad-analysis` |
-| `mol-cad-release` | release package | gather, assemble, validate, RELEASE gate | lead |
+| `mol-cad-release` | release package | gather, validate, RELEASE gate, assemble | lead |
 
 Every worker step carries `execution_mode = "subagent"` and an `execution_agent_type` that names an agent in `cad/agents/`. A part designer builds only a scratch copy and delivers canonical record-source files for authorized parts via `scratch.py`; generated outputs, stray paths and unauthorized PNs are refused. New PN records are authorized at `init`. Conflicts write nothing. The lead alone integrates accepted proposals and builds versions.
 
@@ -60,6 +60,6 @@ Custom-made parts receive checked manufacturing geometry during build; manufactu
 
 Run `cad/formulas/smoke-pour.sh` to copy the formula set into a temporary Beads workspace, pour each root, bond each molecule onto its fan-out step, check that every worker step names a shipped agent, and show that one approved gate makes a whole batch ready at once. It prints each formula's step, gate, and worker-step counts. The full canonical hardware path table is generated at `cad/skills/cad-record/references/layout.md`; use `layout-api.md` from commands instead of writing alternate path conventions.
 
-Release gates and package reports MUST show print/make files, buy rows (including OPEN identity fields and reasons), assembly steps, and checks as structured lists or tables. Give every cited file as a separate absolute-path line; never inline comma prose.
+The RELEASE gate comes before `release.py`, which seals `hw/releases/<REV>/` for good: after approval the lead records it as `decisions/DR-###`, then runs `release.py` with that decision. Release gates and package reports MUST show print/make files, buy rows (including OPEN identity fields and reasons), assembly steps, and checks as structured lists or tables. Give every cited file as a separate absolute-path line; never inline comma prose.
 
 Run `cad/formulas/smoke-pour.sh` to copy the formula set into a temporary Beads workspace, pour each root, bond each molecule onto its fan-out step, check that every worker step names a shipped agent, and show that one approved gate makes a whole batch ready at once. It prints each formula's step, gate, and worker-step counts.

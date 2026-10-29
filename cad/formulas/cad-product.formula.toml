@@ -282,25 +282,24 @@ type = "human"
 timeout = "72h"
 
 [[steps]]
-id = "release-package"
-title = "RELEASE: assemble and validate product package"
-type = "task"
-needs = ["design-freeze-gate"]
-labels = ["cad", "phase:release"]
-description = "Run skill://cad-record to validate freeze completeness and seal the frozen release with `uv run --script skill://cad-record/scripts/release.py hw --rev <letter> --version <vN> --decision <DR-###>`. Set all part revisions to released letters before building the version that will be frozen; record flow.frozen with its exact version, manifest SHA-256 and decision. Run release.py instead of writing an inventory: it refuses missing, stale or failed required contents, and manufacturing failures cannot be waived. Never reuse a revision letter. Use cad-record's layout API for all bundle paths; it owns exact manufacturing, drawing, analysis and evidence inventory and copied release contents. Rebuild or republish the named failed/stale input and retry. Include GitBuilding, DIN SPEC 3105-1 and Open Know-How docs in hw/docs before freeze. Report print/make files, buy items and OPEN reasons, assembly steps, and checks in structured lists or tables with absolute file paths."
-
-[steps.metadata]
-skill_hints = "cad-record, cad-bom, cad-drawings, cad-analysis"
-
-[[steps]]
 id = "release-gate"
 title = "RELEASE gate for {{product}}"
 type = "task"
-needs = ["release-package"]
+needs = ["design-freeze-gate"]
 labels = ["cad", "phase:gate"]
-description = "Present the validated release manifest, then structured lists or tables of print/make files, buy items including OPEN identities and reasons, assembly steps, and checks. Give every referenced file on its own absolute-path line. Obtain explicit user approval to release. Any failed criterion or missing artifact keeps this human gate open; only bd gate resolve closes it."
-
+description = "Run skill://cad-record `validate.py` on the record and confirm flow.frozen names the version to release. Present that version and its manifest SHA-256, the unused revision letter to issue, then structured lists or tables of print/make files, buy items including OPEN identities and reasons, assembly steps, and checks. Give every referenced file on its own absolute-path line. Obtain explicit user approval to release that version as that revision; nothing is sealed before this gate. Any failed criterion or missing artifact keeps this human gate open; only bd gate resolve closes it."
 
 [steps.gate]
 type = "human"
 timeout = "72h"
+
+[[steps]]
+id = "release-package"
+title = "RELEASE: seal the approved product package"
+type = "task"
+needs = ["release-gate"]
+labels = ["cad", "phase:release"]
+description = "Record the RELEASE gate's approval as decisions/DR-###, then seal the approved version and letter with `uv run --script skill://cad-record/scripts/release.py hw --rev <letter> --version <vN> --decision <DR-###>`. Set all part revisions to released letters before building the version that will be frozen; record flow.frozen with its exact version, manifest SHA-256 and decision. Run release.py instead of writing an inventory: it refuses missing, stale or failed required contents, and manufacturing failures cannot be waived. Never reuse a revision letter. Use cad-record's layout API for all bundle paths; it owns exact manufacturing, drawing, analysis and evidence inventory and copied release contents. A refusal seals nothing: rebuild or republish the named failed/stale input and retry; a record or model change needs an ECO, a new version, a re-freeze and a new RELEASE gate. Include GitBuilding, DIN SPEC 3105-1 and Open Know-How docs in hw/docs before freeze. Report print/make files, buy items and OPEN reasons, assembly steps, and checks in structured lists or tables with absolute file paths."
+
+[steps.metadata]
+skill_hints = "cad-record, cad-bom, cad-drawings, cad-analysis"

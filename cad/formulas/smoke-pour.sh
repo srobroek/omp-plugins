@@ -80,7 +80,7 @@ part_root=$(pour cad-part --var product=smoke-part --var scope=hw/ \
 product_root=$(pour cad-product --var product=smoke-product --var scope=hw/ \
   --var kernel=build123d --var process_default=cnc)
 eco_root=$(pour cad-touch --var product=smoke-part --var scope=hw/ \
-  --var part=SMK-0001 --var from_rev=A --var to_rev=B \
+  --var part=SMK-0001 --var from_rev=A --var to_rev=B --var release_rev=C \
   --var decision=DR-001 --var change='smoke ECO' \
   --var kernel=cadquery --var process_default=fdm)
 

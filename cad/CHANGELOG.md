@@ -45,3 +45,10 @@
 
 - The interference rule of cad-model `check` and cad-motion `sweep.py` reports a part buried inside a solid of a compound part (a definition that reads back as a COMPOUND, such as one fused from separate solids), no faces touching, as overlapping at distance 0. BRepExtrema detects containment only inside a SOLID or COMPSOLID operand, so such a part read as clear before.
 - `check.build_volume` now fits an oriented box with its axes assigned to the printer axes in each order and measures each candidate after rotating it. Before, it tested the box extents in their own order and then lowered the height, which could report a fit that does not fit an asymmetric printer volume. It also fits an FDM part in the state it is printed in, against the printer of the version's record snapshot.
+- `release.py` releases a version built with `--attach`. It counted each `REF=PARENT_REF` entry as a part and refused every such release.
+- `validate.py` no longer requires the originals of a version 2 release to exist; it checks the package's own copies. An edit to `hw/docs/` or a part source after release no longer fails validation and blocks the next release.
+- `release.py` refuses verification evidence that cites a missing file inside the frozen version or a selected bundle.
+- `build_guide.py` links the release frozen at the guide's version instead of the newest release, and no release when none holds that version.
+- The `cad-product`, `cad-part`, `cad-touch` and `mol-cad-release` formulas hold the RELEASE gate before `release.py`, so a declined release no longer uses up its revision letter. The lead records the approval as the release decision after the gate.
+- `cad-touch` takes the product release letter as a new required `release_rev` variable instead of the part's `to_rev`, so a second ECO that bumps another part from A to B can still be released.
+- The cad-flow reference's `release.py` example uses revision `A`; `X` is not a release revision.
