@@ -480,11 +480,14 @@ class ValidateProject(unittest.TestCase):
         self.assertTrue(any(m.startswith("segments[0] (reach): J-099 is not a joint of this record") for m in problems))
 
     def test_the_generated_default_motion_case_cannot_be_authored(self) -> None:
-        case = str(self.author_motion_case("default", "{J-001: 0}"))
-        code, findings = self.motion_findings()
-        self.assertEqual(code, 1)
-        self.assertTrue(any(path == case and severity == "error" and "case `default` is reserved" in message
-                            for path, severity, message in findings))
+        case = self.author_motion_case("default", "{J-001: 0}")
+        for contents in ("an authored plan", "no plan"):
+            if contents == "no plan":
+                (case / "plan.yaml").replace(case / ".gitkeep")
+            result, report = self.validate()
+            self.assertEqual(result.returncode, 1, f"{contents}: {result.stderr}")
+            self.assertTrue(any(item["path"] == str(case) and "case `default` is reserved" in item["message"]
+                                for item in report["findings"]), f"{contents}: {report['findings']}")
 
     def test_a_joint_without_nominal_is_reported_beside_an_authored_motion_case(self) -> None:
         self.edit_assembly(self.ELBOW, "    min: -120\n    max: 0\n")

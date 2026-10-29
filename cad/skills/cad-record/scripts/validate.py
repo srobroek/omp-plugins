@@ -482,6 +482,10 @@ def check_motion_cases(hw: Path, assembly_path: str, findings: list[dict[str, st
                                                        f"record's joints: {error}") for name in names)
         return
     for name in names:
+        if name == plan.DEFAULT_CASE:  # plan.load would generate it from a full chain rather than read a file
+            findings.append(finding(str(cases / name), "case `default` is reserved for the generated plan; "
+                                                       "rename the authored case"))
+            continue
         try:
             plan.load(joints, hw, layout, name)
         except plan.PlanError as error:
