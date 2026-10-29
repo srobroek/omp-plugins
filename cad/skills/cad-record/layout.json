@@ -145,6 +145,7 @@
      "files": [{"name": "pose.step", "role": "evidence", "optional": true},
                {"name": "worst.step", "role": "evidence", "optional": true},
                {"name": "worst.step.json", "role": "data", "optional": true},
+               {"name": "evidence/**", "role": "evidence", "optional": true},
                {"name": "result.json", "role": "data"}, {"name": "manifest.json", "role": "manifest"}]},
     {"id": "bundle.analysis", "path": "hw/analysis/{V}/{S}", "kind": "generated",
      "writer": "cad-analysis fea_static.py, an accepted stack-up adapter", "stage": "analysis",
