@@ -23,9 +23,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import sys
-import uuid
 from collections.abc import Mapping, Sequence
+import uuid
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -679,7 +680,6 @@ def main(argv: list[str] | None = None) -> int:
     def draw_part(pn: str) -> tuple[dict[str, Any], int]:
         subject = pn
         recipe = {"part": pn, "provenance": context.provenance(pn)}
-        draft: Path | None = None
         try:
             if output_root is None:
                 existing = api.reusable(hw, "bundle.drawings", {"V": label, "S": subject}, recipe,
@@ -692,11 +692,14 @@ def main(argv: list[str] | None = None) -> int:
                 if draft.exists():
                     return fail("output_exists", f"--output-dir already exists and will not be overwritten: {draft}",
                                 pn=pn), 2
-                draft.parent.mkdir(parents=True, exist_ok=True)
-                draft.mkdir()
             bundle_path = api.bundle_dir(hw, "drawings", label, subject) if output_root is None else draft
             result, code = run_part(context, pn, draft, freecadcmd, args.timeout, bundle_path)
-            if code == 0 and result.get("status") == "pass" and output_root is None:
+            if code != 0:
+                result.setdefault("output_dir", str(draft))
+                rejected = draft / "rejected.json"
+                if not rejected.exists():
+                    rejected.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+            elif result.get("status") == "pass" and output_root is None:
                 result["output_dir"] = str(api.publish(
                     hw, "bundle.drawings", {"V": label, "S": subject}, draft, recipe=recipe,
                     producer="cad-drawings drawing.py", replace=args.replace).path)
@@ -709,7 +712,6 @@ def main(argv: list[str] | None = None) -> int:
             return fail(exc.code, str(exc), pn=pn), exc.exit_code
         except (OSError, ValueError, KeyError) as exc:
             return fail("io_error", str(exc), pn=pn), 2
-
     try:
         with freecad_runtime.terminate_jobs_on_signal():
             outcomes = freecad_runtime.map_jobs(args.part, jobs, draw_part)

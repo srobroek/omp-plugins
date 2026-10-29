@@ -689,11 +689,12 @@ def publish_package(context: DrawingContext, sheets: Sequence[ComposedSheet], re
         subject = "assembly" if sheets[0].metadata.document_type in ("Assembly drawing", "ASSEMBLY DRAWING") else drawing_number
         bundle_path = layout_api().bundle_dir(context.hw, "drawings", context.label, subject)
     output_dir = output_dir.resolve()
+    output_dir.parent.mkdir(parents=True, exist_ok=True)
     if output_dir.exists():
         if not output_dir.is_dir() or any(output_dir.iterdir()):
             raise ValueError(f"{output_dir} must be an empty draft folder")
     else:
-        output_dir.mkdir(parents=True)
+        output_dir.mkdir()
     run_id = uuid.uuid4().hex
     retained = context.hw.parent / ".cad-work" / "rejected-drawings" / run_id
     output_dir.parent.mkdir(parents=True, exist_ok=True)

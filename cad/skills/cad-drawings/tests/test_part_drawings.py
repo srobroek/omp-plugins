@@ -170,13 +170,17 @@ class PinDrawingGate(unittest.TestCase):
         if output:
             command += ["--output-dir", str(Path(self.tmp.name) / ".cad-work" / out)]
         proc = run(*command, timeout=900)
-        return proc.returncode, json.loads(proc.stdout)["parts"][0]
+        try:
+            result = json.loads(proc.stdout)["parts"][0]
+        except json.JSONDecodeError as exc:
+            raise AssertionError(f"drawing CLI returned no JSON (exit {proc.returncode}): {proc.stderr[-3000:]}") from exc
+        return proc.returncode, result
 
     def test_default_output_publishes_and_reuses_the_bundle(self) -> None:
         code, result = self.draw("v1", "unused", output=False)
         self.assertEqual((code, result["status"]), (0, "pass"), result.get("findings"))
         package = Path(result["output_dir"])
-        self.assertEqual(package, self.hw / "drawings" / "v1" / "LMP-0005")
+        self.assertEqual(package, (self.hw / "drawings" / "v1" / "LMP-0005").resolve())
         manifest = (package / "manifest.json").read_bytes()
         package_json = json.loads((package / "package.json").read_text(encoding="utf-8"))
         self.assertEqual(package_json["output_dir"], str(package))
@@ -231,15 +235,15 @@ class PinDrawingGate(unittest.TestCase):
             self.assertNotEqual(part.read_text(encoding="utf-8"), original)
             proc = run(UV, "run", "--script", str(DRAWING), str(self.hw), "--version", "v1",
                        "--part", "LMP-0005", "--part", "LMP-0002", "--output-dir",
-                       str(Path(self.tmp.name) / "isolate-failure"), "--timeout", "900", "--jobs", "2")
+                       str(Path(self.tmp.name) / ".cad-work" / "isolate-failure"), "--timeout", "900", "--jobs", "2")
         finally:
             part.write_text(original, encoding="utf-8")
         self.assertEqual(proc.returncode, 1)
         results = json.loads(proc.stdout)["parts"]
         self.assertEqual([result["pn"] for result in results], ["LMP-0005", "LMP-0002"])
         self.assertEqual([result["status"] for result in results], ["fail", "pass"])
-        failed = Path(results[0]["output_dir"])
-        self.assertTrue((failed / "rejected.json").is_file())
+        rejected = Path(self.tmp.name) / ".cad-work" / "rejected-drawings"
+        self.assertEqual(len(list(rejected.iterdir())), 1)
         self.assertFalse((failed / "package.json").exists())
         passed = Path(results[1]["output_dir"])
         self.assertTrue((passed / "sheet-1.pdf").is_file())
