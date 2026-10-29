@@ -530,6 +530,43 @@ class VersionedPublicationTests(unittest.TestCase):
         self.assertEqual(status, 2)
         self.assertIn("--out must be under", json.loads(output.getvalue())["error"]["message"])
 
+    def test_solver_evidence_excludes_python_bytecode_and_cache_dirs(self) -> None:
+        for path in ("result.frd", "fea_job.py", "nested/result.inp"):
+            with self.subTest(path=path):
+                self.assertTrue(fea_static._is_solver_evidence(path))
+        for path in ("module.pyc", "__pycache__/module.cpython-313.pyc", "nested/__pycache__/module.pyc"):
+            with self.subTest(path=path):
+                self.assertFalse(fea_static._is_solver_evidence(path))
+
+    def test_generated_job_name_is_deterministic(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            step = root / "beam.step"
+            step.touch()
+            case = {"_step": str(step), "material": {"E": 1, "nu": 0.3, "density": 1, "yield": 1},
+                    "fixed_faces": {"indices": [1]}, "loads": [], "mesh_size": 1}
+            with patch("fea_static.find_freecad", return_value=Path("/fake/freecadcmd")), \
+                 patch("fea_static.subprocess.run", side_effect=subprocess.TimeoutExpired("freecadcmd", 0.01)) as run:
+                fea_static.run_job(root / "case.yaml", case, scratch_root=root, timeout=0.01)
+            self.assertEqual(Path(run.call_args.args[0][1]).name, "fea_job.py")
+
+    def test_solver_versions_resolve_tools_beside_freecad_and_record_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory)
+            freecad, gmsh, ccx = (folder / name for name in ("freecadcmd", "gmsh", "ccx"))
+            for command in (freecad, gmsh, ccx):
+                command.write_text("", encoding="utf-8")
+                command.chmod(0o755)
+            def result(command, *args, **kwargs):
+                version = {"freecadcmd": "FreeCAD 1.1.4", "gmsh": "4.15.0", "ccx": "This is Version 2.23"}[Path(command[0]).name]
+                return subprocess.CompletedProcess(command, 201 if Path(command[0]).name == "ccx" else 0, version, "")
+            with patch("fea_static.find_freecad", return_value=freecad), \
+                 patch("fea_static.subprocess.run", side_effect=result):
+                versions = fea_static.solver_versions()
+        self.assertEqual(versions["freecad"], {"path": str(freecad.resolve()), "version": "1.1.4"})
+        self.assertEqual(versions["gmsh"], {"path": str(gmsh.resolve()), "version": "4.15.0"})
+        self.assertEqual(versions["calculix"], {"path": str(ccx.resolve()), "version": "2.23"})
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -13,6 +13,7 @@ import math
 import re
 import subprocess
 import uuid
+import os
 from pathlib import Path
 from typing import Any
 
@@ -227,9 +228,10 @@ def run_job(case_path: Path, case: dict[str, Any], timeout: float = 600.0, *, sc
     run_id = uuid.uuid4().hex
     run_dir = run_directory(case_path, run_id, scratch_root)
     run_dir.mkdir(parents=True, exist_ok=True)
-    job_path = run_dir / f"fea_static_{run_id}.py"
+    job_path = run_dir / "fea_job.py"
     marker_path = run_dir / f"fea_static_{run_id}.json"
     output_path = result_path or case_path.parent.resolve() / "results.json"
+    versions = solver_versions or {}
     job = {
         "run_id": run_id,
         "step": case["_step"],
@@ -246,9 +248,8 @@ def run_job(case_path: Path, case: dict[str, Any], timeout: float = 600.0, *, sc
         "mesh_size": case["mesh_size"],
         "output": str(marker_path),
         "run_directory": str(run_dir),
-        "solver_versions": solver_versions or {},
+        "solver_versions": versions,
     }
-    # JSON is data, not Python source: the generated job loads it as a literal.
     job_json = json.dumps(job)
     script = f'''import json, os, re, shutil, sys, time, math
 import FreeCAD as App, Part, Import, ObjectsFem
@@ -370,7 +371,7 @@ def run():
         if problems: raise RuntimeError("CalculiX prerequisites failed: %r" % problems)
         fea.write_inp_file(); fea.ccx_run(); fea.load_results(); solve_seconds=time.perf_counter()-solver_started
         result={{"run_id":JOB["run_id"], "part":JOB.get("part"), "occurrence":JOB.get("occurrence"), "solid_index":JOB.get("solid_index"), "max_von_mises_mpa":max_stress, "max_displacement_mm":max_displacement, "safety_factor_yield":safety_factor, "node_count":nodes, "element_count":elements, "solve_time_seconds":solve_seconds}}
-        result["solver_versions"]=JOB["solver_versions"] or {{"freecad":".".join(App.Version()[:3])}}
+        result["solver_versions"]=JOB["solver_versions"]
         result["warnings"]=[]
         result["worst_case_pose"]={{"step":JOB["step"], **({{"pose":JOB["pose"]}} if JOB.get("pose") is not None else {{}}), **({{"evidence":JOB["evidence"]}} if JOB.get("evidence") is not None else {{}})}}
         result["required_safety_factor"]=JOB.get("required_safety_factor")
@@ -378,7 +379,8 @@ def run():
         result["mesh_input_files"]=["GmshGeometry.brep", "GmshInput.geo"]
         result["status"]="fail" if result["required_safety_factor"] is not None and safety_factor is not None and safety_factor < result["required_safety_factor"] else "pass"
         result["retained_files"]=[os.path.relpath(os.path.join(root,name), JOB["run_directory"]).replace(os.sep,"/")
-                                  for root,dirs,files in os.walk(JOB["run_directory"]) for name in files]
+                                  for root,dirs,files in os.walk(JOB["run_directory"]) for name in files
+                                  if not name.endswith(".pyc") and "__pycache__" not in os.path.relpath(root, JOB["run_directory"]).split(os.sep)]
         with open(JOB["output"], "w", encoding="utf-8") as f: json.dump(result,f,indent=2); f.write("\\n")
     finally:
         App.closeDocument(doc.Name)
@@ -430,25 +432,36 @@ except Exception as e:
     output_path.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     return result, status
 
+def _solver_binary(freecad: Path, name: str) -> Path | None:
+    candidates = [freecad.resolve().parent / name]
+    candidates.extend(Path(path) / name for path in os.environ.get("PATH", "").split(os.pathsep) if path)
+    return next((path for path in candidates if path.is_file() and os.access(path, os.X_OK)), None)
+
+
 def _tool_version(command: Path | None, args: tuple[str, ...]) -> str:
     if command is None:
-        return "unknown"
+        raise CaseError("required solver executable was not found")
     try:
         completed = subprocess.run([str(command), *args], capture_output=True, text=True, timeout=30, check=False)
-    except (OSError, subprocess.SubprocessError):
-        return "unknown"
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise CaseError(f"cannot query solver version for {command}: {exc}") from exc
     match = re.search(r"\b\d+(?:\.\d+){1,3}\b", completed.stdout + completed.stderr)
-    return match.group(0) if completed.returncode == 0 and match else "unknown"
+    if match is None:
+        raise CaseError(f"cannot determine solver version for {command}")
+    return match.group(0)
 
 
-def solver_versions() -> dict[str, str]:
-    """Stable solver versions for the publication recipe, without executable paths."""
-    gmsh = shutil.which("gmsh")
-    calculix = shutil.which("ccx")
+def solver_versions() -> dict[str, dict[str, str]]:
+    """Resolve tools beside FreeCAD first, then PATH; record each absolute path and version."""
+    freecad = find_freecad()
+    if freecad is None:
+        raise CaseError("freecadcmd not found; set FREECADCMD or add it to PATH")
+    gmsh = _solver_binary(freecad, "gmsh")
+    calculix = _solver_binary(freecad, "ccx")
     return {
-        "freecad": _tool_version(find_freecad(), ("--version",)),
-        "gmsh": _tool_version(Path(gmsh) if gmsh else None, ("--version",)),
-        "calculix": _tool_version(Path(calculix) if calculix else None, ("-v",)),
+        "freecad": {"path": str(freecad.resolve()), "version": _tool_version(freecad, ("--version",))},
+        "gmsh": {"path": str(gmsh), "version": _tool_version(gmsh, ("--version",))},
+        "calculix": {"path": str(calculix), "version": _tool_version(calculix, ("-v",))},
     }
 
 
@@ -469,6 +482,15 @@ def _snapshot_record_hashes(record_dir: Path, case: dict[str, Any]) -> dict[str,
                 raise CaseError(f"version record snapshot {path} must contain a mapping")
             hashes[f"record/{name}"] = hashlib.sha256(path.read_bytes()).hexdigest()
     return hashes
+
+def _is_solver_evidence(relative_path: str) -> bool:
+    path = Path(relative_path)
+    return path.suffix != ".pyc" and "__pycache__" not in path.parts
+
+
+def _producer_code_hashes() -> dict[str, str]:
+    paths = (Path(__file__), Path(__file__).with_name("fea_part_selection.py"))
+    return {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in paths}
 
 
 def _input_hashes(case: dict[str, Any]) -> dict[str, str]:
@@ -548,6 +570,7 @@ def main(argv: list[str] | None = None) -> int:
                 "case_yaml_sha256": hashlib.sha256(case_path.read_bytes()).hexdigest(),
                 "solver_versions": solver_versions(),
                 "options": _case_options(case),
+                "producer_code_sha256": _producer_code_hashes(),
             }
             reused = LAYOUT.reusable(args.hw, "bundle.analysis", params, recipe, replace=args.replace)
             if reused is not None:
@@ -565,7 +588,8 @@ def main(argv: list[str] | None = None) -> int:
                 if status != 2:
                     run_dir = Path(result["run_directory"])
                     evidence_files = []
-                    for rel in sorted(result.get("retained_files", [])):
+                    evidence_names = [name for name in result.get("retained_files", []) if _is_solver_evidence(name)]
+                    for rel in sorted(evidence_names):
                         source = run_dir / rel
                         if not source.is_file():
                             raise CaseError(f"FreeCAD listed a missing retained solver file: {rel}")
