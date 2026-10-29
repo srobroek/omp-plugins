@@ -71,6 +71,37 @@ class ValidateProject(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(json.loads(result.stdout), {"ok": True, "findings": []})
 
+    def test_empty_template_passes_at_ground_but_requires_parts_at_layout(self) -> None:
+        temporary = tempfile.TemporaryDirectory(prefix="cad-record-empty-template-")
+        self.addCleanup(temporary.cleanup)
+        project = Path(temporary.name) / "project"
+        shutil.copytree(TEMPLATE, project)
+        product = project / "hw" / "product.yaml"
+
+        (project / "hw" / "parts").mkdir()
+        product.write_text(product.read_text(encoding="utf-8").replace("stage: layout", "stage: ground"),
+                            encoding="utf-8")
+        result = subprocess.run([sys.executable, str(VALIDATOR), str(project)], capture_output=True,
+                                text=True, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(json.loads(result.stdout), {"ok": True, "findings": []})
+
+        product.write_text(product.read_text(encoding="utf-8").replace("stage: ground", "stage: layout"),
+                            encoding="utf-8")
+        result = subprocess.run([sys.executable, str(VALIDATOR), str(project)], capture_output=True,
+                                text=True, timeout=60)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("no part records found", result.stdout)
+        product.write_text(product.read_text(encoding="utf-8").replace("stage: layout", "stage: design_freeze")
+                            .replace("  recheck_from: layout", "  recheck_from: layout\n  frozen:\n    version: v1\n    manifest_sha256: '" + "0" * 64 + "'\n    decision: DR-001"),
+                            encoding="utf-8")
+        (project / "hw" / "decisions").mkdir()
+        (project / "hw" / "decisions" / "DR-001.md").write_text("# DR-001\n", encoding="utf-8")
+        result = subprocess.run([sys.executable, str(VALIDATOR), str(project)], capture_output=True,
+                                text=True, timeout=60)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("flow/frozen/version v1 is not a built version", result.stdout)
+
     def test_example_record_validates(self) -> None:
         result, report = self.validate()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

@@ -636,7 +636,11 @@ def validate_project(project_dir: Path) -> list[dict[str, str]]:
             check_manufacture(part, str(part_path), hw, findings)
             part_records[pn] = (part, str(part_path))
         if not part_records:
-            findings.append(finding(str(parts_dir), "no part records found"))
+            product = documents.get("product.yaml")
+            flow = product.get("flow") if isinstance(product, dict) else None
+            stage = flow.get("stage") if isinstance(flow, dict) else None
+            if stage not in stages() or stages().index(stage) >= stages().index("layout"):
+                findings.append(finding(str(parts_dir), "no part records found"))
     assembly_path = str(hw / "assembly.yaml")
     inventory = (assembly_inventory(documents["assembly.yaml"], assembly_path, part_records, findings)
                  if valid.get("assembly.yaml") else None)

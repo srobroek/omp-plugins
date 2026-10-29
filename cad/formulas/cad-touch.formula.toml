@@ -53,7 +53,7 @@ title = "Record ECO {{decision}} and impact for {{part}}"
 type = "task"
 priority = 1
 labels = ["cad", "phase:eco"]
-description = "Run skill://cad-record and skill://cad-recheck on the released baseline for {{product}}. Record {{change}} as decisions/{{decision}}. Identify the changed part and only its affected dependents from assembly/interfaces/BOM; state the baseline {{from_rev}} and proposed immediate successor {{to_rev}}. This is a released design after LAYOUT and DESIGN freeze, so never rerun or reopen unaffected parts."
+description = "Run skill://cad-record and skill://cad-recheck on the released baseline for {{product}}. Record {{change}} as decisions/{{decision}}. Identify the changed part and only its affected dependents from assembly/interfaces/BOM; state the baseline {{from_rev}} and proposed immediate successor {{to_rev}}. This is a released design after LAYOUT and DESIGN freeze. Before an existing record is changed, read cad-record/references/layout.md and run the read-only `validate.py PROJECT --migration-plan`; layout findings are sticky once frozen or released. Never rerun or reopen unaffected parts."
 
 [steps.metadata]
 skill_hints = "cad-record, cad-recheck, cad-flow"
@@ -76,7 +76,7 @@ title = "Fan out one revision molecule per part in the ECO {{decision}} impact s
 type = "task"
 needs = ["intent-gate"]
 labels = ["cad", "phase:eco", "fanout"]
-description = "Bond one mol-cad-detail per part in the approved impact set onto this step before dispatch: `bd mol bond mol-cad-detail <this-step> --type parallel --ref detail-<PN> --var product={{product}} --var scope={{scope}} --var part=<PN> --var kernel={{kernel}} --var process_default={{process_default}} --var change='ECO {{decision}}: <change for this part>; set rev <next rev>'`. {{part}} goes from {{from_rev}} to {{to_rev}}, the immediate successor under the design-record rev sequence; an impacted dependent bumps to its own immediate successor only when its geometry changes. Keep unaffected part files and revisions unchanged. Dispatch every ready subagent step below this step in ONE parallel batch of cad-part-designer workers, as skill://cad-flow Delegation describes. Close each molecule's steps and root from its worker's report; dispatch a failed part again in the next batch. Close this step when every child is closed."
+description = "Bond one mol-cad-detail per part in the approved impact set onto this step before dispatch, with the full command shown above. {{part}} goes from {{from_rev}} to {{to_rev}}, the immediate successor under the design-record revision sequence; an impacted dependent bumps only when its geometry changes. Keep unaffected part files and revisions unchanged. Run `validate.py PROJECT --migration-plan` before planning legacy paths; workers deliver only canonical record sources for authorized parts via scratch.py. Dispatch every ready subagent step below this step in ONE parallel batch of cad-part-designer workers, as skill://cad-flow Delegation describes. Close each molecule from its worker's report; close this step when every child is closed."
 
 [steps.metadata]
 skill_hints = "cad-flow, cad-record"
@@ -88,7 +88,7 @@ type = "task"
 needs = ["revise-fanout"]
 waits_for = "all-children"
 labels = ["cad", "phase:eco", "phase:parts"]
-description = "Accept a delivery only with its passing F3 scratch build and the revision the brief named. Decide every proposal and apply the accepted ones to the shared records yourself. Commit one batch: `uv run --script skill://cad-flow/scripts/run.py cad-model/scripts/cad_model.py run hw --label vN --kernel {{kernel}}`, then `uv run --script skill://cad-flow/scripts/run.py cad-model/scripts/cad_model.py check vN --hw hw [--out FILE]`; press fits declared in `hw/interfaces.yaml` are automatically allowed and a blocking check failure stops the batch. Render with `uv run --script skill://cad-flow/scripts/run.py cad-render/scripts/render.py hw --version vN`, run `uv run --script skill://cad-flow/scripts/run.py cad-design/scripts/form_check.py --hw hw --parts-dir hw/versions/vN/parts --fidelity F3`, and generate each revised part's drawing from vN with `uv run --script skill://cad-flow/scripts/run.py cad-drawings/scripts/drawing.py hw/versions/vN/parts/<PN>.step --part hw/parts/<PN>/part.yaml --product hw/product.yaml --metrics hw/versions/vN/metrics.json --output-dir <dir> [--scale <ratio>]`. Commit the decision/design-record entry and bead note."
+description = "Accept a delivery only with its passing F3 scratch build and the revision the brief named. Decide every proposal and apply accepted ones to shared records. Commit one batch: cad-model run, check, render, form_check at F3, and recheck. Use cad-drawings to draft, review and publish version-bound drawings; follow its documented output options and cad-record's layout API. Do not write release inventories or place explicit outputs outside `.cad-work/`. Record the decision/design entry and bead note."
 
 [steps.metadata]
 skill_hints = "cad-model, cad-design, cad-drawings, cad-render, cad-record"
@@ -111,7 +111,7 @@ title = "Fan out the L3-L4 recheck cases for the ECO impact set"
 type = "task"
 needs = ["revision-gate"]
 labels = ["cad", "phase:analysis", "fanout"]
-description = "List the analysis cases that cover {{part}} or an impacted dependent: the joint sweep, the FreeCAD assembly check, tolerance stack-ups, and static FEA. Bond each case that needs no other case's output onto this step before dispatch: `bd mol bond mol-cad-analysis <this-step> --type parallel --ref analysis-<case> --var product={{product}} --var scope={{scope}} --var case=<id> --var kind=sweep|assembly|stackup|fea --var version=vN`. Dispatch every ready subagent step below this step in ONE parallel batch of cad-analyst workers, as skill://cad-flow Delegation describes. An FEA case at the worst-case pose sets `evidence:` to the sweep's `worst.step.json`, so it waits for the sweep molecule, then runs as the next batch. Close each molecule from its worker's report. Close this step when every child is closed."
+description = "List analysis cases covering {{part}} or an impacted dependent. Bond independent cases first; an FEA case using the sweep waits for the sweep molecule. Analysts read the selected version snapshot and publish versioned evidence bundles by default; scratch overrides are new paths under `.cad-work/` only. See cad-record/references/layout.md and each producer's skill for its CLI. Close each molecule from its worker's report and this step when every child is closed."
 
 [steps.metadata]
 skill_hints = "cad-flow, cad-motion, cad-analysis"
@@ -123,7 +123,7 @@ type = "task"
 needs = ["analysis-fanout"]
 waits_for = "all-children"
 labels = ["cad", "phase:detail", "phase:analysis"]
-description = "Check each case's inputs and warnings, then update verification.csv and the ECO record yourself for {{part}} and affected dependents only, tied to version vN. Recheck detail, fits, fasteners, process rules, drawings, BOM, interference, clearance, stack-up, kinematics, and static FEA for the impact set with skill://cad-recheck; preserve evidence for untouched parts. A failed case blocks the gate."
+description = "Check each case's inputs and warnings, then update verification.csv and the ECO record yourself for {{part}} and affected dependents only, tied to version vN. Recheck the affected design with skill://cad-recheck; preserve evidence for untouched parts. An edit after freeze must use an approved ECO, a new built version, and a re-freeze before release. A failed case blocks the gate."
 
 [steps.metadata]
 skill_hints = "cad-analysis, cad-recheck, cad-bom, cad-record"
@@ -183,7 +183,7 @@ title = "Assemble and validate ECO release {{to_rev}}"
 type = "task"
 needs = ["reconcile"]
 labels = ["cad", "phase:release"]
-description = "Run skill://cad-record, skill://cad-bom, and skill://cad-drawings to update the release manifest, STEP AP242, drawings, EBOM, verification matrix, and docs for the affected revision/dependent set. Generate the GitBuilding guide with `uv run --script skill://cad-record/scripts/build_guide.py hw --version vN --out <docs-dir>`. For drawings use `uv run --script skill://cad-flow/scripts/run.py cad-drawings/scripts/drawing.py hw/versions/vN/parts/<PN>.step --part hw/parts/<PN>/part.yaml --product hw/product.yaml --metrics hw/versions/vN/metrics.json --output-dir <dir> [--scale <ratio>]`. Preserve unchanged artifacts. Validate the revision transition {{from_rev}} -> {{to_rev}}, ECO decision {{decision}}, and release evidence. Report print/make files, buy items with OPEN reasons, assembly steps, and checks as structured lists or tables. Give each referenced file as a separate absolute-path line, never inline comma prose. Use FreeCAD 1.1.4 only. No slicer, CAM, or machine tooling."
+description = "Run `uv run --script skill://cad-record/scripts/release.py hw --rev {{to_rev}} --version <frozen-vN> --decision {{decision}}` to validate and seal the ECO release; never author an inventory or reuse a revision. Keep the frozen anchor bound to the exact new version and manifest SHA-256. A missing, stale or failed input, including any manufacturing failure, refuses; fix it, rebuild or republish, and retry. Use the cad-record layout API for all version and bundle paths. Preserve unchanged artifacts. Report print/make files, buy items with OPEN reasons, assembly steps, and checks in structured lists/tables with every referenced file on its own absolute-path line."
 
 [steps.metadata]
 skill_hints = "cad-record, cad-bom, cad-drawings"

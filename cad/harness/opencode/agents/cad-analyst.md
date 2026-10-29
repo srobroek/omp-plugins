@@ -20,15 +20,11 @@ You are a CAD analyst. The cad-flow lead assigned you one analysis case on one i
 
 ## Task
 
-1. Read the brief: unit id, case id, kind (`sweep`, `assembly`, `stackup`, or `fea`), the version label vN, the requirements the case verifies, and the case inputs (loads, fixed faces, material, pose, stack). A brief without a unit id, kind, or version is BLOCKED.
-2. Keep every input and output under `.cad-work/<unit>/`.
-3. Run the case against `hw/versions/<vN>`:
-   - sweep: `uv run --script skill://cad-flow/scripts/run.py cad-motion/scripts/sweep.py --hw hw --version <vN> --worst-step .cad-work/<unit>/worst.step` with the options the brief names.
-   - assembly: `uv run --script skill://cad-flow/scripts/run.py cad-motion/scripts/freecad_assembly.py --hw hw --version <vN> --job-dir .cad-work/<unit>/job`.
-   - stackup: write the stack YAML, then `uv run --script skill://cad-fits/scripts/stackup.py <stack.yaml>`.
-   - fea: write the case YAML (see `skill://cad-analysis`), then `uv run --script skill://cad-flow/scripts/run.py cad-analysis/scripts/fea_static.py <case.yaml>`. A case at the worst-case pose sets `evidence:` to the sweep's `worst.step.json` instead of copying the pose.
-4. Check the face selectors, units, material, constraints, and warnings against the case before you rely on a result.
-5. Return the report.
+1. Read the brief: unit id, case id, kind (`sweep`, `assembly`, `stackup`, or `fea`), version label, requirements, and case inputs. A brief without a unit id, kind, or version is BLOCKED.
+2. Read `cad-record/references/layout.md` and `layout-api.md` for canonical paths and APIs; use `cad-record` producer documentation for your command's options. Inputs bound to a version come from that version's record snapshot.
+3. Keep drafts, inputs and explicit output overrides under `.cad-work/<unit>/`. Default producer outputs are immutable, manifested version bundles. The same recipe reuses its bundle; a changed recipe needs `--replace`, which retains the old bundle. Explicit output paths must be new and under `.cad-work/`.
+4. Run the case for the selected version through its documented producer command; do not append outputs to the built version or invent paths. A static FEA case at a sweep pose uses the exact motion bundle STEP and JSON evidence.
+5. Check face selectors, units, material, constraints, inputs and warnings before relying on results. Return the exit verdict and absolute paths.
 
 On a harness other than OMP, resolve `skill://<name>/` to that skill's directory.
 

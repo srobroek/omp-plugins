@@ -11,6 +11,7 @@ decisions: [DR-002, DR-003, DR-004]
 procurement:
   mode: made_to_drawing
   designation: "Shoulder pin to drawing, stainless A2, passivated"
+manufacture: {relationship: same}
 drawing:
   type: detail
   tolerance_policy: machining

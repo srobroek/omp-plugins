@@ -68,7 +68,7 @@ title = "COMMIT selected variant round {{round}}"
 type = "task"
 needs = ["variant-gate"]
 labels = ["cad", "phase:concept"]
-description = "Record the selected concept id, user direction, variant disposition, and preview location in the design record and bead note. Export the chosen concept with `uv run --script skill://cad-concept/scripts/concept.py handoff <scene> --out hw/concept/handoff.json`. Keep LAYOUT unfrozen until its separate human gate. Concept approval does not run engineering checks."
+description = "Record the selected concept id, user direction, variant disposition, and preview location in the design record and bead note. Export the chosen concept using cad-concept's documented output override at a new path under `.cad-work/`; never write into a managed layout path directly. Keep LAYOUT unfrozen until its separate human gate. Concept approval does not run engineering checks."
 
 [steps.metadata]
 skill_hints = "cad-record, cad-flow"

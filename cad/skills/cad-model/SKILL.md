@@ -31,7 +31,7 @@ TRIGGER
    holds `manufacturing/<PN>/` for every custom-made part: `part.step` (AP242, mm), `part.stl`
    for FDM (binary, mm, on the printer bed) and `manufacturing.json`. A manufacturing output that
    fails its checks fails the run: no version, latest unchanged.
-3. Check: `uv run --script skill://cad-flow/scripts/run.py cad-model/scripts/cad_model.py check vN --hw hw [--out FILE] [--jobs 1|N|auto] [--cache DIR | --no-cache]`
+3. Check: `uv run --script skill://cad-flow/scripts/run.py cad-model/scripts/cad_model.py check vN --hw hw [--out .cad-work/<unit>/check.json] [--jobs 1|N|auto] [--cache DIR | --no-cache]` (explicit results must be new `.cad-work/` paths).
    → check result JSON; press fits and heat-set inserts declared in `hw/interfaces.yaml` are allowed
    to interfere automatically. `build_volume` checks each FDM part, in the state it is printed in,
    against the printer envelope of the version's `product.yaml`.
@@ -59,18 +59,12 @@ hw --label vN` command it names; never rebuild the sealed label.
 
 MUST Pick the next label above the newest version; versions are immutable and `run` refuses an existing or lower label.
 MUST Treat `check` exit 1 as a failed stage gate; report `blocking_failures` and the numbers verbatim.
-MUST Resolve current files through `hw/versions/latest.json`, never by guessing a version path.
+MUST Use the cad-record layout API for version and manufacturing paths; its generated `references/layout.md` is the one canonical path table.
 MUST Add a missing material density to `assets/materials.yaml` with its source; `mass_g: null` means unknown.
-MUST Declare press fits, as a part `pair` or as `hole` and `shaft` feature endpoints, and heat-set
-inserts in `hw/interfaces.yaml`; `check` classifies each fit and allows measured interference only
-for pairs classified as interference fits and for heat-set pairs. A declared interference fit that
-measures clearance is a blocking finding.
+MUST Declare press fits, as a part `pair` or as `hole` and `shaft` feature endpoints, and heat-set inserts in `hw/interfaces.yaml`; `check` classifies each fit and allows measured interference only for intentional interference fits and heat-set pairs.
 DEFAULT Use `--allow-interference PN:PN` only for an undeclared, intentional overlap.
 MUST Declare `build_volume` in `product.yaml` for FDM projects; a missing declaration is an advisory warning.
 NOT Put a short timeout around `run`: a cold OCP import took 170 to 320 s per fresh environment.
-NOT Hand-edit files under `hw/versions/`; rebuild under a new label.
-NOT Export print or machining files by hand or into ad-hoc folders such as `hw/print/`; define the
-state in model.py and let `run` write `manufacturing/<PN>/`.
 
 ```text
 L1 MODEL {RUN|CHECK|DIFF} vN: {PASS|FAIL}, {parts} parts, {wall s}

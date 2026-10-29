@@ -1,7 +1,7 @@
 # mol-cad-analysis: one L4 analysis case run by a cad-analyst worker on an integrated version, read-only on hw/.
 # Bond one per case onto an analysis fan-out step, all independent cases in one batch:
-#   bd mol bond mol-cad-analysis <fanout-step> --type parallel --ref analysis-<case> --var case=<id> --var kind=<kind> --var version=vN ...
-# A static FEA case at the worst-case pose sets `evidence:` to the sweep's worst.step.json: bond it once the sweep molecule closes.
+# Before relying on legacy files, run `validate.py PROJECT --migration-plan`; it is read-only. Use cad-record's layout API and version snapshot contract for all inputs and outputs.
+# A static FEA case at a sweep pose reads the exact motion bundle evidence; bond it once the sweep molecule closes.
 formula = "mol-cad-analysis"
 description = "Run L4 {{kind}} case {{case}} on {{product}} version {{version}} and propose verification rows"
 type = "workflow"
@@ -34,7 +34,7 @@ id = "run-case"
 title = "ANALYSE {{kind}} case {{case}} on {{version}}"
 type = "task"
 labels = ["cad", "phase:analysis"]
-description = "Unit analysis-{{case}}. Run the {{kind}} case the lead's brief defines against hw/versions/{{version}}, writing every input and output under `.cad-work/analysis-{{case}}/`. sweep: `uv run --script skill://cad-flow/scripts/run.py cad-motion/scripts/sweep.py --hw hw --version {{version}} --worst-step .cad-work/analysis-{{case}}/worst.step`. assembly: `uv run --script skill://cad-flow/scripts/run.py cad-motion/scripts/freecad_assembly.py --hw hw --version {{version}}`. stackup: `uv run --script skill://cad-fits/scripts/stackup.py <stack.yaml>`. fea: write the case YAML in the unit directory, then `uv run --script skill://cad-flow/scripts/run.py cad-analysis/scripts/fea_static.py <case.yaml>`. Exit 1 is a check failure to report, exit 2 is no result. Never change hw/. Return the verdict from the exit code, the key numbers verbatim, absolute paths of every result file, and proposed verification.csv rows naming their REQ ids."
+description = "Unit analysis-{{case}}. Run the {{kind}} case in the lead's brief against version {{version}}, reading its `record/` snapshot. Publish results through the producer's immutable bundle default and cad-record layout API; explicit outputs must be new paths under `.cad-work/`. Do not write into a built version or hand-pick managed paths. See `cad-record/references/layout.md` and the producer skill for CLI options. An FEA case at a sweep pose uses that bundle's `worst.step` and `worst.step.json`; it waits for the sweep molecule. Check inputs and warnings, report the exit verdict and propose verification rows."
 
 [steps.metadata]
 skill_hints = "cad-motion, cad-analysis, cad-fits"

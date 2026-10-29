@@ -25,21 +25,9 @@ TRIGGER
    `PARAMS` dict in mm and degrees, `build(params)` returning one part in place at the zero pose.
 3. Start by using the skill's own references: read `references/fidelity.md`, the model.py contract, and the fidelity ladder. Extract the applicable shape and detail decisions from the part's requirements, interfaces, joints, material, and process; do not assume a reference model belongs to an installed skill.
    Checkout users may optionally read `cad/examples/lamp-arm/reference/` as a worked example; it is not a runtime dependency.
-4. On "commit batch" from L1 onward, review the batch with realistic renders through the
-   `cad-render` step (later; until it exists, report it as missing, not done). For the
-   reference arm, `uv run --script skill://cad-flow/scripts/run.py cad-design/scripts/review_render.py --out DIR` writes an iso view and
-   base, elbow, and head close-ups per kernel. -> read every PNG before describing it.
-5. Export one STEP per part, then run
-   `uv run --script skill://cad-flow/scripts/run.py cad-design/scripts/form_check.py --hw hw --parts-dir DIR --fidelity F2|F3`.
-   -> JSON per part (validity, area shares, blends) and per joint (bore offset); exit 0 = no
-   findings, 1 = findings, 2 = usage error. When DIR also holds build_reference.py's
-   `build.json`, form_check adds the in-memory checks: `brep_invalid` with `source: kernel`
-   and `step_readback` (read-back volume drift above 1e-6).
-6. Walk the render self-check questions in `references/fidelity.md` against the renders.
-   A part that fails stays in the stage; report the level it reached.
-
-`scripts/build_reference.py --kernel cadquery|build123d --out DIR` builds the reference
-models in their kernel's uv environment and writes `<PN>.step` per part plus `build.json`.
+4. On "commit batch", use cad-render to review the built version. The lamp reference aid writes temporary CAD files to the output directory you provide. Run `build_reference.py --kernel cadquery|build123d --out DIR` or `review_render.py --out DIR`. Never set a hardware project as `DIR`.
+5. Export one STEP per part in the temporary build output, then run `uv run --script skill://cad-flow/scripts/run.py cad-design/scripts/form_check.py --hw hw --parts-dir DIR --fidelity F2|F3`. JSON reports per-part validity, area shares, blends and joint-bore offsets; exit 0 means no findings, 1 means findings, and 2 means usage error. When DIR contains `build.json`, form_check also compares in-memory checks with STEP read-back.
+6. Walk the render self-check questions in `references/fidelity.md` against the renders. A part that fails stays in the stage; report the level it reached.
 
 ## Rules
 

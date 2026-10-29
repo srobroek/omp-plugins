@@ -30,27 +30,37 @@ class BuildGuide(unittest.TestCase):
         self.root = Path(self.temporary.name)
         self.hw = self.root / "hw"
         self.hw.mkdir()
-        self.out = self.root / "docs"
+        self.out = self.root / ".cad-work" / "docs"
 
     def copy_lamp_example(self) -> Path:
         shutil.copytree(LAMP_EXAMPLE / "hw", self.hw, dirs_exist_ok=True)
         return self.hw
 
     def make_version(self, hw: Path, version: str) -> None:
-        version_parts = hw / "versions" / version / "parts"
-        version_parts.mkdir(parents=True)
+        version_dir = hw / "versions" / version
+        version_dir.mkdir(parents=True)
         bom = hw / "bom.csv"
-        built_parts = {}
-        if bom.is_file():
-            with bom.open(newline="", encoding="utf-8") as stream:
-                for row in csv.DictReader(stream):
-                    if row.get("make_buy") == "make":
-                        pn = row["PN"]
-                        (version_parts / f"{pn}.step").write_text("fixture STEP", encoding="utf-8")
-                        built_parts[pn] = {"step": f"parts/{pn}.step"}
-        (version_parts.parent / "manifest.json").write_text(
-            json.dumps({"label": version, "parts": built_parts}), encoding="utf-8"
-        )
+        made = {}
+        with bom.open(newline="", encoding="utf-8") as stream:
+            for row in csv.DictReader(stream):
+                part = yaml.safe_load((hw / "parts" / row["PN"] / "part.yaml").read_text(encoding="utf-8"))
+                if row.get("make_buy") == "make" or part.get("procurement", {}).get("mode") == "made_to_drawing":
+                    pn = row["PN"]
+                    target = version_dir / "manufacturing" / pn
+                    target.mkdir(parents=True)
+                    (target / "part.step").write_text("fixture STEP", encoding="utf-8")
+                    names = ["part.step"]
+                    if part.get("process") == "fdm":
+                        (target / "part.stl").write_bytes(b"fixture STL")
+                        names.append("part.stl")
+                    (target / "manufacturing.json").write_text("{}\n", encoding="utf-8")
+                    made[pn] = {"path": f"manufacturing/{pn}", "outputs": names + ["manufacturing.json"]}
+                    if part.get("procurement", {}).get("mode") == "made_to_drawing":
+                        drawing = hw / "drawings" / version / pn
+                        drawing.mkdir(parents=True, exist_ok=True)
+                        (drawing / "sheet-1.pdf").write_bytes(b"fixture drawing")
+        (version_dir / "manifest.json").write_text(
+            json.dumps({"label": version, "manufacturing": made}), encoding="utf-8")
 
     def copy_coverage(self, hw: Path) -> None:
         target = hw / "drawings" / "v1" / "assembly" / "coverage.json"
@@ -72,10 +82,13 @@ class BuildGuide(unittest.TestCase):
         self.copy_coverage(hw)
         self.assertTrue((hw / "drawings" / "v1" / "assembly" / "coverage.json").is_file())
         guide = self.generate(hw)
-        self.assertIn('<parts src="../hw/bom.csv" />', guide)
+        self.assertIn('<parts src="../../hw/bom.csv" />', guide)
         for heading in ("Overview", "Parts to make", "Parts to buy", "Tools and consumables",
                         "Assembly steps", "Checks before use"):
             self.assertIn(f"## {heading}", guide)
+        self.assertIn("[part.step](../../hw/versions/v1/manufacturing/LMP-0001/part.step)", guide)
+        self.assertIn("[part.stl](../../hw/versions/v1/manufacturing/LMP-0001/part.stl)", guide)
+        self.assertIn("[drawing sheet PDF](../../hw/drawings/v1/LMP-0005/sheet-1.pdf)", guide)
         self.assertIn("| 11 | LMP-0011 |", guide)
         self.assertIn("OPEN — manufacturer_part_number:", guide)
         self.assertIn("Press item 5 into item 2 along -Z", guide)
@@ -119,14 +132,16 @@ class BuildGuide(unittest.TestCase):
             "  views: [{id: front, kind: assembled, direction: front}]\n"
             "  items: [{item: 7, PN: TST-0001}]\n", encoding="utf-8"
         )
-        (hw / "versions" / "v1" / "parts" / "TST-0001.step").write_text("fixture STEP", encoding="utf-8")
-        (hw / "versions" / "v1" / "manifest.json").write_text(json.dumps({
-            "label": "v1", "parts": {"TST-0001": {"step": "parts/TST-0001.step"}},
-        }), encoding="utf-8")
+        (hw / "versions" / "v1" / "manufacturing" / "TST-0001").mkdir(parents=True)
+        (hw / "versions" / "v1" / "manufacturing" / "TST-0001" / "part.step").write_text("fixture STEP", encoding="utf-8")
+        (hw / "versions" / "v1" / "manufacturing" / "TST-0001" / "manufacturing.json").write_text("{}\n", encoding="utf-8")
+        (hw / "versions" / "v1" / "manifest.json").write_text(json.dumps({"label": "v1", "manufacturing": {
+            "TST-0001": {"path": "manufacturing/TST-0001", "outputs": ["part.step", "manufacturing.json"]}}}),
+            encoding="utf-8")
         guide = self.generate(hw)
         self.assertIn("| Product | minimal |", guide)
         self.assertIn("| Version | v1 |", guide)
-        self.assertIn("| 7 | TST-0001 | Test part | 1 | steel | cnc |", guide)
+        self.assertIn("[part.step](../../minimal-hw/versions/v1/manufacturing/TST-0001/part.step)", guide)
         self.assertIn("## Parts to buy\n\n| Item no.", guide)
         self.assertIn("## Assembly steps\n\nnot recorded", guide)
         self.assertIn("## Checks before use\n\n| Requirement", guide)
@@ -143,6 +158,7 @@ class BuildGuide(unittest.TestCase):
         self.assertIn("| Product | not recorded |", guide)
         self.assertIn("## Parts to make\n\n| Item no.", guide)
         self.assertIn("## Parts to buy\n\n| Item no.", guide)
+        self.assertIn("## Parts to buy\n\n| Item no. | PN | Designation or manufacturer PN | Qty | Supplier | Order code | Drawing |", guide)
         self.assertIn("## Tools and consumables\n\n| Step | Items |", guide)
         self.assertIn("## Assembly steps\n\nnot recorded", guide)
         self.assertIn("## Checks before use\n\n| Requirement", guide)

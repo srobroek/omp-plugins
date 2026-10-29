@@ -29,6 +29,18 @@ import yaml
 SKILL = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SKILL / "scripts"))
 sys.path.insert(0, str(SKILL.parent / "cad-drawings" / "scripts"))
+import importlib.util
+
+LAYOUT_PATH = SKILL / "scripts" / "layout.py"
+if "cad_record_layout" not in sys.modules:
+    _LAYOUT_SPEC = importlib.util.spec_from_file_location("cad_record_layout", LAYOUT_PATH)
+    if _LAYOUT_SPEC is None or _LAYOUT_SPEC.loader is None:
+        raise ImportError(f"{LAYOUT_PATH} not found")
+    LAYOUT = importlib.util.module_from_spec(_LAYOUT_SPEC)
+    sys.modules["cad_record_layout"] = LAYOUT
+    _LAYOUT_SPEC.loader.exec_module(LAYOUT)
+else:
+    LAYOUT = sys.modules["cad_record_layout"]
 import assembly_data  # noqa: E402
 import assembly_check  # noqa: E402
 import assembly_sheet  # noqa: E402
@@ -127,9 +139,19 @@ def release_manifest(hw: Path, product_id: str, version: str) -> Path | None:
     return max(candidates, default=(False, "", None), key=lambda row: (row[0], row[1], str(row[2])))[2]
 
 
+def built_manufacturing(layout: Any, hw: Path, version: str, pn: str, process: str, out: Path) -> str | None:
+    """Link the canonical manufacturing STEP, and the FDM STL when applicable."""
+    directory = layout.manufacturing_dir(hw, version, pn)
+    files = ["part.step"]
+    if process == "fdm":
+        files.append("part.stl")
+    links = [markdown_link(name, directory / name, out) for name in files if (directory / name).is_file()]
+    return "<br>".join(links) if links else None
+
+
 def guide_measurements(hw: Path, version_dir: Path, version: str, product_id: str,
                        operation_ids: set[str]) -> dict[str, Mapping[str, Any]]:
-    bundle = hw / "drawings" / version / "assembly"
+    bundle = LAYOUT.bundle_dir(hw, "drawings", version, "assembly")
     reports = {(bundle / name, False) for name in ("coverage.json", "package.json")}
     releases = hw / "releases"
     if releases.is_dir():
@@ -186,7 +208,7 @@ def recorded_tools(operations: Sequence[Mapping[str, Any]]) -> list[tuple[str, s
 
 def make_guide(hw: Path, version: str, out: Path) -> str:
     hw = hw.resolve()
-    version_dir = hw / "versions" / version
+    version_dir = LAYOUT.version_dir(hw, version)
     version_manifest = version_dir / "manifest.json"
     if not version_manifest.is_file():
         raise GuideError(f"version manifest is missing: {version_manifest}")
@@ -240,12 +262,10 @@ def make_guide(hw: Path, version: str, out: Path) -> str:
         quantity = rolled.get(pn, {}).get("qty", bom.get("qty"))
         common = (items.get(pn), pn)
         if part.get("make_buy", bom.get("make_buy")) == "make":
-            step_value = built.get("parts", {}).get(pn, {}).get("step")
-            step_path = version_dir / step_value if isinstance(step_value, str) and step_value else None
-            step = markdown_link(step_value, step_path, out) if step_path and step_path.is_file() else None
+            process = str(part.get("process") or bom.get("process") or "")
+            manufacturing = built_manufacturing(LAYOUT, hw, version, pn, process, out)
             make_rows.append((*common, part.get("title") or bom.get("title"), quantity,
-                              part.get("material") or bom.get("material"),
-                              part.get("process") or bom.get("process"), step))
+                              part.get("material") or bom.get("material"), process, manufacturing))
         elif part.get("make_buy", bom.get("make_buy")) == "buy":
             procurement = part.get("procurement") or {}
             designation = (procurement.get("designation") or bom.get("designation")
@@ -262,7 +282,12 @@ def make_guide(hw: Path, version: str, out: Path) -> str:
                 supplier = f"{supplier or 'not recorded'}; OPEN — supplier: {open_fields['supplier']}"
             if "supplier_part_number" in open_fields:
                 order_code = f"OPEN — supplier_part_number: {open_fields['supplier_part_number']}"
-            buy_rows.append((*common, designation, quantity, supplier, order_code))
+            drawing_link = None
+            if procurement.get("mode") == "made_to_drawing" and part.get("drawing") is not None:
+                drawing = LAYOUT.bundle_dir(hw, "drawings", version, pn) / "sheet-1.pdf"
+                if drawing.is_file():
+                    drawing_link = markdown_link("drawing sheet PDF", drawing, out)
+            buy_rows.append((*common, designation, quantity, supplier, order_code, drawing_link))
 
     operations = assembly_drawing.get("operations", []) if isinstance(assembly_drawing, Mapping) else []
     resolved = plan.sheets[0].operations if plan is not None else ()
@@ -293,8 +318,8 @@ def make_guide(hw: Path, version: str, out: Path) -> str:
         "## Overview\n\n" + table(("Field", "Value"), overview),
         "## Parts to make\n\n" + table(("Item no.", "PN", "Title", "Qty", "Material", "Process", "Manufacturing file"),
                                            make_rows or [(None,) * 7]),
-        "## Parts to buy\n\n" + table(("Item no.", "PN", "Designation or manufacturer PN", "Qty", "Supplier", "Order code"),
-                                          buy_rows or [(None,) * 6]),
+        "## Parts to buy\n\n" + table(("Item no.", "PN", "Designation or manufacturer PN", "Qty", "Supplier", "Order code", "Drawing"),
+                                          buy_rows or [(None,) * 7]),
         "## Tools and consumables\n\n" + table(
             ("Step", "Items", "Tool or consumable"), tool_rows or [(None, None, None)]),
         "## Assembly steps\n\n" + ("\n".join(steps) if steps else "not recorded"),
@@ -312,14 +337,18 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("hw", type=Path, help="hardware design record directory (hw/)")
     parser.add_argument("--version", required=True, help="built version label, such as v3")
-    parser.add_argument("--out", required=True, type=Path, help="output directory for index.md")
+    parser.add_argument("--out", required=True, type=Path, help="new output directory under .cad-work/ beside hw/")
     args = parser.parse_args(argv)
     if not re.fullmatch(r"v[1-9][0-9]*", args.version):
         parser.error("--version must be vN")
+    scratch = (args.hw / ".." / ".cad-work").resolve()
+    out = args.out.resolve()
+    if out == scratch or scratch not in out.parents or (out.exists() and any(out.iterdir())):
+        parser.error("--out must be a new directory under .cad-work/ beside hw/")
     try:
-        content = make_guide(args.hw, args.version, args.out.resolve())
-        args.out.mkdir(parents=True, exist_ok=True)
-        (args.out / "index.md").write_text(content, encoding="utf-8")
+        content = make_guide(args.hw, args.version, out)
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "index.md").write_text(content, encoding="utf-8")
     except (GuideError, OSError, ValueError, KeyError) as exc:
         print(f"build_guide.py: {exc}", file=sys.stderr)
         return 2

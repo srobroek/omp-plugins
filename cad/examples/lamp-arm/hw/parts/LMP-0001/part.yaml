@@ -8,6 +8,7 @@ mass_target: 313
 make_buy: make
 supplier: null
 decisions: [DR-002, DR-004]
+manufacture: {relationship: same, mesh: {linear_deflection_mm: 0.05, angular_deflection_rad: 0.1}}
 drawing:
   type: detail
   tolerance_policy: fdm_bureau
