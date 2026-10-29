@@ -195,6 +195,44 @@ class RecheckHookTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("CAD layout has", result.stderr)
 
+    def test_frozen_pre_freeze_stage_refuses_a_stray_file(self) -> None:
+        product_path = self.root / "hw" / "product.yaml"
+        version = self.root / "hw" / "versions" / "v1"
+        version.mkdir(parents=True)
+        version_files = {
+            "assembly.step": "step\n",
+            "assembly.glb": "glb\n",
+            "part-map.json": "{}\n",
+            "metrics.json": "{}\n",
+            "parts/PRT-0001.step": "part\n",
+        }
+        for relative, content in version_files.items():
+            target = version / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+        manifest = {"label": "v1", "files": {key: hashlib.sha256((version / key).read_bytes()).hexdigest()
+                                                  for key in version_files}}
+        manifest_path = version / "manifest.json"
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        product_path.parent.mkdir(parents=True, exist_ok=True)
+        frozen_product = {
+            "id": "test-project", "rigor": "pro", "units": "mm", "regime": "iso",
+            "general_tolerance": "ISO 2768-m",
+            "flow": {"stage": "specify", "recheck_from": "release", "frozen": {
+                "version": "v1", "manifest_sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+                "decision": "DR-001",
+            }},
+        }
+        product_path.write_text(json.dumps(frozen_product), encoding="utf-8")
+        stray = self.root / "hw" / "stray.md"
+        stray.write_text("stray\n", encoding="utf-8")
+        self.git("add", "hw/product.yaml", "hw/versions", "hw/stray.md")
+
+        result = self.commit()
+
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("stray.md", result.stderr)
+
     def test_stamp_refuses_staged_stray_before_recording(self) -> None:
         self.stage_product("design_freeze", "layout")
         stray = self.root / "hw" / "parts" / "PRT-0001" / ".cad-work" / "generated.step"
