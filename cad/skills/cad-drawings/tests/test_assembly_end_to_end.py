@@ -134,12 +134,14 @@ def write_project(root: Path, regime: str = "iso", bom_pin_qty: int = 2) -> Path
     return hw
 
 
-def run_cli(hw: Path, out: Path | None = None, jobs: int | None = None) -> tuple[int, dict]:
+def run_cli(hw: Path, out: Path | None = None, jobs: int | None = None, replace: bool = False) -> tuple[int, dict]:
     command = [CLI, str(hw), "--version", "v1", "--timeout", "600"]
     if out is not None:
         command += ["--output-dir", str(out)]
     if jobs is not None:
         command += ["--jobs", str(jobs)]
+    if replace:
+        command.append("--replace")
     proc = subprocess.run(scriptenv.script_command(*command), capture_output=True, text=True, timeout=1800)
     try:
         return proc.returncode, json.loads(proc.stdout)
@@ -207,8 +209,24 @@ class EndToEnd(unittest.TestCase):
         self.assertEqual([row["sheet"] for row in parallel_package["sheets"]], [1, 2])
         self.assertEqual(sequential_package["coverage"]["rows"], parallel_package["coverage"]["rows"])
 
-
-
+    def test_a_failed_run_keeps_the_sealed_bundle_and_retains_its_draft(self) -> None:
+        hw = write_project(self.root / "failed")
+        status, first = run_cli(hw)
+        self.assertEqual((status, first["status"]), (0, "pass"), first.get("findings"))
+        bundle = Path(first["output_dir"])
+        sealed = {p.relative_to(bundle).as_posix(): p.read_bytes() for p in bundle.rglob("*") if p.is_file()}
+        with (hw / "bom.csv").open(encoding="utf-8") as stream:
+            rows = list(csv.reader(stream))
+        rows[2][3] = "3"  # the parts list no longer matches the two placed pins
+        with (hw / "bom.csv").open("w", newline="", encoding="utf-8") as stream:
+            csv.writer(stream, lineterminator="\n").writerows(rows)
+        status, result = run_cli(hw, replace=True)
+        self.assertNotEqual(status, 0)
+        self.assertNotEqual(result["status"], "pass")
+        self.assertEqual(sealed, {p.relative_to(bundle).as_posix(): p.read_bytes() for p in bundle.rglob("*") if p.is_file()})
+        drafts = list((hw.parent / ".cad-work").rglob("rejected.json"))
+        self.assertEqual(len(drafts), 1, drafts)
+        self.assertFalse((drafts[0].parent / "package.json").exists())
 
 
 if __name__ == "__main__":
