@@ -238,7 +238,6 @@ def stl_report(path: Path) -> dict[str, Any]:
             "shells": _shells(mesh.faces, len(mesh.vertices)),
             "bbox_mm": {"min": [float(v) for v in low], "max": [float(v) for v in high]},
             "max_abs_mm": float(np.abs(mesh.vertices).max()) if len(mesh.vertices) else 0.0}
-    return report
 
 
 def node_names(part_map_data: Mapping[str, Any]) -> dict[str, str]:

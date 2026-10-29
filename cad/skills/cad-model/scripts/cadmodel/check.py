@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import importlib.util
 import itertools
-import math
 import sys
 import time
 from functools import cache
@@ -25,7 +24,7 @@ from typing import Any, Iterable, Mapping
 from cadmodel import build, manufacture, mesh, occ, orientation, stepfile
 from cadmodel.motion import load_pair_measure, load_pair_policy, load_pose
 from cadmodel.record import load_layout
-from cadmodel.stepfile import AP242, READBACK_REL  # noqa: F401 - READBACK_REL is read by cad-design form_check
+from cadmodel.stepfile import AP242, READBACK_REL
 
 VERSIONS_SCRIPT = Path(__file__).resolve().parents[3] / "cad-render" / "scripts" / "versions.py"
 
