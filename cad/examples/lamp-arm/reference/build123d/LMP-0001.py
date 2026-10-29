@@ -19,6 +19,8 @@ import build123d as bd
 from cadmodel.safe import safe_cut
 
 KERNEL = "build123d"
+
+REQUIRES_OSIFONT = True
 PARAMS = {
     "radius": 80.0,
     "height": 16.0,
@@ -122,6 +124,7 @@ def build(params: dict) -> bd.Part:
         ))
 
     if p["engraving"]:
-        text = bd.Text(p["engraving"], p["text_size"], font="Arial", font_style=bd.FontStyle.BOLD)
+        text = bd.Text(p["engraving"], p["text_size"], font="Arial", font_path=p["font_path"],
+                       font_style=bd.FontStyle.BOLD)
         body = safe_cut(body, bd.extrude(bd.Pos(*p["text_at"], h) * text, amount=-p["text_depth"]))
     return body

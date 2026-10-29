@@ -38,6 +38,7 @@ Exit 0 when the request was processed (part failures are in the result), 2 when 
 
 from __future__ import annotations
 
+import ast
 import importlib
 import importlib.metadata
 import importlib.util
@@ -52,6 +53,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from cadmodel import occ
+from cadmodel.fonts import osifont_path
 from cadmodel.motion import load_pose
 
 CONTRACT = "model.py must define KERNEL (str), PARAMS (JSON-serialisable dict), and build(params) -> shape"
@@ -87,6 +89,27 @@ def _load_model(pn: str, path: Path) -> Any:
     sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def _validate_text_fonts(module: Any) -> None:
+    """Refuse CadQuery/build123d text calls that can fall back to an OS-selected font."""
+    source = Path(module.__file__).read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=module.__file__)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        function = node.func
+        if isinstance(function, ast.Attribute):
+            name = function.attr
+        elif isinstance(function, ast.Name):
+            name = function.id
+        else:
+            continue
+        if name not in {"text", "Text"}:
+            continue
+        if not any(keyword.arg in {"fontPath", "font_path"} for keyword in node.keywords):
+            raise ContractError(f"{Path(module.__file__).name}:{node.lineno}: {name}() must pass an explicit "
+                                "font file path with fontPath= or font_path=; system font fallback is refused")
 
 
 def _params(module: Any) -> dict[str, Any]:
@@ -214,6 +237,7 @@ def build_part(kernel: str, request: Mapping[str, Any]) -> dict[str, Any]:
     module = _load_model(request["pn"], Path(request["model"]))
     if getattr(module, "KERNEL", None) != kernel:
         raise ContractError(f"KERNEL is {getattr(module, 'KERNEL', None)!r}, this runner is {kernel!r}")
+    _validate_text_fonts(module)
     params = _params(module)
     build = getattr(module, "build", None)
     if not callable(build):
@@ -222,7 +246,10 @@ def build_part(kernel: str, request: Mapping[str, Any]) -> dict[str, Any]:
     if hook is not None and not callable(hook):
         raise ContractError("drawing_features is defined but not callable; expected drawing_features(params, shape)")
     manufacture_hook = _manufacture_hook(module, request.get("manufacture"))
-    value = build(json.loads(json.dumps(params)))  # a private copy: build may not alter the record
+    build_params = json.loads(json.dumps(params))
+    if getattr(module, "REQUIRES_OSIFONT", False):
+        build_params["font_path"] = osifont_path()
+    value = build(build_params)  # a private copy: build may not alter the record
     shape, solids = _shape(value, kernel, "build")
     # The hook sees build's own result, after every cut and fillet, and its own copy of the parameters.
     frame = request.get("model_frame", "assembly_zero")
@@ -239,7 +266,6 @@ def build_part(kernel: str, request: Mapping[str, Any]) -> dict[str, Any]:
     return {"ok": True, "params": params, "kernel_volume_mm3": occ.volume(shape), "kernel_solids": solids,
             "kernel_valid": not errors, "kernel_errors": errors, "build_s": round(time.perf_counter() - started, 3),
             "drawing_features": features, "manufacture": manufacture}
-
 
 def _failure(error: BaseException, model: str) -> dict[str, Any]:
     frames = [f for f in traceback.extract_tb(error.__traceback__) if f.filename == model]

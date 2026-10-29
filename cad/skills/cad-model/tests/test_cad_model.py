@@ -37,10 +37,10 @@ KERNELS = ("cadquery", "build123d")
 FINDING_KEYS = {"pn", "check", "type", "message", "where"}
 
 sys.path.insert(0, str(SCRIPTS))
-from cadmodel import build, check, diff, manufacture, mesh, occ, orientation  # noqa: E402 - stdlib-only imports; OCP loads on first use
+from cadmodel import build, check, diff, fonts, manufacture, mesh, occ, orientation, runner  # noqa: E402 - stdlib-only imports; OCP loads on first use
 
 AP242 = "AP242_MANAGED_MODEL_BASED_3D_ENGINEERING"
-
+SCHEMA = re.compile(r"FILE_SCHEMA\s*\(\s*\(\s*'([^']+)'\s*\)\s*\)")
 ASSEMBLY = """joints:
   - {id: J-001, type: revolute, parent: TST-0001, child: TST-0002, axis: [0, 0, 1], origin: [0, 0, 20],
      min: -90, max: 90, nominal: 90}
@@ -202,17 +202,90 @@ def all_runs() -> dict:
     return _SHARED["runs"]
 
 
+
+
+class DeterministicTextTests(unittest.TestCase):
+    """The runner requires explicit model font paths and injects the verified shared font."""
+
+    def test_runner_refuses_text_without_font_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            model = Path(tmp) / "model.py"
+            model.write_text('KERNEL = "cadquery"\nPARAMS = {}\n'
+                             'def build(params):\n    return cq.Workplane("XY").text("LMP", 8, -0.6)\n',
+                             encoding="utf-8")
+            module = runner._load_model("TST-0001", model)
+            with self.assertRaisesRegex(runner.ContractError, r"text\(\) must pass an explicit font file path"):
+                runner._validate_text_fonts(module)
+
+    def test_runner_accepts_explicit_cadquery_and_build123d_font_paths(self) -> None:
+        calls = (("cadquery", 'cq.Workplane("XY").text("LMP", 8, -0.6, fontPath="font.ttf")'),
+                 ("build123d", 'bd.Text("LMP", 8, font_path="font.ttf")'))
+        for kernel, source in calls:
+            with self.subTest(kernel=kernel), tempfile.TemporaryDirectory() as tmp:
+                model = Path(tmp) / "model.py"
+                model.write_text(f"KERNEL = {kernel!r}\nPARAMS = {{}}\n{source}\n", encoding="utf-8")
+                module = type("Model", (), {"__file__": str(model)})()
+                runner._validate_text_fonts(module)
+
+    def test_verified_osifont_path_matches_the_runner_contract(self) -> None:
+        font = Path(fonts.osifont_path())
+        self.assertEqual(hashlib.sha256(font.read_bytes()).hexdigest(), fonts.OSIFONT_SHA256)
+
+    def test_osifont_resolver_checks_the_expected_font_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            command = root / "bin" / "freecadcmd"
+            font = root / "share" / fonts.OSIFONT_RELATIVE_PATH
+            command.parent.mkdir(parents=True)
+            command.write_text("", encoding="utf-8")
+            font.parent.mkdir(parents=True)
+            font.write_bytes(b"verified osifont test bytes")
+            digest = hashlib.sha256(font.read_bytes()).hexdigest()
+            with mock.patch.object(fonts, "_freecadcmd", return_value=command), \
+                 mock.patch.object(fonts, "OSIFONT_SHA256", digest):
+                resolved = Path(fonts._osifont_for(command))
+            self.assertEqual(resolved, font.resolve())
+
+
+    def test_freecad_lookup_uses_the_preflight_candidate_order(self) -> None:
+        with mock.patch.dict(os.environ, {"FREECADCMD": "/selected/freecadcmd"}):
+            self.assertEqual(fonts._freecadcmd(), Path("/selected/freecadcmd"))
+
+    def test_osifont_resolver_rejects_unexpected_font_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            command = root / "bin" / "freecadcmd"
+            font = root / "share" / fonts.OSIFONT_RELATIVE_PATH
+            command.parent.mkdir(parents=True)
+            command.write_text("", encoding="utf-8")
+            font.parent.mkdir(parents=True)
+            font.write_bytes(b"unexpected font bytes")
+            with mock.patch.object(fonts, "OSIFONT_SHA256", fonts.OSIFONT_SHA256):
+                with self.assertRaisesRegex(RuntimeError, "unsupported TechDraw Osifont"):
+                    fonts._osifont_for(command)
+
+    def test_missing_freecad_font_fails_instead_of_using_system_font(self) -> None:
+        with mock.patch.object(fonts, "_freecadcmd", return_value=None):
+            with self.assertRaisesRegex(FileNotFoundError, "cannot find the preflight-selected FreeCAD"):
+                fonts.osifont_path.__wrapped__()
+
+    def test_text_fixtures_build_identically_in_both_kernels(self) -> None:
+        requests = {kernel: [{"pn": f"TXT-{i:04d}", "name": "Text fixture",
+                             "model": str(FIXTURES / kernel / "text.py"), "step": "unused"}]
+                    for i, kernel in enumerate(KERNELS, start=1)}
+        results = build.run_kernels(requests)
+        shapes = {kernel: next(iter(result["parts"].values())) for kernel, result in results.items()}
+        for kernel, part in shapes.items():
+            self.assertTrue(part["ok"], part)
+        volumes = {kernel: part["kernel_volume_mm3"] for kernel, part in shapes.items()}
+        self.assertLess(abs(volumes["cadquery"] - volumes["build123d"]) / volumes["cadquery"], 1e-7)
+
 def tearDownModule() -> None:  # noqa: N802 - unittest hook name
     if "tmp" in _SHARED:
         _SHARED["tmp"].cleanup()
 
-
-SCHEMA = re.compile(r"FILE_SCHEMA\s*\(\s*\(\s*'([^']+)'")
-
-
 class KernelChecks:
     """The acceptance cases, run once per kernel by the subclasses below."""
-
     kernel = ""
 
     @classmethod

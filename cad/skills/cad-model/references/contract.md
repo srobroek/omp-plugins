@@ -10,7 +10,9 @@
 | `drawing_features(params, shape)` | no | returns semantic feature locators for drawings; see below |
 | `build_manufacture(params)` | only with a declared state | returns the part in its manufacturing state, such as a bent strap's flat blank; see below |
 
-- `build` receives a private copy of `PARAMS`; the manifest records the values it received.
+`build` receives a private copy of `PARAMS`; the manifest records the declared values. A model that
+sets `REQUIRES_OSIFONT = True` additionally receives the resolved, verified `font_path` at build
+time; runner context is not persisted as a design parameter.
 - Accepted return values: CadQuery `Shape` or `Workplane` (every stack object; several become one
   compound), build123d `Shape`/`Part`/`Compound` or a `BuildPart` builder (`.part`).
 - Geometry is in the part's `model_frame` (part.yaml). `assembly_zero`, the default, is assembly
@@ -27,6 +29,32 @@
   and is not in the CadQuery environment.
 - `print` output and OCCT console messages are runner console output; the runner returns its result
   in a file the orchestrator names, so console output never corrupts it.
+
+### Text fonts
+
+Text geometry MUST use a path to a font file. Set `REQUIRES_OSIFONT = True` to use FreeCAD TechDraw Osifont.
+The runner asks cad-flow preflight for its FreeCAD command. It checks the bundled font's SHA-256 before the build.
+Then it passes `font_path` to the private copy of `build(params)`. That path is execution context, not a design parameter.
+
+Pass `font_path` to build123d or `fontPath` to CadQuery. Do not select a font by family name alone.
+The source parser refuses `text()` or `Text()` calls without an explicit font-file path.
+An explicit path may name another font, but only Osifont bytes are pinned by the runner.
+
+If FreeCAD or the pinned font is missing, the runner fails the part. It does not use the host's default font.
+This fail-closed rule prevents publishing geometry with text that changes by host.
+The font is FreeCAD 1.1.4's 114,764-byte `osifont-lgpl3fe.ttf` file.
+Its SHA-256 is `f681b2419818198a8421b9db01602862367dbc3338c0e8e963fda73f545262b8`.
+The license allows LGPL v3, GPL v2, or GPL v3, each with the GPL font exception.
+
+
+Candidate inventory: the pinned CadQuery/OCP environment includes Matplotlib 3.11.2 and DejaVuSans
+(756,072 bytes, SHA-256 `3fdf69cabf06049ea70a00b5919340e2ce1e6d02b0cc3c4b44fb6801bd1e0d22`) on both
+hosts. Its Bitstream Vera / Arev license permits redistribution when notices are included. The
+build123d 0.13.0 environment includes ReliefSingleLineCAD (53,496 bytes, SHA-256
+`8b30ea7ea8a2b17fb9d5c70b5c7c37e6a9285b4f8aced4fbd646bc591dba59b3`), licensed under OFL-1.1.
+Neither option was selected: these are not the established drawing lettering face, and Osifont is
+available byte-identically through FreeCAD on both systems. The independent matplotlib fonts are
+not shared by the build123d environment; ReliefSingleLineCAD is not shared by CadQuery.
 
 ## Drawing feature locators
 
@@ -127,9 +155,16 @@ part. cad-design's `build_reference.py` builds its reference models through the 
 | `safe_fuse(shape, *others)` | max V(inputs) <= V <= sum V(inputs) |
 | `safe_intersect(shape, *others)` | 0 < V <= min V(inputs) |
 
-Also refused: an invalid, null, non-solid, or non-positive-volume input; a kernel error; an
-invalid or solid-free result; a result whose solid members overlap. Bounds allow 1e-7 relative
-(at least 1e-6 mm^3) of kernel noise. The result keeps the first argument's type: CadQuery
-`Shape` → cast `Shape`, `Workplane` → new `Workplane`, build123d `Part` → `Part`, other build123d
-shapes → cast shape. A refusal raises `SafeEditError`; `run` reports it per part with the
-`model.py` line and writes no version.
+The runner rejects invalid, null, non-solid, or zero-volume inputs.
+It rejects kernel errors and invalid results.
+Results must contain solids that do not overlap.
+
+Volume bounds allow 1e-7 relative kernel noise, or at least 1e-6 mm^3.
+An operation preserves the first argument's type.
+CadQuery `Shape` and `Workplane` inputs keep their types.
+Build123d `Part` inputs remain `Part` values.
+Other build123d shapes return as shapes.
+
+On refusal, the operation raises `SafeEditError`.
+`run` reports the failure for that part and names its `model.py` line.
+It does not write a version.
