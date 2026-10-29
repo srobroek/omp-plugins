@@ -50,6 +50,7 @@ import importlib.util
 import json
 import math
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -338,22 +339,38 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--job-dir", type=Path, help="scratch job directory under .cad-work (versioned runs retain solver files automatically)")
     parser.add_argument("--case", default="freecad-assembly", help="case id for the immutable motion bundle")
     parser.add_argument("--replace", action="store_true", help="retain and replace a different recipe")
+    parser.add_argument("--timeout", type=float, default=600.0, help="seconds before the FreeCAD process is stopped")
     args = parser.parse_args(argv)
     started = time.monotonic()
     try:
-        version, record_hw = None, args.hw
+        version, record_hw, version_dir = None, args.hw, None
         if args.version:
-            version, _, record_hw = pose.layout_io.version(args.hw, args.version)
-            args.version, args.record_hw = version, record_hw
+            version, version_dir, record_hw = pose.LAYOUT.built_version(args.hw, args.version)
+            args.version, args.version_dir, args.record_hw = version, version_dir, record_hw
             pose.LAYOUT.resolve(args.hw, "bundle.motion", V=version, S=args.case)
         if args.job_dir is not None:
-            args.job_dir = pose.layout_io.scratch_output(args.hw, args.job_dir, "--job-dir")
-        refuse_coupled(pose.load_assembly(args.hw, record_hw))
+            args.job_dir = pose.LAYOUT.scratch_path(args.hw, args.job_dir, "--job-dir")
         if not 0.0 < args.time_step <= 0.5:
             raise pose.MotionError("--time-step must be in (0, 0.5]")
+        if not 0 < args.timeout:
+            raise pose.MotionError("--timeout must be positive")
         freecad = find_freecad(args.freecad)
         if freecad is None:
             raise pose.MotionError("freecadcmd not found; pass --freecad or set FREECADCMD")
+        assembly = pose.load_assembly(args.hw, record_hw)
+        refuse_coupled(assembly)
+        if version:
+            recipe = {"operation": "freecad_assembly", "case": args.case,
+                      "options": {"time_step": args.time_step, "timeout": args.timeout,
+                                  "report_part": list(args.report_part), "freecad": {"binary": freecad.name}},
+                      "attach": list(args.attach), "inputs_sha256": pose.input_sha256(version_dir)}
+            reused = pose.LAYOUT.reusable(args.hw, "bundle.motion", {"V": version, "S": args.case}, recipe,
+                                          replace=args.replace)
+            if reused is not None:
+                summary = json.loads((reused / "result.json").read_text(encoding="utf-8"))
+                summary.update(bundle=str(reused), reused=True)
+                print(json.dumps(summary, indent=2))
+                return 1 if summary.get("status") == "fail" else 0
         _, chain, definitions = pose.load_inputs(args)
         report = ([chain.resolve(ref, "--report-part: ") for ref in args.report_part] if args.report_part
                   else [joint.child for joint in chain.movable])
@@ -395,33 +412,24 @@ def main(argv: list[str] | None = None) -> int:
                    "timings_s": {"freecad": round(time.monotonic() - job_started, 2),
                                  "total": round(time.monotonic() - started, 2)}}
         if version:
-            summary["retained_files"] = sorted(path.relative_to(job_dir).as_posix()
-                                               for path in job_dir.rglob("*") if path.is_file())
-            recipe = {"operation": "freecad_assembly", "case": args.case, "time_step": args.time_step,
-                      "report_part": list(args.report_part), "attach": list(args.attach),
-                      "source_files": pose.layout_io.fingerprint(record_hw / "product.yaml",
-                          record_hw / "assembly.yaml", *sorted((record_hw / "parts").glob("*/part.yaml"))),
-                      "freecad": {"binary": freecad.name, "version": summary["freecad"]["version"]}}
-            reused = pose.layout_io.reuse(args.hw, "bundle.motion", version, args.case, recipe, args.replace)
-            if reused:
-                summary = reused[1]
-                summary.update(bundle=str(reused[0]), reused=True)
-            else:
-                stage = pose.LAYOUT.staging(args.hw, "bundle.motion")
-                try:
-                    import shutil
-                    for source in job_dir.rglob("*"):
-                        if source.is_file():
-                            target = stage / "evidence" / source.relative_to(job_dir)
-                            target.parent.mkdir(parents=True, exist_ok=True)
-                            shutil.copyfile(source, target)
-                    (stage / "result.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
-                    published = pose.layout_io.publish(args.hw, "bundle.motion", version, args.case, stage, recipe,
-                                                       "cad-motion freecad_assembly.py", summary["status"], args.replace)
-                    summary.update(bundle=str(published.path), reused=published.reused)
-                except Exception:
-                    shutil.rmtree(stage, ignore_errors=True)
-                    raise
+            # the job's own inputs and FreeCAD's raw frames; the part STEPs are the version's definitions,
+            # already bound by the recipe's input hashes, and the result file's run-id name is per run
+            evidence = {"spec.json": job_dir / "spec.json", "job.py": job_dir / "job.py",
+                        "freecad-frames.json": Path(spec["result"])}
+            stage = pose.LAYOUT.staging(args.hw, "bundle.motion")
+            try:
+                (stage / "evidence").mkdir()
+                for name, source in evidence.items():
+                    shutil.copyfile(source, stage / "evidence" / name)
+                summary["retained_files"] = [f"evidence/{name}" for name in sorted(evidence)]
+                (stage / "result.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+                published = pose.LAYOUT.publish(args.hw, "bundle.motion", {"V": version, "S": args.case}, stage,
+                                                recipe=recipe, producer="cad-motion freecad_assembly.py",
+                                                status=summary["status"], replace=args.replace)
+                summary.update(bundle=str(published.path), reused=published.reused)
+            except Exception:
+                shutil.rmtree(stage, ignore_errors=True)
+                raise
             if args.job_dir is None:
                 shutil.rmtree(job_dir, ignore_errors=True)
         elif args.job_dir:
@@ -430,7 +438,7 @@ def main(argv: list[str] | None = None) -> int:
             temporary.cleanup()
         print(json.dumps(summary, indent=2))
         return 1 if failed else 0
-    except (pose.MotionError, OSError, pose.LAYOUT.LayoutError) as error:
+    except (pose.MotionError, OSError, pose.LAYOUT.LayoutError, pose.LAYOUT.PublishConflict) as error:
         print(f"freecad_assembly: {error}", file=sys.stderr)
         return 2
 

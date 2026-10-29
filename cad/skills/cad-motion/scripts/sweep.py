@@ -126,6 +126,7 @@ import importlib.util
 import itertools
 import json
 import math
+import shutil
 import sys
 import time
 import traceback
@@ -612,25 +613,39 @@ def main(argv: list[str] | None = None) -> int:
                               "~/.cache/cad-motion)")
     caching.add_argument("--no-cache", action="store_true", help="measure every pair, reading and writing no cache")
     parser.add_argument("--worst-step", type=Path, help="STEP path for scratch; versioned sweeps publish to hw/motion")
-    parser.add_argument("--case", default="sweep", help="case id for immutable motion bundle")
-    parser.add_argument("--replace", action="store_true", help="retain and replace a different recipe")
     args = parser.parse_args(argv)
     if args.steps < 2 or args.grid == 1 or args.grid < 0:
         print("sweep: --steps must be >= 2, and --grid 0 or >= 2", file=sys.stderr)
         return 2
     started = time.monotonic()
     try:
-        version, record_hw = None, args.hw
+        version, record_hw, version_dir = None, args.hw, None
+        recipe = None
         if args.version:
-            version, _, record_hw = pose.layout_io.version(args.hw, args.version)
-            args.version, args.record_hw = version, record_hw
-            if args.worst_step is not None:
-                raise pose.MotionError("--worst-step is only valid for scratch geometry; versioned sweeps publish to hw/motion")
+            version, version_dir, record_hw = pose.LAYOUT.built_version(args.hw, args.version)
+            args.version, args.version_dir, args.record_hw = version, version_dir, record_hw
             pose.LAYOUT.resolve(args.hw, "bundle.motion", V=version, S=args.case)
+            recipe = {"operation": "sweep", "case": args.case,
+                      "options": {"steps": args.steps, "grid": args.grid, "worst_criterion": args.worst_criterion,
+                                  "end_effector": args.end_effector, "include_pair": list(args.include_pair),
+                                  "min_clearance": args.min_clearance, "pair_clearance": list(args.pair_clearance),
+                                  "volume_tol": args.volume_tol, "max_poses": args.max_poses,
+                                  "time_limit": args.time_limit, "jobs": args.jobs, "no_cache": args.no_cache},
+                      "attach": list(args.attach),
+                      "inputs_sha256": pose.input_sha256(version_dir)}
+            reused = pose.LAYOUT.reusable(args.hw, "bundle.motion", {"V": version, "S": args.case}, recipe,
+                                          replace=args.replace)
+            if reused is not None:
+                result = json.loads((reused / "result.json").read_text(encoding="utf-8"))
+                result.update(bundle=str(reused), reused=True)
+                print(json.dumps(result, indent=2))
+                return 1 if result.get("status") == "fail" else 0
         else:
             if args.worst_step is None:
                 raise pose.MotionError("--worst-step is required for scratch geometry")
-            args.worst_step = pose.layout_io.scratch_output(args.hw, args.worst_step, "--worst-step")
+            args.worst_step = pose.LAYOUT.scratch_path(args.hw, args.worst_step, "--worst-step")
+            if args.worst_step.exists() or evidence_path_for(args.worst_step).exists():
+                raise pose.MotionError(f"--worst-step or its evidence already exists; refusing to overwrite: {args.worst_step}")
         assembly, chain, definitions = pose.load_inputs(args)
         if not chain.independent:
             raise pose.MotionError("the chain has no independent movable joint to sweep")
@@ -694,6 +709,8 @@ def main(argv: list[str] | None = None) -> int:
             stage = pose.LAYOUT.staging(args.hw, "bundle.motion") if version else None
             worst_step = stage / "worst.step" if stage else args.worst_step
             try:
+                args.worst_step = (pose.LAYOUT.bundle_dir(args.hw, "motion", version, args.case) / "worst.step"
+                                   if version else worst_step)
                 pose.write_posed(worst_step, record_hw, chain, definitions, sample.values)
                 digest = sha256(worst_step)
                 evidence_path = (stage / "worst.step.json") if stage else evidence_path_for(worst_step)
@@ -714,27 +731,17 @@ def main(argv: list[str] | None = None) -> int:
         if version:
             if status == "incomplete":
                 raise pose.MotionError(f"sweep incomplete; no bundle published ({state.evaluated}/{len(samples)} poses)")
-            recipe = {"operation": "sweep", "steps": args.steps, "grid": args.grid,
-                      "worst_criterion": args.worst_criterion, "end_effector": args.end_effector,
-                      "include_pair": list(args.include_pair), "min_clearance": args.min_clearance,
-                      "pair_clearance": list(args.pair_clearance), "volume_tol": args.volume_tol,
-                      "max_poses": args.max_poses, "time_limit": args.time_limit, "jobs": args.jobs,
-                      "attach": list(args.attach), "source_sha256": pose.layout_io.fingerprint(
-                          record_hw / "product.yaml", record_hw / "assembly.yaml",
-                          *sorted((record_hw / "parts").glob("*/part.yaml")),
-                          *([record_hw / "interfaces.yaml"] if (record_hw / "interfaces.yaml").is_file() else []))}
-            reused = pose.layout_io.reuse(args.hw, "bundle.motion", version, args.case, recipe, args.replace)
-            if reused:
-                result = reused[1]
-                result["bundle"] = str(reused[0])
-                result["reused"] = True
-            else:
-                stage = stage or pose.LAYOUT.staging(args.hw, "bundle.motion")
+            stage = stage or pose.LAYOUT.staging(args.hw, "bundle.motion")
+            try:
                 (stage / "result.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
-                published = pose.layout_io.publish(args.hw, "bundle.motion", version, args.case, stage, recipe,
-                                                   "cad-motion sweep.py", status, args.replace)
+                published = pose.LAYOUT.publish(args.hw, "bundle.motion", {"V": version, "S": args.case}, stage,
+                                                recipe=recipe, producer="cad-motion sweep.py", status=status,
+                                                replace=args.replace)
                 result["bundle"] = str(published.path)
                 result["reused"] = published.reused
+            except Exception:
+                shutil.rmtree(stage, ignore_errors=True)
+                raise
         else:
             result["timings_s"]["export"] = round(time.monotonic() - swept, 2)
             result["timings_s"]["total"] = round(time.monotonic() - started, 2)
@@ -744,7 +751,7 @@ def main(argv: list[str] | None = None) -> int:
                   file=sys.stderr)
             return 2
         return 1 if failed else 0
-    except (pose.MotionError, OSError, pose.LAYOUT.LayoutError) as error:
+    except (pose.MotionError, OSError, pose.LAYOUT.LayoutError, pose.LAYOUT.PublishConflict) as error:
         print(f"sweep: {error}", file=sys.stderr)
         return 2
 

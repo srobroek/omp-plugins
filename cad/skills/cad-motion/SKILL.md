@@ -19,13 +19,12 @@ TRIGGER
 
 ## Workflow
 
-Every script takes `--hw hw` plus the part definitions as one of:
-`--version vN|latest` (a cad-model version's `hw/versions/vN/parts/`; `latest` via
-`hw/versions/latest.json`), `--parts-dir DIR` (one `<PN>.step` per part), or `--step ASSEMBLY.step`
-(leaf products named PN first). Pass a cad-model version with `--version`: its `assembly.step` is
-posed at the nominal joint values, and `--step` refuses it when any nominal is non-zero. A part
-without a joint needs a `fixed` joint or `--attach REF=PARENT_REF`. Revolute values are degrees,
-prismatic mm. Full contract: each script's docstring.
+Every script takes `--hw hw` plus one of:
+`--version vN|latest` (a verified cad-model version's `hw/versions/vN/parts/`, with assembly and part records read
+from `hw/versions/vN/record/`), `--parts-dir DIR` (one `<PN>.step` per part), or `--step ASSEMBLY.step` (leaf
+products named PN first). Pass a cad-model version with `--version`; its `assembly.step` is posed at the nominal
+joint values, and `--step` refuses it when any nominal is non-zero. A part without a joint needs a `fixed` joint
+or `--attach REF=PARENT_REF`. Revolute values are degrees, prismatic mm. Full contract: each script's docstring.
 
 Occurrences: a PN placed several times has one occurrence per placement in `assembly.yaml`
 (`occurrences`, `@id` references); joints attach to occurrences, so moving one leaves its
@@ -50,13 +49,16 @@ record with couplings (exit 2). Verify coupled motion with `pose.py` and `sweep.
 
 1. Pose:
    `uv run --script skill://cad-flow/scripts/run.py cad-motion/scripts/pose.py --hw hw --version vN --set J-002=-90`
-   publishes `pose.step`, `result.json`, and a manifest under `hw/motion/vN/pose/` in millimetres.
-   Use `--case ID` to select the immutable bundle subject; same recipe reuses, changed settings need
-   `--replace`. With scratch geometry (`--step` or `--parts-dir`), pass `--out .cad-work/<unit>/posed.step`.
+   publishes immutable `pose.step`, `result.json`, and a manifest under `hw/motion/vN/<pose-name>/` in millimetres.
+   Use `--case ID` to select the bundle subject; the default is `pose`. A rerun with the same recipe reuses the
+   bundle; changed settings require `--replace`, which retains the previous bundle under `.cad-work/replaced/`.
+   With scratch geometry (`--step` or `--parts-dir`), pass `--out .cad-work/<unit>/posed.step`.
 2. Sweep: `uv run --script skill://cad-flow/scripts/run.py cad-motion/scripts/sweep.py --hw hw --version vN
    [--case ID] [--replace] [--steps 19] [--grid 3] [--min-clearance MM] [--pair-clearance REF:REF=MM]
    [--include-pair REF:REF] [--end-effector REF] [--jobs 1|N|auto] [--cache DIR | --no-cache]`
-   → JSON `worst_case` (STEP and evidence are inside `hw/motion/vN/<case>/`), `collisions`, clearances, `reach_envelope`, and `timings_s`.
+   → immutable `hw/motion/vN/<case>/` with `worst.step`, `worst.step.json`, and `result.json`; also reports
+   collisions, clearances, `reach_envelope`, and `timings_s`. With scratch geometry, `--worst-step` must be a
+   new path under `.cad-work/`.
    `--jobs 1`, the default, measures in this process on OCCT's thread pool. `--jobs N` measures
    pairs in N worker processes (forkserver; spawn on macOS), each about 110 MB; `auto` is the CPU
    count, at most 8. Workers pay off for many small parts and on a busy host. The result is the
@@ -80,7 +82,7 @@ record with couplings (exit 2). Verify coupled motion with `pose.py` and `sweep.
    `required_mm`, the smallest `clearance_mm` with its sample and pose (the larger overlap breaks a
    tie at 0 mm), `samples_below`, `status`, and its `source`. A row below its requirement exits 1.
 3. FreeCAD: `uv run --script skill://cad-flow/scripts/run.py cad-motion/scripts/freecad_assembly.py --hw hw --version vN [--case ID] [--replace] [--report-part REF]`
-   publishes `result.json` and its retained FreeCAD job files under `hw/motion/vN/<case>/`; its JSON summary includes
+   publishes `result.json` and its retained FreeCAD job files under `hw/motion/vN/<case>/evidence/`; its JSON summary includes
    `frames`, start/mid/end `placements`, `limit_check`, `violations`, and `residuals`.
 4. Record each result as a `verification.csv` row: `requirement_id` from requirements.yaml,
    `result` pass|fail from the exit code, `evidence` = bundle path, inputs, pose, and key numbers.

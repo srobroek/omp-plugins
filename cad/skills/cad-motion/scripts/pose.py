@@ -86,9 +86,11 @@ import json
 import math
 import os
 import re
+import shutil
 import sys
 import traceback
 from collections.abc import Callable, Iterable, Iterator, Mapping
+from hashlib import sha256
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -144,7 +146,6 @@ def _load_module(name: str, path: Path) -> Any:
 
 
 LAYOUT = _load_module("cad_record_layout", Path(__file__).resolve().parents[2] / "cad-record" / "scripts" / "layout.py")
-layout_io = _load_module("cad_motion_layout_io", Path(__file__).resolve().with_name("layout_io.py"))
 # cad-record's occurrence normalizer, the one reader of assembly.yaml occurrences, and the coupling laws.
 assembly_data = _load_module("cad_record_assembly_data", ASSEMBLY_DATA_PATH)
 coupling = _load_module("cad_motion_coupling", COUPLING_PATH)
@@ -1121,10 +1122,9 @@ def _write_document(path: Path, doc: Any, tool: Any) -> None:
     with stdout_to_stderr():
         STEPCAFControl_Controller.Init_s()
         STEPControl_Controller.Init_s()
-        if not Interface_Static.SetCVal_s("write.step.schema", "AP242DIS"):
-            raise MotionError("cannot select the AP242 schema")
-        if not Interface_Static.SetCVal_s("write.step.unit", STEP_LENGTH_UNIT):
-            raise MotionError(f"cannot select the STEP length unit {STEP_LENGTH_UNIT}")
+        for key, value in (("write.step.schema", "AP242DIS"), ("write.step.unit", STEP_LENGTH_UNIT)):
+            if not Interface_Static.SetCVal_s(key, value):
+                raise MotionError(f"cannot select {key}={value}")
         writer = STEPCAFControl_Writer(XSControl_WorkSession(), False)
         writer.SetNameMode(True)
         writer.SetColorMode(True)
@@ -1201,11 +1201,16 @@ def add_geometry_arguments(parser: argparse.ArgumentParser) -> None:
                         help="rigidly attach an occurrence without a joint (a PN or @id) to a parent (repeatable)")
 
 
-def version_parts_dir(hw: Path, version: str) -> Path:
+def version_parts_dir(hw: Path, version: str, version_folder: Path | None = None) -> Path:
     """The verified zero-pose per-part STEP folder of a built cad-model version."""
-    _, folder, _ = layout_io.version(hw, version)
-    return folder / "parts"
+    if version_folder is None:
+        _, version_folder, _ = LAYOUT.built_version(hw, version)
+    return version_folder / "parts"
 
+
+def input_sha256(version_folder: Path) -> str:
+    """Hash the verified version manifest, which inventories the record and geometry inputs."""
+    return sha256((version_folder / "manifest.json").read_bytes()).hexdigest()
 
 def refuse_posed_version_step(step: Path) -> None:
     """Refuse a cad-model version's assembly.step posed away from the zero pose.
@@ -1241,8 +1246,9 @@ def load_inputs(args: argparse.Namespace) -> tuple[Assembly, Chain, dict[str, Pa
         step = read_assembly_step(args.step)
         definitions, located = step.definitions, bind_components(assembly, step, args.step)
     else:
-        definitions = load_definitions(args.hw, version_parts_dir(args.hw, args.version) if args.version
-                                       else args.parts_dir, record_hw)
+        parts_dir = (version_parts_dir(args.hw, args.version, getattr(args, "version_dir", None))
+                     if args.version else args.parts_dir)
+        definitions = load_definitions(args.hw, parts_dir, record_hw)
     if not definitions:
         raise MotionError("no part geometry found; product or file names must start with a PN")
     chain = assembly_chain(assembly, definitions, attach_joints(args.attach, assembly), located)
@@ -1265,57 +1271,56 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", type=Path, help="STEP path for scratch; only .cad-work paths are allowed")
     args = parser.parse_args(argv)
     try:
-        version, record_hw = None, args.hw
+        version, record_hw, version_dir = None, args.hw, None
         if args.version:
-            version, _, record_hw = layout_io.version(args.hw, args.version)
-            args.version, args.record_hw = version, record_hw
+            version, version_dir, record_hw = LAYOUT.built_version(args.hw, args.version)
+            args.version, args.version_dir, args.record_hw = version, version_dir, record_hw
             if args.out is not None:
                 raise MotionError("--out is only allowed for scratch inputs; versioned pose publishes to hw/motion")
-            LAYOUT.resolve(args.hw, "bundle.motion", V=version, S=args.case)
+            recipe = {"operation": "pose", "case": args.case, "options": {"set": list(args.set)},
+                      "attach": list(args.attach), "inputs_sha256": input_sha256(version_dir)}
+            reused = LAYOUT.reusable(args.hw, "bundle.motion", {"V": version, "S": args.case}, recipe,
+                                     replace=args.replace)
+            if reused is not None:
+                result = json.loads((reused / "result.json").read_text(encoding="utf-8"))
+                result.update(bundle=str(reused), reused=True)
+                print(json.dumps(result, indent=2))
+                return 1 if result.get("status") == "fail" else 0
         else:
             if args.out is None:
                 raise MotionError("--out is required for scratch inputs")
-            args.out = layout_io.scratch_output(args.hw, args.out, "--out")
+            args.out = LAYOUT.scratch_path(args.hw, args.out, "--out")
+            if args.out.exists():
+                raise MotionError(f"--out already exists; refusing to overwrite scratch output: {args.out}")
         assembly, chain, definitions = load_inputs(args)
-        chain.product_id = product_id(record_hw)
         values = chain.complete(parse_values(args.set))
         findings = chain.limit_findings(values)
         result: dict[str, Any] = {"status": "fail" if findings else "pass", "values": values,
+                                  "product": product_id(record_hw),
                                   "independent": [j.id for j in chain.independent],
                                   "derived": {j.id: chain.couplings.describe(j.id) for j in chain.dependent},
                                   "units": {j.id: j.unit for j in chain.movable}, "findings": findings,
                                   "no_geometry": [pn for pn in assembly.definitions if pn not in definitions],
                                   "occurrences": {oid: chain.pn(oid) for oid in chain.ids}}
         if not findings and version:
-            inputs = [record_hw / "product.yaml", record_hw / "assembly.yaml",
-                      *sorted((record_hw / "parts").glob("*/part.yaml"))]
-            if (record_hw / "interfaces.yaml").is_file():
-                inputs.append(record_hw / "interfaces.yaml")
-            recipe = {"operation": "pose", "values": values, "attach": list(args.attach),
-                      "source_sha256": layout_io.fingerprint(*inputs)}
-            reused = layout_io.reuse(args.hw, "bundle.motion", version, args.case, recipe, args.replace)
-            if reused:
-                result = reused[1]
-                result.update(bundle=str(reused[0]), reused=True)
-            else:
-                stage = LAYOUT.staging(args.hw, "bundle.motion")
-                try:
-                    transforms = write_posed(stage / "pose.step", record_hw, chain, definitions, values)
-                    result["placements"] = placements_report(chain, transforms)
-                    result["out"] = str(LAYOUT.bundle_dir(args.hw, "motion", version, args.case) / "pose.step")
-                    (stage / "result.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
-                    published = layout_io.publish(args.hw, "bundle.motion", version, args.case, stage, recipe,
-                                                  "cad-motion pose.py", result["status"], args.replace)
-                except Exception:
-                    import shutil
-                    shutil.rmtree(stage, ignore_errors=True)
-                    raise
+            stage = LAYOUT.staging(args.hw, "bundle.motion")
+            try:
+                transforms = write_posed(stage / "pose.step", record_hw, chain, definitions, values)
+                result["placements"] = placements_report(chain, transforms)
+                result["out"] = str(LAYOUT.bundle_dir(args.hw, "motion", version, args.case) / "pose.step")
+                (stage / "result.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+                published = LAYOUT.publish(args.hw, "bundle.motion", {"V": version, "S": args.case}, stage,
+                                           recipe=recipe, producer="cad-motion pose.py", status=result["status"],
+                                           replace=args.replace)
                 result.update(bundle=str(published.path), reused=published.reused)
+            except Exception:
+                shutil.rmtree(stage, ignore_errors=True)
+                raise
         elif not findings:
             transforms = write_posed(args.out, record_hw, chain, definitions, values)
             result["placements"] = placements_report(chain, transforms)
             result["out"] = str(args.out)
-    except (MotionError, OSError, LAYOUT.LayoutError) as error:
+    except (MotionError, OSError, LAYOUT.LayoutError, LAYOUT.PublishConflict) as error:
         print(f"pose: {error}", file=sys.stderr)
         return 2
     print(json.dumps(result, indent=2))
