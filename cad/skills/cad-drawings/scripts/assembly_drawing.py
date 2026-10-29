@@ -50,8 +50,9 @@ import assembly_sheet  # noqa: E402
 import drawing_contract  # noqa: E402
 import drawing_document  # noqa: E402
 import freecad_runtime  # noqa: E402
-from assembly_sheet import BalloonTarget, MeasuredView  # noqa: E402
-from drawing_document import ComposedSheet, CompositionError, CoverageReport, SheetMetadata  # noqa: E402
+from assembly_check import DIRECTIONS, AssemblyPlan, SheetPlan
+from drawing_document import ComposedSheet, CompositionError, CoverageReport, SheetMetadata
+from assembly_sheet import BalloonTarget, MeasuredView
 from freecad_views import ViewGeometry  # noqa: E402
 
 JOB_SCRIPT = Path(__file__).resolve().with_name("assembly_techdraw_job.py")
@@ -324,6 +325,7 @@ def reject(output_dir: Path, findings: Sequence[Mapping[str, Any]], status: int)
 
 def run(args: argparse.Namespace, freecadcmd: Path, jobs: int = 1) -> tuple[dict[str, Any], int]:
     hw = args.hw.resolve()
+    hw = hw / "hw" if hw.name != "hw" and (hw / "hw").is_dir() else hw
     api = drawing_contract.layout_api()
     label, version_dir, _ = api.built_version(hw, args.version)
     context = drawing_contract.load_context(hw, version_dir)
@@ -343,11 +345,11 @@ def run(args: argparse.Namespace, freecadcmd: Path, jobs: int = 1) -> tuple[dict
     with tempfile.TemporaryDirectory(prefix="cad-assembly-drawing-", dir=work_root) as work:
         try:
             with ThreadPoolExecutor(max_workers=jobs, thread_name_prefix="cad-assembly") as executor:
-                bundle_path = api.bundle_dir(hw, "drawings", label, "assembly") if args.output_dir is None else None
+                bundle_path = api.bundle_dir(hw, "drawings", label, "assembly") if args.output_dir is None else output_dir
                 _, sheets, report = build(args, freecadcmd, Path(work), jobs, executor)
                 package = drawing_document.publish_package(context, sheets, report, output_dir, freecadcmd,
                                                            args.timeout, jobs=jobs, executor=executor,
-                                                           bundle_path=bundle_path)
+                                                           bundle_path=bundle_path if report.status == "pass" else output_dir)
         except Failure as failure:
             return reject(output_dir, failure.findings, failure.status), failure.status
     result = package.to_dict()
@@ -382,6 +384,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     try:
         hw = args.hw.resolve()
+        hw = hw / "hw" if hw.name != "hw" and (hw / "hw").is_dir() else hw
         api = drawing_contract.layout_api()
         label, version_dir, _ = api.built_version(hw, args.version)
         context = drawing_contract.load_context(hw, version_dir)

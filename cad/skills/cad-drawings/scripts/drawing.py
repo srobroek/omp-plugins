@@ -491,8 +491,10 @@ def run_part(context: drawing_contract.DrawingContext, pn: str, output_dir: Path
                                            recognition=recognition, faces=face_map)
             return {"pn": pn, "status": "fail", "coverage": report.to_dict()}, 1
         plans = part_views.plan_views(drawing, measured.frame, binding.features, face_map)
-        return compose_and_publish(context, part, drawing, regime, binding, face_map, measured, plans, procurement,
-                                   vendor, output_dir, freecadcmd, timeout, work, recognition, bundle_path)
+        result, code = compose_and_publish(context, part, drawing, regime, binding, face_map, measured, plans,
+                                           procurement, vendor, output_dir, freecadcmd, timeout, work, recognition,
+                                           bundle_path)
+        return result, code
     except drawing_intent.IntentError as exc:
         return fail(exc.code, str(exc), pn=pn), 1
     finally:
@@ -626,7 +628,8 @@ def compose_and_publish(context: drawing_contract.DrawingContext, part: drawing_
     except (CompositionError, ValueError) as exc:
         return fail(getattr(exc, "code", "layout_check_failed"), str(exc), pn=part.pn), 1
     package = drawing_document.publish_package(context, pages, report, output_dir, freecadcmd, timeout,
-                                               completeness.release_blockers(record), bundle_path=bundle_path)
+                                               completeness.release_blockers(record),
+                                               bundle_path=bundle_path if report.status == "pass" else output_dir)
     summary = {"pn": part.pn, "status": package.status, "type": drawing["type"], "sheet": spec.size,
                "sheets": len(numbers), "scale": drawing_document.scale_text(regime, scale), "output_dir": str(package.output_dir),
                "views": [p.id for p in plans], "characteristics": len(measured.characteristics),
@@ -692,6 +695,8 @@ def main(argv: list[str] | None = None) -> int:
                 if draft.exists():
                     return fail("output_exists", f"--output-dir already exists and will not be overwritten: {draft}",
                                 pn=pn), 2
+                draft.parent.mkdir(parents=True, exist_ok=True)
+                draft.mkdir()
             bundle_path = api.bundle_dir(hw, "drawings", label, subject) if output_root is None else draft
             result, code = run_part(context, pn, draft, freecadcmd, args.timeout, bundle_path)
             if code != 0:
