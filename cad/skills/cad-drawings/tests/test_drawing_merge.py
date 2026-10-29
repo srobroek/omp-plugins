@@ -21,6 +21,7 @@ import yaml
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "scripts"))
 sys.path.insert(0, str(HERE))
+import drawing_draft  # noqa: E402
 import drawing_merge  # noqa: E402
 from test_drawing_framework import PN, write_project  # noqa: E402
 
@@ -103,5 +104,23 @@ class Merge(unittest.TestCase):
         self.assertEqual((code, after, result["findings"][0]["code"]), (2, before, "invalid_input"))
 
 
+    def test_latest_selects_verified_built_version(self) -> None:
+        hw, _ = write_project(self.root)
+        (hw / "versions" / "latest.json").write_text('{"label": "v1"}\n', encoding="utf-8")
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            code = drawing_merge.main([str(hw), "--version", "latest", "--part", PN,
+                                       "--draft", str(self.root / "absent.yaml")])
+        result = json.loads(output.getvalue())
+        self.assertEqual(code, 2)
+        self.assertNotIn("AttributeError", result["findings"][0]["message"])
+        self.assertIn("absent.yaml", result["findings"][0]["message"])
+
+    def test_draft_output_must_be_in_project_scratch(self) -> None:
+        hw, _ = write_project(self.root)
+        (hw / "versions" / "latest.json").write_text('{"label": "v1"}\n', encoding="utf-8")
+        out = hw / "parts" / PN
+        self.assertEqual(drawing_draft.main([str(hw), "--version", "latest", "--part", PN,
+                                             "--output-dir", str(out)]), 2)
 if __name__ == "__main__":
     unittest.main()

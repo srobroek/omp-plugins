@@ -138,6 +138,31 @@ class Reconcile(unittest.TestCase):
                 {"level": "1", "PN": PIN, "rev": "A", "qty": "1", "title": "Pin", "material": "Steel"}]
         self.assertEqual(assembly_check.bom_rollup(rows)[PIN]["qty"], 7)
 
+    def test_numbered_bom_assembly_row_is_not_compared_to_step_geometry(self) -> None:
+        rows = [{"level": "0", "PN": "TST-1000", "rev": "A", "qty": "1", "title": "Top", "material": ""},
+                {"level": "1", "PN": BASE, "rev": "A", "qty": "1", "title": "Base", "material": "PETG"},
+                {"level": "2", "PN": PIN, "rev": "A", "qty": "2", "title": "Pin", "material": "Steel"}]
+        intent = read_intent(intent_record(operations=[], items=[{"item": 1, "PN": BASE},
+                                                                {"item": 2, "PN": PIN,
+                                                                 "occurrences": ["@pin-a", "@pin-b"]}],
+                                          subassembly_sheets=[]))
+        plan, findings = reconcile(intent, geometry(), rows, [])
+        self.assertIsNotNone(plan)
+        self.assertNotIn("bom_geometry_mismatch", codes(findings))
+    def test_rejected_package_sheet_lookup_uses_number_not_position(self) -> None:
+        from pathlib import Path
+        import json
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            package = Path(tmp)
+            (package / "rejected.json").write_text(json.dumps({
+                "coverage": {"rows": [{"kind": "assembly_sheet", "sheet": 2}]},
+                "sheets": [],
+            }), encoding="utf-8")
+            result = assembly_check.check_package(package)
+        self.assertEqual(result["status"], "fail")
+        self.assertEqual(result["findings"][0]["sheet"], 2)
 
 class Acceptance(unittest.TestCase):
     def resolved(self, kind: str) -> assembly_check.ResolvedOperation:

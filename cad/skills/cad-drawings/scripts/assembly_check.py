@@ -397,7 +397,10 @@ def reconcile(intent: Intent, geometry: Any, bom_rows: Sequence[Mapping[str, str
                                 ("names no occurrence" if not found else f"is placed {len(found)} times; name one")))
         return None
 
+    bom_rows = list(bom_rows)
     bom = bom_rollup(bom_rows)
+    bom_children = {row["PN"] for index, row in enumerate(bom_rows[:-1])
+                    if int(bom_rows[index + 1]["level"]) > int(row["level"])}
     item_of: dict[str, int] = {}
     items: dict[int, tuple[str, tuple[str, ...]]] = {}
     for entry in intent.items:
@@ -430,7 +433,7 @@ def reconcile(intent: Intent, geometry: Any, bom_rows: Sequence[Mapping[str, str
         if row is None:
             findings.append(finding("bom_geometry_mismatch", f"item {entry.item}: {entry.pn} has no bom.csv row",
                                     item=entry.item))
-        elif row["qty"] != counts.get(entry.pn, 0) or len(ids) != counts.get(entry.pn, 0):
+        elif entry.pn not in bom_children and (row["qty"] != counts.get(entry.pn, 0) or len(ids) != counts.get(entry.pn, 0)):
             findings.append(finding("bom_geometry_mismatch",
                                     f"item {entry.item}: {entry.pn} has bom.csv quantity {row['qty']}, "
                                     f"{counts.get(entry.pn, 0)} occurrences in the assembly STEP and {len(ids)} in the item",
@@ -438,7 +441,7 @@ def reconcile(intent: Intent, geometry: Any, bom_rows: Sequence[Mapping[str, str
     for o in geometry.occurrences:
         if o.occurrence_id not in item_of:
             findings.append(finding("assembly_item_unidentified", f"occurrence {o.ref} ({o.pn}) has no parts-list item"))
-    for pn in sorted(set(bom) - set(counts)):
+    for pn in sorted(set(bom) - set(counts) - bom_children):
         findings.append(finding("bom_geometry_mismatch", f"bom.csv lists {pn}, which the assembly STEP does not place"))
 
     explode: dict[str, Vec] = {}
@@ -683,10 +686,12 @@ def check_package(package: Path) -> dict[str, Any]:
     evidence = [row for row in record["coverage"].get("rows", []) if row.get("kind") == "assembly_sheet"]
     if not evidence:
         return {"status": "error", "findings": [finding("invalid_drawing_intent", f"{marker} records no assembly sheets")]}
+    filenames = {sheet["sheet"]: sheet.get("files", {}).get("svg", f"sheet-{sheet['sheet']}.svg")
+                 for sheet in record.get("sheets", [])}
     findings: list[dict[str, Any]] = []
     for sheet in evidence:
         number = sheet["sheet"]
-        filename = record.get("sheets", [])[number - 1].get("files", {}).get("svg", f"sheet-{number}.svg")
+        filename = filenames.get(number, f"sheet-{number}.svg")
         svg_path = package / Path(filename).name
         if not svg_path.is_file():
             rejected = package / f"sheet-{number}.rejected.svg"

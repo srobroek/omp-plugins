@@ -32,11 +32,12 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import shutil
+import signal
 import sys
 import tempfile
 import uuid
+from contextlib import contextmanager
 from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -175,13 +176,9 @@ class Sheet:
     layout: assembly_sheet.SheetLayout
 
 
-def read_inputs(args: argparse.Namespace, work: Path) -> Inputs:
+def read_inputs(args: argparse.Namespace, work: Path, context: drawing_contract.DrawingContext) -> Inputs:
     """Stages 1 and 2: the verified context, the bound occurrences and the reconciled plan."""
-    hw = args.hw.resolve()
-    try:
-        context = drawing_contract.load_context(hw, hw / "versions" / args.version)
-    except drawing_contract.ContractError as exc:
-        raise Failure([assembly_check.finding(exc.code, str(exc)), *exc.findings], 2) from None
+    hw = context.hw
     try:
         intent = assembly_check.read_intent(context.assembly)
         specs = drawing_document.sheet_specs(context.product, allowed_sizes(context.product))
@@ -289,10 +286,10 @@ def compose(inputs: Inputs, sheet: Sheet, drawn: Sequence[Mapping[str, Any]]) ->
                   "operations": [op.operation.id for op in sheet.plan.operations]}
 
 
-def build(args: argparse.Namespace, freecadcmd: Path, work: Path, jobs: int = 1,
-          executor: Any = None) -> tuple[drawing_contract.DrawingContext, list[ComposedSheet], CoverageReport]:
+def build(args: argparse.Namespace, freecadcmd: Path, work: Path, context: drawing_contract.DrawingContext,
+          jobs: int = 1, executor: Any = None) -> tuple[drawing_contract.DrawingContext, list[ComposedSheet], CoverageReport]:
     """Stages 1 to 4a; stage 4b, publication, follows in ``run``."""
-    inputs = read_inputs(args, work)
+    inputs = read_inputs(args, work, context)
     measured = measure(inputs, freecadcmd, work, args.timeout)
     sheets = lay_out(inputs, measured)
     drawn = draw(inputs, sheets, freecadcmd, work, args.timeout, jobs, executor)
@@ -322,6 +319,15 @@ def reject(output_dir: Path, findings: Sequence[Mapping[str, Any]], status: int)
     (output_dir / "rejected.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     return result
 
+@contextmanager
+def _ignore_publish_signals():
+    """Defer SIGINT/SIGTERM until a sealed bundle has been claimed."""
+    previous = {sig: signal.signal(sig, signal.SIG_IGN) for sig in (signal.SIGINT, signal.SIGTERM)}
+    try:
+        yield
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
 
 def run(args: argparse.Namespace, freecadcmd: Path, jobs: int = 1) -> tuple[dict[str, Any], int]:
     hw = args.hw.resolve()
@@ -346,7 +352,7 @@ def run(args: argparse.Namespace, freecadcmd: Path, jobs: int = 1) -> tuple[dict
         try:
             with ThreadPoolExecutor(max_workers=jobs, thread_name_prefix="cad-assembly") as executor:
                 bundle_path = api.bundle_dir(hw, "drawings", label, "assembly") if args.output_dir is None else output_dir
-                _, sheets, report = build(args, freecadcmd, Path(work), jobs, executor)
+                _, sheets, report = build(args, freecadcmd, Path(work), context, jobs, executor)
                 package = drawing_document.publish_package(context, sheets, report, output_dir, freecadcmd,
                                                            args.timeout, jobs=jobs, executor=executor,
                                                            bundle_path=bundle_path if report.status == "pass" else output_dir)
@@ -354,13 +360,14 @@ def run(args: argparse.Namespace, freecadcmd: Path, jobs: int = 1) -> tuple[dict
             return reject(output_dir, failure.findings, failure.status), failure.status
     result = package.to_dict()
     if package.exit_code == 0 and args.output_dir is None:
-        output_dir = api.publish(hw, "bundle.drawings", {"V": label, "S": "assembly"}, output_dir,
-                                 recipe=recipe, producer="cad-drawings assembly_drawing.py",
-                                 status="pass", replace=args.replace).path
+        with _ignore_publish_signals():
+            output_dir = api.publish(hw, "bundle.drawings", {"V": label, "S": "assembly"}, output_dir,
+                                     recipe=recipe, producer="cad-drawings assembly_drawing.py",
+                                     status="pass", replace=args.replace).path
         result["output_dir"] = str(output_dir)
     result["files"] = [{"sheet": s["sheet"], "size": s["size"],
                         **{kind: str(Path(name)) for kind, name in s["files"].items()}}
-                        for s in package.sheets]
+                       for s in package.sheets]
     return result, package.exit_code
 
 

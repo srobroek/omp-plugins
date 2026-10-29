@@ -630,12 +630,15 @@ def compose_and_publish(context: drawing_contract.DrawingContext, part: drawing_
     package = drawing_document.publish_package(context, pages, report, output_dir, freecadcmd, timeout,
                                                completeness.release_blockers(record),
                                                bundle_path=bundle_path if report.status == "pass" else output_dir)
+    retained_dir = package.output_dir if package.exit_code != 0 else output_dir
+    previews = sorted(str(retained_dir / p.name) for p in retained_dir.glob("*.png"))
     summary = {"pn": part.pn, "status": package.status, "type": drawing["type"], "sheet": spec.size,
-               "sheets": len(numbers), "scale": drawing_document.scale_text(regime, scale), "output_dir": str(package.output_dir),
+               "sheets": len(numbers), "scale": drawing_document.scale_text(regime, scale),
+               "output_dir": str(package.output_dir), "run_id": package.run_id,
                "views": [p.id for p in plans], "characteristics": len(measured.characteristics),
                "findings": [dict(f) for f in package.findings],
                "release": {"ready": not package.release, "blockers": [dict(r) for r in package.release]},
-               "previews": sorted(str(package.output_dir / p.name) for p in output_dir.glob("*.png"))}
+               "previews": previews}
     return summary, package.exit_code
 
 

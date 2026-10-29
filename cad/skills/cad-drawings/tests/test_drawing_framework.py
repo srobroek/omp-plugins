@@ -138,8 +138,9 @@ class LoadContext(unittest.TestCase):
         provenance = context.provenance(PN)
         self.assertEqual(provenance["step"], f"versions/v1/parts/{PN}.step")
         self.assertEqual(provenance["drawing_features_sha256"], sha((version / "drawing-features.json").read_bytes()))
-        self.assertEqual(provenance["part_record_sha256"], sha((hw / "parts" / PN / "part.yaml").read_bytes()))
-        self.assertEqual(set(context.provenance("TST-ASM")["part_records_sha256"]), {PN})
+        interfaces_hash = sha((version / "record" / "interfaces.yaml").read_bytes())
+        self.assertEqual(provenance["interfaces_sha256"], interfaces_hash)
+        self.assertEqual(context.provenance("TST-ASM")["interfaces_sha256"], interfaces_hash)
         with self.assertRaises(drawing_contract.ContractError):
             context.part("TST-0009")
 
@@ -414,14 +415,14 @@ class FreeCadViewsAndPackage(unittest.TestCase):
         self.assertEqual(check_layout(sheet.svg, sheet.regions, sheet.placeholders), [])
         output = self.root / "package"
         report = publish_package(context, [sheet], CoverageReport("pass", rows=({"feature": "bed_face"},)), output,
-                                 FREECADCMD, 300, bundle_path=self.root / "record" / "hw" / "drawings" / "v1" / PN)
+                                 FREECADCMD, 300, bundle_path=context.hw / "drawings" / "v1" / PN)
         self.assertEqual((report.status, report.exit_code, report.findings), ("pass", 0, ()), report.findings)
         self.assertEqual(sorted(p.name for p in output.iterdir()),
                          ["coverage.json", "package.json", "sheet-1.pdf", "sheet-1.png", "sheet-1.svg"])
         package = json.loads((output / "package.json").read_text(encoding="utf-8"))
-        self.assertEqual(package["provenance"]["subject"], PN)
-        self.assertEqual(package["provenance"]["step_sha256"], context.part(PN).step_sha256)
-        self.assertEqual(package["sheets"][0]["export"]["pdf_fonts"], ["osifont"])
+        self.assertEqual(package["output_dir"], f"hw/drawings/v1/{PN}")
+        self.assertEqual(package["sheets"][0]["files"]["svg"], f"hw/drawings/v1/{PN}/sheet-1.svg")
+        self.assertEqual(package["sheets"][0]["files"]["pdf"], f"hw/drawings/v1/{PN}/sheet-1.pdf")
         self.assertEqual(package["sheets"][0]["sha256"]["pdf"], sha((output / "sheet-1.pdf").read_bytes()))
 
         crossing = SvgAnnotation("over-view", "label", '<text x="100" y="77" font-size="3.5" font-family="osifont">ON THE PART</text>')
@@ -461,8 +462,8 @@ class DrawingPublication(unittest.TestCase):
             def staged_bundle(value: bytes) -> Path:
                 staged = api.staging(hw, "bundle.drawings")
                 (staged / "coverage.json").write_text("{}\n", encoding="utf-8")
-                package = {"output_dir": str(target),
-                           "sheets": [{"files": {"svg": str(target / "sheet-1.svg")}}]}
+                package = {"output_dir": api.relative(hw, target),
+                           "sheets": [{"files": {"svg": api.relative(hw, target / "sheet-1.svg")}}]}
                 (staged / "package.json").write_text(json.dumps(package), encoding="utf-8")
                 for extension in ("svg", "pdf", "png"):
                     (staged / f"sheet-1.{extension}").write_bytes(value)
@@ -470,8 +471,8 @@ class DrawingPublication(unittest.TestCase):
             api.publish(hw, "bundle.drawings", params, staged_bundle(b"old"), recipe=recipe,
                         producer="test drawing")
             published = json.loads((target / "package.json").read_text(encoding="utf-8"))
-            self.assertEqual(published["output_dir"], str(target))
-            self.assertEqual(published["sheets"][0]["files"], {"svg": str(target / "sheet-1.svg")})
+            self.assertEqual(published["output_dir"], api.relative(hw, target))
+            self.assertEqual(published["sheets"][0]["files"], {"svg": api.relative(hw, target / "sheet-1.svg")})
             self.assertEqual(api.reusable(hw, "bundle.drawings", params, recipe), target)
             original_manifest = (target / "manifest.json").read_bytes()
             changed_recipe = {"part": PN, "input_sha256": "b" * 64}
