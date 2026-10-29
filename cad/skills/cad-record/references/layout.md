@@ -14,7 +14,7 @@ listed files and nothing else.
 |---|---|---|---|
 | `{V}` | `v[1-9][0-9]*` | `v3` | cad-model version label |
 | `{PN}` | `[A-Z]{2,5}-[0-9]{4}` | `LMP-0002` | part number |
-| `{S}` | `[A-Z]{2,5}-[0-9]{4}\|[a-z][a-z0-9_-]*` | `assembly` | bundle subject: a PN, a subassembly, check or case id, or assembly for the whole product |
+| `{S}` | `[A-Z]{2,5}-[0-9]{3,4}\|[a-z][a-z0-9_-]*` | `assembly` | bundle subject: a PN, a record id such as a stack-up (STK-101), a subassembly, check or case id, or assembly for the whole product |
 | `{ID}` | `[a-z][a-z0-9_-]*` | `arm-load` | analysis case id |
 | `{REV}` | `[A-HJ-NPRTUVWY]` | `A` | released revision letter |
 | `{DR}` | `DR-[0-9]{3}` | `DR-001` | decision record id |
