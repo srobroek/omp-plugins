@@ -740,7 +740,8 @@ class StepTests(unittest.TestCase):
 
     def test_assembly_step_input_poses_the_lamp_arm(self) -> None:
         out = self.root / "lamp-posed.step"
-        proc, result = self.run_script("pose.py", "--hw", str(TEMPLATE_HW), "--step", str(self.lamp / "lamp-arm.step"),
+        hw = shutil.copytree(TEMPLATE_HW, Path(tempfile.mkdtemp(dir=self.root)) / "hw")  # scratch lands beside it
+        proc, result = self.run_script("pose.py", "--hw", str(hw), "--step", str(self.lamp / "lamp-arm.step"),
                                        "--set", "J-002=-90", "--out", str(out))
         self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
         self.assertEqual(sorted(result["placements"]),
@@ -975,7 +976,8 @@ class StepTests(unittest.TestCase):
 
     def test_assembly_step_input_poses_the_lamp_arm(self) -> None:
         out = self.root / "lamp-posed.step"
-        proc, result = self.run_script("pose.py", "--hw", str(TEMPLATE_HW), "--step", str(self.lamp / "lamp-arm.step"),
+        hw = shutil.copytree(TEMPLATE_HW, Path(tempfile.mkdtemp(dir=self.root)) / "hw")  # scratch lands beside it
+        proc, result = self.run_script("pose.py", "--hw", str(hw), "--step", str(self.lamp / "lamp-arm.step"),
                                        "--set", "J-002=-90", "--out", str(out))
         self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
         self.assertEqual(sorted(result["placements"]),
