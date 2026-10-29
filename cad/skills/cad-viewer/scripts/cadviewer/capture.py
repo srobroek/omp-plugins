@@ -462,6 +462,7 @@ def capture(host: Any, page: Any, request: dict[str, Any]) -> dict[str, Any]:
         if host.user_connected():  # the user's tab follows the refit, as it follows every camera change
             for slot in slots:
                 host.set_camera(slot, host.camera(slot), ("user",))
+    cameras = {slot: host.camera(slot, "presenter") for slot in slots}
     for slot in slots:
         if slot not in frames:
             png = driver.settle(slot, minimum_s=0.6)
@@ -474,8 +475,12 @@ def capture(host: Any, page: Any, request: dict[str, Any]) -> dict[str, Any]:
     else:
         page.screenshot(path=str(out))
     blank = any(f["content_px"] is None for f in frames.values())
-    cameras = {slot: {k: v for k, v in host.camera(slot).items() if k != "target0"} for slot in slots}
+    final_state = host.state()
     return {"status": "fail" if blank else "pass", "out": str(out), "view": view, "crop": crop,
+            "version": final_state["selected"]["A"]["label"],
+            "viewer_state": {"mode": final_state["mode"], "view": final_state["view"],
+                             "animation": final_state["animation"], "selected": final_state["selected"]},
+            "selected": final_state["selected"],
             "viewport": [page.viewport_size["width"], page.viewport_size["height"]], "mode": state["mode"],
             "camera_from": camera_from, "frames": frames, "cameras": cameras, "host": result,
-            "animation": host.state()["animation"]}
+            "animation": final_state["animation"]}

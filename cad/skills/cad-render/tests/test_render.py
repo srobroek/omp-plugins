@@ -7,7 +7,10 @@ Pillow is only needed by the standalone image comparator's tests.
 
 from __future__ import annotations
 
+import argparse
+from unittest import mock
 import asyncio
+import hashlib
 import base64
 import importlib.util
 import json
@@ -74,6 +77,20 @@ def frame(w: int = 120, h: int = 90, *, subject=None, other=None, shadow=None, s
     if rim:
         paint(rim, None, zone=render.FLOOR_RIM)
     return render.Frame(w, h, bytes(rgba), bytes(mask), bytes(floor))
+
+class VersionManifestSchema(unittest.TestCase):
+    def test_schema_two_requires_record_and_manufacturing_maps(self) -> None:
+        reader = render.version_reader
+        for key in ("record", "manufacturing"):
+            invalid = {"schema_version": 2, "record": {}, "manufacturing": {}}
+            invalid[key] = None
+            with self.subTest(key=key), self.assertRaisesRegex(reader.VersionError, key):
+                reader.validate_version_manifest(invalid)
+        reader.validate_version_manifest({"schema_version": 2, "record": {}, "manufacturing": {}})
+
+    def test_schema_one_version_manifest_is_rejected(self) -> None:
+        with self.assertRaisesRegex(render.version_reader.VersionError, "supported version manifest"):
+            render.version_reader.validate_version_manifest({"schema_version": 1, "record": {}, "manufacturing": {}})
 
 
 GOOD = dict(subject=(30, 20, 70, 60), shadow=(40, 60, 95, 75))
@@ -382,21 +399,32 @@ class Explode(unittest.TestCase):
 
 
 class Cache(unittest.TestCase):
-    key = {"source_sha256": "a", "materials_sha256": "b", "renderer_sha256": "c", "image": "1600x1200"}
+    key = {"source_sha256": "a", "materials_sha256": "b", "renderer_sha256": "c", "image": "1600x1200",
+           "parity": parity.cache_key()}
 
-    def write(self, out: Path, status: str = "pass") -> None:
-        out.mkdir(parents=True)
+    def write(self, hw: Path, status: str = "pass") -> Path:
+        params = {"V": "v1", "S": "assembly"}
+        version = hw / "versions" / "v1"
+        (version / "record").mkdir(parents=True)
+        (version / "manifest.json").write_text("version manifest\n", encoding="utf-8")
+        out = render.layout.staging(hw, "bundle.renders")
         png = b"\x89PNG fake"
         (out / "iso.png").write_bytes(png)
-        (out / "manifest.json").write_text(json.dumps({
-            "status": status, "cache_key": self.key,
-            "views": {"iso": {"png": "iso.png", "sha256": render.sha256(png)}}}))
+        render_json = {"status": status, "cache_key": self.key,
+                       "views": {"iso": {"png": "iso.png", "sha256": render.sha256(png),
+                                          "quality": {"status": status, "failures": [], "warnings": []},
+                                          "retry": {"strategy": "original", "attempts": []}}}}
+        (out / "render.json").write_text(json.dumps(render_json), encoding="utf-8")
+        return render.layout.publish(hw, "bundle.renders", params, out,
+                                     recipe={"views": ["iso"], "cache_key": self.key},
+                                     producer="test", status=status).path
 
     def test_hit_only_on_a_passing_manifest_with_the_same_key_and_intact_pngs(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            out = Path(tmp) / "v1"
+            hw = Path(tmp) / "hw"
+            out = hw / "renders" / "v1" / "assembly"
             self.assertIsNone(render.cache_hit(out, self.key, ["iso"]))
-            self.write(out)
+            out = self.write(hw)
             self.assertIsNotNone(render.cache_hit(out, self.key, ["iso"]))
             self.assertIsNone(render.cache_hit(out, {**self.key, "materials_sha256": "changed"}, ["iso"]))
             self.assertIsNone(render.cache_hit(out, self.key, ["iso", "front"]))
@@ -405,13 +433,14 @@ class Cache(unittest.TestCase):
 
     def test_a_failed_render_is_never_a_cache_hit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            out = Path(tmp) / "v1"
-            self.write(out, status="fail")
+            hw = Path(tmp) / "hw"
+            out = self.write(hw, status="fail")
             self.assertIsNone(render.cache_hit(out, self.key, ["iso"]))
+
     def test_warning_manifest_is_cacheable(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            out = Path(tmp) / "v1"
-            self.write(out, status="warn")
+            hw = Path(tmp) / "hw"
+            out = self.write(hw, status="warn")
             self.assertIsNotNone(render.cache_hit(out, self.key, ["iso"]))
 
 class CacheKey(unittest.TestCase):
@@ -419,6 +448,7 @@ class CacheKey(unittest.TestCase):
 
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
         self.hw = Path(self.tmp.name) / "hw"
         shutil.copytree(TEMPLATE_HW, self.hw)
         pns = sorted(p.name for p in (self.hw / "parts").iterdir())
@@ -426,15 +456,43 @@ class CacheKey(unittest.TestCase):
         folder.mkdir(parents=True)
         (folder / "assembly.step").write_text("", encoding="utf-8")
         (folder / "assembly.glb").write_bytes(b"glTF v1")
-        self.write(folder / "part-map.json", {"parts": {pn: {"node_indices": [i]} for i, pn in enumerate(pns)}})
+        part_occurrences = {pn: {"PN": pn, "node_indices": [i]} for i, pn in enumerate(pns)}
+        self.write(folder / "part-map.json", {"schema_version": 2,
+                                              "parts": {pn: {"node_indices": [i]} for i, pn in enumerate(pns)},
+                                              "occurrences": part_occurrences})
         self.write(folder / "metrics.json", {"parts": {pn: {"bbox_mm": {"min": [0, 0, 0], "max": [10, 10, 10],
                                                                         "size": [10, 10, 10]}} for pn in pns}})
-        self.write(folder / "manifest.json", {"ground": pns[0], "pose": {"transforms": {pn: IDENTITY for pn in pns}}})
-        self.write(self.hw / "versions" / "latest.json", {
-            "label": "v1", **{k: f"versions/v1/{name}" for k, name in render.version_layout.FILES.items()}})
+        record = folder / "record"
+        (record / "parts").mkdir(parents=True)
+        shutil.copyfile(self.hw / "assembly.yaml", record / "assembly.yaml")
+        for pn in pns:
+            (record / "parts" / pn).mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(self.hw / "parts" / pn / "part.yaml", record / "parts" / pn / "part.yaml")
+        self.seal(folder, pns)
+        self.write(self.hw / "versions" / "latest.json", {"label": "v1"})
 
-    def tearDown(self) -> None:
-        self.tmp.cleanup()
+    @staticmethod
+    def seal(folder: Path, pns: list[str]) -> None:
+        files = {p.relative_to(folder).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
+                 for p in folder.rglob("*") if p.is_file() and p.name != "manifest.json"}
+        record = {name: digest for name, digest in files.items() if name.startswith("record/")}
+        records = {pn: {"PN": pn, "ref": pn, "rest": IDENTITY, "group": None} for pn in pns}
+        CacheKey.write(folder / "manifest.json", {"schema_version": 2, "label": "v1", "files": files,
+                                                   "record": record, "manufacturing": {},
+                                                   "ground": pns[0], "occurrences": records, "joints": [],
+                                                   "pose": {"transforms": {pn: IDENTITY for pn in pns},
+                                                           "motions": {pn: IDENTITY for pn in pns}},
+                                                   "assembly_yaml_sha256": files["record/assembly.yaml"]})
+    @staticmethod
+    def refresh(folder: Path) -> None:
+        manifest_path = folder / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        files = {p.relative_to(folder).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
+                 for p in folder.rglob("*") if p.is_file() and p != manifest_path}
+        manifest["files"] = files
+        manifest["record"] = {name: digest for name, digest in files.items() if name.startswith("record/")}
+        manifest["assembly_yaml_sha256"] = files["record/assembly.yaml"]
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
     @staticmethod
     def write(path: Path, data: dict) -> None:
@@ -445,22 +503,32 @@ class CacheKey(unittest.TestCase):
         return render.build_scene(self.hw, version, ["iso", "exploded"], (800, 600), materials.MaterialTable.load())[2]["key"]
 
     def test_every_input_the_scene_reads_changes_the_key(self) -> None:
+        folder = self.hw / "versions" / "v1"
         def edit_json(name: str, change) -> None:
-            path = self.hw / "versions" / "v1" / name
+            path = folder / name
             data = json.loads(path.read_text(encoding="utf-8"))
             change(data)
             self.write(path, data)
+            self.refresh(folder)
 
-        part_yaml = self.hw / "parts" / "LMP-0002" / "part.yaml"
+        part_yaml = folder / "record" / "parts" / "LMP-0002" / "part.yaml"
+        def edit_part_material() -> None:
+            part_yaml.write_text(re.sub(r"(?m)^material:.*$", "material: PETG",
+                                        part_yaml.read_text(encoding="utf-8")), encoding="utf-8")
+            self.refresh(folder)
+
+        def edit_assembly() -> None:
+            path = folder / "record" / "assembly.yaml"
+            path.write_text(path.read_text(encoding="utf-8") + "\n# edited\n", encoding="utf-8")
+            self.refresh(folder)
+
         edits = {
-            "glb": lambda: (self.hw / "versions" / "v1" / "assembly.glb").write_bytes(b"glTF v2"),
+            "part-map occurrences": lambda: edit_json("part-map.json", lambda d: d["occurrences"]["LMP-0001"].update(node_indices=[9])),
             "part map": lambda: edit_json("part-map.json", lambda d: d["parts"]["LMP-0002"].update(node_indices=[9])),
             "manifest pose": lambda: edit_json("manifest.json", lambda d: d["pose"]["transforms"]["LMP-0002"][0].__setitem__(3, 5.0)),
             "metrics bbox": lambda: edit_json("metrics.json", lambda d: d["parts"]["LMP-0003"]["bbox_mm"].update(size=[10, 10, 99])),
-            "assembly.yaml": lambda: (self.hw / "assembly.yaml").write_text(
-                (self.hw / "assembly.yaml").read_text(encoding="utf-8") + "\n# edited\n", encoding="utf-8"),
-            "part material": lambda: part_yaml.write_text(
-                re.sub(r"(?m)^material:.*$", "material: PETG", part_yaml.read_text(encoding="utf-8")), encoding="utf-8"),
+            "assembly.yaml": edit_assembly,
+            "part material": edit_part_material,
         }
         before = self.key()
         for name, edit in edits.items():
@@ -481,10 +549,13 @@ class CacheKey(unittest.TestCase):
         self.assertEqual(self.key(), before)
 
     def test_a_malformed_latest_json_is_an_infra_error(self) -> None:
-        self.write(self.hw / "versions" / "latest.json", {"glb": "versions/v1/assembly.glb"})
+        latest = self.hw / "versions" / "latest.json"
+        original = latest.read_text(encoding="utf-8")
+        latest.write_text('{"glb": "versions/v1/assembly.glb"}', encoding="utf-8")
         with self.assertRaisesRegex(render.InfraError, "label"):
             render.resolve_version(self.hw, "latest")
-        self.assertEqual(render.resolve_version(self.hw, "v1").label, "v1")  # the documented layout still resolves
+        latest.write_text(original, encoding="utf-8")
+        self.assertEqual(render.resolve_version(self.hw, "v1").label, "v1")
 
 
 class Views(unittest.TestCase):
@@ -534,8 +605,19 @@ class OccurrenceScene(unittest.TestCase):
                      "motions": {oid: IDENTITY for oid in occurrences}},
             "joints": [{"id": f"J-00{n}", "type": "fixed", "parent": "LMP-0001", "child": oid, "axis": [0, 0, 1],
                         "origin": [0, 0, 0]} for n, oid in enumerate(("ring-a", "ring-b"), start=1)]})
-        write(self.hw / "versions" / "latest.json", {
-            "label": "v1", **{k: f"versions/v1/{name}" for k, name in render.version_layout.FILES.items()}})
+        for pn in ("LMP-0001", "LMP-0011"):
+            (folder / "record" / "parts" / pn).mkdir(parents=True)
+            shutil.copyfile(self.hw / "parts" / pn / "part.yaml", folder / "record" / "parts" / pn / "part.yaml")
+        (folder / "record" / "assembly.yaml").write_text("joints: []\n", encoding="utf-8")
+        files = {p.relative_to(folder).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
+                 for p in folder.rglob("*") if p.is_file() and p.name != "manifest.json"}
+        data = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
+        data["files"] = files
+        data["record"] = {name: digest for name, digest in files.items() if name.startswith("record/")}
+        data["manufacturing"] = {}
+        data["assembly_yaml_sha256"] = files["record/assembly.yaml"]
+        write(folder / "manifest.json", data)
+        write(self.hw / "versions" / "latest.json", {"label": "v1"})
 
     def test_each_occurrence_is_its_own_scene_part_with_its_pn_material(self) -> None:
         version = render.resolve_version(self.hw, "latest")
@@ -554,7 +636,17 @@ class OccurrenceScene(unittest.TestCase):
         CacheKey.write(path, {**json.loads(path.read_text(encoding="utf-8")), "schema_version": 3})
         with self.assertRaisesRegex(render.InfraError, "schema_version 3"):
             render.resolve_version(self.hw, "latest")
-
+    def test_existing_scratch_output_is_never_overwritten(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            hw = Path(tmp) / "hw"
+            scratch = Path(tmp) / ".cad-work" / "render"
+            scratch.mkdir(parents=True)
+            args = argparse.Namespace(hw=hw, version="v1", views=["iso"], size="800x600", jobs=1,
+                                      subject="assembly", out_dir=scratch, replace=False, cache_dir=None)
+            with mock.patch.object(render, "resolve_version") as resolve:
+                with self.assertRaisesRegex(render.InfraError, "refusing to overwrite"):
+                    render.run(args)
+                resolve.assert_not_called()
 
 
 class RendererPage(unittest.TestCase):

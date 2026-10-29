@@ -38,56 +38,70 @@ def write(path: Path, data: bytes | str | dict) -> Path:
     path.write_bytes(data if isinstance(data, bytes) else data.encode())
     return path
 
+def bundle(hw: Path, kind: str, version: str, subject: str, files: dict[str, bytes | str | dict],
+           recipe: dict, status: str = "pass") -> Path:
+    """Create a fixture through cad-record's real bundle contract."""
+    api = gallery.record._layout()
+    staged = api.staging(hw, f"bundle.{kind}")
+    for name, data in files.items():
+        write(staged / name, data)
+    return api.publish(hw, f"bundle.{kind}", {"V": version, "S": subject}, staged, recipe=recipe,
+                       producer="test_gallery", status=status).path
+
 
 def make_project(root: Path) -> Path:
-    """The template record with versions v1 and v2 built (empty files), renders, captures,
-    drawings, and concept screenshots."""
+    """A template record with built v1/v2 bundles and current plus legacy art."""
     hw = root / "hw"
     shutil.copytree(TEMPLATE_HW, hw)
     for label in ("v1", "v2"):
-        for name in ("assembly.step", "assembly.glb", "metrics.json", "part-map.json", "manifest.json"):
-            write(hw / "versions" / label / name, "")
-    write(hw / "versions" / "latest.json", {
-        "label": "v2", **{k: f"versions/v2/{n}" for k, n in (("assembly_step", "assembly.step"), ("glb", "assembly.glb"),
-                                                               ("metrics", "metrics.json"), ("part_map", "part-map.json"),
-                                                               ("manifest", "manifest.json"))}})
-    renders = hw / "renders" / "v2"
-    for view in ("iso", "part-LMP-0001", "closeup-LMP-0002"):
-        write(renders / f"{view}.png", PNG)
-    write(renders / "stray.png", PNG)
-    write(renders / "manifest.json", {
+        folder = hw / "versions" / label
+        folder.mkdir(parents=True)
+        for name in ("assembly.step", "assembly.glb", "metrics.json", "part-map.json"):
+            write(folder / name, "")
+        write(folder / "manifest.json", {"label": label, "files": {}})
+    write(hw / "versions" / "latest.json", {"label": "v2"})
+    render_meta = {
         "version": "v2", "status": "pass",
         "materials": {"LMP-0001": {"rule": "al-anodised", "label": "Anodised aluminium"},
                       "LMP-0002": {"rule": "pa12", "label": "PA12 nylon"}},
         "views": {
-            "iso": {"png": "iso.png", "subject": ["LMP-0001", "LMP-0002"],
+            "iso": {"subject": ["LMP-0001", "LMP-0002"],
                     "quality": {"status": "pass", "failures": [], "warnings": []}},
-            "part-LMP-0001": {"png": "part-LMP-0001.png", "subject": ["LMP-0001"],
+            "part-LMP-0001": {"subject": ["LMP-0001"],
                               "quality": {"status": "pass", "failures": [], "warnings": ["NO_SHADOW"]}},
-            "closeup-LMP-0002": {"png": "closeup-LMP-0002.png", "subject": ["LMP-0002"],
+            "closeup-LMP-0002": {"subject": ["LMP-0002"],
                                  "quality": {"status": "pass", "failures": [], "warnings": []},
                                  "retry": {"strategy": "ghosted-context", "note": "enclosed by LMP-0001",
                                            "attempts": [{"strategy": "original", "status": "fail"},
-                                                        {"strategy": "ghosted-context", "status": "pass"}]}},
-        }})
-    write(hw / "renders" / "v1" / "manifest.json", {"version": "v1", "status": "fail", "views": {
-        "iso": {"png": "iso.png", "quality": {"status": "fail", "failures": ["BLANK"]}}}})
-    write(hw / "renders" / "v1" / "iso.png", PNG)
-    write(hw / "captures" / "v2" / "iso.png", PNG)
-    write(hw / "captures" / "v1" / "front.png", PNG)
-    write(hw / "captures" / "loose.png", PNG)
-    single = hw / "drawings" / "v2" / "LMP-0001"
-    write(single / "drawing.pdf", PDF)
-    write(single / "drawing_abc.png", PNG)
-    write(single / "drawing_abc.complete.json", {
-        "status": "pass", "pdf": str(single / "drawing.pdf"), "rendered_png": str(single / "drawing_abc.png"),
-        "scale": "1:2", "projection_method": "first-angle", "warnings": ["bore H3 not on the front view"]})
-    package = hw / "packages" / "LMP-0003"
-    write(package / "sheet-1.png", PNG)
-    write(package / "sheet-1.pdf", PDF)
-    write(package / "package.json", {"status": "pass", "provenance": {"subject": "LMP-0003", "version": "v1"},
-                                     "sheets": [{"sheet": 1, "files": {"png": "sheet-1.png", "pdf": "sheet-1.pdf",
-                                                                       "svg": "sheet-1.svg"}}]})
+                                                        {"strategy": "ghosted-context", "status": "pass"}]}}
+        }}
+    render_files = {f"{view}.png": PNG for view in ("iso", "part-LMP-0001", "closeup-LMP-0002", "stray")}
+    render_files["render.json"] = render_meta
+    bundle(hw, "renders", "v2", "assembly", render_files, {"views": ["iso", "part-LMP-0001"], "size": [800, 600]})
+    bundle(hw, "renders", "v1", "assembly", {"iso.png": PNG, "render.json": {
+        "version": "v1", "status": "fail", "views": {
+            "iso": {"quality": {"status": "fail", "failures": ["BLANK"]}}}}},
+        {"views": ["iso"], "size": [800, 600]}, "fail")
+    for label, view in (("v2", "iso"), ("v1", "front")):
+        bundle(hw, "captures", label, view, {f"{view}.png": PNG,
+                                               "capture.json": {"version": label, "view": view,
+                                                                "viewer_state": {"mode": "single"}}},
+               {"view": view, "viewer_state": {"mode": "single"}, "size": [800, 600]})
+    single = bundle(hw, "drawings", "v2", "LMP-0001", {
+        "sheet-1.png": PNG, "sheet-1.pdf": PDF, "sheet-1.svg": "<svg/>",
+        "coverage.json": {"status": "pass"},
+        "package.json": {"status": "pass", "scale": "1:2", "projection_method": "first-angle",
+                         "provenance": {"subject": "LMP-0001", "version": "v2"},
+                         "sheets": [{"sheet": 1, "files": {"png": "sheet-1.png", "pdf": "sheet-1.pdf",
+                                                                  "svg": "sheet-1.svg"}}]}},
+        {"part": "LMP-0001"})
+    bundle(hw, "drawings", "v1", "LMP-0003", {
+        "sheet-1.png": PNG, "sheet-1.pdf": PDF, "sheet-1.svg": "<svg/>",
+        "coverage.json": {"status": "pass"},
+        "package.json": {"status": "pass", "provenance": {"subject": "LMP-0003", "version": "v1"},
+                         "sheets": [{"sheet": 1, "files": {"png": "sheet-1.png", "pdf": "sheet-1.pdf",
+                                                                  "svg": "sheet-1.svg"}}]}},
+        {"part": "LMP-0003"})
     write(hw / "drawings" / "sketch.png", PNG)
     write(hw / "drawings" / ".pkg.staging-1" / "sheet-1.png", PNG)
     shots = hw / "concept" / "screenshots"
@@ -120,10 +134,11 @@ class Index(Fixture):
         model = gallery.index(self.hw, "v2")
         tiles = {t["title"]: t for t in self.section(model, "renders")["tiles"]}
         self.assertEqual(list(tiles), ["iso", "part-LMP-0001", "closeup-LMP-0002", "stray"])
-        self.assertEqual(tiles["iso"]["path"], str(self.hw / "renders" / "v2" / "iso.png"))
-        self.assertEqual(tiles["iso"]["url"], "/gallery/file?path=renders/v2/iso.png")
-        self.assertEqual([m["pn"] for m in tiles["iso"]["materials"]], ["LMP-0001", "LMP-0002"])
-        self.assertIsNone(tiles["iso"]["subject"])  # the whole assembly; materials already name every PN
+        iso = tiles["iso"]
+        self.assertEqual(iso["path"], str(self.hw / "renders" / "v2" / "assembly" / "iso.png"))
+        self.assertEqual(iso["url"], "/gallery/file?path=renders/v2/assembly/iso.png")
+        self.assertEqual([m["pn"] for m in iso["materials"]], ["LMP-0001", "LMP-0002"])
+        self.assertIsNone(iso["subject"])
         self.assertEqual(tiles["part-LMP-0001"]["subject"], ["LMP-0001"])
         self.assertEqual(tiles["part-LMP-0001"]["warnings"], ["NO_SHADOW"])
         self.assertEqual(tiles["part-LMP-0001"]["status"], "pass")
@@ -131,25 +146,36 @@ class Index(Fixture):
                          [{"pn": "LMP-0001", "label": "Anodised aluminium", "rule": "al-anodised"}])
         self.assertEqual(tiles["closeup-LMP-0002"]["retry"],
                          {"strategy": "ghosted-context", "attempts": 2, "note": "enclosed by LMP-0001"})
-        self.assertEqual(tiles["stray"]["note"], "not listed in manifest.json")
+        self.assertEqual(tiles["stray"]["note"], "not listed in render.json")
         v1 = self.section(gallery.index(self.hw, "v1"), "renders")["tiles"]
         self.assertEqual([(t["status"], t["failures"]) for t in v1], [("fail", ["BLANK"])])
 
     def test_captures_and_drawings_follow_the_selected_version(self) -> None:
         v2, v1 = gallery.index(self.hw, "v2"), gallery.index(self.hw, "v1")
-        self.assertEqual(self.titles(v2, "captures"), ["loose", "iso"])
-        self.assertEqual(self.titles(v1, "captures"), ["loose", "front"])
-        loose = self.section(v2, "captures")["tiles"][0]
-        self.assertFalse(loose["version_recorded"])
-        self.assertEqual(self.titles(v2, "drawings"), ["LMP-0001 drawing", "sketch"])
-        self.assertEqual(self.titles(v1, "drawings"), ["LMP-0003 sheet 1", "sketch"])
+        self.assertEqual(self.titles(v2, "captures"), ["iso"])
+        self.assertEqual(self.titles(v1, "captures"), ["front"])
+        capture_tile = self.section(v2, "captures")["tiles"][0]
+        self.assertTrue(capture_tile["version_recorded"])
+        self.assertEqual(capture_tile["state"], {"mode": "single"})
+        self.assertEqual(self.titles(v2, "drawings"), ["LMP-0001 sheet 1"])
+        self.assertEqual(self.titles(v1, "drawings"), ["LMP-0003 sheet 1"])
         single = self.section(v2, "drawings")["tiles"][0]
-        self.assertEqual(single["pdf"], {"path": str(self.hw / "drawings/v2/LMP-0001/drawing.pdf"),
-                                         "url": "/gallery/file?path=drawings/v2/LMP-0001/drawing.pdf"})
+        self.assertEqual(single["path"], str(self.hw / "drawings/v2/LMP-0001/sheet-1.png"))
+        self.assertEqual(single["pdf"], {"path": str(self.hw / "drawings/v2/LMP-0001/sheet-1.pdf"),
+                                         "url": "/gallery/file?path=drawings/v2/LMP-0001/sheet-1.pdf"})
         self.assertEqual((single["scale"], single["projection"]), ("1:2", "first-angle"))
         sheet = self.section(v1, "drawings")["tiles"][0]
-        self.assertEqual(sheet["pdf"]["path"], str(self.hw / "packages/LMP-0003/sheet-1.pdf"))
-        self.assertIsNone(self.section(v2, "drawings")["tiles"][1]["pdf"])
+        self.assertEqual(sheet["pdf"]["path"], str(self.hw / "drawings/v1/LMP-0003/sheet-1.pdf"))
+
+    def test_picker_reads_verified_per_version_bundles_and_sheet_previews(self) -> None:
+        entries = {entry["label"]: entry for entry in gallery.record.version_list(self.hw)}
+        v2 = entries["v2"]["previews"]
+        self.assertEqual([(bundle["subject"], bundle["files"]) for bundle in v2["renders"]],
+                         [("assembly", ["renders/v2/assembly/closeup-LMP-0002.png",
+                                        "renders/v2/assembly/iso.png", "renders/v2/assembly/part-LMP-0001.png",
+                                        "renders/v2/assembly/stray.png"])])
+        self.assertEqual(v2["captures"], [{"subject": "iso", "files": ["captures/v2/iso/iso.png"],
+                                           "views": ["iso"]}])
 
     def test_concept_screenshots_take_scene_and_variant(self) -> None:
         self.assertEqual(self.titles(gallery.index(self.hw), "concept"), ["lamp B"])
@@ -162,18 +188,27 @@ class Index(Fixture):
 
     def test_a_drawing_png_outside_hw_is_not_listed(self) -> None:
         outside = write(self.tmp / "elsewhere.png", PNG)
-        marker = self.hw / "drawings" / "v2" / "LMP-0001" / "drawing_abc.complete.json"
-        data = json.loads(marker.read_text())
-        marker.write_text(json.dumps({**data, "rendered_png": str(outside)}))
+        bundle_path = self.hw / "drawings" / "v2" / "LMP-0001"
+        api = gallery.record._layout()
+        stage = api.staging(self.hw, "bundle.drawings")
+        for name in ("sheet-1.png", "sheet-1.pdf", "sheet-1.svg", "coverage.json", "package.json"):
+            shutil.copyfile(bundle_path / name, stage / name)
+        package = json.loads((stage / "package.json").read_text())
+        package["sheets"][0]["files"]["png"] = str(outside)
+        (stage / "package.json").write_text(json.dumps(package))
+        broken = api.bundle_dir(self.hw, "drawings", "v2", "LMP-0001")
+        shutil.rmtree(broken)
+        api.publish(self.hw, "bundle.drawings", {"V": "v2", "S": "LMP-0001"}, stage,
+                    recipe={"part": "LMP-0001", "tampered": True}, producer="test_gallery", status="fail")
         drawings = self.section(gallery.index(self.hw, "v2"), "drawings")
         self.assertNotIn(str(outside), [t["path"] for t in drawings["tiles"]])
-        self.assertTrue(any("outside" in note for note in drawings["notes"]))
 
 
 class Resolve(Fixture):
     def test_files_inside_hw_resolve(self) -> None:
-        self.assertEqual(gallery.resolve(self.hw, "renders/v2/iso.png"), self.hw / "renders" / "v2" / "iso.png")
-        self.assertEqual(gallery.resolve(self.hw, "drawings/v2/LMP-0001/drawing.pdf").suffix, ".pdf")
+        self.assertEqual(gallery.resolve(self.hw, "renders/v2/assembly/iso.png"),
+                         self.hw / "renders" / "v2" / "assembly" / "iso.png")
+        self.assertEqual(gallery.resolve(self.hw, "drawings/v2/LMP-0001/sheet-1.pdf").suffix, ".pdf")
 
     def test_traversal_hidden_folders_other_types_and_escaping_links_are_forbidden(self) -> None:
         write(self.tmp / "secret.png", PNG)
@@ -230,8 +265,8 @@ class HostRoutes(Fixture):
         answer = self.open_project()
         self.assertEqual(answer["url"], f"http://127.0.0.1:{self.port}/gallery?version=v2")
         self.assertEqual(answer["versions"], ["v1", "v2"])
-        self.assertIn(str(self.hw / "renders/v2/iso.png"), answer["files"]["renders"])
-        self.assertIn(str(self.hw / "drawings/v2/LMP-0001/drawing.pdf"), answer["files"]["drawings"])
+        self.assertIn(str(self.hw / "renders/v2/assembly/iso.png"), answer["files"]["renders"])
+        self.assertIn(str(self.hw / "drawings/v2/LMP-0001/sheet-1.pdf"), answer["files"]["drawings"])
         status, _, raw = self.request("POST", "/api/gallery", {"hw": str(self.tmp)})
         self.assertEqual(status, 400, raw)
 
@@ -246,10 +281,10 @@ class HostRoutes(Fixture):
         status, _, raw = self.request("GET", "/api/gallery?version=v1")
         self.assertEqual((status, json.loads(raw)["version"]), (200, "v1"))
         self.assertEqual(self.request("GET", "/api/gallery?version=v9")[0], 404)
-        status, headers, body = self.request("GET", "/gallery/file?path=renders/v2/iso.png")
+        status, headers, body = self.request("GET", "/gallery/file?path=renders/v2/assembly/iso.png")
         self.assertEqual((status, headers["Content-Type"], body), (200, "image/png", PNG))
         self.assertEqual(headers["X-Content-Type-Options"], "nosniff")
-        status, headers, body = self.request("GET", "/gallery/file?path=drawings/v2/LMP-0001/drawing.pdf")
+        status, headers, body = self.request("GET", "/gallery/file?path=drawings/v2/LMP-0001/sheet-1.pdf")
         self.assertEqual((status, headers["Content-Type"], body), (200, "application/pdf", PDF))
 
     def test_the_file_route_rejects_traversal_and_other_sites(self) -> None:
@@ -263,7 +298,7 @@ class HostRoutes(Fixture):
                 self.assertNotEqual(body, PNG)
         self.assertEqual(self.request("GET", "/gallery/file?path=renders/v2/none.png")[0], 404)
         self.assertEqual(self.request("GET", "/gallery/file")[0], 403)
-        route = "/gallery/file?path=renders/v2/iso.png"
+        route = "/gallery/file?path=renders/v2/assembly/iso.png"
         self.assertEqual(self.request("GET", route, headers={"Origin": "http://evil.example"})[0], 403)
         self.assertEqual(self.request("GET", route, headers={"Host": f"evil.example:{self.port}"})[0], 403)
         self.assertEqual(self.request("POST", "/api/gallery", None, {"Content-Type": "text/plain"})[0], 415)

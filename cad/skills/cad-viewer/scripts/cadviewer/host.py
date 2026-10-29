@@ -421,7 +421,8 @@ class Host:
         if shown is None:
             raise ViewerError("nothing shown yet; run `viewer.py show` first")
         hw = shown.version.hw
-        same = current is not None and record.version_files(hw, version).label == current.version.label
+        label, _folder, _record_snapshot = record.version_files(hw, version)
+        same = current is not None and label == current.version.label
         loaded = replace(current, requested=version) if same else _load(str(hw), version, None)
         with self.lock:
             if self.versions.get("A") is None or self.versions["A"].version.hw != hw:
@@ -781,10 +782,47 @@ class Host:
         return {"status": "stopping", "pid": os.getpid()}
 
     def capture(self, body: dict[str, Any]) -> dict[str, Any]:
-        """One capture on the presenter; the guard holds until the presenter has finished it,
-        even when this request has given up waiting."""
+        """Capture once, then seal its pixels and displayed state as an immutable version bundle."""
         if self.presenter is None:
             raise ViewerError("presenter browser is not running")
+        state = self.state()
+        selected = state.get("selected", {}).get("A")
+        with self.lock:
+            shown = self.versions.get("A")
+        if not selected or not selected.get("label") or shown is None:
+            raise ViewerError("nothing shown yet; run `viewer.py show` first")
+
+        hw, label = shown.version.hw, selected["label"]
+        api = record._layout()
+        requested = Path(str(body["out"])) if body.get("out") else None
+        view = str(body.get("view"))
+        subject = view.replace(":", "-")
+        viewer_state = {"mode": state["mode"], "view": state["view"], "animation": state["animation"],
+                        "selected": selected}
+        size = [self.viewport[0], self.viewport[1]]
+        recipe = {"view": view, "viewer_state": viewer_state, "size": size}
+
+        filename_view = view.replace(":", "-")
+        subject = filename_view.lower()
+        staged: Path | None = None
+        try:
+            if requested is None:
+                existing = api.reusable(hw, "bundle.captures", {"V": label, "S": subject}, recipe,
+                                        replace=bool(body.get("replace")))
+                if existing is not None:
+                    return {"status": "pass", "cache": "hit", "out": str(existing / f"{filename_view}.png"),
+                            "version": label, "view": view, "viewer_state": viewer_state}
+                staged = api.staging(hw, "bundle.captures")
+                target = staged / f"{filename_view}.png"
+            else:
+                target = api.scratch_path(hw, requested, "--out")
+                target.parent.mkdir(parents=True, exist_ok=True)
+                if target.exists() or target.is_symlink():
+                    raise ViewerError(f"{target} already exists; capture outputs are never overwritten")
+            body["out"] = str(target)
+        except api.LayoutError as error:
+            raise ViewerError(str(error)) from error
+
         self.guard.begin_capture()
         try:
             job = self.presenter.submit(lambda page: capture.capture(self, page, body))
@@ -792,7 +830,19 @@ class Host:
             self.guard.end_capture()
             raise
         job.add_done_callback(lambda _: self.guard.end_capture())
-        return self.presenter.result(job, CAPTURE_TIMEOUT_S, "capture")
+        result = self.presenter.result(job, CAPTURE_TIMEOUT_S, "capture")
+        if staged is not None:
+            metadata = {"version": label, "view": result["view"], "viewer_state": result["viewer_state"]}
+            (staged / "capture.json").write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
+            try:
+                published = api.publish(hw, "bundle.captures", {"V": label, "S": subject}, staged, recipe=recipe,
+                                        producer="cad-viewer viewer.py capture", status=result["status"],
+                                        replace=bool(body.get("replace")))
+            except api.LayoutError as error:
+                raise ViewerError(str(error)) from error
+            result["out"] = str(published.path / f"{filename_view}.png")
+            result["cache"] = "hit" if published.reused else "miss"
+        return result
 
     def serve(self) -> None:
         """Start the viewers, the API, and the presenter; serve until /api/stop or SIGTERM.
