@@ -17,16 +17,18 @@ TRIGGER
 
 1. Export the assembly as STEP AP242 with product names that start with the PN
    (`PIN-0001` or `PIN-0001 Dowel pin`).
-2. `uv run --script skill://cad-flow/scripts/run.py cad-bom/scripts/bom.py ASSEMBLY.step --hw hw [--out hw/bom.csv]`
+2. `uv run --script skill://cad-flow/scripts/run.py cad-bom/scripts/bom.py ASSEMBLY.step --hw hw [--out hw/bom.csv] [--version vN|latest]`
    → writes `bom.csv` with columns `level,PN,rev,qty,title,material,process,make_buy,supplier,mass,`
    `unit,designation,manufacturer,manufacturer_part_number,supplier_part_number,specification_ref,specification_rev`
    and prints a JSON summary: `status`, `rows`, `total_qty`, `missing_part_yaml`,
-   `missing_in_step`, `unidentified`.
+   `missing_in_step`, `unidentified`; with `--version`, `reconciled_against` names the selected version.
+   Versioned reconciliation reads part metadata from that version's immutable record snapshot.
 3. Exit 1 means the record and the model disagree; bom.csv is still written. Resolve each list:
    `missing_part_yaml` → create the part.yaml or rename the product;
    `missing_in_step` → remove the stale part or add it to the model;
    `unidentified` → give the leaf product a PN.
 4. Rerun until exit 0, then COMMIT records the bom.csv change with the stage.
+   Without `--version`, the current `hw/parts` records are reconciled; with it, BOM metadata and reconciliation use the selected version's snapshot, not current records.
 
 ## Semantics
 
