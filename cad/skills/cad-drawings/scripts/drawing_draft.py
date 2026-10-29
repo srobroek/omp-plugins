@@ -11,8 +11,8 @@ For each part: read its STEP in FreeCAD, recognise its manufacturing features (`
 and write ``DIR/<PN>/drawing_intent.draft.yaml``:
 
 - ``recognized``: every hole, pocket, cutout, slot, notch, groove, boss, rib, wall, step, round,
-  chamfer, arc, engraving and the outline, with its faces and measured sizes (for review only: the
-  record never carries values);
+  chamfer, arc, dish, engraving and the outline, with its faces and measured sizes (for review only:
+  the record never carries values);
 - ``unrecognized``: faces no pattern matches, with the reason;
 - ``locators``: before the model has a ``drawing_features`` hook, one proposed locator per feature and
   plane (kind, faces, and per face a ``select`` line: support type, normal or axis, level or radius),
@@ -22,7 +22,9 @@ and write ``DIR/<PN>/drawing_intent.draft.yaml``:
 - ``drawing``: a proposed ``part.yaml`` drawing block in those locator names: datums on the largest
   outer planes, the frame, orthographic views, ``size: general`` per locator, and a direct dimension
   request for every wall, rib and shell thickness and every pocket, cutout and notch width, length and
-  depth, so the gate's ISO 129-1 functional sizes are stated directly;
+  depth, so the gate's ISO 129-1 functional sizes are stated directly; a drafted wall's thickness and
+  a width between inclined flanks ``at`` their reference plane with their angles, and a spherical
+  recess's radius (SR) and depth;
 - ``review``: what the agent decides before merging: design intent, tolerances, notes, sections.
 
 It never writes part.yaml or model.py; ``drawing_merge.py`` merges the reviewed block. Exit 0 when
@@ -47,7 +49,7 @@ import drawing  # noqa: E402
 import drawing_contract  # noqa: E402
 import feature_geometry as fg  # noqa: E402
 import freecad_runtime  # noqa: E402
-from feature_recognition import Recognition, Recognized  # noqa: E402
+from feature_recognition import Recognition, Recognized, Size  # noqa: E402
 
 # a face goes to the first feature that claims it, in this order: the kinds that state the most first
 PRIORITY = ("hole", "boss", "shaft", "groove", "slot", "engraving", "arc", "chamfer", "round", "taper", "dish",
@@ -168,29 +170,75 @@ def _hooked(recognition: Recognition, binding: fg.Binding) -> tuple[dict[int, st
     return dict(binding.owner), locators
 
 
-def draft(pn: str, recognition: Recognition, faces: dict[int, fg.Face], record: dict[str, Any],
-          product: dict[str, Any], binding: fg.Binding | None = None) -> dict[str, Any]:
-    """The draft for one part: proposed locators before a hook exists, the hook's own names once it does."""
-    names, locators = _hooked(recognition, binding) if binding is not None else _proposed(recognition, faces)
-    requests, seen, ids = [], set(), set()
+def _requests(recognition: Recognition, names: dict[int, str], locators: dict[str, dict[str, Any]],
+              faces: dict[int, fg.Face]) -> list[dict[str, Any]]:
+    """The direct size requests: wall, rib and shell thicknesses, recess widths, lengths and depths; a drafted
+    wall's thickness and an inclined-flank width at their reference plane with the angles that go with them; a
+    spherical recess's SR and depth."""
+    requests: list[dict[str, Any]] = []
+    seen: set[Any] = set()
+    ids: set[str] = set()
+
+    def add(item: Recognized, name: str, value: float, request: dict[str, Any]) -> None:
+        key = (request["operation"], frozenset(request["features"]), request.get("at"))
+        if key in seen:
+            return
+        seen.add(key)
+        base = rid = f"{item.id}_{name}"
+        while rid in ids:   # a pocket's two widths, a rib's two thicknesses: one id each
+            rid = f"{base}_{sum(1 for i in ids if i == base or i.startswith(base + '_')) + 1}"
+        ids.add(rid)
+        requests.append({"id": rid, **request, "review": f"{item.category} {name} {value:g}"
+                                                         f"{'°' if name == 'angle' else ' mm'}"})
+
     for item in recognition.features:
+        if item.category == "dish":   # SR and the depth below the plane it opens through
+            dish = names.get(item.faces[0])
+            for size in item.sizes:
+                entry = names.get(size.between[0][0]) if size.name == "depth" else None
+                if dish is not None and (size.name == "radius" or entry is not None):
+                    add(item, size.name, size.value, {"operation": size.name,
+                                                      "features": [dish] if entry is None else [dish, entry]})
+            continue
+        at = next((s.at[0] for s in item.sizes if s.at), None)
         for size in item.sizes:
+            if size.name == "angle" and at is not None:
+                add(item, "angle", size.value, {"operation": "angle", "features": _angle_to(size, item, at, names, faces)})
             if size.name not in DIRECT or not size.between or not size.between[0] or not size.between[1]:
                 continue
             if size.name == "depth" and item.category in ("hole", "engraving"):
                 continue   # a floored bore and an engraving state their own depth in their callout
             first, second = names.get(size.between[0][0]), names.get(size.between[1][0])
-            if first is None or second is None or first == second or frozenset((first, second)) in seen:
+            if first is None or second is None:
                 continue
-            if locators[first]["kind"] == "slot" and locators[second]["kind"] == "slot":
+            if size.at:   # between non-parallel planes: stated where they meet the reference plane
+                if names.get(size.at[0]) is not None:
+                    add(item, size.name, size.value, {"operation": "thickness" if size.name == "thickness" else "width",
+                                                      "features": [first] if first == second else [first, second],
+                                                      "at": names[size.at[0]]})
+                continue
+            if first == second or (locators[first]["kind"] == "slot" and locators[second]["kind"] == "slot"):
                 continue   # the slot kind states its own width and length
-            seen.add(frozenset((first, second)))
-            base = rid = f"{item.id}_{size.name}"
-            while rid in ids:   # a pocket's two widths, a rib's two thicknesses: one id each
-                rid = f"{base}_{sum(1 for i in ids if i == base or i.startswith(base + '_')) + 1}"
-            ids.add(rid)
-            requests.append({"id": rid, "operation": "thickness" if size.name == "thickness" else "plane_separation",
-                             "features": [first, second], "review": f"{item.category} {size.name} {size.value:g} mm"})
+            add(item, size.name, size.value, {"operation": "thickness" if size.name == "thickness" else "plane_separation",
+                                              "features": [first, second]})
+    return [r for r in requests if None not in r["features"]]
+
+
+def _angle_to(size: Size, item: Recognized, at: int, names: dict[int, str], faces: dict[int, fg.Face]) -> list[str]:
+    """An inclined face's angle request: from a face of the same size pair at right angles to the reference plane
+    (a drafted wall's other face: the draft angle), else from the reference plane itself (a flank's angle)."""
+    face = size.faces[0]
+    normal = fg.unit(faces[at].normal)
+    others = [i for s in item.sizes if s.at and face in s.faces for i in s.faces
+              if i != face and fg.perpendicular(faces[i].normal, normal)]
+    return [names.get(face), names.get(others[0] if others else at)]
+
+
+def draft(pn: str, recognition: Recognition, faces: dict[int, fg.Face], record: dict[str, Any],
+          product: dict[str, Any], binding: fg.Binding | None = None) -> dict[str, Any]:
+    """The draft for one part: proposed locators before a hook exists, the hook's own names once it does."""
+    names, locators = _hooked(recognition, binding) if binding is not None else _proposed(recognition, faces)
+    requests = _requests(recognition, names, locators, faces)
     planes = sorted((f for f in faces.values() if f.support_type == "plane" and names.get(f.index) in locators
                      and locators[names[f.index]]["kind"] == "plane_face"), key=lambda f: -f.area_mm2)
     datums: dict[str, dict[str, str]] = {}
@@ -249,6 +297,9 @@ def draft(pn: str, recognition: Recognition, faces: dict[int, fg.Face], record: 
             "Keep each direct size request whose feature is functional; a request locates its second plane "
             "from its first in place of that plane's datum location.",
             "Give every size under 0.5 mm, and every fit, its own tolerance; ISO 2768-1 has none there.",
+            "A drafted wall's thickness and a width between inclined flanks are stated at a reference plane (at): "
+            "keep the proposed plane (a rim, a top, a bed) or name the parting plane, and keep the angle request "
+            "that goes with it.",
             "Add a section view through each recess, wall or blind hole the orthographic views show hidden.",
             "Edge fillets and edge breaks may take presentation: general_note; contour radii get their own "
             "dimension.",

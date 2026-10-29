@@ -1122,12 +1122,17 @@ class Measurer:
     def _requests(self, frame: DatumFrame) -> None:
         for request in self.drawing.get("dimensions", []):
             features = [self.binding.features.get(f) for f in request["features"]]
-            if any(f is None for f in features):
+            at = request.get("at")
+            if any(f is None for f in features) or (at is not None and at not in self.binding.features):
                 self.add(finding("feature_not_found", f"dimension {request['id']} names an unbound feature "
-                                 f"{request['features']}", dimension=request["id"]))
+                                 f"{[*request['features'], *([at] if at else [])]}", dimension=request["id"]))
                 continue
+            measured_at: dict[str, Any] = {}
             try:
-                value, faces, axis = self._measure_request(request, features, frame)
+                if at is not None:
+                    value, faces, axis, measured_at = self._measure_at(request, features, frame)
+                else:
+                    value, faces, axis = self._measure_request(request, features, frame)
             except IntentError as exc:
                 self.add(finding(exc.code, f"dimension {request['id']}: {exc}", dimension=request["id"]))
                 continue
@@ -1158,12 +1163,16 @@ class Measurer:
             if tolerance is None and not request.get("reference"):
                 tolerance = same[0].tolerance if same else self.general(request["features"][0], operation, value)
             details = {**(same[0].details if same else {}), "features": request["features"],
-                       "datum_frame": request.get("datum_frame", [])}
-            chain = operation in SEPARATION_REQUESTS and len(features) == 2
+                       "datum_frame": request.get("datum_frame", []), **measured_at}
+            if operation in ("radius", "diameter") and self._spherical(features[0]):
+                details["spherical"] = True   # SR, S⌀ (ISO 129-1, ASME Y14.5)
+            chain = operation in SEPARATION_REQUESTS and len(features) == 2 and at is None
             if chain:   # drawn from the first feature's plane nearest the second
                 details["from_faces"] = self._separation_planes(features[0], features[1])[0]
             quantity = same[0].quantity if same else 1
-            if operation == "width" and len(features) == 2:
+            if at is not None:   # every pair of planes at that width on the plane: 2× width 2.3
+                quantity = len(measured_at["pairs"])
+            elif operation == "width" and len(features) == 2:
                 # a width callout states every opposed pair of the two features at that width: 4× width 0.6
                 pairs = self._pairs_at(features[0], features[1], value)
                 quantity, faces = len(pairs), sorted({b for _, b in pairs})
@@ -1176,6 +1185,55 @@ class Measurer:
                 self.result.characteristics = [c for c in self.result.characteristics if not (
                     c.feature == features[1].id and c.operation == "location" and not c.requested)]
             self.result.characteristics.append(item)
+
+    def _spherical(self, feature: ResolvedFeature) -> bool:
+        radii = [self.faces[i] for i in feature.faces if self.faces[i].radius]
+        return bool(radii) and all(f.support_type == "sphere" for f in radii)
+
+    def _sphere_depth(self, features: Sequence[ResolvedFeature]) -> tuple[float, list[int], None]:
+        """A spherical recess's depth: from the plane it opens through to the sphere's lowest point."""
+        dish = next((f for f in features if any(self.faces[i].support_type == "sphere" and self.faces[i].inward
+                                                for i in f.faces)), None)
+        if dish is None:
+            raise IntentError("measurement_failed", "depth between two features needs an inward sphere (a spherical "
+                              "recess) and the plane it opens through")
+        plane = self._plane_of(next(f for f in features if f is not dish))
+        sphere = next(self.faces[i] for i in dish.faces if self.faces[i].support_type == "sphere")
+        n = fg.unit(plane.normal)
+        depth = fg.dot(fg.sub(plane.point, sphere.axis_point), n) + sphere.radius
+        return depth, [i for i in dish.faces if self.faces[i].support_type == "sphere"], None
+
+    def _measure_at(self, request: Mapping[str, Any], features: Sequence[ResolvedFeature], frame: DatumFrame
+                    ) -> tuple[float, list[int], str | None, dict[str, Any]]:
+        """A width or thickness stated at a reference plane (ISO 129-1): the distance between the lines where two
+        planes meet the ``at`` plane, for a drafted wall or two inclined flanks. The planes are one feature's two,
+        or one of each of two features: the pair nearest the plane, then the narrowest; every pair at that width
+        side by side along the lines counts, so ``pairs`` lists them."""
+        operation = request["operation"]
+        if operation not in SEPARATION_REQUESTS:
+            raise IntentError("invalid_drawing_intent", f"at applies to {', '.join(SEPARATION_REQUESTS)}, "
+                              f"not {operation}")
+        if len(features) not in (1, 2):
+            raise IntentError("invalid_drawing_intent", "at measures between one feature's planes or two features'")
+        ref = self._plane_of(self.binding.features[request["at"]])
+        planes = [[self.faces[i] for i in f.faces if self.faces[i].support_type == "plane"] for f in features]
+        candidates = ([(a, b) for k, a in enumerate(planes[0]) for b in planes[0][k + 1:]] if len(features) == 1
+                      else [(a, b) for a in planes[0] for b in planes[1]])
+        found = []
+        for a, b in candidates:
+            trace = fg.trace_at(a, b, ref)
+            if trace is not None and fg.side_by_side(a, b, trace.along):
+                found.append((round(fg.reach(a, ref) + fg.reach(b, ref), 3), trace, a.index, b.index))
+        if not found:
+            raise IntentError("measurement_failed", f"no two planes of {[f.id for f in features]} meet "
+                              f"{request['at']} in parallel lines side by side")
+        reach, trace, _, _ = min(found, key=lambda item: (item[0], item[1].width))
+        pairs = [[a, b] for near, other, a, b in found if near == reach and abs(other.width - trace.width) < EPS]
+        axis = frame.axis_of(trace.across)
+        return trace.width, sorted({b for _, b in pairs}), axis[0] if axis else None, {
+            "at": request["at"], "pairs": pairs,
+            "trace": {"first": list(trace.first), "second": list(trace.second), "along": list(trace.along),
+                      "across": list(trace.across)}}
 
     def _measure_request(self, request: Mapping[str, Any], features: Sequence[ResolvedFeature],
                          frame: DatumFrame) -> tuple[float, list[int], str | None]:
@@ -1192,6 +1250,8 @@ class Measurer:
                         self.locate(axis[0], c)
             # measured from the first feature: the characteristic's faces are the second plane's, its target
             return value, target, axis[0] if axis else None
+        if operation == "depth" and len(features) == 2:
+            return self._sphere_depth(features)
         if operation == "axis_distance" and len(features) == 2:
             a, b = (cylinder_instances([self.faces[i] for i in f.faces])[0] for f in features)
             if not fg.parallel(a.axis_dir, b.axis_dir):

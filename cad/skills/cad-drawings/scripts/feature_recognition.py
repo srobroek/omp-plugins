@@ -15,12 +15,18 @@ face records of ``feature_geometry.extract_faces`` and those facts, with no loca
 - ``boss``, ``rib``: side walls joined by convex or tangent edges standing on a base face, a rib when
   one width is thin against the other;
 - ``step``: a single riser between a lower and an upper face facing the same way;
-- ``wall``: two opposed parallel planes with material between them, thin against their extent:
-  shell walls, plates, floors and roofs, sized by their thickness;
-- ``round`` (tangent blend cylinders, tori), ``chamfer`` (cones and narrow bevel planes between two
-  convex edges), ``taper``, ``dish`` (an inward sphere);
+- ``wall``: two opposed planes with material between them, thin against their extent: shell walls,
+  plates, floors and roofs, sized by their thickness; two faces drafted against each other by up to
+  ``DRAFT_MAX_DEG`` are sized at the plane both end on (the rim), with each drafted face's angle;
+- ``round`` (tangent blend cylinders, tori, spheres), ``chamfer`` (cones and narrow bevel planes
+  between two convex edges), ``taper``, ``dish`` (an inward sphere opening through a plane: its
+  radius, SR, and its depth below that plane);
 - ``engraving``: shallow recesses of one depth in one face, one of them with a freeform wall (text);
 - ``outline``: unclaimed faces seen from outside the part, its envelope.
+
+A recess's or protrusion's two walls that are not parallel to each other, at least one inclined,
+have their width at its rim or top: the distance between the lines where they meet that plane
+(``Size.at``), as ISO 129-1 states a width between inclined flanks.
 
 Each feature lists the sizes a complete drawing states (``Size``) and whether every face is a plane,
 cylinder or cone (``prismatic``): a prismatic feature has sizes a drawing can and must state; other
@@ -33,7 +39,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Protocol
 
 import feature_geometry as fg
@@ -48,6 +54,8 @@ WALL_RATIO = 0.2           # a wall's thickness against the longer extent of its
 CHAMFER_MAX_MM = 5.0
 ENGRAVING_MAX_DEPTH_MM = 2.0
 SPAN_SAMPLES = 3           # samples of each plane face cast through the material to the opposite face
+DRAFT_MAX_DEG = 10.0       # a wall's two faces drafted against each other by up to this are still one wall
+DRAFT_COS = math.cos(math.radians(DRAFT_MAX_DEG))
 PRISMATIC = ("plane", "cylinder", "cone")
 RECESSES = ("pocket", "cutout", "slot", "notch", "hole", "dish")
 
@@ -64,13 +72,17 @@ class Probe(Protocol):
 
 @dataclass(frozen=True)
 class Size:
-    """A size a complete drawing states: its value measured on these faces, or between two face sets."""
+    """A size a complete drawing states: its value measured on these faces, or between two face sets.
 
-    name: str                      # diameter, radius, depth, width, length, thickness, height, chamfer
+    ``at`` is the reference plane a size between non-parallel planes is stated at: a drafted wall's
+    thickness at its rim, a width between inclined flanks at the plane they meet."""
+
+    name: str                      # diameter, radius, depth, width, length, thickness, height, chamfer, angle
     value: float
     faces: tuple[int, ...]
     between: tuple[tuple[int, ...], tuple[int, ...]] | None = None
     direction: Vector | None = None
+    at: tuple[int, ...] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         found: dict[str, Any] = {"name": self.name, "value_mm": round(self.value, 6), "faces": list(self.faces)}
@@ -78,14 +90,17 @@ class Size:
             found["between"] = [list(self.between[0]), list(self.between[1])]
         if self.direction is not None:
             found["direction"] = [round(c, 6) for c in self.direction]
+        if self.at is not None:
+            found["at"] = list(self.at)
         return found
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> Size:
-        between, direction = data.get("between"), data.get("direction")
+        between, direction, at = data.get("between"), data.get("direction"), data.get("at")
         return cls(data["name"], float(data["value_mm"]), tuple(data["faces"]),
                    (tuple(between[0]), tuple(between[1])) if between else None,
-                   tuple(float(c) for c in direction) if direction else None)
+                   tuple(float(c) for c in direction) if direction else None,
+                   tuple(at) if at else None)
 
 
 @dataclass(frozen=True)
@@ -298,10 +313,11 @@ def facts(faces: Sequence[Face], probe: Probe) -> Facts:
             if not inside:
                 continue
             exit_point = fg.sub(start, fg.scale(n, inside[0][1]))
-            for b in planes:
-                if b.index != a.index and fg.dot(n, b.normal) < -1 + 1e-6 \
+            for b in planes:   # the opposite face: parallel, or drafted against this one by up to DRAFT_MAX_DEG
+                if b.index != a.index and fg.dot(n, fg.unit(b.normal)) < -DRAFT_COS \
                         and abs(fg.dot(fg.sub(exit_point, b.point), b.normal)) < 10 * EPS and regions[b.index].contains(exit_point):
-                    spans[(min(a.index, b.index), max(a.index, b.index))] = inside[0][1] - 0.01
+                    key = (min(a.index, b.index), max(a.index, b.index))
+                    spans[key] = min(spans.get(key, math.inf), inside[0][1] - 0.01)
                     break
     exposed = set()
     for face in faces:   # seen from outside at most of its samples: a window in an opposite wall is not enough
@@ -367,17 +383,19 @@ class _Classifier:
             direction = None if size.direction is None else _canonical(size.direction)
             between = size.between
             if between and direction is not None and between[0] and between[1] \
+                    and all(self.faces[side[0]].point is not None for side in between) \
                     and self.level(between[0][0], direction) > self.level(between[1][0], direction):
                 between = (between[1], between[0])
-            key = (size.name, round(size.value, 3), direction)
+            key = (size.name, round(size.value, 3), direction, size.at is not None)
             if key in found:
                 old = found[key]
                 faces = tuple(sorted({*old.faces, *size.faces}))
                 sides = None if old.between is None or between is None else (
                     tuple(sorted({*old.between[0], *between[0]})), tuple(sorted({*old.between[1], *between[1]})))
-                found[key] = Size(old.name, old.value, faces, sides, old.direction)
+                at = None if old.at is None else tuple(sorted({*old.at, *size.at}))
+                found[key] = Size(old.name, old.value, faces, sides, old.direction, at)
             else:
-                found[key] = Size(size.name, size.value, size.faces, between, direction)
+                found[key] = Size(size.name, size.value, size.faces, between, direction, size.at)
         return tuple(found.values())
 
     def kind(self, a: int, b: int) -> str:
@@ -488,12 +506,27 @@ class _Classifier:
                 self.add("round", [face.index], [Size("radius", face.radius, (face.index,))], "round",
                          internal=bool(face.inward))
             elif face.support_type == "sphere":
-                if face.inward:
-                    self.add("dish", [face.index], [Size("radius", face.radius, (face.index,))], "surface")
-                elif kinds == {"smooth"}:
-                    self.add("round", [face.index], [Size("radius", face.radius, (face.index,))], "round")
+                if kinds == {"smooth"}:   # a spherical blend, such as the ball end of a groove
+                    self.add("round", [face.index], [Size("radius", face.radius, (face.index,))], "round",
+                             internal=bool(face.inward))
+                elif face.inward:
+                    self._dish(face)
             elif face.support_type == "plane":
                 self._bevel(face)
+
+    def _dish(self, face: Face) -> None:
+        """An inward sphere: a spherical recess, stated by its radius (SR) and, when it opens through a plane
+        across a convex edge, its depth from that plane to the sphere's lowest point."""
+        sizes = [Size("radius", face.radius, (face.index,))]
+        entries = sorted(n for n in self.neighbours(face.index) if self.kind(face.index, n) == "convex"
+                         and self.faces[n].support_type == "plane")
+        n = fg.unit(self.faces[entries[0]].normal) if entries else None
+        if n is not None:
+            rims = tuple(i for i in entries if fg.parallel(self.faces[i].normal, n)
+                         and abs(self.level(i, n) - self.level(entries[0], n)) < EPS)
+            depth = fg.dot(fg.sub(self.faces[rims[0]].point, face.axis_point), n) + face.radius
+            sizes.append(Size("depth", depth, (face.index,), (rims, (face.index,)), n))
+        self.add("dish", [face.index], sizes, "surface", n)
 
     def _bevel(self, face: Face) -> None:
         """A narrow plane strip between two convex edges to non-parallel planes: a planar chamfer."""
@@ -607,10 +640,28 @@ class _Classifier:
         top = max(fg.dot(p, d) for i in component for p in self.faces[i].boundary_points())
         return top - self.level(base, d)
 
-    def sizes_across(self, component: Sequence[int], facing: bool, d: Vector) -> list[Size]:
-        """Widths between opposed walls, radii of their blends, and each inclined wall's angle to the floor plane."""
+    def sizes_across(self, component: Sequence[int], facing: bool, d: Vector, at: Sequence[int] = ()) -> list[Size]:
+        """Widths between opposed walls, radii of their blends, and each inclined wall's angle to the floor plane.
+
+        Two walls not parallel to each other, at least one inclined, have no width of their own: it is stated
+        at the first of the ``at`` planes (a recess's rim, a protrusion's top) that both walls' lines on it are
+        parallel, facing each other across the gap (``facing``) or away from each other across material."""
         sizes = [Size("width", gap, (a.index, b.index), ((a.index,), (b.index,)), a.normal)
                  for a, b, gap in self.pairs(component, facing)]
+        planes = [self.faces[i] for i in component if self.faces[i].support_type == "plane"]
+        for k, a in enumerate(planes):
+            for b in planes[k + 1:]:
+                if fg.parallel(a.normal, b.normal):
+                    continue
+                for ref in at:
+                    trace = fg.trace_at(a, b, self.faces[ref])
+                    if trace is None:
+                        continue
+                    out_a, out_b = fg.dot(fg.unit(a.normal), trace.across), fg.dot(fg.unit(b.normal), trace.across)
+                    if (out_a > EPS and out_b < -EPS) if facing else (out_a < -EPS and out_b > EPS):
+                        sizes.append(Size("width", trace.width, (a.index, b.index), ((a.index,), (b.index,)),
+                                          trace.across, at=(ref,)))
+                        break
         rounds = [self.faces[i] for i in component if "round" in self.categories(i)]
         for radius in sorted({round(f.radius, 4) for f in rounds}):
             sizes.append(Size("radius", radius, tuple(f.index for f in rounds if round(f.radius, 4) == radius)))
@@ -727,7 +778,7 @@ class _Classifier:
 
     def add_recess(self, floor: int, component: Sequence[int], rims: Sequence[int], open_to: Sequence[int],
                    depth: float, d: Vector) -> None:
-        sizes = self.sizes_across(component, facing=True, d=d)
+        sizes = self.sizes_across(component, facing=True, d=d, at=rims)
         pairs = self.pairs(component, facing=True)
         cylinders = [self.faces[i] for i in component if self.faces[i].support_type == "cylinder"]
         slot = len(pairs) == 1 and 1 <= len(cylinders) <= 2 and all(abs(2 * f.radius - pairs[0][2]) < EPS
@@ -783,7 +834,7 @@ class _Classifier:
         tops = self.caps(component, d, "convex")
         top = max(tops, key=lambda i: self.faces[i].area_mm2) if tops else None
         tops = [i for i in tops if top is not None and abs(self.level(i, d) - self.level(top, d)) < EPS]
-        sizes = self.sizes_across(component, facing=False, d=d)
+        sizes = self.sizes_across(component, facing=False, d=d, at=tops)
         height = self.level(top, d) - self.level(base, d) if top is not None else self.rise(component, base, d)
         sizes.append(Size("height", height, tuple(component), ((base,), (top,)) if top is not None else None, d))
         widths = sorted((s for s in sizes if s.name == "width"), key=lambda s: s.value)
@@ -794,8 +845,8 @@ class _Classifier:
             rib = widths[0].value <= THIN_RATIO * (hi - lo)
         widths = [s.value for s in widths]
         if rib:
-            sizes = [Size("thickness", s.value, s.faces, s.between, s.direction)
-                     if s.name == "width" and abs(s.value - widths[0]) < EPS else s for s in sizes]
+            sizes = [replace(s, name="thickness") if s.name == "width" and abs(s.value - widths[0]) < EPS else s
+                     for s in sizes]
         self.add("rib" if rib else "boss", [*component, *tops], sizes, "plane_face", d, base=base, top=tops)
 
     def claim(self, item: Recognized, faces: Iterable[int]) -> None:
@@ -838,8 +889,8 @@ class _Classifier:
                     continue
                 # the material it passes through is a wall, sized by the wall's own thickness
                 thickness = abs(self.level(far[0], d) - self.level(rim.index, d))
-                self.add("cutout", component, self.sizes_across(component, facing=True, d=d), "plane_face", d,
-                         rims=[rim.index, far[0]], through_mm=thickness)
+                sizes = self.sizes_across(component, facing=True, d=d, at=[rim.index])
+                self.add("cutout", component, sizes, "plane_face", d, rims=[rim.index, far[0]], through_mm=thickness)
 
     # walls -----------------------------------------------------------------------------------------
     def walls(self) -> None:
@@ -857,8 +908,40 @@ class _Classifier:
             perimeter = sum(fg.norm(fg.sub(q, p)) for e in face.edges for p, q in zip(e.points, e.points[1:]))
             if perimeter <= 0 or t > min(2 * face.area_mm2 / perimeter, WALL_RATIO * regions[smaller].longest()):
                 continue
-            self.add("wall", [a, b], [Size("thickness", t, (a, b), ((a,), (b,)), self.faces[a].normal)], "plane_face",
-                     self.faces[a].normal)
+            if fg.parallel(self.faces[a].normal, self.faces[b].normal):
+                self.add("wall", [a, b], [Size("thickness", t, (a, b), ((a,), (b,)), self.faces[a].normal)],
+                         "plane_face", self.faces[a].normal)
+            else:
+                self.drafted(a, b)
+
+    def drafted(self, a: int, b: int) -> None:
+        """A wall whose faces are drafted against each other: its thickness at the plane both faces end on (its
+        rim or parting plane, the thinnest such end), and each drafted face's angle from that plane's normal.
+        A drafted wall that ends on no common plane has no stated thickness and stays unclaimed."""
+        ends = sorted(set(self.ends_of(a)) & set(self.ends_of(b)))
+        found = [(trace, ref) for ref in ends
+                 if (trace := fg.trace_at(self.faces[a], self.faces[b], self.faces[ref])) is not None]
+        if not found:
+            return
+        trace, ref = min(found, key=lambda item: (round(item[0].width, 6), item[1]))
+        d = fg.unit(self.faces[ref].normal)
+        sizes = [Size("thickness", trace.width, (a, b), ((a,), (b,)), trace.across, at=(ref,))]
+        for i in (a, b):
+            normal = fg.unit(self.faces[i].normal)
+            if not fg.perpendicular(normal, d):
+                sizes.append(Size("angle", 90.0 - math.degrees(math.acos(min(1.0, abs(fg.dot(normal, d))))), (i,)))
+        self.add("wall", [a, b], sizes, "plane_face", trace.across, drafted=True, at=ref)
+
+    def ends_of(self, index: int) -> list[int]:
+        """The planes a face ends on: across a convex edge, directly or across a chamfer or round on that edge."""
+        blended = {"chamfer", "round"}
+        direct = {n for n in self.neighbours(index) if self.kind(index, n) == "convex"
+                  and self.faces[n].support_type == "plane" and not self.categories(n) & blended}
+        blends = {n for n in self.neighbours(index) if self.categories(n) & blended
+                  and self.kind(index, n) in ("convex", "smooth")}
+        beyond = {m for n in blends for m in self.neighbours(n) if m != index and self.faces[m].support_type == "plane"
+                  and self.kind(n, m) in ("convex", "smooth") and not self.categories(m) & blended}
+        return sorted(direct | beyond)
 
     # outline and leftovers -------------------------------------------------------------------------
     def outline(self) -> list[dict[str, Any]]:
