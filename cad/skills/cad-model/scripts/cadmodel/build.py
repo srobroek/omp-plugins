@@ -358,6 +358,9 @@ def run(hw: Path, label: str, kernel: str, attach: Iterable[str]) -> tuple[int, 
                        "runners": {k: {"import_s": r["import_s"], "wall_s": r["wall_s"]} for k, r in results.items()}}
 
         built = {pn: (k, res) for k, result in results.items() for pn, res in result["parts"].items()}
+        warnings = [{"pn": pn, "message": message}
+                    for _, result in results.items() for pn, part in result["parts"].items()
+                    for message in part.get("warnings", [])]
         parts = pose.load_definitions(hw, work / "parts")
         chain = pose.assembly_chain(assembly, parts, attached)
         pose.require_geometry(chain, parts)
@@ -488,6 +491,7 @@ def run(hw: Path, label: str, kernel: str, attach: Iterable[str]) -> tuple[int, 
         "manufacturing": {pn: {"status": entry["status"], "complete": entry["complete"], "path": entry["path"],
                                "process": entry.get("process"), "state": entry.get("state", {}).get("relationship")}
                           for pn, entry in made.items()},
+        "warnings": warnings,
         "latest": str(versions / "latest.json"),
         "timings_s": {**timings, **{f"{k}_import_s": r["import_s"] for k, r in results.items()},
                       **{f"{k}_runner_wall_s": r["wall_s"] for k, r in results.items()}},
