@@ -33,7 +33,7 @@
       "name": "beads",
       "description": "Beads issue tracking: dependency DAGs, formulas, and decisions recorded as beads.",
       "source": "./beads",
-      "version": "4.1.8",
+      "version": "4.1.9",
       "category": "productivity"
     },
     {
@@ -47,7 +47,7 @@
       "name": "cad",
       "description": "Agent-assisted mechanical CAD from rapid concept through verified STEP AP242 release.",
       "source": "./cad",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "category": "development"
     },
     {
@@ -68,7 +68,7 @@
       "name": "delivery",
       "description": "Delivery workflow guidance with pull-request review, landing, cleanup, and hygiene tools.",
       "source": "./delivery",
-      "version": "1.4.3",
+      "version": "1.4.4",
       "category": "devops"
     },
     {
@@ -159,7 +159,7 @@
       "name": "speckit",
       "description": "SpecKit workflow: spec-driven setup, bugfix flow, and tasks.md protection.",
       "source": "./speckit",
-      "version": "0.10.4",
+      "version": "0.10.5",
       "category": "development"
     },
     {

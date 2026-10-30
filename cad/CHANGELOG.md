@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.2.0](https://github.com/srobroek/omp-plugins/compare/cad--v0.1.0...cad--v0.2.0) (2026-10-30)
+
+
+### Features
+
+* **cad:** add the CAD design plugin ([ab1dac9](https://github.com/srobroek/omp-plugins/commit/ab1dac9e4828b0dd20535c352960c54e0151cca4))
+
+
+### Bug Fixes
+
+* **cad:** serve the concept viewer's modules and deliver scratch parts past build output ([a065283](https://github.com/srobroek/omp-plugins/commit/a065283e504e900c6be9520c6b25c8bcfb5ae777))
+
+
+### Documentation
+
+* **delivery:** align review loop limits ([#405](https://github.com/srobroek/omp-plugins/issues/405)) ([5cd2b7b](https://github.com/srobroek/omp-plugins/commit/5cd2b7b2589aa27edc1d0c549a7f533171b672a4))
+
 ## 0.1.0
 
 ### Features

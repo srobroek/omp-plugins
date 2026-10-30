@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.5](https://github.com/srobroek/omp-plugins/compare/speckit--v0.10.4...speckit--v0.10.5) (2026-10-30)
+
+
+### Bug Fixes
+
+* **speckit:** close four harness-independent speckit gaps ([#723](https://github.com/srobroek/omp-plugins/issues/723)) ([5c22cec](https://github.com/srobroek/omp-plugins/commit/5c22cec1e85582d526b1fe80732751b5ef4cb0f4))
+
 ## [0.10.4](https://github.com/srobroek/omp-plugins/compare/speckit--v0.10.3...speckit--v0.10.4) (2026-10-10)
 
 

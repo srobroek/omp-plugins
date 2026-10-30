@@ -1,6 +1,6 @@
 {
   "name": "cad",
   "description": "Agent-assisted mechanical CAD from rapid concept through verified STEP AP242 release.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "category": "development"
 }
