@@ -318,7 +318,8 @@ def check_docs(release: Release) -> None:
         release.refuse(rel, "docs", f"{rel} describes release {fields['release']!r} of {fields['version']!r} dated "
                                     f"{fields['release_date']!r}, not release {release.rev} of {release.version} "
                                     f"dated {expected['release_date']}; regenerate it with build_guide.py hw --version "
-                                    f"{release.version} --rev {release.rev} --out hw/docs")
+                                    f"{release.version} --rev {release.rev} --date {expected['release_date']} "
+                                    "--out hw/docs")
     release.checks["docs"] = "pass"
 
 

@@ -6,10 +6,11 @@
 """Generate a structured GitBuilding guide, an OKH manifest and a DIN SPEC 3105-1 checklist from a
 hardware record and built version.
 
-Usage: build_guide.py HW --version vN --out DIR [--rev REV] [--replace]
+Usage: build_guide.py HW --version vN --out DIR [--rev REV [--date YYYY-MM-DD]] [--replace]
 
---rev prepares the documents for release REV of vN before release.py seals it (release.py refuses a
-generated okh.toml that describes another release). Each document starts with a marker that holds the
+--rev prepares the documents for release REV of vN before release.py seals it, dated --date: the UTC
+date release.py will seal it (a sealed REV gives its own date). release.py refuses a generated okh.toml
+that names another version, revision or date. Each document starts with a marker that holds the
 sha256 of the rest; in hw/docs/ build_guide.py overwrites only an unchanged generated document, and a
 file without the marker or edited since needs --replace.
 """
@@ -18,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import datetime
 import html
 import json
 import math
@@ -26,7 +28,6 @@ import re
 import sys
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Mapping, Sequence
@@ -146,7 +147,7 @@ class ReleaseRef:
     """The release the documents describe: sealed (its manifest exists) or prepared with --rev."""
 
     rev: str
-    date: str  # YYYY-MM-DD: the sealed manifest's released_at, or the UTC date a prepared release is made
+    date: str  # YYYY-MM-DD: the sealed manifest's released_at, or the --date release.py will seal a prepared one
     manifest: Path
     sealed: bool
 
@@ -173,17 +174,24 @@ def _holds(manifest: Mapping[str, Any], product_id: str, version: str) -> bool:
                for item in manifest.get("files", []) if isinstance(item, str))
 
 
-def release_reference(hw: Path, product_id: str, version: str, rev: str | None) -> ReleaseRef | None:
-    """Release `rev` of `version`, sealed or prepared; without `rev`, the newest sealed release of
-    `version`, or None when no release holds it."""
+def release_reference(hw: Path, product_id: str, version: str, rev: str | None,
+                      date: str | None = None) -> ReleaseRef | None:
+    """Release `rev` of `version`: sealed, dated by its manifest, or prepared, dated `date` (the UTC date
+    release.py will seal it). Without `rev`, the newest sealed release of `version`, or None."""
     if rev is not None:
         path = LAYOUT.locate(hw, LAYOUT.load().path("release.package", {"REV": rev})) / "manifest.json"
         if not path.exists():
-            return ReleaseRef(rev, datetime.now(timezone.utc).strftime("%Y-%m-%d"), path, sealed=False)
+            if date is None:
+                raise GuideError(f"release {rev} is not sealed yet: pass --date YYYY-MM-DD, the UTC date "
+                                 "release.py will seal it, which its okh.toml release_date must match")
+            return ReleaseRef(rev, date, path, sealed=False)
         manifest = _read_manifest(path)
         if manifest is None or not _holds(manifest, product_id, version):
             raise GuideError(f"hw/releases/{rev}/manifest.json does not release {version} of {product_id or 'this product'}")
-        return ReleaseRef(rev, str(manifest.get("released_at", ""))[:10], path, sealed=True)
+        sealed = str(manifest.get("released_at", ""))[:10]
+        if date is not None and date != sealed:
+            raise GuideError(f"release {rev} was sealed on {sealed}, not {date}")
+        return ReleaseRef(rev, sealed, path, sealed=True)
     candidates = []
     for path in (hw / "releases").glob("*/manifest.json"):
         manifest = _read_manifest(path)
@@ -390,8 +398,9 @@ def din_document(hw: Path, out: Path, version: str, release: ReleaseRef | None, 
     return template.replace("{{requirements_evidence}}", requirements_ids)
 
 
-def make_guide(hw: Path, version: str, out: Path, rev: str | None = None) -> dict[str, str]:
-    """The generated documents by file name, before their marker line; `rev` prepares them for that release."""
+def make_guide(hw: Path, version: str, out: Path, rev: str | None = None, date: str | None = None) -> dict[str, str]:
+    """The generated documents by file name, before their marker line; `rev` prepares them for that
+    release, sealed on `date` when it is not sealed yet."""
     hw = hw.resolve()
     version_dir = LAYOUT.version_dir(hw, version)
     version_manifest = version_dir / "manifest.json"
@@ -440,7 +449,7 @@ def make_guide(hw: Path, version: str, out: Path, rev: str | None = None) -> dic
         revisions = {row.get("rev", "").strip() for row in bom_rows if row.get("rev", "").strip()}
         revision = next(iter(revisions)) if len(revisions) == 1 else None
     overview = [("Product", product_id), ("Revision", revision), ("Version", version)]
-    release = release_reference(hw, str(product_id or ""), version, rev)
+    release = release_reference(hw, str(product_id or ""), version, rev, date)
     overview.append(("Release manifest", release_cell(release, version, hw, out)))
 
     make_rows: list[tuple[Any, ...]] = []
@@ -551,11 +560,21 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", required=True, type=Path,
                         help="project hw/docs/ record directory or a new .cad-work/ scratch directory")
     parser.add_argument("--rev", help="prepare the documents for release REV of --version before release.py seals it")
+    parser.add_argument("--date", help="with --rev, the UTC date YYYY-MM-DD release.py will seal it; "
+                                       "a sealed release gives its own")
     parser.add_argument("--replace", action="store_true",
                         help="overwrite hw/docs/ files that build_guide.py did not generate or that were edited since")
     args = parser.parse_args(argv)
     if not re.fullmatch(r"v[1-9][0-9]*", args.version):
         parser.error("--version must be vN")
+    if args.date is not None:
+        if args.rev is None:
+            parser.error("--date dates the release --rev names; pass --rev too")
+        try:
+            if datetime.date.fromisoformat(args.date).isoformat() != args.date:
+                raise ValueError(args.date)
+        except ValueError:
+            parser.error("--date must be a calendar date YYYY-MM-DD")
     hw = args.hw.resolve()
     scratch = (hw / ".." / ".cad-work").resolve()
     docs = (hw / "docs").resolve()
@@ -574,7 +593,7 @@ def main(argv: list[str] | None = None) -> int:
               "--replace to overwrite them.", file=sys.stderr)
         return 2
     try:
-        documents = make_guide(args.hw, args.version, out, args.rev)
+        documents = make_guide(args.hw, args.version, out, args.rev, args.date)
         out.mkdir(parents=True, exist_ok=True)
         for name, body in documents.items():
             (out / name).write_text(generated_docs.stamp(name, body), encoding="utf-8")

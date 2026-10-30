@@ -10,7 +10,6 @@ import subprocess
 import tempfile
 import tomllib
 import unittest
-from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
@@ -262,16 +261,21 @@ class BuildGuide(unittest.TestCase):
         for document in (guide, din, okh):
             self.assertNotIn("None", document)
 
-    def test_rev_prepares_the_documents_for_that_release(self) -> None:
+    def test_rev_prepares_the_documents_for_that_release_on_its_given_date(self) -> None:
         hw = self.copy_lamp_example()
         self.make_version(hw, "v1")
-        guide = self.generate(hw, "v1", "--rev", "A")
+        undated = self.run_guide(hw, "--rev", "A")
+        self.assertEqual(undated.returncode, 2)
+        self.assertIn("pass --date YYYY-MM-DD, the UTC date release.py will seal it", undated.stderr)
+        self.assertEqual(self.run_guide(hw, "--date", "2026-11-02").returncode, 2, "--date needs --rev")
+        self.assertEqual(self.run_guide(hw, "--rev", "A", "--date", "2026-11-31").returncode, 2)
+        self.assertFalse(self.out.exists(), "a refusal writes nothing")
+        guide = self.generate(hw, "v1", "--rev", "A", "--date", "2026-11-02")
         prepared = "hw/releases/A/manifest.json (release.py seals it with these documents)"
         self.assertIn(f"| Release manifest | {prepared} |", guide)
         self.assertIn(prepared, (self.out / "din-spec-3105-1-checklist.md").read_text(encoding="utf-8"))
         okh = tomllib.loads((self.out / "okh.toml").read_text(encoding="utf-8"))["okhv"]
-        self.assertEqual((okh["version"], okh["release"], okh["release_date"]),
-                         ("v1", "A", datetime.now(timezone.utc).strftime("%Y-%m-%d")))
+        self.assertEqual((okh["version"], okh["release"], okh["release_date"]), ("v1", "A", "2026-11-02"))
 
     def test_unmeasured_standoff_step_has_readable_gap_prompt(self) -> None:
         hw = self.copy_lamp_example()
@@ -350,6 +354,14 @@ class BuildGuide(unittest.TestCase):
             self.assertIn(f"| Release manifest | {link}", self.generate(hw, version))
             okh = tomllib.loads((self.out / "okh.toml").read_text(encoding="utf-8"))["okhv"]
             self.assertEqual((okh["release"], okh["release_date"]), release)
+        self.out = self.root / ".cad-work" / "docs-sealed"
+        self.generate(hw, "v3", "--rev", "A")  # a sealed release gives its own date
+        okh = tomllib.loads((self.out / "okh.toml").read_text(encoding="utf-8"))["okhv"]
+        self.assertEqual((okh["release"], okh["release_date"]), ("A", "2026-10-01"))
+        self.out = self.root / ".cad-work" / "docs-misdated"
+        misdated = self.run_guide(hw, "--rev", "A", "--date", "2026-10-05", version="v3")
+        self.assertEqual(misdated.returncode, 2)
+        self.assertIn("release A was sealed on 2026-10-01, not 2026-10-05", misdated.stderr)
 
     def test_buy_identity_open_fields_remain_visible(self) -> None:
         hw = self.copy_lamp_example()

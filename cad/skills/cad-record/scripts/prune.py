@@ -10,8 +10,8 @@ it, its label, or the sha256 of one of its manifests.
 Applying writes .cad-work/prune-<REV>-<digest>/journal.json, renames each folder into that directory (one
 atomic rename on the same filesystem, so hw/ never holds a half-deleted folder), deletes the moved
 folders, runs `cad_model.py store gc` and removes the journal last. A rerun with the same digest finishes
-an interrupted prune; when the record changed meanwhile so a moved folder must stay, it moves the folders
-back instead.
+an interrupted prune: while folders are still moving, it first moves every one back, plans afresh and
+continues only when that plan has the same digest; otherwise it refuses with everything restored.
 """
 
 from __future__ import annotations
@@ -341,18 +341,25 @@ def after_release(hw: Path, rev: str, version: str, digest: str | None) -> dict[
                                f"rerun that release command with --prune --yes {first['digest']} to finish it",
                     "status": "incomplete"}
         path, journal = mine[0]
-        if journal["phase"] == "moving":  # nothing deleted yet: what is still in hw/ must still be prunable
-            current = plan(hw, rev, version)
-            stale = [rel for rel in journal["remove"]
-                     if os.path.lexists(layout.locate(hw, rel)) and rel not in current["remove"]]
-            if stale:
+        if journal["phase"] == "moving":  # nothing deleted yet: put every moved folder back, then plan afresh
+            folder = layout.relative(hw, path.parent)
+            try:
                 restored, left = _restore(hw, path.parent, journal["remove"])
-                if not left:
-                    shutil.rmtree(path.parent)
-                return {"plan": current, "restored": restored, "left": left,
-                        "message": f"the record changed since the interrupted prune: {', '.join(stale)} must stay; "
-                                   "its moved folders are back in hw/; review the new plan",
-                        "status": "refused"}
+            except OSError as error:
+                return {"journal": folder, "digest": digest,
+                        "message": f"cannot move the folders in {folder} back into hw/: {error}; rerun with "
+                                   f"--prune --yes {digest}", "status": "incomplete"}
+            if left:
+                return {"journal": folder, "restored": restored, "left": left,
+                        "message": f"hw/ holds {', '.join(left)} again, so their moved copies stay in {folder}; "
+                                   "resolve them by hand", "status": "refused"}
+            current = plan(hw, rev, version)
+            if current["digest"] != digest:
+                shutil.rmtree(path.parent)
+                return {"plan": current, "restored": restored,
+                        "message": "the record changed since the interrupted prune; every moved folder is back in "
+                                   "hw/; review this plan and rerun with --prune --yes "
+                                   f"{current['digest']}", "status": "refused"}
         return _finish(hw, path, journal)
     current = plan(hw, rev, version)
     if digest is None:

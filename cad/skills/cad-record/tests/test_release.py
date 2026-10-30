@@ -15,6 +15,7 @@ import sys
 import tempfile
 import tomllib
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 from unittest import mock
@@ -376,24 +377,24 @@ class Pruning(ReleaseCase):
         self.assertEqual((code, report["status"], report["pruning"]["status"]), (0, "released", "pruned"), report)
         self.assertFalse(self.journal(hw, digest).parent.exists())
 
-    def interrupt_after_two_moves(self, hw: Path, digest: str) -> dict[str, Any]:
+    def interrupt_after(self, count: int, hw: Path, digest: str) -> dict[str, Any]:
         rename, moved = os.rename, []
 
         def interrupted(source: Any, target: Any) -> None:
-            if len(moved) == 2:
+            if len(moved) == count:
                 raise OSError("interrupted")
             moved.append(layout.relative(hw.resolve(), Path(source)))
             rename(source, target)
 
         with mock.patch.object(prune.os, "rename", interrupted):
             result = prune.after_release(hw, "A", "v3", digest)
-        self.assertEqual(moved, SUPERSEDED[:2])
+        self.assertEqual(moved, SUPERSEDED[:count])
         return result
 
     def test_an_interrupted_prune_moves_whole_folders_and_a_rerun_finishes(self) -> None:
         hw = self.released()
         digest = prune.plan(hw, "A", "v3")["digest"]
-        result = self.interrupt_after_two_moves(hw, digest)
+        result = self.interrupt_after(2, hw, digest)
         self.assertEqual((result["status"], result["digest"]), ("incomplete", digest))
         self.assertEqual(layout.verify(hw / "versions" / "v1"), [], "v1 is untouched, never half deleted")
         self.assertGone(hw, SUPERSEDED[:2])
@@ -406,12 +407,15 @@ class Pruning(ReleaseCase):
     def test_an_interrupted_prune_moves_back_a_version_that_became_a_milestone(self) -> None:
         hw = self.released()
         digest = prune.plan(hw, "A", "v3")["digest"]
-        self.interrupt_after_two_moves(hw, digest)
+        self.interrupt_after(3, hw, digest)  # every v1 folder has left hw/
+        self.assertGone(hw, SUPERSEDED[:3])
         write(hw / "decisions" / "DR-006.md", "# DR-006 Gate\n\nThe PARTS gate approved v1.\n")
         result = prune.after_release(hw, "A", "v3", digest)
-        self.assertEqual((result["status"], sorted(result["restored"])), ("refused", sorted(SUPERSEDED[:2])))
+        self.assertEqual((result["status"], sorted(result["restored"])), ("refused", sorted(SUPERSEDED[:3])))
+        self.assertEqual(result["plan"]["keep"]["v1"], ["named by DR-006"])
         self.assertGone(hw, SUPERSEDED, gone=False)
-        self.assertEqual(layout.verify(hw / "checks" / "v1" / "static"), [])
+        for folder in ("versions/v1", "checks/v1/static", "renders/v1/iso"):
+            self.assertEqual(layout.verify(hw / folder), [], folder)
         self.assertFalse(self.journal(hw, digest).parent.exists())
 
     def test_a_real_kept_manifest_that_references_a_superseded_version_keeps_it(self) -> None:
@@ -463,7 +467,8 @@ class Documents(ReleaseCase):
         self.assertEqual(code, 1)
         self.assertIn("release.docs", [item.get("code") for item in report["findings"]])
         self.assertFalse((hw / "releases").exists())
-        self.guide(hw, "--rev", "A")
+        # the UTC date release.py stamps; run the guide and the release the same UTC day
+        self.guide(hw, "--rev", "A", "--date", datetime.now(timezone.utc).strftime("%Y-%m-%d"))
         code, report = self.release(hw)
         self.assertEqual(code, 0, report.get("findings"))
         okh = tomllib.loads((hw / "releases" / "A" / "docs" / "okh.toml").read_text(encoding="utf-8"))["okhv"]
