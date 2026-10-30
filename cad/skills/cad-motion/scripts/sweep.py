@@ -243,11 +243,12 @@ PRODUCERS = (HERE / "sweep.py", HERE / "subsystems.py", HERE / "continuous.py", 
              HERE / "pair_measure.py", HERE / "mesh_bound.py", SKILLS / "cad-record" / "scripts" / "design_rules.py")
 
 
-def claim_run(hw: Path) -> Any:
+def claim_run(hw: Path, scope: str) -> Any:
     """This sweep's run record under hw/.cad/runs/ (process_lifecycle.claim_run), or None where the
-    platform has no process groups; a sweep or a stray recorded for `hw` refuses it."""
+    platform has no process groups. A live sweep of the same `scope` (version/case, or the scratch
+    output), or a stray recorded for `hw`, refuses it; sweeps of other cases may run alongside."""
     try:
-        return lifecycle.claim_run(hw, "sweep")
+        return lifecycle.claim_run(hw, "sweep", scope=scope)
     except lifecycle.RunRefused as error:
         raise pose.MotionError(str(error)) from None
     except lifecycle.Unsupported as error:
@@ -896,7 +897,8 @@ def margin_warnings(chain: Any, plan: Plan, state: SweepState) -> list[dict[str,
             continue
         for value, source, margin in options:
             if exact < value + margin:
-                rows.append({"check": "margin", "severity": "warning", "pair": [chain.ref(pair[0]), chain.ref(pair[1])],
+                rows.append({"check": "margin", "status": "warn", "warning": "margin", "severity": "warning",
+                             "pair": [chain.ref(pair[0]), chain.ref(pair[1])],
                              "clearance_mm": round(exact, 4), "required_mm": value, "margin_mm": margin,
                              "source": source,
                              "message": f"{round(exact, 4)} mm meets {value} mm by less than its {margin} mm margin"})
@@ -1602,7 +1604,7 @@ def main(argv: list[str] | None = None) -> int:
             args.worst_step = pose.LAYOUT.scratch_path(args.hw, args.worst_step, "--worst-step")
             if args.worst_step.exists() or evidence_path_for(args.worst_step).exists():
                 raise pose.MotionError(f"--worst-step or its evidence already exists; refusing to overwrite: {args.worst_step}")
-        guard = claim_run(args.hw)
+        guard = claim_run(args.hw, f"{version}/{args.case}" if version else str(args.worst_step))
         try:
             return sweep_run(args, version, version_dir, record_hw, started)
         finally:

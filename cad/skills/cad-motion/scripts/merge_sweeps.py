@@ -148,7 +148,7 @@ def main(argv: list[str] | None = None) -> int:
                                                    *provenance["argv"], *extra])
         options.version, options.version_dir, options.record_hw = version, version_dir, record_hw
         pose.LAYOUT.resolve(args.hw, "bundle.motion", V=version, S=args.case)
-        guard = sweep.claim_run(args.hw)
+        guard = sweep.claim_run(args.hw, f"{version}/{args.case}")
         try:
             return merge(options, inputs, version, version_dir, record_hw, started)
         finally:
