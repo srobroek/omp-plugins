@@ -566,6 +566,11 @@ class KernelChecks:
         store = hw / ".cad" / "parts"
         base = versions[0] / "parts" / "TST-0001.step"
         self.assertTrue(os.path.samefile(base, store / build.store.file_sha(base)))
+        manifest = json.loads((versions[0] / "manifest.json").read_text(encoding="utf-8"))
+        for rel in ("parts/TST-0001.step", "parts/TST-0002.step", "manufacturing/TST-0002/part.step"):
+            with self.subTest(read_only=rel):  # TST-0002 was rebuilt in v2-v4; v1's bytes and mode stay
+                self.assertEqual((versions[0] / rel).stat().st_mode & 0o777, 0o444)
+                self.assertEqual(build.store.file_sha(versions[0] / rel), manifest["files"][rel])
         self.assertEqual((store / ".gitignore").read_text(encoding="utf-8"), "*\n")
 
 
@@ -669,6 +674,7 @@ class ManufacturingStateTests(unittest.TestCase):
         shutil.copytree(hw, tampered)
         stl = tampered / "versions" / "v2" / "manufacturing" / STRAP / "part.stl"
         data = stl.read_bytes()
+        stl.chmod(0o644)  # sealed outputs are read-only (0444): tampering takes a deliberate chmod
         stl.write_bytes(data[:80] + struct.pack("<I", struct.unpack_from("<I", data, 80)[0] - 1) + data[84:-50])
         cls.runs["tampered"] = cli("check", "v2", "--hw", str(tampered))
         # The pointer write fails after v3 is sealed: latest.json is a directory.

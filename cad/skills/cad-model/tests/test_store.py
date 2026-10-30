@@ -8,7 +8,9 @@ Standard library only; the kernel builds that reuse parts are in test_cad_model.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
+import shutil
 import sys
 import tempfile
 import unittest
@@ -72,7 +74,80 @@ class StoreTests(unittest.TestCase):
         obj = self.hw / ".cad" / "parts" / digest
         self.assertEqual((obj.read_bytes(), target.read_bytes()), (b"copied", b"copied"))
         self.assertFalse(os.path.samefile(target, obj))
-        self.assertEqual(target.stat().st_mode & 0o777, first.stat().st_mode & 0o777)
+        self.assertEqual((target.stat().st_mode & 0o777, obj.stat().st_mode & 0o777), (0o444, 0o444))
+
+    @unittest.skipIf(hasattr(os, "geteuid") and os.geteuid() == 0, "root writes through read-only modes")
+    def test_a_later_rebuild_cannot_change_an_earlier_versions_bytes(self) -> None:
+        """v1's part is a read-only link to its object. A rebuild that wrote through the old path fails
+        instead of changing v1; the runner writes a new file, and storing it never touches v1."""
+        digest = self.store.intern(self.output("TST-0001.step", b"v1 geometry"))
+        sealed = self.hw / "versions" / "v1" / "parts" / "TST-0001.step"
+        self.store.place(digest, sealed)
+        self.assertEqual(sealed.stat().st_mode & 0o777, 0o444)
+        for target in (sealed, self.work / "TST-0001.step"):  # the sealed copy and the linked staging path
+            with self.subTest(target=target.name), self.assertRaises(PermissionError):
+                target.write_bytes(b"v2 geometry")
+        rebuilt = self.hw / "versions" / ".v2.partial-2" / "parts" / "TST-0001.step"
+        rebuilt.parent.mkdir(parents=True)
+        rebuilt.write_bytes(b"v2 geometry")
+        self.store.intern(rebuilt)
+        self.assertEqual(sealed.read_bytes(), b"v1 geometry")
+        self.assertEqual(store.file_sha(self.hw / ".cad" / "parts" / digest), digest)
+
+    def version(self, label: str, files: dict[str, bytes], keep: dict[str, str] | None = None) -> dict[str, str]:
+        """A sealed version whose files are store objects, as `run` leaves it; returns path -> sha256."""
+        folder = self.hw / "versions" / label
+        shas = {}
+        for rel, data in files.items():
+            staged = self.output(f"{label}-{rel.replace('/', '-')}", data)
+            shas[rel] = self.store.intern(staged)
+            self.store.place(shas[rel], folder / rel)
+        (folder / "manifest.json").write_text(json.dumps({"label": label, "files": shas}), encoding="utf-8")
+        return shas
+
+    def test_gc_frees_a_deleted_versions_own_outputs_and_keeps_shared_ones(self) -> None:
+        v1 = self.version("v1", {"parts/A.step": b"shared base", "parts/B.step": b"arm v1, long" * 50})
+        v2 = self.version("v2", {"parts/A.step": b"shared base", "parts/B.step": b"arm v2"})
+        state = self.store.intern(self.output("state.step", b"flat blank"))  # in no manifest, needed by a record
+        for name, objects in (("base", {"step": v1["parts/A.step"], "manufacture_step": state}),
+                              ("arm1", {"step": v1["parts/B.step"]}), ("arm2", {"step": v2["parts/B.step"]})):
+            self.store.save(store.key({"pn": name}), {"objects": objects})
+        shutil.rmtree(self.work.parent)  # the run's staging folder is gone once a version is sealed
+        shutil.rmtree(self.hw / "versions" / "v1")
+        objects = self.hw / ".cad" / "parts"
+        before = sorted(p.name for p in objects.iterdir())
+        code, dry = build.store_gc(self.hw, dry_run=True)
+        self.assertEqual((code, dry["removed_objects"]), (0, [v1["parts/B.step"]]))
+        self.assertEqual(sorted(p.name for p in objects.iterdir()), before, "a dry run removes nothing")
+        code, result = build.store_gc(self.hw)
+        self.assertEqual((result["removed_objects"], result["records"]), ([v1["parts/B.step"]], {"kept": 2, "removed": 1}))
+        self.assertEqual(result["removed_bytes"], len(b"arm v1, long" * 50))
+        self.assertGreaterEqual(result["freed_bytes"], result["removed_bytes"])
+        self.assertEqual(sorted(p.name for p in objects.iterdir() if p.name != ".gitignore"),
+                         sorted({v2["parts/A.step"], v2["parts/B.step"], state}))
+        self.assertIsNotNone(self.store.record(store.key({"pn": "base"})))
+        self.assertIsNone(store.Store(self.hw).record(store.key({"pn": "arm1"})))
+        self.assertEqual(build.record.load_layout().verify(self.hw / "versions" / "v2"), [])
+        self.assertEqual(build.store_gc(self.hw)[1]["objects"]["removed"], 0)
+
+    def test_gc_keeps_what_a_release_names_and_refuses_while_unsure(self) -> None:
+        shas = self.version("v1", {"parts/A.step": b"released"})
+        release = self.hw / "releases" / "A"
+        release.mkdir(parents=True)
+        (release / "manifest.json").write_text(json.dumps({"schema_version": 2, "files": {
+            "definition/parts/A.step": {"sha256": shas["parts/A.step"], "original": "hw/versions/v1/parts/A.step"}}}),
+            encoding="utf-8")
+        shutil.rmtree(self.work.parent)
+        shutil.rmtree(self.hw / "versions" / "v1")
+        self.assertEqual(build.store_gc(self.hw)[1]["objects"], {"kept": 1, "removed": 0})
+        (self.hw / "versions" / ".v2.partial-7").mkdir(parents=True)
+        with self.assertRaisesRegex(build.UsageError, "in progress or was interrupted"):
+            build.store_gc(self.hw)
+        (self.hw / "versions" / ".v2.partial-7").rmdir()
+        (release / "manifest.json").write_text("{", encoding="utf-8")
+        with self.assertRaisesRegex(build.UsageError, "cannot read"):
+            build.store_gc(self.hw)
+        self.assertTrue((self.hw / ".cad" / "parts" / shas["parts/A.step"]).is_file())
 
     def test_a_record_is_reused_only_while_its_objects_hash_to_their_names(self) -> None:
         digest = self.store.intern(self.output("TST-0001.step", b"geometry"))

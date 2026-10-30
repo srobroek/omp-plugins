@@ -63,8 +63,8 @@ listed files and nothing else.
 | `cache.pairs` | `hw/.cad/pairs-v2.sqlite` | generated | (data) | cad-motion pair_measure.py PairCache (sweep.py, spot_check.py, cad-model check) | any | scratch | disposable pair-measurement cache the sweep and the static check share; deleting it costs time, never a result; git-ignored, never evidence |
 | `cache.pairs_wal` | `hw/.cad/pairs-v2.sqlite-wal` | generated | (data) | SQLite, for cad-motion pair_measure.py PairCache | any | scratch | the pair cache's write-ahead log; disposable with the cache |
 | `cache.pairs_shm` | `hw/.cad/pairs-v2.sqlite-shm` | generated | (data) | SQLite, for cad-motion pair_measure.py PairCache | any | scratch | the pair cache's shared-memory index; disposable with the cache |
-| `cache.part_objects` | `hw/.cad/parts/{SHA}` | generated | (data) | cad-model cad_model.py run (cadmodel/store.py) | layout | scratch | one part output (definition or state STEP, manufacturing STEP, STL or manufacturing.json) stored once under the sha256 of its bytes; each version holds a hard link to it where the filesystem allows, else a copy, so readers read the version's own path; git-ignored, never evidence; deleting it costs a rebuild, never a version |
-| `cache.part_records` | `hw/.cad/builds/{SHA}.json` | generated | (data) | cad-model cad_model.py run (cadmodel/store.py) | layout | scratch | what one part build or manufacturing make produced, keyed by the sha256 of its inputs: the stored objects and the runner or check facts; run reuses it only while every object still hashes to its name; git-ignored, disposable |
+| `cache.part_objects` | `hw/.cad/parts/{SHA}` | generated | (data) | cad-model cad_model.py run (cadmodel/store.py) | layout | scratch | one part output (definition or state STEP, manufacturing STEP, STL or manufacturing.json) stored once, read-only, under the sha256 of its bytes; each version holds a hard link to it where the filesystem allows, else a copy, so readers read the version's own path; git-ignored, never evidence; cad_model.py store gc removes it once no manifest references it |
+| `cache.part_records` | `hw/.cad/builds/{SHA}.json` | generated | (data) | cad-model cad_model.py run (cadmodel/store.py) | layout | scratch | what one part build or manufacturing make produced, keyed by the sha256 of its inputs: the stored objects and the runner or check facts; run reuses it only while every object still hashes to its name; git-ignored; store gc drops it once no manifest references its outputs |
 | `control.run` | `hw/.cad/runs/{RUN}.json` | generated | (control) | cad-flow process_lifecycle.py claim_run (cad-motion sweep.py, cad-model check, cad-analysis fea_static.py) | any | scratch | the process groups of one running sweep, check or FEA run, removed when it ends; a live one refuses an overlapping run; git-ignored |
 | `control.run_lock` | `hw/.cad/runs/.lock` | generated | (control) | cad-flow process_lifecycle.py claim_run | any | scratch | lock held only while a run claims its record; disposable |
 | `scratch` | `.cad-work/` | scratch | `**` (scratch) | cad-flow scratch.py, scoped workers, layout.py publication staging | any | scratch | drafts, jobs, logs, publication staging and replaced bundles, beside hw/ |
@@ -209,10 +209,11 @@ where the filesystem allows them, else byte copies; the paths and manifests are 
 and verification hashes file content, never the inode. `hw/.cad/builds/{SHA}.json` records, under
 the sha256 of a part's build inputs, the objects and facts its build produced. A part whose inputs
 are unchanged reuses them once every object still hashes to its name, so a run builds only the
-changed parts. Never edit a version file in place: a hard link shares its bytes with every version
-that reuses it, and each of those then fails verification. Both folders ignore themselves in git and
-are disposable: deleting them frees the space of deleted versions and makes the next run build every
-part once.
+changed parts. Objects and the version files linked to them are read-only (0444), so an in-place
+write fails instead of changing every version that shares the bytes. Both folders ignore
+themselves in git. After deleting versions, `cad_model.py store gc <hw> [--dry-run]` removes every
+object no version or release manifest references, and the build records no referenced output
+needs, and reports the bytes freed; it never removes an object a manifest names.
 
 ## Git storage
 

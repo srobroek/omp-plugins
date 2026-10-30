@@ -13,10 +13,10 @@ Usage:
 
 The workspace is <project>/.cad-work/<UNIT>/, <project> being the directory that holds HW.
 
-init    copies HW into <workspace>/hw/ without versions/, renders/, releases/, .git/, the part
-        store (.cad/parts/, .cad/builds/) and __pycache__/, then records the unit's PNs and the
-        sha256 of every copied file in <workspace>/baseline.json. An existing workspace is kept
-        unless --reset replaces it.
+init    copies HW into <workspace>/hw/ without versions/, renders/, releases/, .git/, .cad/ (the
+        part store, the pair cache, run records and the recheck stamp) and __pycache__/, then
+        records the unit's PNs and the sha256 of every copied file in <workspace>/baseline.json.
+        An existing workspace is kept unless --reset replaces it.
 build   runs cad-model `run` on the scratch hw/ under the next scratch label, cad-model `check`
         on that version, and cad-design form_check at --fidelity. HW itself is never passed to
         any of them, so HW/versions/ is neither created nor changed. Form findings are split
@@ -26,8 +26,8 @@ build   runs cad-model `run` on the scratch hw/ under the next scratch label, ca
 deliver copies each unit PN's scratch hw/parts/<PN>/ over HW/parts/<PN>/ and lists every other
         scratch file that differs from the baseline as a proposal for the lead. When any
         HW/parts/<PN>/ changed since init it writes nothing and exits 1. Generated
-        versions/, renders/, and releases/ output, the part store and every __pycache__/ are
-        ignored during delivery.
+        versions/, renders/, releases/ and .cad/ output and every __pycache__/ are ignored
+        during delivery, so a scratch build's own caches never reach HW.
 
 stdout: one JSON document; every path in it is absolute. build writes each tool's diagnostics to
 <workspace>/<tool>-<label>.log and names the log in the JSON, so its output stays small.
@@ -58,7 +58,9 @@ sys.path.insert(0, str(CAD_MODEL_SCRIPTS))
 from cadmodel import scriptenv  # noqa: E402 - standard library only
 CAD_MODEL = CAD_MODEL_SCRIPTS / "cad_model.py"
 WORK_DIR = ".cad-work"
-NOT_COPIED = frozenset({"versions", "renders", "releases", ".git"})
+# .cad/ holds only caches and control files (cad-record layout cache.*, control.*): the part store is as
+# large as every version together, and the scratch build writes its own pair cache and run records there.
+NOT_COPIED = frozenset({"versions", "renders", "releases", ".git", ".cad"})
 UNIT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 PN = re.compile(r"^[A-Z]{2,5}-[0-9]{4}$")
 LABEL = re.compile(r"^v([1-9][0-9]*)$")
@@ -77,10 +79,6 @@ def load_layout():
 
 
 layout = load_layout()
-# The part store below hw/ (cad-record layout cache.part_objects, cache.part_records): the cache of
-# every build, as large as every version together. It is never copied, hashed or delivered.
-STORE = frozenset(PurePosixPath(layout.load().entry(entry_id).path).parent.relative_to("hw").parts
-                  for entry_id in ("cache.part_objects", "cache.part_records"))
 
 
 class UsageError(Exception):
@@ -96,10 +94,9 @@ def workspace(hw: Path, unit: str) -> Path:
 
 
 def is_skipped(relative: PurePosixPath, top: frozenset[str]) -> bool:
-    """Whether a path relative to the copied root is left out: `top` directly below it, the part
-    store, and __pycache__ anywhere."""
-    return (relative.parts[0] in top or "__pycache__" in relative.parts
-            or any(relative.parts[:len(store)] == store for store in STORE))
+    """Whether a path relative to the copied root is left out: `top` directly below it, and
+    __pycache__ anywhere."""
+    return relative.parts[0] in top or "__pycache__" in relative.parts
 
 
 def skips(root: Path, top: frozenset[str] = NOT_COPIED):

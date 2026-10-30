@@ -646,6 +646,31 @@ def reconcile_latest(hw: Path, label: str) -> tuple[int, dict[str, Any]]:
                "verified_files": len(manifest["files"])}
 
 
+def store_gc(hw: Path, dry_run: bool = False) -> tuple[int, dict[str, Any]]:
+    """`store gc`: drop what no version or release manifest references from the part store. Refused
+    while a version is being staged, and when a manifest cannot be read, so it never removes an object
+    a manifest names."""
+    hw = hw.resolve()
+    versions = hw / "versions"
+    staging = sorted(p.name for p in versions.glob(".v*.partial-*")) if versions.is_dir() else []
+    if staging:
+        raise UsageError(f"{versions} holds staging folders {staging}: a cad-model run is in progress or was "
+                         "interrupted; delete them once no run is in progress, then run gc again")
+    manifests = sorted([*versions.glob("v*/manifest.json"), *(hw / "releases").glob("*/manifest.json")])
+    referenced: set[str] = set()
+    for path in manifests:
+        manifest = read_json(path)
+        inventory = manifest.get("files") if isinstance(manifest, dict) else None
+        if not isinstance(inventory, dict):
+            raise UsageError(f"{path} has no files inventory; gc removed nothing")
+        for value in inventory.values():  # a v2 release manifest lists {sha256, original}
+            sha = value.get("sha256") if isinstance(value, Mapping) else value
+            if isinstance(sha, str):
+                referenced.add(sha)
+    result = store.Store(hw).gc(referenced, dry_run)
+    return 0, {"status": "pass", "dry_run": dry_run, "manifests": len(manifests), **result}
+
+
 def version_exists(label: str, final: Path) -> UsageError:
     return UsageError(f"version {label} already exists at {final}; versions are immutable, choose a new label")
 

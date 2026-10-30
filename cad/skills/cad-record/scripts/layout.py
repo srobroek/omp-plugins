@@ -1075,10 +1075,11 @@ def markdown() -> str:
               "and verification hashes file content, never the inode. `hw/.cad/builds/{SHA}.json` records, under",
               "the sha256 of a part's build inputs, the objects and facts its build produced. A part whose inputs",
               "are unchanged reuses them once every object still hashes to its name, so a run builds only the",
-              "changed parts. Never edit a version file in place: a hard link shares its bytes with every version",
-              "that reuses it, and each of those then fails verification. Both folders ignore themselves in git and",
-              "are disposable: deleting them frees the space of deleted versions and makes the next run build every",
-              "part once.", ""]
+              "changed parts. Objects and the version files linked to them are read-only (0444), so an in-place",
+              "write fails instead of changing every version that shares the bytes. Both folders ignore",
+              "themselves in git. After deleting versions, `cad_model.py store gc <hw> [--dry-run]` removes every",
+              "object no version or release manifest references, and the build records no referenced output",
+              "needs, and reports the bytes freed; it never removes an object a manifest names.", ""]
     storage = lay.storage
     approved, ignored = git_storage(True)[".gitattributes"], git_storage(None)[".gitignore"]
     lfs = ", ".join(f"`*{suffix}`" for suffix in storage["lfs_suffixes"])
