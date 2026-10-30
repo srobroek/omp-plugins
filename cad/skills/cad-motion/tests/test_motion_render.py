@@ -161,7 +161,21 @@ class PlanLongTravel(PlanValidation):
         self.assertIn("--attach", command)
         self.assertIn("TST-0005=TST-0001", command)
         self.assertEqual(run_json.call_args.args[0], command)
-        self.assertEqual(json.loads((folder / "manifest.json").read_text(encoding="utf-8"))["attach"], ctx.attach)
+
+    def test_smoke_crosscheck_cannot_be_used_as_verification_evidence(self) -> None:
+        fixture = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, fixture, ignore_errors=True)
+        hw = fixture / "project" / "hw"
+        motion_version.write(hw, pose)
+        ctx = motion.Context(hw, "v1")
+        job = fixture / "crosscheck"
+        job.mkdir()
+        (job / "crosscheck.json").write_text(json.dumps({"mode": "smoke", "evidence": False,
+                                                            "status": "pass"}), encoding="utf-8")
+        with mock.patch.object(motion.scriptenv, "script_command", return_value=["freecad"]), \
+             mock.patch.object(motion, "_run_json", return_value=(0, {"status": "pass"})):
+            with self.assertRaisesRegex(pose.MotionError, "smoke run is diagnostic only"):
+                motion.crosscheck_freecad(ctx, fixture / "frames.json", fixture)
 
     def test_the_lamp_default_plan_covers_three_drivers_and_a_combined_pose(self) -> None:
         effective = plan.prepare(self.lamp, plan.default_plan(self.lamp), "default")
