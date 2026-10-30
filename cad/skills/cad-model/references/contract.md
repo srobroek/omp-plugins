@@ -27,6 +27,11 @@ time; runner context is not persisted as a design parameter.
 - Import only the declared kernel, OCP, the standard library, `cadmodel.safe`, the optional `cadmodel.fillets`, and the
   kernel's warehouse: `bd_warehouse` 0.4.0 is in the build123d environment. `cq_warehouse` is not on PyPI
   and is not in the CadQuery environment.
+- Read only `model.py`'s own `sources/` folder, never `part.yaml` or a file elsewhere. `run` rebuilds a
+  part only when `model.py` or `sources/**` change, its product name, `model_frame` or
+  `manufacture.relationship` in part.yaml change, or the kernel environment or the plugin and project
+  Python files the runner loads change (`references/outputs.md`). A model that reads anything else,
+  such as another part.yaml field, the clock or a random seed, keeps its earlier output.
 - `print` output and OCCT console messages are runner console output; the runner returns its result
   in a file the orchestrator names, so console output never corrupts it.
 

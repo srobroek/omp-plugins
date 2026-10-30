@@ -12,6 +12,7 @@ Usage:
        [--expect-solids PN=N ...] [--jobs 1|N|auto] [--cache DIR | --no-cache]
     uv run --script skill://cad-flow/scripts/run.py cad-model/scripts/cad_model.py diff vA vB [--hw HW] [--out FILE]
     uv run --script skill://cad-flow/scripts/run.py cad-model/scripts/cad_model.py latest <hw-dir> --label vN
+    uv run --script skill://cad-flow/scripts/run.py cad-model/scripts/cad_model.py store gc <hw-dir> [--dry-run]
 
 A REF is a PN placed once, or `@id` for one occurrence of hw/assembly.yaml.
 
@@ -44,6 +45,9 @@ check runs the geometry checks on a built version; diff compares two built versi
       newest built version before vN); its report is partial (`scope.complete` false).
 latest points hw/versions/latest.json at the newest built version after `run` sealed it but could
       not write the pointer; it verifies the version against its manifest first and rebuilds nothing.
+store gc removes from the part store (hw/.cad/parts, hw/.cad/builds) every object no version or
+      release manifest references and no build record of a referenced output needs, and every other
+      build record; it reports the bytes freed. --dry-run removes nothing.
 
 stdout: one JSON document. stderr: diagnostics.
 Exit codes: 0 pass, 1 a part model or a manufacturing output failed (run) or a blocking check failed
@@ -141,6 +145,11 @@ def parser() -> argparse.ArgumentParser:
     latest = sub.add_parser("latest", help="point hw/versions/latest.json at the newest sealed version")
     latest.add_argument("hw", type=Path, help="hardware design record directory (hw/)")
     latest.add_argument("--label", required=True, help="the sealed version label the pointer write failed for")
+    store = sub.add_parser("store", help="maintain the part store hw/.cad/parts and hw/.cad/builds")
+    store.add_argument("action", choices=("gc",),
+                       help="gc: remove what no version or release manifest references, report the bytes freed")
+    store.add_argument("hw", type=Path, help="hardware design record directory (hw/)")
+    store.add_argument("--dry-run", action="store_true", help="report what gc would remove; remove nothing")
     return root
 
 
@@ -172,6 +181,8 @@ def main(argv: list[str] | None = None) -> int:
                 from cadmodel.diff import diff
 
                 code, result = diff(args.hw, args.a, args.b)
+            elif args.command == "store":
+                code, result = build.store_gc(args.hw, args.dry_run)
             else:
                 code, result = build.reconcile_latest(args.hw, args.label)
     except (build.UsageError, pose.MotionError, lifecycle.LifecycleError, OSError) as error:

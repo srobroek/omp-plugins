@@ -421,6 +421,58 @@ class TreeAudit(TempProject):
                 self.assertNotIn(match.role, ("definition", "manufacture", "evidence"))
         self.assertIsNone(layout.classify("hw/.cad/pairs.sqlite"))  # the old global cache never lived in hw/
 
+    def test_the_part_store_is_accepted_disposable_and_never_a_result(self) -> None:
+        """Stored objects and build records sit where cad-model run writes them, are not sealed, earn no
+        geometry role, and are no generated result for git; a half-written one is transient."""
+        digest = "a" * 64
+        accepted = (".cad/parts/.gitignore", f".cad/parts/{digest}", ".cad/builds/.gitignore",
+                    f".cad/builds/{digest}.json")
+        for rel in (*accepted, f".cad/parts/.{digest}.4242.tmp", f".cad/builds/.{digest}.json.4242.tmp"):
+            write(self.hw / rel)
+        self.assertEqual(self.codes(), {f"hw/.cad/parts/.{digest}.4242.tmp": "layout.transient",
+                                        f"hw/.cad/builds/.{digest}.json.4242.tmp": "layout.transient"})
+        for rel in (accepted[1], accepted[3]):
+            with self.subTest(rel):
+                match = layout.classify(f"hw/{rel}")
+                self.assertEqual((match.entry.kind, match.entry.manifest, match.entry.mutability),
+                                 ("generated", None, "scratch"))
+                self.assertNotIn(match.role, ("definition", "manufacture", "evidence"))
+                self.assertIsNone(layout.result_root(rel))
+        for bad in (".cad/parts/abc", f".cad/parts/{digest}.step", f".cad/builds/{digest}"):
+            self.assertIsNone(layout.classify(f"hw/{bad}"), bad)
+
+
+class GitStorage(unittest.TestCase):
+    """layout.json `storage`: which generated results git tracks, by the user's answer."""
+
+    def test_every_sealed_output_is_a_result_and_nothing_else_is(self) -> None:
+        lay = layout.load()
+        for entry in lay.entries:
+            for name in [spec.name for spec in entry.files] or [None]:
+                rel = lay.example(entry, name).removeprefix("hw/")
+                with self.subTest(entry=entry.id, path=rel):
+                    if entry.kind == "generated" and entry.mutability in ("immutable", "pointer"):
+                        self.assertIsNotNone(layout.result_root(rel))
+                    else:  # the record, the BOM, the concept handoff, the recheck stamp, caches and scratch
+                        self.assertIsNone(layout.result_root(rel))
+        self.assertEqual(layout.result_root("motion/v3/assembly/pose.step"), "motion/v3")
+        self.assertIsNone(layout.result_root("motion/cases/arm-load/plan.yaml"))
+        self.assertIsNone(layout.result_root("analysis/cases/arm-load/case.yaml"))
+
+    def test_unapproved_results_are_ignored_and_approved_ones_tracked_with_lfs(self) -> None:
+        roots = layout.load().storage["results"]
+        for answer in (None, False):
+            with self.subTest(answer=answer):
+                self.assertEqual(layout.git_storage(answer), {".gitignore": [f"/{root}/" for root in roots],
+                                                              ".gitattributes": []})
+        approved = layout.git_storage(True)
+        self.assertEqual(approved[".gitignore"], [])
+        self.assertEqual(len(approved[".gitattributes"]), 2 * len(roots))
+        self.assertIn("versions/**/*.step filter=lfs diff=lfs merge=lfs -text", approved[".gitattributes"])
+        self.assertIn("motion/v*/**/*.glb filter=lfs diff=lfs merge=lfs -text", approved[".gitattributes"])
+        self.assertTrue(all(rule.split("/", 1)[0] in {r.split("/", 1)[0] for r in roots}
+                            for rule in approved[".gitattributes"]))
+
 
 class ValidatorLayout(TempProject):
     """validate.py on a copy of the lamp example: layout findings, their severity and the exit code."""

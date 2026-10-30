@@ -6,6 +6,10 @@ millimetres) and manufacturing.json. The state is the installed definition, or t
 `build_manufacture(params)` shape of a part whose part.yaml declares `manufacture.relationship:
 different`. `inspect` reads the written files back and judges them; `run` seals the version only
 when no part fails a blocking check, and `check` repeats `inspect` on the sealed files.
+
+A part's outputs are a function of its manifest facts, its state's geometry and the code and runtime
+of this process, so `make` keys them by those (`cadmodel.store`) and links the files, placement and
+row of an earlier identical make instead of exporting again; only an output that did not fail is kept.
 """
 
 from __future__ import annotations
@@ -16,12 +20,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
-from cadmodel import mesh, occ, orientation, stepfile
+from cadmodel import mesh, occ, orientation, provenance, stepfile, store
 from cadmodel.motion import load_pose
 from cadmodel.record import load_layout
 
 SIDECAR = "manufacturing.json"
 SIDECAR_SCHEMA = 1
+OUTPUTS_FORMAT = 1  # bump when what make writes changes without any keyed input changing
 BED_MM = 1e-6  # bed contact, and how far a measured bound may pass a reserved extent
 FLOAT32_EPS = 2.0 ** -23  # STL stores float32 coordinates
 
@@ -297,14 +302,18 @@ def _relative(hw: Path, label: str, pn: str) -> str:
 
 def make(work: Path, hw: Path, label: str, plans: Mapping[str, Plan], products: Mapping[str, str],
          definitions: Mapping[str, Any], built: Mapping[str, Mapping[str, Any]], states: Mapping[str, Any],
-         volume: orientation.BuildVolume | None) -> tuple[dict[str, Any], dict[str, Any]]:
+         volume: orientation.BuildVolume | None, parts_store: store.Store,
+         state_shas: Mapping[str, str]) -> tuple[dict[str, Any], dict[str, Any], set[str]]:
     """Write and judge the outputs of every planned part below the partial version folder `work`.
 
-    `definitions` are the installed read-back Parts, `built` the runner's per-part results and
-    `states` the read-back `build_manufacture` Parts. Returns (the manifest entry of each part, its
-    row); a part without a model gets an incomplete entry and no folder."""
+    `definitions` are the installed read-back Parts, `built` the runner's per-part results, `states`
+    the read-back `build_manufacture` Parts and `state_shas` their STEP files' sha256. Returns (the
+    manifest entry of each part, its row, the PNs whose outputs `parts_store` already held); a part
+    without a model gets an incomplete entry and no folder."""
     entries: dict[str, Any] = {}
     rows: dict[str, Any] = {}
+    reused: set[str] = set()
+    identity = {"runtime": provenance.runtime({}), "sources": provenance.sources([provenance.SKILLS])}
     for pn, part_plan in sorted(plans.items()):
         if pn not in definitions:
             entries[pn] = rows[pn] = {"PN": pn, "path": None, "status": "warn", "complete": False,
@@ -318,20 +327,39 @@ def make(work: Path, hw: Path, label: str, plans: Mapping[str, Plan], products: 
                       _relative(hw, label, pn))
         target = work / entry["path"]
         written = [name for name in part_plan.policy.outputs if name != SIDECAR]
-        try:
-            entry["placement"] = export(target, entry, (states[pn] if different else definitions[pn]).shape, volume)
-        except (occ.GeometryError, load_pose().MotionError) as error:
-            rows[pn] = {"status": "fail", "complete": False, "blocking_failures": ["export"],
-                        "checks": {"export": _judge({"written": False}, message=str(error))}}
-            entries[pn] = {**entry, **rows[pn]}
-            continue
-        row, _ = inspect(target, entry, part_plan.record, written)
-        outputs = {name: sha256(target / name) for name in written if (target / name).is_file()}
-        (target / SIDECAR).write_text(json.dumps({**entry, "files": outputs, **row}, indent=2) + "\n", encoding="utf-8")
+        outputs_key = store.key({"format": OUTPUTS_FORMAT, "kind": "manufacturing", "entry": entry,
+                                 "state": state_shas.get(pn) if different else None, "process": identity})
+        cached = parts_store.record(outputs_key)
+        files = ({name: cached["objects"][name] for name in (*written, SIDECAR) if name in cached["objects"]}
+                 if cached is not None else {})
+        if cached is not None and all(parts_store.place(sha, target / name) for name, sha in files.items()):
+            entry["placement"], row = cached["placement"], cached["row"]
+            reused.add(pn)
+        else:
+            if target.exists():  # a reuse that store gc cut short (an object went): export into an empty folder
+                for path in target.iterdir():
+                    path.unlink()
+                target.rmdir()
+            try:
+                entry["placement"] = export(target, entry, (states[pn] if different else definitions[pn]).shape,
+                                            volume)
+            except (occ.GeometryError, load_pose().MotionError) as error:
+                rows[pn] = {"status": "fail", "complete": False, "blocking_failures": ["export"],
+                            "checks": {"export": _judge({"written": False}, message=str(error))}}
+                entries[pn] = {**entry, **rows[pn]}
+                continue
+            row, _ = inspect(target, entry, part_plan.record, written)
+            outputs = {name: sha256(target / name) for name in written if (target / name).is_file()}
+            (target / SIDECAR).write_text(json.dumps({**entry, "files": outputs, **row}, indent=2) + "\n",
+                                          encoding="utf-8")
+            files = {**outputs, SIDECAR: sha256(target / SIDECAR)}
+            if row["status"] != "fail":
+                parts_store.save(outputs_key, {"kind": "manufacturing", "pn": pn, "placement": entry["placement"],
+                                               "row": row, "objects": {name: parts_store.intern(target / name)
+                                                                       for name in files}})
         rows[pn] = row
-        entries[pn] = {**entry, "files": {**outputs, SIDECAR: sha256(target / SIDECAR)},
-                       **{key: row[key] for key in ("status", "complete", "blocking_failures")}}
-    return entries, rows
+        entries[pn] = {**entry, "files": files, **{key: row[key] for key in ("status", "complete", "blocking_failures")}}
+    return entries, rows, reused
 
 
 def version_check(folder: Path, manifest: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:

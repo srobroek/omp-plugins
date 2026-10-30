@@ -23,6 +23,7 @@ listed files and nothing else.
 | `{PRODUCT}` | `[a-z0-9][a-z0-9-]*` | `lamp-arm` | product id from product.yaml |
 | `{SCENE_SHA}` | `[0-9a-f]{64}` | `1111111111111111111111111111111111111111111111111111111111111111` | sha256 of the concept scene file |
 | `{CAPTURE_SHA}` | `[0-9a-f]{64}` | `2222222222222222222222222222222222222222222222222222222222222222` | sha256 of the captured viewer state |
+| `{SHA}` | `[0-9a-f]{64}` | `3333333333333333333333333333333333333333333333333333333333333333` | sha256 of a stored part output's bytes, or of the inputs of a cached part output |
 | `{PID}` | `[0-9]+` | `4242` | process id of the writing run |
 | `{STAMP}` | `[0-9]+` | `1730000000` | monotonic clock stamp of the writing run |
 | `{RUN}` | `[A-Za-z0-9][A-Za-z0-9._-]{0,127}` | `3f2b9c1e8d7a4b6c9e0f1a2b3c4d5e6f` | id of one supervised sweep, check or FEA run |
@@ -62,6 +63,8 @@ listed files and nothing else.
 | `cache.pairs` | `hw/.cad/pairs-v2.sqlite` | generated | (data) | cad-motion pair_measure.py PairCache (sweep.py, spot_check.py, cad-model check) | any | scratch | disposable pair-measurement cache the sweep and the static check share; deleting it costs time, never a result; git-ignored, never evidence |
 | `cache.pairs_wal` | `hw/.cad/pairs-v2.sqlite-wal` | generated | (data) | SQLite, for cad-motion pair_measure.py PairCache | any | scratch | the pair cache's write-ahead log; disposable with the cache |
 | `cache.pairs_shm` | `hw/.cad/pairs-v2.sqlite-shm` | generated | (data) | SQLite, for cad-motion pair_measure.py PairCache | any | scratch | the pair cache's shared-memory index; disposable with the cache |
+| `cache.part_objects` | `hw/.cad/parts/{SHA}` | generated | (data) | cad-model cad_model.py run (cadmodel/store.py) | layout | scratch | one part output (definition or state STEP, manufacturing STEP, STL or manufacturing.json) stored once, read-only, under the sha256 of its bytes; each version holds a hard link to it where the filesystem allows, else a copy, so readers read the version's own path; git-ignored, never evidence; cad_model.py store gc removes it once no manifest references it |
+| `cache.part_records` | `hw/.cad/builds/{SHA}.json` | generated | (data) | cad-model cad_model.py run (cadmodel/store.py) | layout | scratch | what one part build or manufacturing make produced, keyed by the sha256 of its inputs: the stored objects and the runner or check facts; run reuses it only while every object still hashes to its name; git-ignored; store gc drops it once no manifest references its outputs |
 | `control.run` | `hw/.cad/runs/{RUN}.json` | generated | (control) | cad-flow process_lifecycle.py claim_run (cad-motion sweep.py, cad-model check, cad-analysis fea_static.py) | any | scratch | the process groups of one running sweep, check or FEA run, removed when it ends; a live one refuses an overlapping run; git-ignored |
 | `control.run_lock` | `hw/.cad/runs/.lock` | generated | (control) | cad-flow process_lifecycle.py claim_run | any | scratch | lock held only while a run claims its record; disposable |
 | `scratch` | `.cad-work/` | scratch | `**` (scratch) | cad-flow scratch.py, scoped workers, layout.py publication staging | any | scratch | drafts, jobs, logs, publication staging and replaced bundles, beside hw/ |
@@ -112,6 +115,8 @@ reported with the action below; `vcs` paths are accepted.
 |---|---|---|---|
 | `hw/versions/.{V}.partial-{PID}`/ | transient | cad-model cad_model.py run | An interrupted cad-model run left this staging folder. Delete it once no run is in progress. |
 | `hw/versions/.latest.json.tmp` | transient | cad-model cad_model.py run | An interrupted cad-model run left this temporary pointer. Delete it once no run is in progress. |
+| `hw/.cad/parts/.{SHA}.{PID}.tmp` | transient | cad-model cad_model.py run | An interrupted cad-model run left this half-stored object. Delete it once no run is in progress. |
+| `hw/.cad/builds/.{SHA}.json.{PID}.tmp` | transient | cad-model cad_model.py run | An interrupted cad-model run left this half-written build record. Delete it once no run is in progress. |
 | `hw/renders/.{V}.partial-{STAMP}`/ | transient | cad-render render.py | An interrupted render left this staging folder. Delete it once no render is in progress. |
 | `hw/renders/.{V}.old-{STAMP}`/ | transient | cad-render render.py | An interrupted render left the set it was replacing. Delete it once no render is in progress. |
 | `hw/.cad/.recheck.json.tmp` | transient | cad-recheck stamp.py | An interrupted stamp left this temporary file. Delete it once no stamp is in progress. |
@@ -194,3 +199,47 @@ The STL tessellation defaults to 0.05 mm linear and 0.1 rad angular deflection; 
 part. A part made in its installed shape compares the manufactured volume to the installed one within
 1e-09 relative. A part with `manufacture.relationship: different`
 declares its own `volume_rel_tolerance` or `volume_abs_tolerance_mm3`.
+
+## Part store
+
+`cad-model run` stores each part output once: the definition and state STEP of every part and the
+manufacturing files of every custom-made part, in `hw/.cad/parts/{SHA}`, named by the sha256 of its
+bytes. A version's `parts/{PN}.step` and `manufacturing/{PN}/` files are hard links to those objects
+where the filesystem allows them, else byte copies; the paths and manifests are those of any version,
+and verification hashes file content, never the inode. `hw/.cad/builds/{SHA}.json` records, under
+the sha256 of a part's build inputs, the objects and facts its build produced. A part whose inputs
+are unchanged reuses them once every object still hashes to its name, so a run builds only the
+changed parts. Objects and the version files linked to them are read-only (0444), so an in-place
+write fails instead of changing every version that shares the bytes. Both folders ignore
+themselves in git. After deleting versions, `cad_model.py store gc <hw> [--dry-run]` removes every
+object no version or release manifest references, and the build records no referenced output
+needs, and reports the bytes freed; it never removes an object a manifest names.
+
+## Git storage
+
+Generated results stay out of git unless the user approved storing them: `product.yaml`
+`storage.results_in_git: true`. Absent means not asked yet and counts as not approved.
+`uv run --script skill://cad-flow/scripts/setup.py --storage --yes`, run from the project root, writes the
+rules below into one managed block of `hw/.gitignore` or `hw/.gitattributes` and removes the other
+block, so changing the answer and running it again changes the rules. Other lines of both files are
+kept. The project template's `hw/.gitignore` holds the not-approved block.
+
+| Results below `hw/` | Not approved: `hw/.gitignore` | Approved: `hw/.gitattributes` |
+|---|---|---|
+| `versions/` | `/versions/` | `versions/**/*.step`, `versions/**/*.glb` with `filter=lfs diff=lfs merge=lfs -text` |
+| `checks/` | `/checks/` | `checks/**/*.step`, `checks/**/*.glb` with `filter=lfs diff=lfs merge=lfs -text` |
+| `drawings/` | `/drawings/` | `drawings/**/*.step`, `drawings/**/*.glb` with `filter=lfs diff=lfs merge=lfs -text` |
+| `renders/` | `/renders/` | `renders/**/*.step`, `renders/**/*.glb` with `filter=lfs diff=lfs merge=lfs -text` |
+| `captures/` | `/captures/` | `captures/**/*.step`, `captures/**/*.glb` with `filter=lfs diff=lfs merge=lfs -text` |
+| `motion/v*/` | `/motion/v*/` | `motion/v*/**/*.step`, `motion/v*/**/*.glb` with `filter=lfs diff=lfs merge=lfs -text` |
+| `analysis/v*/` | `/analysis/v*/` | `analysis/v*/**/*.step`, `analysis/v*/**/*.glb` with `filter=lfs diff=lfs merge=lfs -text` |
+| `concept/screenshots/` | `/concept/screenshots/` | `concept/screenshots/**/*.step`, `concept/screenshots/**/*.glb` with `filter=lfs diff=lfs merge=lfs -text` |
+| `releases/` | `/releases/` | `releases/**/*.step`, `releases/**/*.glb` with `filter=lfs diff=lfs merge=lfs -text` |
+
+- Approved: Git LFS stores the `*.step`, `*.glb` files. Install Git LFS and run `git lfs install` once per clone
+  before committing results. Setup never runs `git lfs`. Files committed before the rules keep their
+  history; converting it, such as with `git lfs migrate import`, rewrites history and is the user's call.
+- Not approved: `.gitignore` keeps new results out but untracks nothing. For results git already
+  tracks, the user runs `git rm -r --cached <path>` (the files stay on disk) and commits. Setup lists
+  those paths and never runs it.
+- Either way the part store stays out of git through its own `.gitignore` files.

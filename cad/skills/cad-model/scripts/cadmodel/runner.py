@@ -12,6 +12,7 @@ and reads one JSON result from that file once the runner exits, identical in sha
 
     {"kernel": "cadquery", "tools": {"python": "3.12.13", "cadquery": "2.8.0", ...},
      "import_s": 3.7,
+     "sources": {"/abs/cad/skills/cad-model/scripts/cadmodel/occ.py": "<sha256>", ...},
      "parts": {"LMP-0003": {"ok": true, "params": {...}, "kernel_volume_mm3": 1234.5,
                             "kernel_solids": 1, "kernel_valid": true, "kernel_errors": [], "build_s": 0.4,
                             "drawing_features": {"elbow_bore": {...}} or null,
@@ -19,6 +20,14 @@ and reads one JSON result from that file once the runner exits, identical in sha
                                             "kernel_valid": true, "kernel_errors": []} or null},
                "LMP-0004": {"ok": false, "error": {"type": "SafeEditError", "message": "...",
                                                    "where": "model.py:42 in build"}}}}
+
+`sources` hashes every Python file the runner loaded from the plugin or the project, the part models
+themselves excepted: with `tools` and the part's own files they are what a cached build depends on.
+`run_<kernel>.py --tools` prints `cadmodel.provenance.runtime` of the environment instead, without
+importing the kernel or reading stdin, so `run` can decide which parts to build before starting one.
+Each part result also carries `inputs`, the sha256 of the model bytes it executed and of the other
+files of the part folder before the build, and `inputs_stable`, whether the folder hashed the same
+after it; `run` caches the part only when both match the inputs it keyed the build by.
 
 `drawing_features` is the optional `drawing_features(params, shape)` hook's result, checked by
 `feature_locators`: JSON primitives only, never a kernel object; null when the model has no hook.
@@ -39,6 +48,7 @@ Exit 0 when the request was processed (part failures are in the result), 2 when 
 from __future__ import annotations
 
 import ast
+import hashlib
 import importlib
 import importlib.metadata
 import importlib.util
@@ -53,7 +63,7 @@ import traceback
 from pathlib import Path
 from typing import Any, Mapping
 
-from cadmodel import occ
+from cadmodel import occ, provenance
 from cadmodel.fonts import osifont_path
 from cadmodel.motion import load_pose
 
@@ -81,14 +91,19 @@ def tool_versions(dists: tuple[str, ...]) -> dict[str, str]:
     return versions
 
 
-def _load_model(pn: str, path: Path) -> Any:
-    name = "cad_model_part_" + re.sub(r"\W", "_", pn)
+MODEL_MODULE = "cad_model_part_"  # the module name prefix of a loaded part model
+
+
+def _load_model(pn: str, path: Path, source: bytes | None = None) -> Any:
+    """model.py as a module, executed from `source` (the bytes the caller hashed; read from `path` when None)."""
+    name = MODEL_MODULE + re.sub(r"\W", "_", pn)
     spec = importlib.util.spec_from_file_location(name, path)
     if spec is None or spec.loader is None:
         raise ContractError(f"cannot load {path}")
     module = importlib.util.module_from_spec(spec)
     sys.modules[name] = module
-    spec.loader.exec_module(module)
+    code = compile(path.read_bytes() if source is None else source, str(path), "exec", dont_inherit=True)
+    exec(code, module.__dict__)  # noqa: S102 - executing the part model is the runner's job
     return module
 
 
@@ -255,7 +270,11 @@ def build_part(kernel: str, request: Mapping[str, Any]) -> dict[str, Any]:
 def _build_part(kernel: str, request: Mapping[str, Any]) -> dict[str, Any]:
     pose = load_pose()
     started = time.perf_counter()
-    module = _load_model(request["pn"], Path(request["model"]))
+    model = Path(request["model"])
+    inputs = provenance.folder_inputs(model.parent)
+    source = model.read_bytes()
+    inputs["model.py"] = hashlib.sha256(source).hexdigest()  # the bytes executed, whatever the file holds later
+    module = _load_model(request["pn"], model, source)
     if getattr(module, "KERNEL", None) != kernel:
         raise ContractError(f"KERNEL is {getattr(module, 'KERNEL', None)!r}, this runner is {kernel!r}")
     _validate_text_fonts(module)
@@ -286,7 +305,8 @@ def _build_part(kernel: str, request: Mapping[str, Any]) -> dict[str, Any]:
                        "kernel_valid": not state_errors, "kernel_errors": state_errors}
     return {"ok": True, "params": params, "kernel_volume_mm3": occ.volume(shape), "kernel_solids": solids,
             "kernel_valid": not errors, "kernel_errors": errors, "build_s": round(time.perf_counter() - started, 3),
-            "drawing_features": features, "manufacture": manufacture}
+            "drawing_features": features, "manufacture": manufacture, "inputs": inputs,
+            "inputs_stable": provenance.folder_inputs(model.parent) == inputs}
 
 def _failure(error: BaseException, model: str) -> dict[str, Any]:
     frames = [f for f in traceback.extract_tb(error.__traceback__) if f.filename == model]
@@ -296,6 +316,9 @@ def _failure(error: BaseException, model: str) -> dict[str, Any]:
 
 def main(kernel: str, dists: tuple[str, ...]) -> int:
     sys.dont_write_bytecode = True  # never leave __pycache__ beside hw/parts/<PN>/model.py
+    if sys.argv[1:] == ["--tools"]:
+        print(json.dumps(provenance.runtime(tool_versions(dists))))
+        return 0
     try:
         request = json.load(sys.stdin)
         parts = request["parts"]
@@ -312,6 +335,8 @@ def main(kernel: str, dists: tuple[str, ...]) -> int:
             results[part["pn"]] = build_part(kernel, part)
         except Exception as error:  # noqa: BLE001 - every model failure is reported per part
             results[part["pn"]] = _failure(error, str(Path(part["model"])))
+    projects = {Path(part["model"]).resolve().parents[2] for part in parts}  # hw/ of hw/parts/<PN>/model.py
     result.write_text(json.dumps({"kernel": kernel, "tools": tool_versions(dists), "import_s": import_s,
+                                  "sources": provenance.sources([provenance.SKILLS, *projects], MODEL_MODULE),
                                   "parts": results}) + "\n", encoding="utf-8")
     return 0

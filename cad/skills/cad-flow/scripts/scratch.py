@@ -13,9 +13,12 @@ Usage:
 
 The workspace is <project>/.cad-work/<UNIT>/, <project> being the directory that holds HW.
 
-init    copies HW into <workspace>/hw/ without versions/, renders/, releases/, .git/ and
-        __pycache__/, then records the unit's PNs and the sha256 of every copied file in
-        <workspace>/baseline.json. An existing workspace is kept unless --reset replaces it.
+init    copies HW into <workspace>/hw/ without versions/, renders/, releases/, .git/, .cad/ (the
+        part store, the pair cache, run records and the recheck stamp) and __pycache__/, then
+        records the unit's PNs and the sha256 of every copied file in <workspace>/baseline.json.
+        It seeds the scratch part store with hard links to HW's stored objects and build records,
+        so the scratch build reuses every unchanged part. An existing workspace is kept unless
+        --reset replaces it.
 build   runs cad-model `run` on the scratch hw/ under the next scratch label, cad-model `check`
         on that version, and cad-design form_check at --fidelity. HW itself is never passed to
         any of them, so HW/versions/ is neither created nor changed. Form findings are split
@@ -25,7 +28,8 @@ build   runs cad-model `run` on the scratch hw/ under the next scratch label, ca
 deliver copies each unit PN's scratch hw/parts/<PN>/ over HW/parts/<PN>/ and lists every other
         scratch file that differs from the baseline as a proposal for the lead. When any
         HW/parts/<PN>/ changed since init it writes nothing and exits 1. Generated
-        versions/, renders/, and releases/ output and every __pycache__/ are ignored during delivery.
+        versions/, renders/, releases/ and .cad/ output and every __pycache__/ are ignored
+        during delivery, so a scratch build's own caches never reach HW.
 
 stdout: one JSON document; every path in it is absolute. build writes each tool's diagnostics to
 <workspace>/<tool>-<label>.log and names the log in the JSON, so its output stays small.
@@ -45,7 +49,7 @@ import re
 import shutil
 import subprocess
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 SKILLS = Path(__file__).resolve().parents[2]
@@ -56,7 +60,9 @@ sys.path.insert(0, str(CAD_MODEL_SCRIPTS))
 from cadmodel import scriptenv  # noqa: E402 - standard library only
 CAD_MODEL = CAD_MODEL_SCRIPTS / "cad_model.py"
 WORK_DIR = ".cad-work"
-NOT_COPIED = frozenset({"versions", "renders", "releases", ".git"})
+# .cad/ holds only caches and control files (cad-record layout cache.*, control.*): the part store is as
+# large as every version together, and the scratch build writes its own pair cache and run records there.
+NOT_COPIED = frozenset({"versions", "renders", "releases", ".git", ".cad"})
 UNIT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 PN = re.compile(r"^[A-Z]{2,5}-[0-9]{4}$")
 LABEL = re.compile(r"^v([1-9][0-9]*)$")
@@ -89,11 +95,17 @@ def workspace(hw: Path, unit: str) -> Path:
     return hw.parent / WORK_DIR / unit
 
 
+def is_skipped(relative: PurePosixPath, top: frozenset[str]) -> bool:
+    """Whether a path relative to the copied root is left out: `top` directly below it, and
+    __pycache__ anywhere."""
+    return relative.parts[0] in top or "__pycache__" in relative.parts
+
+
 def skips(root: Path, top: frozenset[str] = NOT_COPIED):
-    """A copytree `ignore` that leaves out `top` directly below `root` and __pycache__ anywhere."""
+    """A copytree `ignore` that leaves out what `is_skipped` names."""
     def ignore(directory: str, names: list[str]) -> set[str]:
-        at_top = Path(directory) == root
-        return {name for name in names if name == "__pycache__" or (at_top and name in top)}
+        below = PurePosixPath(Path(directory).relative_to(root).as_posix())
+        return {name for name in names if is_skipped(below / name, top)}
     return ignore
 
 
@@ -101,8 +113,8 @@ def tree_hashes(root: Path, top: frozenset[str] = NOT_COPIED) -> dict[str, str]:
     """sha256 per file below `root`, keyed by POSIX path relative to it, skipping what `skips` leaves out."""
     hashes = {}
     for path in sorted(root.rglob("*")):
-        relative = path.relative_to(root)
-        if relative.parts[0] in top or "__pycache__" in relative.parts or not path.is_file():
+        relative = PurePosixPath(path.relative_to(root).as_posix())
+        if is_skipped(relative, top) or not path.is_file():
             continue
         hashes[relative.as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
     return hashes
@@ -113,6 +125,29 @@ def load_baseline(work: Path) -> dict[str, Any]:
     if not path.is_file():
         raise UsageError(f"{work} has no baseline.json; run `scratch.py init` first")
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def seed_store(hw: Path, scratch_hw: Path) -> int:
+    """Hard-link HW's part store (cad-record layout cache.part_objects, cache.part_records) into the
+    scratch copy and return how many files were linked. The store's writers only rename onto a name and
+    never write a file in place, so no scratch write reaches HW through a link; objects stay read-only.
+    Where no hard link can be made (another filesystem) seeding stops, and the scratch build builds the
+    rest itself; nothing is copied, because the store can be as large as every version together."""
+    lay, seeded = layout.load(), 0
+    for entry_id in ("cache.part_objects", "cache.part_records"):
+        folder = layout.locate(hw, str(PurePosixPath(lay.entry(entry_id).path).parent))
+        for path in sorted(folder.iterdir()) if folder.is_dir() else []:
+            match = lay.classify(layout.relative(hw, path))
+            if match is None or match.entry.id != entry_id or path.is_symlink() or not path.is_file():
+                continue
+            target = scratch_hw / path.relative_to(hw)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                os.link(path, target)
+            except OSError:
+                return seeded
+            seeded += 1
+    return seeded
 
 
 def init(hw: Path, unit: str, parts: list[str], reset: bool) -> tuple[int, dict[str, Any]]:
@@ -130,13 +165,14 @@ def init(hw: Path, unit: str, parts: list[str], reset: bool) -> tuple[int, dict[
     if not gitignore.exists():
         gitignore.write_text("*\n", encoding="utf-8")
     shutil.copytree(hw, work / "hw", ignore=skips(hw))
+    seeded = seed_store(hw, work / "hw")
     for pn in sorted(set(parts)):
         if not (hw / "parts" / pn).exists():
             (work / "hw" / "parts" / pn).mkdir(parents=True, exist_ok=True)
     baseline = {"unit": unit, "hw": str(hw), "parts": sorted(set(parts)), "files": tree_hashes(work / "hw")}
     (work / "baseline.json").write_text(json.dumps(baseline, indent=2) + "\n", encoding="utf-8")
     return 0, {"status": "created", "unit": unit, "workspace": str(work), "scratch_hw": str(work / "hw"),
-               "parts": baseline["parts"], "files": len(baseline["files"])}
+               "parts": baseline["parts"], "files": len(baseline["files"]), "seeded_store_files": seeded}
 
 
 def run_tool(argv: list[str], log: Path) -> tuple[int, dict[str, Any] | None]:

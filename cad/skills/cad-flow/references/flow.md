@@ -75,7 +75,9 @@ The full sweep, a FreeCAD assembly run, an FEA case, and the first run of a new 
 
 ## Storage of generated results
 
-Before the first build, ask the user explicitly whether generated results (STEP, GLB, renders and check bundles) are stored in git. Record the answer as `product.yaml` `storage.results_in_git` with a DR. Only `true` tracks them, with Git LFS for STEP and GLB. With `false` they stay out of git, and the record remains valid. While the setting is absent the question is open: ask it, and commit no generated result.
+Before the first build, ask the user explicitly whether generated results (STEP, GLB, renders and check bundles) are stored in git. Record the answer as `product.yaml` `storage.results_in_git` with a DR. Then run `uv run --script skill://cad-flow/scripts/setup.py --storage --yes` from the project root. It writes the rules for the answer into `hw/.gitignore` or `hw/.gitattributes` (cad-record `references/layout.md` "Git storage"); run it again whenever the answer changes. Only `true` tracks them, with Git LFS for STEP and GLB. With `false` they stay out of git, and the record remains valid. While the setting is absent the question is open: ask it, and commit no generated result.
+
+A `.gitignore` untracks nothing. When git already tracks results and the answer is not `true`, setup lists those paths. The user stops tracking them with `git rm -r --cached <path>` (the files stay on disk) and a commit; never run it yourself. With `true`, setup never runs `git lfs` either: the user installs Git LFS and runs `git lfs install` once per clone.
 
 ## Delegation
 
@@ -127,7 +129,7 @@ Read every report of the batch before you change anything. Accept a part deliver
 
 A part designer works in `.cad-work/<unit>/` next to `hw/`; `scratch.py` writes a `.gitignore` there so git ignores the directory.
 
-- `uv run --script skill://cad-flow/scripts/scratch.py init --hw hw --unit <unit> --part <PN> [--part <PN> ...]` copies `hw/` without `versions/`, `renders/`, `releases/`, or `.git/` and records a baseline.
+- `uv run --script skill://cad-flow/scripts/scratch.py init --hw hw --unit <unit> --part <PN> [--part <PN> ...]` copies `hw/` without `versions/`, `renders/`, `releases/`, `.cad/` (part store, pair cache, run records) or `.git/` and records a baseline. `deliver` ignores the scratch copy's own `.cad/`.
 - `scratch.py build --hw hw --unit <unit> --fidelity F2|F3 [--kernel auto|cadquery|build123d] [--attach REF=PARENT_REF ...]` builds and checks the scratch copy under its own label and runs the form check on the unit's PNs; `hw/versions/` is never touched. Pass the same `--attach` entries as the lead's integrated build, so the unit checks the same rigid attachments; the report echoes them as `attach`.
 - `scratch.py deliver --hw hw --unit <unit>` accepts only canonical source files under authorized part records (including a PN authorized at `init`), rejects generated subtrees, stray paths and unauthorized PNs, and writes nothing when a conflict is detected. The lead integrates the returned part files only after the passing scratch build.
 

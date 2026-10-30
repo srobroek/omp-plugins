@@ -3,6 +3,12 @@
 A version holds the installed definitions, the assembly, its record snapshot (record/) and the
 manufacturing outputs of every custom-made part (manufacturing/<PN>/, cadmodel.manufacture). It is
 sealed only when every part builds and every manufacturing output passes its blocking checks.
+
+Only parts whose build inputs changed are built: the part folder's files (model.py, sources/), the
+request fields from part.yaml, the kernel environment (`provenance.runtime`) and the plugin and
+project sources the runner loaded. Every other part reuses its earlier output from the store
+(`cadmodel.store`) byte for byte, once that output still hashes to its record; the version holds a
+hard link to it where the filesystem allows, else a copy.
 """
 
 from __future__ import annotations
@@ -24,7 +30,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
-from cadmodel import holes, manufacture, mesh, occ, orientation, record, scriptenv
+from cadmodel import holes, manufacture, mesh, occ, orientation, provenance, record, scriptenv, store
 from cadmodel.motion import load_pose
 
 SCRIPTS = Path(__file__).resolve().parents[1]
@@ -35,6 +41,8 @@ ORCHESTRATOR_DISTS = ("cadquery-ocp-novtk", "trimesh", "numpy", "pyyaml")
 FEATURES_FILE = "drawing-features.json"  # the drawing_features hook results of one version
 # part-map.json, metrics.json and manifest.json format: 2 adds occurrences; files without the key are version 1
 SCHEMA_VERSION = 2
+CACHE_FORMAT = 1  # bump when what a runner writes for a part changes without any keyed input changing
+REQUEST_FIELDS = ("pn", "name", "model_frame", "manufacture")  # the request fields a part build depends on
 
 
 class UsageError(RuntimeError):
@@ -232,6 +240,72 @@ def _stop(procs: Iterable[subprocess.Popen[str]]) -> None:
         proc.wait()
 
 
+def runtime_of(kernel: str) -> dict[str, Any]:
+    """The kernel environment's `provenance.runtime`, from its runner's `--tools` mode: no kernel import."""
+    if shutil.which("uv") is None:
+        raise UsageError("uv is required to run the kernel environments")
+    proc = subprocess.Popen(scriptenv.script_command(RUNNERS[kernel], "--tools"), stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, text=True, start_new_session=True)
+    try:
+        out, err = proc.communicate()  # no timeout: a cold environment installs first
+    except BaseException:
+        _stop([proc])
+        raise
+    try:
+        if proc.returncode != 0:
+            raise ValueError(f"exited {proc.returncode}")
+        return json.loads(out.strip().splitlines()[-1])
+    except (ValueError, IndexError) as error:
+        raise UsageError(f"{kernel} runner --tools failed ({error}): {err[-2000:]}") from error
+
+
+def part_inputs(source: PartSource) -> dict[str, str]:
+    """sha256 of every file of the part's folder its build can read (`provenance.folder_inputs`)."""
+    return provenance.folder_inputs(source.model.parent)
+
+
+def build_key(request: Mapping[str, Any], kernel: str, runtime: Mapping[str, Any], inputs: Mapping[str, str]) -> str:
+    """The store key of one part build: everything its output depends on except the runner sources,
+    which its record lists because only the runner knows them (`sources_hold`)."""
+    return store.key({"format": CACHE_FORMAT, "kind": "part", "kernel": kernel, "runtime": runtime,
+                      "request": {name: request[name] for name in REQUEST_FIELDS}, "inputs": inputs})
+
+
+def project_sources(found: Mapping[str, str], hw: Path) -> dict[str, dict[str, str]]:
+    """A runner's `sources`, keyed below the plugin's skills folder and below hw/, so a record names the
+    files of whichever plugin copy and project checkout runs next."""
+    keyed: dict[str, dict[str, str]] = {"hw": {}, "skills": {}}
+    for path, sha in found.items():
+        for name, base in (("hw", hw), ("skills", provenance.SKILLS)):
+            if Path(path).is_relative_to(base):
+                keyed[name][Path(path).relative_to(base).as_posix()] = sha
+                break
+    return keyed
+
+
+def sources_hold(recorded: Any, hw: Path, seen: dict[Path, str | None]) -> bool:
+    """Whether every source a part record lists still has its recorded sha256; `seen` caches hashes."""
+    if not isinstance(recorded, Mapping):
+        return False
+    for name, base in (("hw", hw), ("skills", provenance.SKILLS)):
+        for rel, sha in (recorded.get(name) or {}).items():
+            path = base / rel
+            if path not in seen:
+                seen[path] = sha256(path) if path.is_file() else None
+            if seen[path] != sha:
+                return False
+    return True
+
+
+def reusable(cached: Mapping[str, Any], request: Mapping[str, Any], hw: Path, seen: dict[Path, str | None]) -> bool:
+    """Whether a part record read from the store can stand in for building the part of `request`: a
+    successful result, the STEP files the request needs, and runner sources that still hold."""
+    objects, result = cached.get("objects", {}), cached.get("result")
+    return ("step" in objects and (not request["manufacture_step"] or "manufacture_step" in objects)
+            and isinstance(result, Mapping) and result.get("ok") is True and cached.get("kernel") in KERNELS
+            and sources_hold(cached.get("sources"), hw, seen))
+
+
 def orchestrator_tools() -> dict[str, str]:
     import importlib.metadata
 
@@ -339,28 +413,60 @@ def run(hw: Path, label: str, kernel: str, attach: Iterable[str]) -> tuple[int, 
     layout = record.load_layout()
     record_dir = layout.resolve(hw, "version.record", V=label).relative_to(layout.version_dir(hw, label)).as_posix()
     states_of = {pn: p.policy.relationship for pn, p in plans.items()}
+    parts_store = store.Store(hw)
     work = versions / f".{label}.partial-{os.getpid()}"
     shutil.rmtree(work, ignore_errors=True)
     (work / "parts").mkdir(parents=True)
     states = Path(tempfile.mkdtemp(prefix="cad-model-states-"))  # build_manufacture shapes, read back by make
     try:
-        results = run_kernels({k: [{"pn": p.pn, "name": p.product, "model_frame": p.model_frame, "model": str(p.model),
-                                    "step": str(work / "parts" / f"{p.pn}.step"), "manufacture": states_of.get(p.pn),
-                                    "manufacture_step": (str(states / f"{p.pn}.step")
-                                                         if states_of.get(p.pn) == "different" else None)}
-                                   for p in members]
-                               for k, members in groups.items()})
+        requests = {p.pn: {"pn": p.pn, "name": p.product, "model_frame": p.model_frame, "model": str(p.model),
+                           "step": str(work / "parts" / f"{p.pn}.step"), "manufacture": states_of.get(p.pn),
+                           "manufacture_step": (str(states / f"{p.pn}.step")
+                                                if states_of.get(p.pn) == "different" else None)}
+                    for p in sources}
+        runtimes = {k: runtime_of(k) for k in groups}
+        inputs = {p.pn: part_inputs(p) for p in sources}
+        keys = {p.pn: build_key(requests[p.pn], k, runtimes[k], inputs[p.pn])
+                for k, members in groups.items() for p in members}
+        seen: dict[Path, str | None] = {}
+        reused = {pn: cached for pn, cached in ((pn, parts_store.record(key)) for pn, key in keys.items())
+                  if cached is not None and reusable(cached, requests[pn], hw, seen)}
+        for pn, cached in list(reused.items()):  # an object store gc removed since record() is a miss: build it
+            step, state = Path(requests[pn]["step"]), requests[pn]["manufacture_step"]
+            if not (parts_store.place(cached["objects"]["step"], step)
+                    and (not state or parts_store.place(cached["objects"]["manufacture_step"], Path(state)))):
+                step.unlink(missing_ok=True)  # never leave the runner a read-only link to write through
+                del reused[pn]
+        objects_of = {pn: cached["objects"] for pn, cached in reused.items()}
+        pending = {k: [requests[p.pn] for p in members if p.pn not in reused] for k, members in groups.items()}
+        results = run_kernels({k: parts for k, parts in pending.items() if parts}) if any(pending.values()) else {}
         timings["kernels_s"] = round(time.perf_counter() - started, 3)
+        unsaved = []  # built from inputs that changed after they were keyed: never cached, so built again next run
+        for kernel, result in results.items():  # kept even when another part fails, so a rerun builds only that one
+            for pn, res in result["parts"].items():
+                if not res["ok"]:
+                    continue
+                objects_of[pn] = {"step": parts_store.intern(Path(requests[pn]["step"]))}
+                if requests[pn]["manufacture_step"]:
+                    objects_of[pn]["manufacture_step"] = parts_store.intern(Path(requests[pn]["manufacture_step"]))
+                if (res.get("inputs") == inputs[pn] and res.get("inputs_stable") is True
+                        and part_inputs(by_pn[pn]) == inputs[pn]):
+                    parts_store.save(keys[pn], {"kind": "part", "pn": pn, "kernel": kernel, "tools": result["tools"],
+                                                "sources": project_sources(result["sources"], hw), "result": res,
+                                                "objects": objects_of[pn]})
+                else:
+                    unsaved.append(pn)
         failed = [finding(pn, "build", res["error"]["message"], res["error"]["type"], res["error"]["where"])
                   for result in results.values() for pn, res in result["parts"].items() if not res["ok"]]
         if failed:
             return 1, {"status": "fail", "label": label, "findings": failed,
                        "runners": {k: {"import_s": r["import_s"], "wall_s": r["wall_s"]} for k, r in results.items()}}
 
-        built = {pn: (k, res) for k, result in results.items() for pn, res in result["parts"].items()}
+        built = {**{pn: (cached["kernel"], cached["result"]) for pn, cached in reused.items()},
+                 **{pn: (k, res) for k, result in results.items() for pn, res in result["parts"].items()}}
+        state_shas = {pn: objects["manufacture_step"] for pn, objects in objects_of.items() if "manufacture_step" in objects}
         warnings = [{"pn": pn, "message": message}
-                    for _, result in results.items() for pn, part in result["parts"].items()
-                    for message in part.get("warnings", [])]
+                    for pn, (_, part) in sorted(built.items()) for message in part.get("warnings", [])]
         parts = pose.load_definitions(hw, work / "parts")
         chain = pose.assembly_chain(assembly, parts, attached)
         pose.require_geometry(chain, parts)
@@ -371,9 +477,9 @@ def run(hw: Path, label: str, kernel: str, attach: Iterable[str]) -> tuple[int, 
                                    + "; ".join(f["message"] for f in limits))
         transforms, motions = chain.transforms(values), chain.motions(values)
         mark = time.perf_counter()
-        made, rows = manufacture.make(work, hw, label, plans, {pn: p.product for pn, p in by_pn.items()}, parts,
-                                      {pn: res for pn, (_, res) in built.items()}, pose.load_definitions(hw, states),
-                                      volume)
+        made, rows, made_reused = manufacture.make(work, hw, label, plans, {pn: p.product for pn, p in by_pn.items()},
+                                                   parts, {pn: res for pn, (_, res) in built.items()},
+                                                   pose.load_definitions(hw, states), volume, parts_store, state_shas)
         timings["manufacturing_s"] = round(time.perf_counter() - mark, 3)
         unmade = {pn: row for pn, row in rows.items() if row["status"] == "fail"}
         if unmade:
@@ -440,8 +546,9 @@ def run(hw: Path, label: str, kernel: str, attach: Iterable[str]) -> tuple[int, 
                                    for j in chain.joints), key=lambda entry: (entry["pair"], entry["joint"])),
             "ground": chain.root,
             "glb": glb_info,
-            "tools": {"orchestrator": orchestrator_tools(),
-                      **{k: {**r["tools"], "import_s": r["import_s"]} for k, r in results.items()}},
+            "tools": {"orchestrator": orchestrator_tools(),  # a kernel whose parts were all reused did not start
+                      **{k: ({**results[k]["tools"], "import_s": results[k]["import_s"]} if k in results
+                             else dict(runtimes[k]["tools"])) for k in groups}},
             "parts": {pn: {
                 "title": by_pn[pn].title,
                 "product": by_pn[pn].product,
@@ -464,9 +571,9 @@ def run(hw: Path, label: str, kernel: str, attach: Iterable[str]) -> tuple[int, 
         manifest["record"] = {f"{record_dir}/{name}": sha
                               for name, sha in record.write_snapshot(work / record_dir, files).items()}
         manifest["manufacturing"] = made
-        if record.snapshot(hw, part_folders(hw)) != files or {p.pn: sha256(p.model) for p in sources} != model_sha:
-            raise UsageError("hw/ records or part models changed while the version was built; nothing was written, "
-                             "run again")
+        if record.snapshot(hw, part_folders(hw)) != files or {p.pn: part_inputs(p) for p in sources} != inputs:
+            raise UsageError("hw/ records, part models or part sources changed while the version was built; nothing "
+                             f"was written and {sorted(unsaved) or 'no part'} was not cached; run again")
         manifest["files"] = {p.relative_to(work).as_posix(): sha256(p) for p in sorted(work.rglob("*")) if p.is_file()}
         stray = [name for name in manifest["files"] if layout.classify(f"hw/versions/{label}/{name}") is None]
         if stray:
@@ -484,13 +591,19 @@ def run(hw: Path, label: str, kernel: str, attach: Iterable[str]) -> tuple[int, 
                          f"({error}); point it at {label} without rebuilding: cad_model.py latest {hw} --label {label}"
                          ) from error
     timings["total_s"] = round(time.perf_counter() - started, 3)
+    made_paths = {pn for pn, entry in made.items() if entry["path"] is not None}
     return 0, {
         "status": "pass", "label": label, "version_dir": str(final),
-        "parts": {pn: {"kernel": built[pn][0], "volume_mm3": metrics[pn]["volume_mm3"], "solids": metrics[pn]["solids"],
+        "parts": {pn: {"kernel": built[pn][0], "build": "reused" if pn in reused else "built",
+                       "volume_mm3": metrics[pn]["volume_mm3"], "solids": metrics[pn]["solids"],
                        "mass_g": metrics[pn]["mass_g"], "quantity": quantity[pn]} for pn in sorted(parts)},
         "manufacturing": {pn: {"status": entry["status"], "complete": entry["complete"], "path": entry["path"],
-                               "process": entry.get("process"), "state": entry.get("state", {}).get("relationship")}
+                               "process": entry.get("process"), "state": entry.get("state", {}).get("relationship"),
+                               "build": None if pn not in made_paths else "reused" if pn in made_reused else "built"}
                           for pn, entry in made.items()},
+        "cache": {"parts": {"built": len(parts) - len(reused), "reused": len(reused)},
+                  "manufacturing": {"built": len(made_paths - made_reused), "reused": len(made_reused)},
+                  **({"unsaved": sorted(unsaved)} if unsaved else {})},
         "warnings": warnings,
         "latest": str(versions / "latest.json"),
         "timings_s": {**timings, **{f"{k}_import_s": r["import_s"] for k, r in results.items()},
@@ -533,6 +646,31 @@ def reconcile_latest(hw: Path, label: str) -> tuple[int, dict[str, Any]]:
     point_latest(hw, label, manifest)
     return 0, {"status": "pass", "label": label, "latest": str(hw / "versions" / "latest.json"),
                "verified_files": len(manifest["files"])}
+
+
+def store_gc(hw: Path, dry_run: bool = False) -> tuple[int, dict[str, Any]]:
+    """`store gc`: drop what no version or release manifest references from the part store. Refused
+    while a version is being staged, and when a manifest cannot be read, so it never removes an object
+    a manifest names."""
+    hw = hw.resolve()
+    versions = hw / "versions"
+    staging = sorted(p.name for p in versions.glob(".v*.partial-*")) if versions.is_dir() else []
+    if staging:
+        raise UsageError(f"{versions} holds staging folders {staging}: a cad-model run is in progress or was "
+                         "interrupted; delete them once no run is in progress, then run gc again")
+    manifests = sorted([*versions.glob("v*/manifest.json"), *(hw / "releases").glob("*/manifest.json")])
+    referenced: set[str] = set()
+    for path in manifests:
+        manifest = read_json(path)
+        inventory = manifest.get("files") if isinstance(manifest, dict) else None
+        if not isinstance(inventory, dict):
+            raise UsageError(f"{path} has no files inventory; gc removed nothing")
+        for value in inventory.values():  # a v2 release manifest lists {sha256, original}
+            sha = value.get("sha256") if isinstance(value, Mapping) else value
+            if isinstance(sha, str):
+                referenced.add(sha)
+    result = store.Store(hw).gc(referenced, dry_run)
+    return 0, {"status": "pass", "dry_run": dry_run, "manifests": len(manifests), **result}
 
 
 def version_exists(label: str, final: Path) -> UsageError:

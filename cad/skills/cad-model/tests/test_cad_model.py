@@ -533,6 +533,46 @@ class KernelChecks:
         self.assertEqual(checked["checks"]["build_volume"]["parts"][STRAP]["status"], "pass")
         self.assertEqual(checked["checks"]["artifact_integrity"], {"status": "pass", "blocking": True, "problems": []})
 
+    def test_only_the_changed_part_is_built_and_unchanged_outputs_are_stored_once(self) -> None:
+        """v2-v4 each change only the arm: the base is reused byte for byte, as hard links to one stored
+        copy, and each version adds new inodes only for the arm's outputs; every version still verifies."""
+        hw = self.runs["hw"]
+        self.assertEqual(self.runs["v1"][1]["cache"], {"parts": {"built": 2, "reused": 0},
+                                                     "manufacturing": {"built": 2, "reused": 0}})
+        for label in ("v2", "v3", "v4"):
+            with self.subTest(label=label):
+                result = self.runs[label][1]
+                self.assertEqual(result["cache"]["parts"], {"built": 1, "reused": 1})
+                self.assertEqual({pn: part["build"] for pn, part in result["parts"].items()},
+                                 {"TST-0001": "reused", "TST-0002": "built"})
+                self.assertEqual(result["manufacturing"]["TST-0001"]["build"], "reused")
+        versions = [hw / "versions" / label for label in ("v1", "v2", "v3", "v4")]
+        for rel in ("parts/TST-0001.step", "manufacturing/TST-0001/part.step",
+                    "manufacturing/TST-0001/manufacturing.json"):
+            for folder in versions[1:]:
+                with self.subTest(rel=rel, version=folder.name):
+                    self.assertEqual((folder / rel).read_bytes(), (versions[0] / rel).read_bytes())
+                    self.assertTrue(os.path.samefile(folder / rel, versions[0] / rel))
+
+        def inodes(folder: Path) -> dict[int, str]:
+            return {p.stat().st_ino: p.relative_to(folder).as_posix()
+                    for sub in ("parts", "manufacturing") for p in (folder / sub).rglob("*") if p.is_file()}
+        added = {inode: rel for inode, rel in inodes(versions[1]).items() if inode not in inodes(versions[0])}
+        self.assertEqual(sorted(added.values()), ["manufacturing/TST-0002/manufacturing.json",
+                                                  "manufacturing/TST-0002/part.step", "parts/TST-0002.step"])
+        layout = build.record.load_layout()
+        for folder in versions:
+            self.assertEqual(layout.verify(folder), [], folder.name)
+        store = hw / ".cad" / "parts"
+        base = versions[0] / "parts" / "TST-0001.step"
+        self.assertTrue(os.path.samefile(base, store / build.store.file_sha(base)))
+        manifest = json.loads((versions[0] / "manifest.json").read_text(encoding="utf-8"))
+        for rel in ("parts/TST-0001.step", "parts/TST-0002.step", "manufacturing/TST-0002/part.step"):
+            with self.subTest(read_only=rel):  # TST-0002 was rebuilt in v2-v4; v1's bytes and mode stay
+                self.assertEqual((versions[0] / rel).stat().st_mode & 0o777, 0o444)
+                self.assertEqual(build.store.file_sha(versions[0] / rel), manifest["files"][rel])
+        self.assertEqual((store / ".gitignore").read_text(encoding="utf-8"), "*\n")
+
 
 @unittest.skipUnless(shutil.which("uv"), "uv is required for the kernel environments")
 class CadQueryTests(KernelChecks, unittest.TestCase):
@@ -634,6 +674,7 @@ class ManufacturingStateTests(unittest.TestCase):
         shutil.copytree(hw, tampered)
         stl = tampered / "versions" / "v2" / "manufacturing" / STRAP / "part.stl"
         data = stl.read_bytes()
+        stl.chmod(0o644)  # sealed outputs are read-only (0444): tampering takes a deliberate chmod
         stl.write_bytes(data[:80] + struct.pack("<I", struct.unpack_from("<I", data, 80)[0] - 1) + data[84:-50])
         cls.runs["tampered"] = cli("check", "v2", "--hw", str(tampered))
         # The pointer write fails after v3 is sealed: latest.json is a directory.
@@ -645,6 +686,21 @@ class ManufacturingStateTests(unittest.TestCase):
         (hw / "versions" / "latest.json").rmdir()
         cls.runs["stale"] = cli("latest", str(hw), "--label", "v2")
         cls.runs["latest"] = cli("latest", str(hw), "--label", "v3")
+        # Each manufacturing-only input on its own, in a copy, so the pointer cases above keep their state.
+        cls.rebuilds = rebuilds = root / "rebuilds" / "hw"
+        shutil.copytree(hw, rebuilds)
+        (rebuilds / "product.yaml").write_text(FLAT_PRODUCT.replace("x_mm: 60", "x_mm: 61"), encoding="utf-8")
+        cls.runs["volume"] = cli("run", str(rebuilds), "--label", "v4")
+        set_strap(rebuilds, "cadquery", manufacture=FLAT_STATE.replace("1.0e-6", "2.0e-6").replace(
+            "}\n", ", mesh: {linear_deflection_mm: 0.1, angular_deflection_rad: 0.2}}\n"))
+        cls.runs["deflection"] = cli("run", str(rebuilds), "--label", "v5")
+        set_model(rebuilds, "TST-0001", "cadquery", "base.py", base, "Base block", "Aluminum 6061-T6")
+        cls.runs["material"] = cli("run", str(rebuilds), "--label", "v6")
+        set_model(rebuilds, "TST-0001", "cadquery", "base.py", base, "Base block", "Aluminum 6061-T6", "purchased")
+        cls.runs["process"] = cli("run", str(rebuilds), "--label", "v7")
+        step = rebuilds / "versions" / "v7" / "parts" / "TST-0001.step"
+        (rebuilds / ".cad" / "parts" / build.store.file_sha(step)).unlink()  # as if store gc ran
+        cls.runs["missing"] = cli("run", str(rebuilds), "--label", "v8")
 
     @classmethod
     def tearDownClass(cls) -> None:
@@ -690,6 +746,49 @@ class ManufacturingStateTests(unittest.TestCase):
         self.assertEqual((result["changed"], result["added"], result["removed"]), ([], [], []))
         self.assertEqual(result["manufacturing"]["changed"], [STRAP])
         self.assertEqual(result["manufacturing"]["parts"][STRAP]["changed"], ["tolerance"])
+
+    def test_a_record_only_change_makes_only_the_outputs_it_changes(self) -> None:
+        """v2 changes only the strap's declared tolerance: both definitions and the base's manufacturing
+        outputs are reused and no kernel starts; the strap's outputs are made again. v3 changes nothing,
+        so every part output is the very file v2 holds, and the manifest still names the kernel."""
+        result = self.runs["v2"][1]
+        self.assertEqual(result["cache"], {"parts": {"built": 0, "reused": 2},
+                                           "manufacturing": {"built": 1, "reused": 1}})
+        self.assertEqual({pn: row["build"] for pn, row in result["manufacturing"].items()},
+                         {"TST-0001": "reused", STRAP: "built"})
+        self.assertNotIn("cadquery_import_s", result["timings_s"])
+        v1, v2, v3 = (self.hw / "versions" / label for label in ("v1", "v2", "v3"))
+        self.assertTrue(os.path.samefile(v1 / "parts" / f"{STRAP}.step", v2 / "parts" / f"{STRAP}.step"))
+        self.assertTrue(os.path.samefile(v1 / "manufacturing" / "TST-0001" / "part.step",
+                                         v2 / "manufacturing" / "TST-0001" / "part.step"))
+        self.assertFalse(os.path.samefile(v1 / "manufacturing" / STRAP / "manufacturing.json",
+                                          v2 / "manufacturing" / STRAP / "manufacturing.json"))
+        outputs = [p for sub in ("parts", "manufacturing") for p in sorted((v2 / sub).rglob("*")) if p.is_file()]
+        self.assertEqual(len(outputs), 7)
+        for path in outputs:
+            self.assertTrue(os.path.samefile(path, v3 / path.relative_to(v2)), path.relative_to(v2))
+        tools = json.loads((v3 / "manifest.json").read_text(encoding="utf-8"))["tools"]["cadquery"]
+        self.assertEqual(tools["cadquery"], "2.8.0")
+        self.assertNotIn("import_s", tools)  # the kernel never started
+
+    def test_manufacturing_outputs_follow_their_own_inputs(self) -> None:
+        """A printer volume, an STL deflection, a material or a process change remakes exactly the outputs
+        it changes; no definition is built again."""
+        for name, remade in (("volume", {STRAP}), ("deflection", {STRAP}), ("material", {"TST-0001"}),
+                             ("process", {"TST-0001"})):
+            with self.subTest(change=name):
+                proc, result, _ = self.runs[name]
+                self.assertEqual(proc.returncode, 0, proc.stdout[-2000:] + proc.stderr[-3000:])
+                self.assertEqual(result["cache"]["parts"], {"built": 0, "reused": 2})
+                self.assertEqual({pn for pn, row in result["manufacturing"].items() if row["build"] == "built"},
+                                 remade)
+
+    def test_a_part_whose_stored_object_went_is_built_again(self) -> None:
+        proc, result, _ = self.runs["missing"]
+        self.assertEqual(proc.returncode, 0, proc.stdout[-2000:] + proc.stderr[-3000:])
+        self.assertEqual({pn: part["build"] for pn, part in result["parts"].items()},
+                         {"TST-0001": "built", STRAP: "reused"})
+        self.assertEqual(build.record.load_layout().verify(self.rebuilds / "versions" / "v7"), [])
 
     def test_a_cracked_stl_fails_check(self) -> None:
         proc, result, _ = self.runs["tampered"]
@@ -1786,6 +1885,129 @@ class StaticSuspectTests(unittest.TestCase):
         self.assertEqual((found["interference"], found["clearance"], found["kernel_evaluations"]), ("pass", "pass", 0))
         self.assertEqual((found["row"]["clearance_mm"], found["suspects"]), (None, []))
         self.assertGreater(found["row"]["lower_mm"], 8.0)
+
+
+HELPER_MODEL = '''import os
+import sys
+from pathlib import Path
+
+import cadquery as cq
+
+KERNEL = "cadquery"
+PARAMS = {"size": 40.0}
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parents[1] / "lib"))
+import cad_helper  # noqa: E402 - a project helper below hw/
+
+
+def build(params):
+    if os.environ.get("CAD_TEST_EDIT_SOURCES"):  # an edit that lands while the part builds
+        (HERE / "sources" / "mode.txt").write_text("edited\\n", encoding="utf-8")
+    return cq.Workplane("XY").box(params["size"] * cad_helper.SCALE, params["size"], 20.0)
+'''
+
+
+@unittest.skipUnless(shutil.which("uv"), "uv is required for the kernel environments")
+class RebuildTriggerTests(unittest.TestCase):
+    """What makes a cached part build again (CadQuery only), run from a copy of the plugin: a changed plugin
+    module, a changed project helper the model imports, and a sources/ edit that lands during the build,
+    which must leave no record a later run with the same inputs could reuse."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        from cadmodel import scriptenv
+
+        cls.tmp = tempfile.TemporaryDirectory()
+        root = Path(cls.tmp.name)
+        skills = root / "plugin" / "skills"
+        for name in ("cad-model", "cad-motion", "cad-record", "cad-flow", "cad-drawings"):
+            shutil.copytree(HERE.parents[1] / name, skills / name, ignore=shutil.ignore_patterns("tests", "__pycache__"))
+        copy = skills / "cad-model" / "scripts" / "cad_model.py"
+        hw = two_part_project(root, "cadquery")
+        set_arm(hw, "cadquery")
+        (hw / "lib").mkdir()
+        (hw / "lib" / "cad_helper.py").write_text("SCALE = 1.0\n", encoding="utf-8")
+        part = hw / "parts" / "TST-0001"
+        (part / "model.py").write_text(HELPER_MODEL, encoding="utf-8")
+        mode = part / "sources" / "mode.txt"
+        mode.parent.mkdir()
+        mode.write_text("edit\n", encoding="utf-8")
+
+        def run(label: str, **env: str) -> tuple[int, dict, str]:
+            proc = subprocess.run(scriptenv.script_command(copy, "run", str(hw), "--label", label),
+                                  capture_output=True, text=True, check=False, env={**os.environ, **env})
+            return proc.returncode, (json.loads(proc.stdout) if proc.stdout.strip() else {}), proc.stderr
+
+        cls.runs = {"v1": run("v1")}
+        occ_copy = skills / "cad-model" / "scripts" / "cadmodel" / "occ.py"
+        occ_copy.write_text(occ_copy.read_text(encoding="utf-8") + "\n# a plugin edit\n", encoding="utf-8")
+        cls.runs["plugin"] = run("v2")
+        (hw / "lib" / "cad_helper.py").write_text("SCALE = 1.0  # a helper edit\n", encoding="utf-8")
+        cls.runs["helper"] = run("v3")
+        mode.write_text("race\n", encoding="utf-8")  # new inputs, so the next run keys a new build
+        cls.runs["race"] = run("v4", CAD_TEST_EDIT_SOURCES="1")
+        cls.edited = mode.read_text(encoding="utf-8")
+        mode.write_text("race\n", encoding="utf-8")  # back to the bytes the racing run keyed its build by
+        cls.runs["after-race"] = run("v4")
+        cls.runs["unchanged"] = run("v5")
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls.tmp.cleanup()
+
+    def builds(self, name: str) -> dict[str, str]:
+        code, result, stderr = self.runs[name]
+        self.assertEqual(code, 0, stderr[-3000:])
+        return {pn: part["build"] for pn, part in result["parts"].items()}
+
+    def test_a_changed_plugin_module_rebuilds_the_parts(self) -> None:
+        self.assertEqual(self.builds("v1"), {"TST-0001": "built", "TST-0002": "built"})
+        self.assertEqual(self.builds("plugin"), {"TST-0001": "built", "TST-0002": "built"})
+        self.assertEqual(self.runs["plugin"][1]["cache"]["manufacturing"], {"built": 2, "reused": 0})
+
+    def test_a_changed_project_helper_rebuilds_the_part_that_imports_it(self) -> None:
+        self.assertEqual(self.builds("helper")["TST-0001"], "built")
+
+    def test_a_sources_edit_during_the_build_leaves_no_reusable_record(self) -> None:
+        code, _, stderr = self.runs["race"]
+        self.assertEqual((code, self.edited), (2, "edited\n"), stderr[-3000:])
+        self.assertIn("part sources changed while the version was built", stderr)
+        self.assertIn("['TST-0001'] was not cached", stderr)
+        self.assertEqual(self.builds("after-race"), {"TST-0001": "built", "TST-0002": "reused"})
+        self.assertEqual(self.builds("unchanged"), {"TST-0001": "reused", "TST-0002": "reused"})
+
+
+def other_filesystem() -> Path | None:
+    """A writable folder on another filesystem than the temporary folder: CAD_TEST_OTHER_FS, else /dev/shm."""
+    here = os.stat(tempfile.gettempdir()).st_dev
+    for candidate in (os.environ.get("CAD_TEST_OTHER_FS"), "/dev/shm"):
+        if candidate and os.path.isdir(candidate) and os.access(candidate, os.W_OK) and os.stat(candidate).st_dev != here:
+            return Path(candidate)
+    return None
+
+
+@unittest.skipUnless(shutil.which("uv") and other_filesystem(),
+                     "needs a writable folder on another filesystem: CAD_TEST_OTHER_FS, or /dev/shm on Linux")
+class CrossFilesystemTests(unittest.TestCase):
+    """The build_manufacture states folder (TMPDIR) on another filesystem than hw/: no hard link joins them,
+    so the store copies there and back, and both the build and its reuse seal verified versions."""
+
+    def test_a_states_folder_on_another_filesystem_builds_and_reuses_through_copies(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory(dir=other_filesystem()) as states:
+            hw = flat_project(Path(tmp), "cadquery")
+            self.assertNotEqual(os.stat(states).st_dev, os.stat(hw).st_dev)
+            results = []
+            for label in ("v1", "v2"):
+                if label == "v2":  # only the strap's tolerance: the definitions and the strap's state are reused
+                    set_strap(hw, "cadquery", manufacture=FLAT_STATE.replace("1.0e-6", "2.0e-6"))
+                proc = subprocess.run(["uv", "run", "--quiet", "--script", str(CLI), "run", str(hw), "--label", label],
+                                      capture_output=True, text=True, check=False, env={**os.environ, "TMPDIR": states})
+                self.assertEqual(proc.returncode, 0, proc.stdout[-2000:] + proc.stderr[-3000:])
+                results.append(json.loads(proc.stdout))
+            self.assertEqual(results[1]["cache"], {"parts": {"built": 0, "reused": 2},
+                                                   "manufacturing": {"built": 1, "reused": 1}})
+            for label in ("v1", "v2"):
+                self.assertEqual(build.record.load_layout().verify(hw / "versions" / label), [], label)
 
 
 if __name__ == "__main__":

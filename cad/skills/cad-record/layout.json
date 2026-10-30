@@ -12,6 +12,7 @@
     "PRODUCT": {"pattern": "[a-z0-9][a-z0-9-]*", "example": "lamp-arm", "meaning": "product id from product.yaml"},
     "SCENE_SHA": {"pattern": "[0-9a-f]{64}", "example": "1111111111111111111111111111111111111111111111111111111111111111", "meaning": "sha256 of the concept scene file"},
     "CAPTURE_SHA": {"pattern": "[0-9a-f]{64}", "example": "2222222222222222222222222222222222222222222222222222222222222222", "meaning": "sha256 of the captured viewer state"},
+    "SHA": {"pattern": "[0-9a-f]{64}", "example": "3333333333333333333333333333333333333333333333333333333333333333", "meaning": "sha256 of a stored part output's bytes, or of the inputs of a cached part output"},
     "PID": {"pattern": "[0-9]+", "example": "4242", "meaning": "process id of the writing run"},
     "STAMP": {"pattern": "[0-9]+", "example": "1730000000", "meaning": "monotonic clock stamp of the writing run"},
     "RUN": {"pattern": "[A-Za-z0-9][A-Za-z0-9._-]{0,127}", "example": "3f2b9c1e8d7a4b6c9e0f1a2b3c4d5e6f", "meaning": "id of one supervised sweep, check or FEA run"},
@@ -191,6 +192,12 @@
     {"id": "cache.pairs_shm", "path": "hw/.cad/pairs-v2.sqlite-shm", "kind": "generated", "role": "data",
      "writer": "SQLite, for cad-motion pair_measure.py PairCache", "stage": "any", "mutability": "scratch",
      "meaning": "the pair cache's shared-memory index; disposable with the cache"},
+    {"id": "cache.part_objects", "path": "hw/.cad/parts/{SHA}", "kind": "generated", "role": "data",
+     "writer": "cad-model cad_model.py run (cadmodel/store.py)", "stage": "layout", "mutability": "scratch",
+     "meaning": "one part output (definition or state STEP, manufacturing STEP, STL or manufacturing.json) stored once, read-only, under the sha256 of its bytes; each version holds a hard link to it where the filesystem allows, else a copy, so readers read the version's own path; git-ignored, never evidence; cad_model.py store gc removes it once no manifest references it"},
+    {"id": "cache.part_records", "path": "hw/.cad/builds/{SHA}.json", "kind": "generated", "role": "data",
+     "writer": "cad-model cad_model.py run (cadmodel/store.py)", "stage": "layout", "mutability": "scratch",
+     "meaning": "what one part build or manufacturing make produced, keyed by the sha256 of its inputs: the stored objects and the runner or check facts; run reuses it only while every object still hashes to its name; git-ignored; store gc drops it once no manifest references its outputs"},
     {"id": "control.run", "path": "hw/.cad/runs/{RUN}.json", "kind": "generated", "role": "control",
      "writer": "cad-flow process_lifecycle.py claim_run (cad-motion sweep.py, cad-model check, cad-analysis fea_static.py)",
      "stage": "any", "mutability": "scratch",
@@ -211,6 +218,12 @@
     {"id": "transient.latest", "path": "hw/versions/.latest.json.tmp", "kind": "transient",
      "writer": "cad-model cad_model.py run",
      "action": "An interrupted cad-model run left this temporary pointer. Delete it once no run is in progress."},
+    {"id": "transient.part_object", "path": "hw/.cad/parts/.{SHA}.{PID}.tmp", "kind": "transient",
+     "writer": "cad-model cad_model.py run",
+     "action": "An interrupted cad-model run left this half-stored object. Delete it once no run is in progress."},
+    {"id": "transient.part_record", "path": "hw/.cad/builds/.{SHA}.json.{PID}.tmp", "kind": "transient",
+     "writer": "cad-model cad_model.py run",
+     "action": "An interrupted cad-model run left this half-written build record. Delete it once no run is in progress."},
     {"id": "transient.render_partial", "path": "hw/renders/.{V}.partial-{STAMP}", "directory": true, "kind": "transient",
      "writer": "cad-render render.py",
      "action": "An interrupted render left this staging folder. Delete it once no render is in progress."},
@@ -336,5 +349,11 @@
     "formats": {"part.step": "STEP AP242, exact B-rep, millimetres", "part.stl": "binary STL, millimetres"},
     "mesh": {"linear_deflection_mm": 0.05, "angular_deflection_rad": 0.1},
     "same_state_volume_rel_tolerance": 1e-9
+  },
+  "storage": {
+    "setting": "storage.results_in_git",
+    "results": ["versions", "checks", "drawings", "renders", "captures", "motion/v*", "analysis/v*",
+                "concept/screenshots", "releases"],
+    "lfs_suffixes": [".step", ".glb"]
   }
 }

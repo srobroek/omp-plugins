@@ -4,7 +4,7 @@
   "title": "CAD hw/ layout (cad-record layout.json)",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "tokens", "legend", "entries", "exceptions", "rules", "classes", "findings", "manufacturing"],
+  "required": ["schema_version", "tokens", "legend", "entries", "exceptions", "rules", "classes", "findings", "manufacturing", "storage"],
   "properties": {
     "schema_version": {"const": 1},
     "tokens": {
@@ -76,6 +76,19 @@
           }
         },
         "same_state_volume_rel_tolerance": {"type": "number", "exclusiveMinimum": 0, "maximum": 1}
+      }
+    },
+    "storage": {
+      "description": "Which generated results git tracks, by the product.yaml answer `setting` names: ignored unless it is true, then tracked with Git LFS for `lfs_suffixes`",
+      "type": "object", "additionalProperties": false, "required": ["setting", "results", "lfs_suffixes"],
+      "properties": {
+        "setting": {"const": "storage.results_in_git"},
+        "results": {
+          "description": "Directories below hw/ that hold only generated results; a name may use the git glob *",
+          "type": "array", "minItems": 1, "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^[A-Za-z0-9_*-]+(/[A-Za-z0-9_*-]+)*$"}
+        },
+        "lfs_suffixes": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^\\.[a-z0-9]+$"}}
       }
     }
   },
