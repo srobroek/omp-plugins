@@ -433,6 +433,7 @@ def run(argv: list[str], *, idle_timeout_s: float | None = None,
             "project_root": args.project_root.resolve(),
             "watcher": watcher,
             "scene_dir": scene_dir,
+            "vendor": VendorCache(args.cache_dir, integrity),
             "heartbeat_s": HEARTBEAT_S if timeout_s <= 0 else min(HEARTBEAT_S, timeout_s / 4),
         },
     )
