@@ -119,6 +119,43 @@ class ReferenceModelTests(unittest.TestCase):
                 self.assertEqual((code, report["findings"]), (0, []))
 
 
+@unittest.skipUnless(shutil.which("uv"), "uv is required to build the CAD shape fixtures")
+class BlockShapeTests(unittest.TestCase):
+    """Block-like detection distinguishes a solid placeholder from a planar skeleton."""
+
+    def test_box_fails_and_open_frame_passes_without_blends(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            models = Path(tmp) / "models"
+            models.mkdir()
+            (models / "TST-0301.py").write_text(
+                'import cadquery as cq\nKERNEL = "cadquery"\nPARAMS = {}\n\n'
+                'def build(params):\n    return cq.Workplane().box(100, 100, 20)\n', encoding="utf-8")
+            (models / "TST-0302.py").write_text(
+                'import cadquery as cq\nKERNEL = "cadquery"\nPARAMS = {}\n\n'
+                'def build(params):\n'
+                '    outer = cq.Workplane().box(100, 100, 20)\n'
+                '    inner = cq.Workplane().box(90, 90, 22)\n'
+                '    return outer.cut(inner)\n', encoding="utf-8")
+            out = Path(tmp) / "out"
+            code, built = run_json([sys.executable, str(SCRIPTS / "build_reference.py"), "--kernel", "cadquery",
+                                    "--models", str(models), "--out", str(out)])
+            self.assertEqual((code, built["errors"]), (0, []))
+            code, report = form_check(out, "F2")
+
+        self.assertEqual(code, 1)
+        by_part = {row["part"]: row for row in report["findings"] if row["check"] == "block_like"}
+        self.assertEqual(sorted(by_part), ["TST-0301"])
+        box = report["parts"]["TST-0301"]
+        frame = report["parts"]["TST-0302"]
+        self.assertGreaterEqual(box["axis_planar_fraction"], 0.80)
+        self.assertGreaterEqual(box["obb_fill_fraction"], 0.20)
+        self.assertEqual(box["blend_faces"] + box["freeform_faces"], 0)
+        self.assertEqual(frame["axis_planar_fraction"], 1.0)
+        self.assertLess(frame["obb_fill_fraction"], 0.20)
+        self.assertGreaterEqual(frame["obb_thickness_fraction"], 0.10)
+        self.assertEqual(frame["blend_faces"] + frame["freeform_faces"], 0)
+
+
 @unittest.skipUnless(shutil.which("uv"), "uv is required to build the cad-motion block fixtures")
 class BlockDetectorTests(unittest.TestCase):
     """The cad-motion stand-in lamp is boxes and cylinders: every made part must be flagged."""
