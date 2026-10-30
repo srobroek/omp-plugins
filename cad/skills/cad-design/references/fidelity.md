@@ -63,6 +63,23 @@ note; a part whose interfaces change drops back to F1 until the new interface is
 | Pin bores | Use H7 for declared 5 H7/p6 press-fit holders and the declared `cad-fits` class for running bores; 0.5 mm 45-degree entry chamfers |
 | Exterior edges | 1-1.5 mm fillets on silhouettes; break remaining edges 0.2-0.5 mm by drawing note, not in the model |
 | Channels | Ball-end cut: full-radius floor and spherical ends |
+## F2 process wall check
+
+`form_check.py --fidelity F2` samples a 4×4 interior UV grid on each trimmed face of
+each solid STEP part, classifies samples inside the solid, then casts inward normals.
+An exit is a wall only when its nearest support is another face, the face normals are
+within 20° of antiparallel, and the ray crosses from inside to outside. Samples closer
+than the per-process minimum to a face UV edge are skipped. The shortest sampled chord
+is `min_wall` with thickness and part-local location. FDM default: 1.2 mm for a 0.4 mm
+nozzle; `hw/product.yaml` `manufacturing.min_wall_mm` overrides per process. The kernel
+intersection/classification tolerance is 1e-7 mm with a 1e-5 mm origin offset. That is
+local kernel precision, not a certified global minimum: narrow features between UV grid
+samples can be missed; curved walls are reported as straight-ray chords.
+
+`block_like` applies only to `form_class: solid` in `part.yaml`; absent means `solid`.
+Frame, plate, skeleton, and shell are exempt. Solid parts retain the existing OBB tests:
+the face-area rule, minimum 0.20 OBB fill, and shortest OBB extent above 0.10 of the
+second-shortest extent.
 
 ## Self-check: block-like parts
 

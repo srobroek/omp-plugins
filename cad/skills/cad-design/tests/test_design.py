@@ -9,13 +9,14 @@ OCP import can take minutes, so the builds have no short timeout.
 from __future__ import annotations
 
 import json
-from pathlib import Path
+import os
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
-import os
+from pathlib import Path
+
 HERE = Path(__file__).resolve().parent
 SKILL = HERE.parent
 SCRIPTS = SKILL / "scripts"
@@ -27,6 +28,7 @@ KERNELS = ("cadquery", "build123d")
 TEMPLATE_PARTS = sorted(p.name for p in (EXAMPLE / "hw" / "parts").iterdir() if (p / "part.yaml").is_file())
 sys.path.insert(0, str(SKILL.parent / "cad-drawings" / "scripts"))
 import freecad_runtime  # noqa: E402
+
 FREECADCMD = freecad_runtime.find_freecadcmd()
 FREECAD_PRESENT = FREECADCMD is not None and FREECADCMD.is_file() and os.access(FREECADCMD, os.X_OK)
 
@@ -41,10 +43,30 @@ def run_json(command: list[str]) -> tuple[int, dict]:
         raise AssertionError(f"{command[:4]} printed no JSON (exit {result.returncode}):\n{result.stderr[-3000:]}") from error
 
 
-def form_check(parts_dir: Path, fidelity: str) -> tuple[int, dict]:
-    return run_json(["uv", "run", "--script", str(SCRIPTS / "form_check.py"), "--hw", str(TEMPLATE_HW),
+def form_check(parts_dir: Path, fidelity: str, hw: Path = TEMPLATE_HW) -> tuple[int, dict]:
+    return run_json(["uv", "run", "--script", str(SCRIPTS / "form_check.py"), "--hw", str(hw),
                      "--parts-dir", str(parts_dir), "--fidelity", fidelity])
 
+def build_box_fixture(root: Path, thickness: float, form_class: str | None = None) -> tuple[Path, Path]:
+    """Build one STEP part using cad-design's product runner."""
+    hw, models = root / "hw", root / "models"
+    parts_dir = root / "parts"
+    (hw / "parts" / "TST-0301").mkdir(parents=True)
+    models.mkdir()
+    record = "PN: TST-0301\nprocess: fdm\nmake_buy: make\n"
+    if form_class:
+        record += f"form_class: {form_class}\n"
+    (hw / "parts" / "TST-0301" / "part.yaml").write_text(record, encoding="utf-8")
+    (hw / "assembly.yaml").write_text("joints: []\n", encoding="utf-8")
+    (models / "TST-0301.py").write_text(
+        'import cadquery as cq\nKERNEL = "cadquery"\nPARAMS = {}\n\n'
+        f'def build(params):\n    return cq.Workplane().box(10, 10, {thickness})\n', encoding="utf-8")
+    result = subprocess.run([sys.executable, str(SCRIPTS / "build_reference.py"), "--kernel", "cadquery",
+                             "--models", str(models), "--hw", str(hw), "--out", str(parts_dir)],
+                            capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        raise AssertionError(f"build_reference.py failed: {result.stderr[-2000:]}")
+    return hw, parts_dir
 
 @unittest.skipUnless(FREECAD_PRESENT, "reference lamp tests need FreeCAD 1.1.4's bundled Osifont")
 class ReferenceModelTests(unittest.TestCase):
@@ -161,6 +183,29 @@ class BlockShapeTests(unittest.TestCase):
         self.assertLess(pin["axis_planar_fraction"], 0.80)
         self.assertEqual(pin["blend_faces"] + pin["freeform_faces"], 0)
         self.assertIn("TST-0303", by_part)
+    def test_non_solid_block_is_exempt_and_wall_override_applies(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            hw, parts_dir = build_box_fixture(Path(tmp), 1.1, "frame")
+            (hw / "product.yaml").write_text("id: fixture\nmanufacturing:\n  min_wall_mm: {fdm: 1.0}\n", encoding="utf-8")
+            code, report = form_check(parts_dir, "F2", hw)
+            self.assertEqual(code, 0, report["findings"])
+            self.assertEqual(report["parts"]["TST-0301"]["form_class"], "frame")
+            self.assertAlmostEqual(report["parts"]["TST-0301"]["min_wall"]["thickness_mm"], 1.09998, places=5)
+            (hw / "product.yaml").write_text("id: fixture\nmanufacturing:\n  min_wall_mm: {fdm: 1.15}\n", encoding="utf-8")
+            code, report = form_check(parts_dir, "F2", hw)
+            wall = next(f for f in report["findings"] if f["check"] == "min_wall")
+            self.assertEqual((code, wall["part"], wall["min_mm"]), (1, "TST-0301", 1.15))
+            self.assertEqual(len(wall["location_mm"]), 3)
+
+    def test_solid_box_defaults_to_block_like_and_fdm_wall_minimum(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            hw, parts_dir = build_box_fixture(Path(tmp), 1.1)
+            code, report = form_check(parts_dir, "F2", hw)
+            block = next(f for f in report["findings"] if f["check"] == "block_like")
+            wall = next(f for f in report["findings"] if f["check"] == "min_wall")
+            self.assertEqual((code, block["part"], wall["min_mm"]), (1, "TST-0301", 1.2))
+            self.assertLess(wall["thickness_mm"], wall["min_mm"])
+            self.assertEqual(len(wall["location_mm"]), 3)
 
 @unittest.skipUnless(shutil.which("uv"), "uv is required to build the cad-motion block fixtures")
 class BlockDetectorTests(unittest.TestCase):

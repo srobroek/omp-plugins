@@ -33,10 +33,12 @@ TRIGGER
 
 MUST Reach F2 on every made part before the L2 PARTS gate and F3 before the L3 DETAIL gate.
 MUST Treat `form_check.py` exit 1 as a gate blocker; `block_like` is never waived by a render.
-The `block_like` check applies when either at least 80% of face area is planar and normal
-to a principal axis, or the part has no recognized blend or freeform faces; it also
-requires solid material to occupy at least 20% of OBB volume and the shortest OBB extent
-to exceed 10% of the second-shortest extent.
+The `block_like` check applies only when `part.yaml` `form_class` is `solid` (the
+default when absent). Frame, plate, skeleton, and shell are exempt. Solid parts retain
+the two OBB exemptions: either at least 80% of face area is planar and normal to a
+principal axis or there are no recognized blend/freeform faces; solid material fills
+at least 20% of its OBB and shortest OBB extent exceeds 10% of the second-shortest.
+At F2, form_check.py checks process wall thickness; the FDM default is 1.2 mm (0.4 mm nozzle).
 MUST Put every joint bore on its `assembly.yaml` origin and axis (form_check tolerance 0.05 mm).
 MUST Size bores from `skill://cad-fits` output and counterbores from ISO 4762 head sizes, never from memory.
 DEFAULT Model CadQuery fastener heads natively; `cq_warehouse` is not on PyPI. bd_warehouse 0.4.0 serves build123d.
