@@ -65,6 +65,21 @@ Gmsh/OCC numerical nondeterminism, not source input drift; comparable repeats ma
 - `2`: no result; invalid input, unavailable or failed FreeCAD job, timeout, malformed result, or
   other infrastructure failure.
 
+## Solver failures
+
+The job runs the ccx it records in `solver_versions`: beside FreeCAD first, then on PATH. A failed
+solve names its cause in `error.code`, with the evidence in `error.details`:
+
+- `solver_crashed`: ccx died from a signal. `details` gives the signal, the `stage`
+  (`spooles_factorisation` or `before_equation_solver`), and the degrees of freedom. The SPOOLES in
+  FreeCAD's ccx overflows a 32-bit index once its factorisation has more than 46,340 fronts, near
+  1,000,000 degrees of freedom (some 350,000 nodes), so a finer mesh than that cannot solve; raise
+  `mesh_size`.
+- `solver_failed`: ccx stopped with `*ERROR` messages, quoted in the message and `details.errors`.
+  A nonpositive Jacobian lists the distorted second-order elements; lower `mesh_size`.
+- `freecad_timeout`: `details.phase` is `import`, `mesh`, `solve` or `results`. The timeout stops
+  the whole job, Gmsh and ccx included.
+
 ## Rules
 
 MUST Check that face selection, units, material, constraints, and solver warnings match the case before relying on results.
