@@ -1,0 +1,43 @@
+requirements:
+  - id: REQ-001
+    text: "The lamp head shall pivot relative to the upper link through at least 45 degrees in each direction."
+    rationale: "Allow users to direct the light toward the work surface."
+    source: "Project brief"
+    priority: must
+    verification: {method: T, criteria: "Measure head travel on both sides of nominal; each direction is at least 45 degrees."}
+  - id: REQ-002
+    text: "The elbow shall fold to 0 degrees and extend to at least -120 degrees."
+    rationale: "Provide a compact folded position and useful reach."
+    source: "Project brief"
+    priority: must
+    verification: {method: T, criteria: "Sweep the elbow joint and verify both endpoints."}
+  - id: REQ-003
+    text: "The base pivot shall support a range from -10 to 80 degrees."
+    rationale: "The arm must rotate from behind the lamp to a forward position."
+    source: "Project brief"
+    priority: must
+    verification: {method: I, criteria: "Inspect the modeled hard-stop range against the joint record."}
+  - id: REQ-004
+    text: "The structure shall support a 0.8 kg head at full horizontal reach."
+    rationale: "Avoid excessive sag or structural failure in normal use."
+    source: "Engineering assumption"
+    priority: must
+    verification: {method: A, criteria: "Static analysis at worst-case pose shows required margin per project review."}
+  - id: REQ-005
+    text: "The base shall attach to a work surface with two M6 fasteners."
+    rationale: "Keep the lamp stable under normal adjustment."
+    source: "Project brief"
+    priority: should
+    verification: {method: I, criteria: "Inspect mounting hole pattern and fastener access."}
+  - id: REQ-006
+    text: "User-accessible edges shall not have sharp burrs."
+    rationale: "Prevent injury during assembly and adjustment."
+    source: "Workshop safety practice"
+    priority: should
+    verification: {method: I, criteria: "Inspect and deburr every user-accessible edge."}
+  - id: REQ-007
+    text: "The assembly shall be serviceable with common hand tools."
+    rationale: "Permit maintenance without specialist equipment."
+    source: "Project brief"
+    priority: could
+    verification: {method: D, criteria: "Demonstrate installation and removal using standard metric hex keys."}

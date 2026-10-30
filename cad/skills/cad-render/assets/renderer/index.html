@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Product render</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="concept-tokens.css" />
+    <link rel="stylesheet" href="tokens.css" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        background: var(--color-backdrop);
+        font-family: var(--font-ui);
+        font-size: var(--text-sm);
+        color: var(--color-fg);
+      }
+      canvas {
+        display: block;
+      }
+      .status {
+        position: fixed;
+        left: var(--space-3);
+        bottom: var(--space-3);
+        margin: 0;
+        padding: var(--space-2) var(--space-3);
+        border-radius: var(--radius-2);
+        background: var(--color-surface);
+        color: var(--color-fg-muted);
+      }
+      body[data-state="error"] .status {
+        color: var(--color-danger);
+      }
+      body[data-state="ready"] .status {
+        display: none;
+      }
+    </style>
+    <!-- three is pinned to one exact release. render.py serves /vendor/ through cad-concept's
+         SRI-checked cache: each module is fetched once from jsDelivr, checked against the digest
+         below, and reused offline. Every module the page reaches must be listed here. -->
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "/vendor/three@0.186.1/build/three.module.js",
+          "three/addons/": "/vendor/three@0.186.1/examples/jsm/"
+        },
+        "integrity": {
+          "/vendor/three@0.186.1/build/three.module.js": "sha384-m8JoFX52V6NGv2usipnlLJKnJfL7IE8dbniPDDCSGSQv3Hm4n6PjfV6syVwfuoRc",
+          "/vendor/three@0.186.1/build/three.core.js": "sha384-mdKeCwPEcbDvzaxwhm+MVuLoMou+E7jQqrs4tmu/n8HBYPGI1kZt0MkJxlMR4zFM",
+          "/vendor/three@0.186.1/examples/jsm/loaders/GLTFLoader.js": "sha384-jmhN0si8z6E7+h0t9KiwQ71oyrC3PhTpols1FXeN/vODuFa/L4bPIe9sLbOlhjq7",
+          "/vendor/three@0.186.1/examples/jsm/utils/BufferGeometryUtils.js": "sha384-Rm97j4mcjlLkGsYC2LX3nZG9VU2R8lgK0QE+DmBr4thue+H7J+SHm+68If2ZLBVg",
+          "/vendor/three@0.186.1/examples/jsm/utils/SkeletonUtils.js": "sha384-Pozn8j5+YFr3ak8Pm90ayqDrGYn/DV7vVs/YIIqzJhzeJT0LQksoS1fZQ5lfsYlw",
+          "/vendor/three@0.186.1/examples/jsm/environments/RoomEnvironment.js": "sha384-/H49oz0ZtMgJNgMZ+OhhuMuKBOsaiC3kY0/PZSvgJJXAOJJwmSBJjzlV5lJul3MB",
+          "/vendor/three@0.186.1/examples/jsm/postprocessing/EffectComposer.js": "sha384-9Rdp95mYHRj8gGxPz4TqkDaCUh8rd67b7V5slkjz7GA9uNXtykhptQdEPPOocbUn",
+          "/vendor/three@0.186.1/examples/jsm/postprocessing/Pass.js": "sha384-927X5fcqlqKPsXZV1w3tv5BZx797OXX3D/TDJk0FHwJd12z58B5aqS77g5LZoprI",
+          "/vendor/three@0.186.1/examples/jsm/postprocessing/ShaderPass.js": "sha384-0DjIyth2/18aCmCo4x7GEOqSJTu3uNx5ptRg+rlkZ7zs9MlNfUXVEhbUuzVzglaG",
+          "/vendor/three@0.186.1/examples/jsm/postprocessing/MaskPass.js": "sha384-5MFlCMNYgjI2KQDXH12DjwyKtWiXRsrFMMGKIP3pCQemWtt1INLwPKwZDF0TEKG9",
+          "/vendor/three@0.186.1/examples/jsm/postprocessing/RenderPass.js": "sha384-uXlYrFHzQTAiW5xsJFs0kB/Pym7jA0qunZ+aS1V25CJ1MjaKbgNQv5SjoEzNoa4F",
+          "/vendor/three@0.186.1/examples/jsm/postprocessing/GTAOPass.js": "sha384-YvTlnX5ZV8iyXD41aGDTNz+CXwK4EGxSPE0vnYoJ0VW9/31DFynBMuJ4yhjhD7kY",
+          "/vendor/three@0.186.1/examples/jsm/postprocessing/OutputPass.js": "sha384-3IFYrRLOw90S3gt5Xi3JVTJrETpklthjLSmnmeyqxQmh1knUIaGPwbRsk35kgNoW",
+          "/vendor/three@0.186.1/examples/jsm/shaders/CopyShader.js": "sha384-Hxod3deUgRexb42wOr+7J8ySu/QNr1oXlCfY9bivrSKBseng+R34eirHq/Rvvxee",
+          "/vendor/three@0.186.1/examples/jsm/shaders/GTAOShader.js": "sha384-Vzy332Htapj4ylV0T8/PWIycS377IR435ZYJFP3+FIP1hBppZKHK6uB4X5Z9uwQM",
+          "/vendor/three@0.186.1/examples/jsm/shaders/PoissonDenoiseShader.js": "sha384-9TmXYAPLd/EezQq3Ak+vYUGEvDtanSVB6I8VfwK7qspzZfUmhxsXk28mseonzROP",
+          "/vendor/three@0.186.1/examples/jsm/shaders/OutputShader.js": "sha384-7B5u2okAR4bArb4emcYnTiZPFpV3wPNvV3ZY9xre0xp3cNKs2TeaYiOyMDa/bDAi",
+          "/vendor/three@0.186.1/examples/jsm/math/SimplexNoise.js": "sha384-IwC6d45K1GYEOKIe6xPySXxRzXCN862+MGz2r55ZDvPrc1LxaLCbaKWCRGLAFk16"
+        }
+      }
+    </script>
+    <script
+      type="module"
+      src="render.js"
+      onerror="document.body.dataset.state = 'error'; document.getElementById('status').textContent = 'The renderer could not load three.js. Run render.py with network access once to fill the module cache.'"
+    ></script>
+  </head>
+  <body data-state="loading">
+    <canvas id="render" role="img" aria-label="Product render"></canvas>
+    <p class="status" id="status" role="status" aria-live="polite">Loading model…</p>
+  </body>
+</html>

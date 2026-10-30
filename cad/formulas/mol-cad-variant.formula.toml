@@ -1,0 +1,35 @@
+# mol-cad-variant: one L0 concept variant drafted by a cad-concept-designer worker.
+# Bond one per variant onto a concept fan-out step, all in one batch:
+#   bd mol bond mol-cad-variant <fanout-step> --type parallel --ref variant-<id> --var variant=<id> ...
+formula = "mol-cad-variant"
+description = "Draft concept variant {{variant}} of {{product}} as a checked one-variant three.js scene"
+type = "workflow"
+
+[vars.product]
+required = true
+description = "hardware product id recorded in hw/product.yaml"
+
+[vars.scope]
+required = true
+description = "hardware project paths the concept stage covers"
+
+[vars.variant]
+required = true
+pattern = "^[a-z][a-z0-9]*(-[a-z0-9]+)*$"
+description = "variant id, unique in the product scene; the unit id is variant-<variant>"
+
+[vars.tradeoff]
+required = true
+description = "the answer to the main trade-off this variant explores, in one sentence"
+
+[[steps]]
+id = "draft-variant"
+title = "DRAFT concept variant {{variant}}"
+type = "task"
+labels = ["cad", "phase:concept"]
+description = "Unit variant-{{variant}}. Draft one concept variant {{variant}} for {{product}} that answers the trade-off: {{tradeoff}}. Read hw/product.yaml, hw/requirements.yaml, and skill://cad-concept/references/scene-format.md. Write `.cad-work/variant-{{variant}}/{{variant}}.scene.json`, a scene whose `variants` holds only this variant, with the trade-off in `params`, a one-line `summary`, and the node ids and joints the lead's brief names. Run `uv run --script skill://cad-concept/scripts/concept.py check <file>` until it exits 0. Write nothing under hw/, start no preview, and ask the user nothing. Return the absolute file path, the params, and the summary."
+
+[steps.metadata]
+skill_hints = "cad-concept"
+execution_mode = "subagent"
+execution_agent_type = "cad-concept-designer"

@@ -1,0 +1,19 @@
+#!/bin/sh
+# Enforce a passing, current recheck stamp once the project's recheck threshold is reached.
+set -eu
+
+command_name='uv run --script <path-to-cad-recheck>/scripts/stamp.py --verify'
+
+fail() {
+    printf 'cad-recheck: %s\nRun: %s\n' "$1" "$command_name" >&2
+    exit 1
+}
+
+# Hooks run for every commit; non-hardware commits do not require a stamp.
+staged_hw=$(git diff --cached --name-only --diff-filter=ACDMRTUXB -- hw/)
+[ -n "$staged_hw" ] || exit 0
+
+# stamp.py reads only the staged product and decides whether verification is required.
+hook_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+uv run --script "$hook_dir/cad-recheck-stamp.py" --verify || fail 'stamp verification failed'
+exit 0

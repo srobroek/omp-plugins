@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://srobroek.com/cad/schemas/release-manifest.schema.json",
+  "title": "CAD release manifest",
+  "description": "Version 1 (no schema_version) lists project files in place. Version 2, written by release.py, seals a package of byte copies under hw/releases/<rev>/.",
+  "if": {"type": "object", "required": ["schema_version"]},
+  "then": {"$ref": "#/$defs/v2"},
+  "else": {"$ref": "#/$defs/v1"},
+  "$defs": {
+    "product_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$"},
+    "rev": {"type": "string", "pattern": "^[A-HJ-NPRTUVWY]$"},
+    "checks": {"type": "object", "additionalProperties": {"type": "string", "enum": ["pass", "fail", "waived"]}},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "package_path": {
+      "description": "A path inside the package directory",
+      "type": "string", "pattern": "^(?!/)(?!.*(^|/)\\.{1,2}(/|$))(?!manifest\\.json$)[^\\\\]+$"
+    },
+    "v1": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["product_id", "rev", "released_at", "files", "checks"],
+      "properties": {
+        "product_id": {"$ref": "#/$defs/product_id"},
+        "rev": {"$ref": "#/$defs/rev"},
+        "released_at": {"type": "string", "format": "date-time"},
+        "files": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+        "checks": {"$ref": "#/$defs/checks"}
+      }
+    },
+    "v2": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "product_id", "rev", "released_at", "frozen", "approval", "files", "manufacturing", "bundles", "checks"],
+      "properties": {
+        "schema_version": {"const": 2},
+        "product_id": {"$ref": "#/$defs/product_id"},
+        "rev": {"$ref": "#/$defs/rev"},
+        "released_at": {"type": "string", "format": "date-time"},
+        "frozen": {"$ref": "product.schema.json#/$defs/frozen"},
+        "approval": {"description": "the decision record approving this release", "$ref": "product.schema.json#/$defs/decision"},
+        "files": {
+          "description": "Every package file but manifest.json, keyed by its path in the package, with its sha256 and the immutable original it copies",
+          "type": "object", "minProperties": 1,
+          "propertyNames": {"$ref": "#/$defs/package_path"},
+          "additionalProperties": {
+            "type": "object", "additionalProperties": false, "required": ["sha256", "original"],
+            "properties": {
+              "sha256": {"$ref": "#/$defs/sha256"},
+              "original": {"type": "string", "pattern": "^hw/(?!releases/)(?!.*(^|/)\\.{1,2}(/|$))[^\\\\]+$"}
+            }
+          }
+        },
+        "manufacturing": {
+          "description": "Per custom-made PN of the frozen version: its process, assembled quantity and package files",
+          "type": "object",
+          "propertyNames": {"pattern": "^[A-Z]{2,5}-[0-9]{4}$"},
+          "additionalProperties": {
+            "type": "object", "additionalProperties": false, "required": ["process", "quantity", "files"],
+            "properties": {
+              "process": {"enum": ["fdm", "cnc", "purchased"]},
+              "quantity": {"type": "integer", "minimum": 1},
+              "files": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/package_path"}}
+            }
+          }
+        },
+        "bundles": {
+          "description": "The drawing, check, analysis and other bundles the release selected, by manifest sha256",
+          "type": "array", "uniqueItems": true,
+          "items": {
+            "type": "object", "additionalProperties": false, "required": ["layout", "path", "manifest_sha256"],
+            "properties": {
+              "layout": {"type": "string", "pattern": "^[a-z]+(\\.[a-z_]+)*$"},
+              "path": {"type": "string", "pattern": "^hw/(?!.*(^|/)\\.{1,2}(/|$))[^\\\\]+$"},
+              "manifest_sha256": {"$ref": "#/$defs/sha256"}
+            }
+          }
+        },
+        "checks": {"$ref": "#/$defs/checks"}
+      }
+    }
+  }
+}

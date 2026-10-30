@@ -1,0 +1,10 @@
+/*
+ * Renderer scene tokens. render.js reads them through getComputedStyle, so the photographed
+ * backdrop and shadow have one source. The status line's chrome tokens (colours, spacing, type)
+ * are cad-concept's assets/viewer/tokens.css, which render.py serves as /concept-tokens.css.
+ */
+:root {
+  --color-backdrop: #e6e8eb;
+  --color-shadow: #1d2530;
+  --shadow-opacity: 0.8;
+}

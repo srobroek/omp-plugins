@@ -1,0 +1,189 @@
+{
+  "argv": [
+    "kiro-cli",
+    "chat",
+    "--no-interactive",
+    "--agent-engine",
+    "v3",
+    "--model",
+    "claude-haiku-5.5",
+    "--output-format",
+    "stream-json",
+    "--trust-all-tools",
+    "--trust-workspace",
+    "--agent",
+    "cad-eval",
+    "First, under the heading INSTRUCTIONS, list every instruction file, rule file, steering document and system-prompt section you were given (file path or section heading, one per line), other than skill bodies. Then, under the heading SKILLS, list the names of every skill available to you, one per line. Then, under the heading FILES, list the entries of the current working directory, using your file or directory tool rather than a shell command. Then create a file named hello.txt whose entire content is the word ok. End your reply with the single word DONE."
+  ],
+  "at": "2026-10-27T01:56:00+00:00",
+  "file_written": true,
+  "harness": "kiro",
+  "host": {
+    "shared_temp": {
+      "added_by_other_processes": 10,
+      "added_by_trial": [],
+      "roots": [
+        "/private/tmp",
+        "$TMPDIR"
+      ]
+    },
+    "trial_tmpdir": [
+      "kiro-cli-updates-503",
+      "kiro-log",
+      "kiro-log/kiro-chat.log",
+      "kiro-log/lsp.log",
+      "kiro-log/mcp.log"
+    ],
+    "unchanged": false,
+    "user_stores": {
+      "/Applications/Kiro CLI.app/Contents/MacOS/kiro-cli": {
+        "added": [],
+        "changed": [],
+        "fingerprint": {
+          "mtime_ns": 1793031414000000000,
+          "sha256": "6a98130360fef93f4c342f9e49ecada36a8dc1a96f4de113cc6c31dc2d002b22",
+          "size": 73465744
+        },
+        "removed": [],
+        "sqlite": {},
+        "trial_counterpart_entries": 0
+      },
+      "/Applications/Kiro CLI.app/Contents/MacOS/kiro-cli-chat": {
+        "added": [],
+        "changed": [],
+        "fingerprint": {
+          "mtime_ns": 1793031415000000000,
+          "sha256": "8f3e7f4e1fce16b289c7ffa4628dd41443120ae0c5fc2ce36e9be0fe93290dcf",
+          "size": 412904352
+        },
+        "removed": [],
+        "sqlite": {},
+        "trial_counterpart_entries": 0
+      },
+      "/Applications/Kiro CLI.app/Contents/MacOS/kiro-cli-term": {
+        "added": [],
+        "changed": [],
+        "fingerprint": {
+          "mtime_ns": 1793031414000000000,
+          "sha256": "a59dc1e55232208ad9f20e4cb9d9bb6e51300f230db7267ff18c9969de5031b0",
+          "size": 61654512
+        },
+        "removed": [],
+        "sqlite": {},
+        "trial_counterpart_entries": 0
+      },
+      "~/.kiro": {
+        "added": [],
+        "changed": [
+          "~/.kiro/sessions/cli"
+        ],
+        "removed": [],
+        "sqlite": {},
+        "trial_counterpart_entries": 12
+      },
+      "~/Library/Application Support/kiro-cli": {
+        "added": [
+          "~/Library/Application Support/kiro-cli/run-receipts/ea3786eb-042b-43f2-8d3b-0aa17fa41a90.json",
+          "~/Library/Application Support/kiro-cli/run-receipts/f7552dea-cb87-4297-aec8-6f0f2171ddcb.json"
+        ],
+        "changed": [
+          "~/Library/Application Support/kiro-cli/data.sqlite3",
+          "~/Library/Application Support/kiro-cli/run-receipts",
+          "~/Library/Application Support/kiro-cli/run/turn-markers",
+          "~/Library/Application Support/kiro-cli/telemetry-export-drops.json"
+        ],
+        "removed": [],
+        "sqlite": {
+          "data.sqlite3": {
+            "rows": {
+              "auth_kv": 2,
+              "conversations": 0,
+              "conversations_v2": 417,
+              "extracted_kas_versions": 7,
+              "history": 1902,
+              "migrations": 11,
+              "pinned_bin_versions": 5,
+              "state": 43
+            },
+            "rows_mentioning_trial": 0,
+            "tables_changed": [
+              "extracted_kas_versions"
+            ]
+          }
+        },
+        "trial_counterpart_entries": 12
+      }
+    }
+  },
+  "inventory": {
+    "agents": [
+      "cad-dfm-reviewer",
+      "cad-eval",
+      "cad-mech-reviewer"
+    ],
+    "baseline": {
+      "declared_for": "2.34.1",
+      "loaded": {}
+    },
+    "commands": [],
+    "context": [
+      "file://<trial>/work/cad/skills/cad-analysis/SKILL.md",
+      "file://<trial>/work/cad/skills/cad-bom/SKILL.md",
+      "file://<trial>/work/cad/skills/cad-concept/SKILL.md",
+      "file://<trial>/work/cad/skills/cad-design/SKILL.md",
+      "file://<trial>/work/cad/skills/cad-drawings/SKILL.md",
+      "file://<trial>/work/cad/skills/cad-fits/SKILL.md",
+      "file://<trial>/work/cad/skills/cad-flow/SKILL.md",
+      "file://<trial>/work/cad/skills/cad-model/SKILL.md",
+      "file://<trial>/work/cad/skills/cad-motion/SKILL.md",
+      "file://<trial>/work/cad/skills/cad-recheck/SKILL.md",
+      "file://<trial>/work/cad/skills/cad-record/SKILL.md",
+      "file://<trial>/work/cad/skills/cad-render/SKILL.md",
+      "file://<trial>/work/cad/skills/cad-review-dfm/SKILL.md",
+      "file://<trial>/work/cad/skills/cad-review-mech/SKILL.md",
+      "file://<trial>/work/cad/skills/cad-viewer/SKILL.md"
+    ],
+    "mcp": [],
+    "missing": [],
+    "plugins": [],
+    "skills": [
+      "cad-analysis",
+      "cad-bom",
+      "cad-concept",
+      "cad-design",
+      "cad-drawings",
+      "cad-fits",
+      "cad-flow",
+      "cad-model",
+      "cad-motion",
+      "cad-recheck",
+      "cad-record",
+      "cad-render",
+      "cad-review-dfm",
+      "cad-review-mech",
+      "cad-viewer"
+    ],
+    "version": "2.34.1"
+  },
+  "isolation": "clean",
+  "isolation_mechanism": "HOME, XDG_* and TMPDIR in the trial; a trial-own Kiro database holding a copy of the user's login only; --agent cad-eval (sandbox-local, cad skills only); cad copied to <work>/cad",
+  "latency_s": 17.9,
+  "leaks": [],
+  "ok": true,
+  "requested_model": "claude-haiku-5.5",
+  "served_matches": true,
+  "served_model": "claude-haiku-5.5",
+  "text": "INSTRUCTIONS\nSystem prompt: \"Security, trust and safety\"\nSystem prompt: \"Work guidelines\" (including \"Understand before acting\", \"Make safe, scoped changes\")\nSystem prompt: \"Communication Guide\" (including \"Structure and style\", \"Substance and words\")\nSystem prompt: hook output channel rules\nSystem prompt: system information and workspace folder rules\n\nSKILLS\ncad-analysis\ncad-bom\ncad-concept\ncad-design\ncad-drawings\ncad-fits\ncad-flow\ncad-model\ncad-motion\ncad-recheck\ncad-record\ncad-render\ncad-review-dfm\ncad-review-mech\ncad-viewer\n\nFILES\n.git\n.kiro\ncad\n\nDONE",
+  "tools": [
+    "List Directory",
+    "Write File"
+  ],
+  "transcript_entries": 6,
+  "usage": {
+    "cacheRead": 0,
+    "cacheWrite": 0,
+    "credits": 0.024613,
+    "input": 0,
+    "output": 0
+  }
+}

@@ -1,0 +1,41 @@
+PN: LMP-0010
+rev: X1
+title: Heat-set insert QT M10x1 x 12.7 OD 12.6
+material: Brass
+process: purchased
+finish: Cleaned
+mass_target: 6.7
+make_buy: buy
+supplier: null
+decisions: [DR-004]
+procurement:
+  mode: catalog
+  manufacturer: In-saiL
+  designation: "Heat-set insert QT-M10x12.7-OD12.6, thread M10x1-6H to order (catalogue M10x1.5)"
+  specification:
+    reference: In-saiL drawing LF646, QT-M10x12.7-OD12.6
+    revision: "A, 2013-05-04"
+    url: https://v6-file.globalso.com/upload/p/147/file/2024-06/qt-m10x12-7-od12-6-lf646.pdf
+    sha256: e09e925db6a678d28e47561587ff9412ee4fe451be4025cdef58a3e6ec37e6ae
+  open:
+    manufacturer_part_number: "In-saiL to confirm the M10x1-6H special; the catalogue QT-M10x12.7-OD12.6 is M10x1.5 (DR-004)"
+drawing:
+  type: vendor_specification
+  datum_features:
+    A: {feature: installed_end, role: plane}
+    B: {feature: thread_bore, role: axis}
+  coordinate_frame:
+    origin: {intersection: [A, B]}
+    z: {parallel_to: B, toward: blind_end}
+  views:
+    - {id: elevation, kind: orthographic, perpendicular_to: B}
+    - {id: end, kind: orthographic, along_axis: B, toward: installed_end}
+  features:
+    thread_bore: {thread: {designation: M10x1-6H, standard: ISO 965-1, operation: vendor}}
+  dimensions:
+    - {id: length, operation: plane_separation, features: [installed_end, blind_end], tolerance: {deviation_mm: [-0.12, 0.12]}}
+    - {id: knurl_diameter, operation: diameter, features: [knurl], tolerance: {deviation_mm: [-0.12, 0.12]}}
+  notes:
+    - {kind: general, text: "The thread is the ordering requirement; length L and the knurl diameter OD are to drawing LF646. The envelope does not model the insert's pilot."}
+    - {kind: inspection, text: "Heat-set into the LMP-0004 insert hole, flush with the socket-boss face (DR-004)."}
+  sheet: {sizes: [A4, A3], scale: auto}

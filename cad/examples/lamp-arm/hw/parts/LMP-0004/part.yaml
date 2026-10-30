@@ -1,0 +1,76 @@
+PN: LMP-0004
+rev: X1
+title: Lamp head housing
+material: PETG
+process: fdm
+finish: Deburr; no sharp edges
+mass_target: 62
+make_buy: make
+supplier: null
+decisions: [DR-002, DR-004]
+manufacture: {relationship: same, mesh: {linear_deflection_mm: 0.05, angular_deflection_rad: 0.1}}
+drawing:
+  type: detail
+  tolerance_policy: fdm_bureau
+  datum_features:
+    A: {feature: knuckle_seating_face, role: plane}
+    B: {feature: seat, role: axis}
+    C: {feature: cap, role: axis}
+  coordinate_frame:
+    origin: {intersection: [A, B]}
+    y: {normal_to: A}
+    z: {parallel_to: C, toward: cap_top}
+  views:
+    - {id: plan, kind: orthographic, along_axis: C, toward: cap_top}
+    - {id: section_mid, kind: section, through: C}
+    - {id: side, kind: orthographic, along_axis: B, toward: knuckle_seating_face}
+    - {id: underside, kind: orthographic, opposite: plan}
+  features:
+    knuckle_seating_face: {size: general}
+    knuckle_far_face: {size: general}
+    knuckle_upper_flat: {size: general}
+    knuckle_lower_flat: {size: general}
+    knuckle_round: {size: general}
+    knuckle_rounds: {size: general}
+    seat: {size: interface}
+    seat_counterbore: {size: general}
+    counterbore_floor: {size: general}
+    bore_entry_chamfers: {size: general}
+    neck_transition: {profile: controlled_model}
+    neck: {size: general}
+    neck_end: {size: general}
+    cable_run: {size: general}
+    cable_entry: {size: general}
+    cable_entry_floor: {size: general}
+    cap: {size: general}
+    cap_roll: {size: general}
+    cap_top: {size: general}
+    cap_inner_wall: {size: general}
+    cap_ceiling: {size: general}
+    socket_boss: {size: general}
+    boss_face: {size: general}
+    insert_hole: {size: interface}
+    grip_flutes: {size: general}
+    flute_lower_ends: {size: general}
+    flute_upper_ends: {size: general}
+    shade_profile: {profile: controlled_model}
+    rim_round: {size: general}
+  dimensions:
+    - {id: counterbore_depth, operation: location, features: [counterbore_floor], tolerance: {deviation_mm: [0.0, 0.1]}}
+    - {id: knuckle_width, operation: location, features: [knuckle_far_face], tolerance: {deviation_mm: [0.0, 0.2]}}
+    - {id: cap_inner_depth, operation: length, features: [cap_inner_wall]}
+    - {id: cable_entry_depth, operation: length, features: [cable_entry]}
+    - {id: insert_floor_thickness, operation: thickness, features: [insert_hole, cap_top]}
+  geometric_tolerances:
+    - {id: seat_perpendicularity, characteristic: perpendicularity, features: [seat], zone_mm: 0.2, diameter_zone: true, datum_frame: [A]}
+    - {id: insert_hole_coaxiality, characteristic: coaxiality, features: [insert_hole], zone_mm: 0.2, diameter_zone: true, datum_frame: [C]}
+    - {id: form_profile, characteristic: profile_surface, features: [neck_transition, shade_profile], zone_mm: 0.4, datum_frame: [A, B, C]}
+  edges: {external: [-0.2, 0.0], internal: [0.0, 0.2]}
+  surface_texture: {open: "no standard or vendor specification in the record gives an as-printed PETG roughness; the print bureau's surface specification is needed (DR-004)"}
+  notes:
+    - {kind: process, text: "FDM, printed shade-down; drill or ream the bushing seat and the insert hole to their limits after printing."}
+    - {kind: finish, text: "As printed, burrs and stringing removed; the bushing seat and the insert hole are post-processed."}
+    - {kind: inspection, text: "Heat-set the LMP-0009 bushing with its head in the counterbore, and the LMP-0010 M10x1-6H insert flush with the boss face (DR-004)."}
+  manufacturing:
+    interface_condition: post_processed
+  sheet: {sizes: [A3, A2], scale: auto}

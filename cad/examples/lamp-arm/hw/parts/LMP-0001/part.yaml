@@ -1,0 +1,64 @@
+PN: LMP-0001
+rev: X1
+title: Base plate and pivot boss
+material: PETG
+process: fdm
+finish: Deburr; no sharp edges
+mass_target: 313
+make_buy: make
+supplier: null
+decisions: [DR-002, DR-004]
+manufacture: {relationship: same, mesh: {linear_deflection_mm: 0.05, angular_deflection_rad: 0.1}}
+drawing:
+  type: detail
+  tolerance_policy: fdm_bureau
+  datum_features:
+    A: {feature: bed_face, role: plane}
+    B: {feature: seat, role: axis}
+    C: {feature: mount_slots, role: clocking_feature}
+  coordinate_frame:
+    origin: {intersection: [A, B]}
+    z: {normal_to: A, toward: boss_top}
+    x: {toward: C}
+  views:
+    - {id: plan, kind: orthographic, normal_to: top_face}
+    - {id: section_profile, kind: section, through: B}
+    - {id: underside, kind: orthographic, opposite: plan}
+  features:
+    bed_face: {size: general}
+    seat: {size: interface}
+    seat_chamfer: {size: general}
+    boss_top: {size: general}
+    boss_chamfer: {size: general}
+    boss: {size: general}
+    boss_root_round: {size: general}
+    top_face: {size: general}
+    top_round: {size: general}
+    rim: {size: general}
+    bed_chamfer: {size: general}
+    cavity_outer_wall: {size: general}
+    cavity_flanks: {size: general}
+    cavity_roof: {size: general}
+    cavity_inner_wall: {size: general}
+    clip_pocket: {size: general}
+    mount_slots: {size: general}
+    mount_counterbores: {size: general}
+    foot_recesses: {size: general}
+    engraving: {size: general}
+  dimensions:
+    - {id: cavity_wall_height, operation: length, features: [cavity_outer_wall]}
+    - {id: plate_thickness, operation: thickness, features: [bed_face, top_face]}
+    - {id: cavity_roof_thickness, operation: thickness, features: [top_face, cavity_roof]}
+  geometric_tolerances:
+    - {id: seat_perpendicularity, characteristic: perpendicularity, features: [seat], zone_mm: 0.2, diameter_zone: true, datum_frame: [A]}
+  edges: {external: [-0.2, 0.0], internal: [0.0, 0.2]}
+  surface_texture: {open: "no standard or vendor specification in the record gives an as-printed PETG roughness; the print bureau's surface specification is needed (DR-004)"}
+  notes:
+    - {kind: process, text: "FDM, printed boss-up with datum face A on the build plate."}
+    - {kind: finish, text: "As printed, burrs and stringing removed; the bushing seat is drilled or reamed to its limits after printing."}
+    - {kind: general, text: "Engrave the text LMP in FreeCAD TechDraw Osifont Bold, centred on the stated position.", reference: engraving}
+    - {kind: inspection, text: "Heat-set the LMP-0008 bushing flush with the boss top after drilling (DR-004)."}
+  manufacturing:
+    build_direction: {normal_to: A, toward: boss_top}
+    interface_condition: post_processed
+  sheet: {sizes: [A3, A2], scale: auto}

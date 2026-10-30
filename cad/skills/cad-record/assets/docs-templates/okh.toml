@@ -1,0 +1,42 @@
+schema = "OKH-LOSH-v1.0"
+
+[okhv]
+name = ""
+repo = ""
+version = ""
+license = ""
+licensor = ""
+author = ""
+design_owner = ""
+release_date = ""
+documentation_language = "en"
+hardware_license = ""
+software = ""
+tool = ""
+
+[technology_readiness_level]
+value = ""
+
+[documentation]
+readme = "README.md"
+
+[bom]
+complete = true
+source = "hw/bom.csv"
+parts_to_make = "docs/index.md#parts-to-make"
+parts_to_buy = "docs/index.md#parts-to-buy"
+
+[manufacturing_files]
+files = ["hw/versions/vN/parts/"]
+
+[operating_instructions]
+readme = "docs/index.md"
+assembly_steps = "docs/index.md#assembly-steps"
+tools_and_consumables = "docs/index.md#tools-and-consumables"
+
+[quality_management]
+quality_system = ""
+
+[validation]
+validation_method = "hw/verification.csv"
+validation_description = "See docs/index.md#checks-before-use for the generated check list."

@@ -1,0 +1,245 @@
+occurrences:
+  # One DIN 471 ring definition (LMP-0011, part_local), placed in the three pin grooves at the zero pose.
+  - id: ring-base
+    PN: LMP-0011
+    placement:
+      translation_mm: [0, 0, 21.495]
+      rotation: {axis: [1, 0, 0], angle_deg: 180}
+  - id: ring-elbow
+    PN: LMP-0011
+    placement:
+      translation_mm: [160, -11.005, 40]
+      rotation: {axis: [1, 0, 0], angle_deg: 90}
+  - id: ring-head
+    PN: LMP-0011
+    placement:
+      translation_mm: [360, -8.505, 40]
+      rotation: {axis: [1, 0, 0], angle_deg: 90}
+subassemblies:
+  - id: base_sub
+    title: Base subassembly (base plate and pivot boss, its bushing)
+    parts: [LMP-0001, LMP-0008]
+  - id: arm_sub
+    title: Arm subassembly (lower link, upper link, and head, with pins, bushing, insert, and rings)
+    parts: [LMP-0002, LMP-0003, LMP-0004, LMP-0005, LMP-0006, LMP-0007, LMP-0009, LMP-0010]
+    occurrences: ["@ring-base", "@ring-elbow", "@ring-head"]
+joints:
+  - id: J-001
+    type: revolute
+    parent: LMP-0001
+    child: LMP-0002
+    axis: [0, 0, 1]
+    origin: [0, 0, 40]
+    min: -10
+    max: 80
+    nominal: 0
+  - id: J-002
+    type: revolute
+    parent: LMP-0002
+    child: LMP-0003
+    axis: [0, 1, 0]
+    origin: [160, 0, 40]
+    min: -120
+    max: 0
+    nominal: -30
+  - id: J-003
+    type: revolute
+    parent: LMP-0003
+    child: LMP-0004
+    axis: [0, 1, 0]
+    origin: [360, 0, 40]
+    min: -45
+    max: 45
+    nominal: 0
+  - id: J-004
+    type: fixed
+    parent: LMP-0002
+    child: LMP-0005
+    axis: [0, 0, 1]
+    origin: [0, 0, 40]
+    min: 0
+    max: 0
+    nominal: 0
+  - id: J-005
+    type: fixed
+    parent: LMP-0002
+    child: LMP-0006
+    axis: [0, 1, 0]
+    origin: [160, 0, 40]
+    min: 0
+    max: 0
+    nominal: 0
+  - id: J-006
+    type: fixed
+    parent: LMP-0003
+    child: LMP-0007
+    axis: [0, 1, 0]
+    origin: [360, 0, 40]
+    min: 0
+    max: 0
+    nominal: 0
+  - id: J-007
+    type: fixed
+    parent: LMP-0001
+    child: LMP-0008
+    axis: [0, 0, 1]
+    origin: [0, 0, 40]
+    min: 0
+    max: 0
+    nominal: 0
+  - id: J-008
+    type: fixed
+    parent: LMP-0004
+    child: LMP-0009
+    axis: [0, 1, 0]
+    origin: [360, 0, 40]
+    min: 0
+    max: 0
+    nominal: 0
+  - id: J-009
+    type: fixed
+    parent: LMP-0004
+    child: LMP-0010
+    axis: [0, 0, 1]
+    origin: [430, 0, 50]
+    min: 0
+    max: 0
+    nominal: 0
+  - id: J-010
+    type: fixed
+    parent: LMP-0005
+    child: "@ring-base"
+    axis: [0, 0, 1]
+    origin: [0, 0, 40]
+    min: 0
+    max: 0
+    nominal: 0
+  - id: J-011
+    type: fixed
+    parent: LMP-0006
+    child: "@ring-elbow"
+    axis: [0, 1, 0]
+    origin: [160, 0, 40]
+    min: 0
+    max: 0
+    nominal: 0
+  - id: J-012
+    type: fixed
+    parent: LMP-0007
+    child: "@ring-head"
+    axis: [0, 1, 0]
+    origin: [360, 0, 40]
+    min: 0
+    max: 0
+    nominal: 0
+drawing:
+  # Assembly drawing intent (cad-drawings assembly_drawing.py): sheet 1 is the whole arm, then one
+  # sheet per subassembly. Explode offsets are presentation only and carry each occurrence's
+  # kinematic children along; operation directions are in the receiving part's model frame.
+  number: LMP-ASM
+  rev: X1
+  title: Lamp arm assembly
+  scope: modeled_mechanical_assembly
+  excludes: ["lampholder and wiring (IF-005)", "M6 mounting fasteners and feet (IF-004)"]
+  views:
+    - {id: assembled_front, kind: assembled, direction: front}
+    - {id: exploded_iso, kind: exploded, direction: iso}
+  explode:
+    - {ref: LMP-0008, offset_mm: [0, 0, 40]}
+    - {ref: LMP-0002, offset_mm: [0, 0, 75]}
+    - {ref: LMP-0005, offset_mm: [0, 0, 45]}
+    - {ref: "@ring-base", offset_mm: [0, 0, -96]}
+    - {ref: LMP-0006, offset_mm: [0, 40, 0]}
+    - {ref: "@ring-elbow", offset_mm: [0, -70, 0]}
+    - {ref: LMP-0003, offset_mm: [0, 0, 45]}
+    - {ref: LMP-0007, offset_mm: [0, 40, 0]}
+    - {ref: "@ring-head", offset_mm: [0, -70, 0]}
+    - {ref: LMP-0004, offset_mm: [60, 0, 0]}
+    - {ref: LMP-0009, offset_mm: [0, 35, 50]}
+    - {ref: LMP-0010, offset_mm: [50, 0, -86.6]}
+  items:
+    - {item: 1, PN: LMP-0001}
+    - {item: 2, PN: LMP-0002}
+    - {item: 3, PN: LMP-0003}
+    - {item: 4, PN: LMP-0004}
+    - {item: 5, PN: LMP-0005}
+    - {item: 6, PN: LMP-0006}
+    - {item: 7, PN: LMP-0007}
+    - {item: 8, PN: LMP-0008}
+    - {item: 9, PN: LMP-0009}
+    - {item: 10, PN: LMP-0010}
+    - {item: 11, PN: LMP-0011, occurrences: ["@ring-base", "@ring-elbow", "@ring-head"]}
+  subassembly_sheets: [base_sub, arm_sub]
+  operations:
+    - id: heat_set_base_bushing
+      kind: heat_set
+      part: LMP-0008
+      into: LMP-0001
+      interface: IF-001
+      direction: [0, 0, -1]
+      acceptance: {kind: flush, features: [top_end, boss_top_face]}
+    - id: heat_set_head_bushing
+      kind: heat_set
+      part: LMP-0009
+      into: LMP-0004
+      interface: IF-003
+      direction: [0, -1, 0]
+      acceptance: {kind: seated, features: [head_underside, counterbore_floor]}
+    - id: heat_set_socket_insert
+      kind: heat_set
+      part: LMP-0010
+      into: LMP-0004
+      interface: IF-005
+      direction: [0, 0, 1]
+      acceptance: {kind: flush, features: [installed_end, socket_boss_face]}
+    - id: press_base_pin
+      kind: press_fit
+      part: LMP-0005
+      into: LMP-0002
+      interface: IF-001
+      direction: [0, 0, -1]
+      tools: ["Arbor press or pin punch"]
+      acceptance: {kind: standoff, features: [head_underside, hub_top_face]}
+    - id: ring_base
+      kind: retaining_ring
+      part: "@ring-base"
+      into: LMP-0005
+      interface: IF-001
+      direction: [0, 0, 1]
+      tools: ["External circlip pliers"]
+      acceptance: {kind: engaged, features: [ring_groove]}
+      verify_joint: J-001
+    - id: press_elbow_pin
+      kind: press_fit
+      part: LMP-0006
+      into: LMP-0002
+      interface: IF-002
+      direction: [0, -1, 0]
+      tools: ["Arbor press or pin punch"]
+      acceptance: {kind: standoff, features: [head_underside, cheek_face]}
+    - id: ring_elbow
+      kind: retaining_ring
+      part: "@ring-elbow"
+      into: LMP-0006
+      interface: IF-002
+      direction: [0, 1, 0]
+      tools: ["External circlip pliers"]
+      acceptance: {kind: engaged, features: [ring_groove]}
+      verify_joint: J-002
+    - id: press_head_pin
+      kind: press_fit
+      part: LMP-0007
+      into: LMP-0003
+      interface: IF-003
+      direction: [0, -1, 0]
+      tools: ["Arbor press or pin punch"]
+      acceptance: {kind: standoff, features: [head_underside, cheek_face]}
+    - id: ring_head
+      kind: retaining_ring
+      part: "@ring-head"
+      into: LMP-0007
+      interface: IF-003
+      direction: [0, 1, 0]
+      tools: ["External circlip pliers"]
+      acceptance: {kind: engaged, features: [ring_groove]}
+      verify_joint: J-003

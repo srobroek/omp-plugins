@@ -1,0 +1,33 @@
+id: lamp-arm
+rigor: pro
+units: mm
+regime: iso
+general_tolerance: "ISO 2768-m"
+build_volume:
+  x_mm: 256
+  y_mm: 256
+  z_mm: 256
+  margin_mm: 5
+  orientations: [xyz, xzy, yxz, yzx, zxy, zyx]
+flow:
+  stage: layout
+  recheck_from: layout
+drawing:
+  definition: model_and_drawing
+  projection: first_angle
+  standards:
+    dimensioning: ISO 129-1:2018
+    geometrical_tolerancing: ISO 1101:2017
+    datums: ISO 5459:2024
+    gps_fundamentals: ISO 8015:2011
+    general_tolerances: ISO 2768-1:1989
+    fits: ISO 286-1:2010
+    edges: ISO 13715:2017
+    surface_texture: ISO 21920-1:2021
+    threads: ISO 6410-1:1993
+    sheets: ISO 5457:1999
+  default_sheet: {sizes: [A4, A3, A2], orientation: landscape, scale: auto}
+  tolerance_policies:
+    machining: {kind: standard, standard: ISO 2768-1:1989, class: m, applies_to: [cnc]}
+    fdm_bureau: {kind: limits, linear_mm: 0.2, angular_deg: 1, applies_to: [fdm], reference: "FDM bureau capability +/-0.2 mm, +/-1 deg (DR-004)"}
+  general_tolerance_policy: machining

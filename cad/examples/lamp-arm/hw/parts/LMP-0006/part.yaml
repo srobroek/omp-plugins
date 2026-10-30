@@ -1,0 +1,54 @@
+PN: LMP-0006
+rev: X1
+title: M5 x 25 shoulder pin
+material: Stainless steel A2
+process: cnc
+finish: Passivated
+mass_target: 5.1
+make_buy: buy
+supplier: null
+decisions: [DR-002, DR-003, DR-004]
+procurement:
+  mode: made_to_drawing
+  designation: "Shoulder pin to drawing, stainless A2, passivated"
+manufacture: {relationship: same}
+drawing:
+  type: detail
+  tolerance_policy: machining
+  datum_features:
+    A: {feature: press_band, role: axis}
+    B: {feature: head_underface, role: plane}
+  coordinate_frame:
+    origin: {intersection: [A, B]}
+    z: {parallel_to: A, toward: tip_face}
+  views:
+    - {id: elevation, kind: orthographic, perpendicular_to: A}
+    - {id: head_end, kind: orthographic, along_axis: A, toward: head_top}
+    - {id: groove_detail, kind: detail, feature: groove}
+  features:
+    head_top: {size: general}
+    head_chamfer: {size: general}
+    head: {size: general}
+    socket: {size: general}
+    head_underface: {size: general}
+    press_band: {size: interface, surface_texture: {parameter: Ra, limit_um: 0.8, process: removal_required}}
+    press_step: {size: general}
+    journal: {size: interface, surface_texture: {parameter: Ra, limit_um: 0.8, process: removal_required}}
+    groove: {size: interface, presentation: detail, edges: {external: [-0.02, 0.0], internal: [0.0, 0.06]}}
+    tip_chamfer: {size: general}
+    tip_face: {size: general}
+  dimensions:
+    - {id: groove_width, operation: width, features: [groove], tolerance: {deviation_mm: [0.0, 0.14]}, presentation: detail}
+    - {id: head_chamfer_size, operation: chamfer, features: [head_chamfer], tolerance: {deviation_mm: [-0.1, 0.1]}}
+    - {id: tip_chamfer_size, operation: chamfer, features: [tip_chamfer], tolerance: {deviation_mm: [-0.1, 0.1]}}
+  geometric_tolerances:
+    - {id: journal_coaxiality, characteristic: coaxiality, features: [journal], zone_mm: 0.02, diameter_zone: true, datum_frame: [A]}
+  edges: {external: [-0.3, 0.0], internal: [0.0, 0.3]}
+  surface_texture: {parameter: Ra, limit_um: 1.6, process: removal_required}
+  notes:
+    - {kind: finish, text: "Passivated. Press band and journal ground or precision-turned to their limits."}
+    - {kind: general, text: "Groove 0.7 H13 per DIN 471 for the 5 x 0.6 retaining ring LMP-0011.", reference: groove}
+  manufacturing:
+    interface_condition: finish_machined
+    dimensions_apply: after_finish
+  sheet: {sizes: [A4, A3], scale: auto}

@@ -1,0 +1,12 @@
+level,PN,rev,qty,title,material,process,make_buy,supplier,mass,unit,designation,manufacturer,manufacturer_part_number,supplier_part_number,specification_ref,specification_rev
+1,LMP-0001,X1,1,Base plate and pivot boss,PETG,fdm,make,,313,pcs,,,,,,
+1,LMP-0002,X1,1,Lower link,Aluminum 6061-T6,cnc,make,,153,pcs,,,,,,
+1,LMP-0008,X1,1,Bushing SPIROL CMPL 4 X 8 EK CL8000,Brass C36000,purchased,buy,,2.0,pcs,"Compression limiter CL8000, M4 x 8, brass (E), plain (K)",SPIROL International Corporation,CMPL 4 X 8 EK CL8000,,SPIROL CL8000/CL8100 specification flyer,01/24
+1,LMP-0003,X1,1,Upper link,Aluminum 6061-T6,cnc,make,,138,pcs,,,,,,
+1,LMP-0005,X1,1,M5 x 30 shoulder pin,Stainless steel A2,cnc,buy,,5.9,pcs,"Shoulder pin to drawing, stainless A2, passivated",,,,,
+1,LMP-0006,X1,1,M5 x 25 shoulder pin,Stainless steel A2,cnc,buy,,5.1,pcs,"Shoulder pin to drawing, stainless A2, passivated",,,,,
+1,LMP-0004,X1,1,Lamp head housing,PETG,fdm,make,,62,pcs,,,,,,
+1,LMP-0007,X1,1,M5 x 20 shoulder pin,Stainless steel A2,cnc,buy,,4.3,pcs,"Shoulder pin to drawing, stainless A2, passivated",,,,,
+1,LMP-0011,X1,3,Retaining ring DIN 471 - 5x0.6,Spring steel C60S,purchased,buy,,0.081,pcs,"Retaining ring DIN 471 - 5x0.6, spring steel C60S, phosphated and oiled",Beneri,,,Beneri DIN 471 datasheet,"undated, retrieved 2026-10-27"
+1,LMP-0009,X1,1,Bushing SPIROL CMPL 4 X 6 EK CL8100,Brass C36000,purchased,buy,,1.9,pcs,"Headed compression limiter CL8100, M4 x 6, brass (E), plain (K)",SPIROL International Corporation,CMPL 4 X 6 EK CL8100,,SPIROL CL8000/CL8100 specification flyer,01/24
+1,LMP-0010,X1,1,Heat-set insert QT M10x1 x 12.7 OD 12.6,Brass,purchased,buy,,6.7,pcs,"Heat-set insert QT-M10x12.7-OD12.6, thread M10x1-6H to order (catalogue M10x1.5)",In-saiL,,,"In-saiL drawing LF646, QT-M10x12.7-OD12.6","A, 2013-05-04"

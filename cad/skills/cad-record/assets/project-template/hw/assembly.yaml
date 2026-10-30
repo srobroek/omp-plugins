@@ -1,0 +1,5 @@
+subassemblies:
+  - id: main
+    title: Main assembly
+    parts: [PRT-0001]
+joints: []

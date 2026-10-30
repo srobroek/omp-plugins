@@ -1,0 +1,39 @@
+# Material densities for cad-model metrics.json mass (mass_g = volume_mm3 * density / 1000).
+#
+# Keys match hw/parts/<PN>/part.yaml `material` case-insensitively, with runs of whitespace
+# collapsed. A material missing here gets mass_g: null and is listed under
+# totals.parts_without_density; add it here with its source rather than guessing in a part record.
+#
+# Values are nominal room-temperature densities of the solid material, in g/cm3, from supplier
+# datasheets and handbook tables (Aluminum Association, EN 10088-1, EN 12164, polymer supplier
+# datasheets). FDM parts are reported as fully dense: real mass scales with infill and walls.
+densities_g_cm3:
+  # Polymers (FDM filament and moulding grades)
+  PLA: 1.24
+  PETG: 1.27
+  ABS: 1.04
+  ASA: 1.07
+  PC: 1.20
+  PA12: 1.01
+  PA6: 1.14
+  PA6-CF: 1.18
+  TPU 95A: 1.21
+  POM: 1.41
+  # Aluminium
+  Aluminum 6061-T6: 2.70
+  Aluminum 6082-T6: 2.70
+  Aluminum 6063-T5: 2.69
+  Aluminum 7075-T6: 2.81
+  Aluminum 5052-H32: 2.68
+  # Steels
+  Stainless steel A2: 7.90   # A2 = 1.4301 / AISI 304 (EN 10088-1: 7.9)
+  Stainless steel A4: 8.00   # A4 = 1.4401 / AISI 316 (EN 10088-1: 8.0)
+  Steel 8.8: 7.85            # property-class 8.8 fasteners, medium-carbon steel
+  Steel S235: 7.85
+  Steel C45: 7.85
+  Spring steel C60S: 7.85    # EN 10132-4 strip, DIN 471 rings up to 27 mm; carbon-steel value as C45
+  # Copper alloys
+  Brass CW614N: 8.47
+  Brass C36000: 8.50         # UNS C36000 free-cutting brass, ASTM B16 (0.307 lb/in3)
+  Brass: 8.47                # alloy not published by the vendor; free-cutting brass CW614N value
+  Copper Cu-ETP: 8.93

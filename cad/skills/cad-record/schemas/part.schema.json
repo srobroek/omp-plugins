@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://srobroek.com/cad/schemas/part.schema.json",
+  "title": "CAD part record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["PN", "rev", "title", "material", "process", "finish", "mass_target", "make_buy"],
+  "properties": {
+    "PN": {"type": "string", "pattern": "^[A-Z]{2,5}-[0-9]{4}$"},
+    "rev": {"type": "string", "pattern": "^(X[1-9][0-9]*|[A-HJ-NPRTUVWY])$"},
+    "title": {"type": "string", "minLength": 1},
+    "material": {"type": "string", "minLength": 1},
+    "process": {"type": "string", "enum": ["fdm", "cnc", "purchased"]},
+    "finish": {"type": "string", "minLength": 1},
+    "mass_target": {"type": ["number", "null"], "exclusiveMinimum": 0},
+    "make_buy": {"type": "string", "enum": ["make", "buy"]},
+    "supplier": {"type": ["string", "null"], "minLength": 1},
+    "decisions": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^DR-[0-9]{3}$"}},
+    "model_frame": {
+      "description": "Frame of model.py's geometry: assembly_zero (default) is assembly coordinates at the zero joint pose, one identity-placed occurrence only; part_local is the definition's own origin and axes, placed by each occurrence",
+      "type": "string", "enum": ["assembly_zero", "part_local"]
+    },
+    "procurement": {"$ref": "drawing.schema.json#/$defs/procurement"},
+    "drawing": {"$ref": "drawing.schema.json#/$defs/part_drawing"},
+    "manufacture": {
+      "description": "How a custom-made part is manufactured relative to its installed definition (cad-record layout.json manufacturing). Absent: relationship same, compared to 1e-9 relative volume, default mesh.",
+      "type": "object", "additionalProperties": false,
+      "required": ["relationship"],
+      "properties": {
+        "relationship": {"description": "same: made in its installed shape; different: model.py build_manufacture(params) defines the manufacturing state", "enum": ["same", "different"]},
+        "state": {"description": "name of the manufacturing state, such as flat", "type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+        "reason": {"description": "why the states differ, such as elastic_bending", "type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+        "decision": {"description": "the decision record approving the difference", "type": "string", "pattern": "^DR-[0-9]{3}$"},
+        "volume_rel_tolerance": {"description": "allowed |V_manufactured - V_installed| / V_installed", "type": "number", "exclusiveMinimum": 0, "maximum": 1},
+        "volume_abs_tolerance_mm3": {"description": "absolute floor of the allowed volume difference", "type": "number", "exclusiveMinimum": 0},
+        "mesh": {
+          "description": "FDM part.stl tessellation, overriding the layout default (0.05 mm, 0.1 rad)",
+          "type": "object", "additionalProperties": false, "minProperties": 1,
+          "properties": {
+            "linear_deflection_mm": {"type": "number", "exclusiveMinimum": 0},
+            "angular_deflection_rad": {"type": "number", "exclusiveMinimum": 0, "maximum": 3.141592653589793}
+          }
+        }
+      },
+      "if": {"properties": {"relationship": {"const": "different"}}},
+      "then": {
+        "required": ["state", "reason", "decision"],
+        "anyOf": [{"required": ["volume_rel_tolerance"]}, {"required": ["volume_abs_tolerance_mm3"]}]
+      },
+      "else": {
+        "not": {"anyOf": [{"required": ["state"]}, {"required": ["reason"]}, {"required": ["decision"]},
+                          {"required": ["volume_rel_tolerance"]}, {"required": ["volume_abs_tolerance_mm3"]}]}
+      }
+    }
+  }
+}

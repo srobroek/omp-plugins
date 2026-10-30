@@ -117,12 +117,14 @@ jobs:
           python3 scripts/test-checker-contracts.py
       - name: Files duplicated across plugins are identical
         run: python3 scripts/check-shared-detector.py
+      # The cad suites build CadQuery and OCP environments, so they run in the
+      # path-filtered `cad` job below instead of inside this job's budget.
       - name: Skill Python tests
         run: |
           status=0
           while IFS= read -r test; do
             python3 -m unittest discover -s "$(dirname "$test")" -p "$(basename "$test")" -v || status=1
-          done < <(git ls-files '*/skills/*/test_*.py')
+          done < <(git ls-files '*/skills/*/test_*.py' ':(exclude)cad/')
           exit $status
 
       # Every extension module must at least parse and bundle. Committed dist/
@@ -219,3 +221,86 @@ jobs:
 
       - name: Prose gate
         run: uvx --from slopvac==2.3.2 python scripts/prose-gate.py README.md --profile normal
+
+  # Actions has no job-level `paths` filter, so this job works out whether a push
+  # or pull request touched the files the path-filtered `cad` job covers.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      cad: ${{ steps.diff.outputs.cad }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - id: diff
+        env:
+          # A pull request is checked out as its merge commit, whose first parent is
+          # the base branch; a push compares against the commit it replaced.
+          BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.before }}
+        run: |
+          if ! git rev-parse --verify --quiet "$BASE^{commit}" >/dev/null; then
+            cad=true  # no base to compare against: a new branch or a force push
+          elif git diff --quiet "$BASE" HEAD -- cad .github/workflows/ci.yml; then
+            cad=false
+          else
+            cad=true
+          fi
+          echo "cad=$cad" >> "$GITHUB_OUTPUT"
+
+  # The cad suites start CadQuery, build123d and OCP scripts whose environments uv
+  # builds from their PEP 723 headers. Measured on 2026-10-26 on a loaded
+  # workstation, with the FreeCAD tests skipped as they are here: 24 minutes with
+  # an empty uv cache, 3.5 minutes with a warm one. The timeout leaves headroom
+  # over the cold run.
+  cad:
+    needs: changes
+    if: needs.changes.outputs.cad == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The uv cache holds those script environments, so its key is the dependency
+      # headers alone: editing a script body reuses the cache, and changing a
+      # dependency rebuilds it.
+      - name: Collect the PEP 723 dependency headers
+        run: |
+          python3 - > cad-pep723-headers.txt <<'EOF'
+          import re
+          import subprocess
+
+          block = re.compile(r"(?m)^# /// script$\s(?P<content>(^#(| .*)$\s)+)^# ///$")
+          files = subprocess.run(["git", "ls-files", "-z", "cad/*.py"], capture_output=True, text=True, check=True).stdout
+          headers = {m["content"] for f in files.split("\0") if f for m in block.finditer(open(f, encoding="utf-8").read())}
+          print("".join(sorted(headers)), end="")
+          EOF
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: cad-pep723-headers.txt
+
+      # The suites' own interpreter needs pyyaml and jsonschema, plus defusedxml for
+      # the cad-drawings modules its tests import; the scripts they start through
+      # `uv run --script` bring their own environments.
+      - name: CAD skill tests
+        run: |
+          status=0
+          while IFS= read -r test; do
+            uv run --no-project --with pyyaml==6.0.3 --with jsonschema==4.26.0 --with defusedxml==0.7.1 \
+              python -m unittest discover -s "$(dirname "$test")" -p "$(basename "$test")" -v || status=1
+          done < <(git ls-files 'cad/skills/*/test_*.py')
+          exit $status
+
+      # Claude Code, Kiro and OpenCode agent files and the Claude Code plugin manifest
+      # are generated from the canonical OMP files; a hand edit or a stale render
+      # fails here. The install tests skip each harness CLI the runner lacks.
+      - name: CAD harness files are current
+        run: |
+          python3 -m unittest discover -s cad/harness -p 'test_*.py' -v
+          python3 cad/harness/generate.py --check
+
+      - name: CAD eval runner tests
+        env:
+          CAD_EVALS_SKIP_GEOMETRY: "1" # skips the oracle builds and the OCCT read-back
+        run: uv run --no-project --with pyyaml==6.0.3 --with jsonschema==4.26.0 python -m unittest discover -s cad/evals/tests -v

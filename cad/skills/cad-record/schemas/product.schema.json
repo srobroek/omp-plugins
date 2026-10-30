@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://srobroek.com/cad/schemas/product.schema.json",
+  "title": "CAD product record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "rigor", "units", "regime", "general_tolerance", "flow"],
+  "properties": {
+    "id": {"type": "string", "minLength": 1, "pattern": "^[a-z0-9][a-z0-9-]*$"},
+    "rigor": {"type": "string", "enum": ["maker", "pro", "regulated"], "default": "pro"},
+    "units": {"const": "mm"},
+    "regime": {"type": "string", "enum": ["iso", "asme"]},
+    "general_tolerance": {"oneOf": [{"type": "number", "exclusiveMinimum": 0}, {"type": "string", "minLength": 1}]},
+    "flow": {
+      "type": "object", "additionalProperties": false,
+      "required": ["stage", "recheck_from"],
+      "properties": {
+        "stage": {"$ref": "#/$defs/stage"},
+        "recheck_from": {"$ref": "#/$defs/stage"},
+        "frozen": {"$ref": "#/$defs/frozen"},
+        "change": {"$ref": "#/$defs/change"}
+      },
+      "dependentRequired": {"change": ["frozen"]}
+    },
+    "build_volume": {
+      "type": "object", "additionalProperties": false,
+      "required": ["x_mm", "y_mm", "z_mm"],
+      "properties": {
+        "x_mm": {"type": "number", "exclusiveMinimum": 0},
+        "y_mm": {"type": "number", "exclusiveMinimum": 0},
+        "z_mm": {"type": "number", "exclusiveMinimum": 0},
+        "orientations": {
+          "type": "array", "minItems": 1, "uniqueItems": true,
+          "items": {"type": "string", "enum": ["xyz", "xzy", "yxz", "yzx", "zxy", "zyx"]}
+        },
+        "margin_mm": {"type": "number", "minimum": 0}
+      }
+    },
+    "drawing": {"$ref": "drawing.schema.json#/$defs/product_drawing"}
+  },
+  "$defs": {
+    "stage": {"type": "string", "enum": ["ground", "intent", "specify", "concept", "layout", "parts", "detail", "bom", "analysis", "critique", "reconcile", "design_freeze", "release"]},
+    "version": {"type": "string", "pattern": "^v[1-9][0-9]*$"},
+    "decision": {"type": "string", "pattern": "^DR-[0-9]{3}$"},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "frozen": {
+      "description": "The frozen configuration: the built version the design_freeze gate approved, its manifest sha256 and the approving decision. Once set, layout findings stay blocking at every stage.",
+      "type": "object", "additionalProperties": false,
+      "required": ["version", "manifest_sha256", "decision"],
+      "properties": {
+        "version": {"$ref": "#/$defs/version"},
+        "manifest_sha256": {"$ref": "#/$defs/sha256"},
+        "decision": {"$ref": "#/$defs/decision"}
+      }
+    },
+    "change": {
+      "description": "An approved engineering change against the frozen baseline, while it is open",
+      "type": "object", "additionalProperties": false,
+      "required": ["decision", "baseline_version", "affected_parts"],
+      "properties": {
+        "decision": {"$ref": "#/$defs/decision"},
+        "baseline_version": {"$ref": "#/$defs/version"},
+        "affected_parts": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^[A-Z]{2,5}-[0-9]{4}$"}}
+      }
+    }
+  }
+}

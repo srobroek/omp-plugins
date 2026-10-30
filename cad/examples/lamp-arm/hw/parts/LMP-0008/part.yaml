@@ -1,0 +1,39 @@
+PN: LMP-0008
+rev: X1
+title: Bushing SPIROL CMPL 4 X 8 EK CL8000
+material: Brass C36000
+process: purchased
+finish: Plain
+mass_target: 2.0
+make_buy: buy
+supplier: null
+decisions: [DR-004]
+procurement:
+  mode: catalog
+  manufacturer: SPIROL International Corporation
+  manufacturer_part_number: CMPL 4 X 8 EK CL8000
+  designation: "Compression limiter CL8000, M4 x 8, brass (E), plain (K)"
+  specification:
+    reference: SPIROL CL8000/CL8100 specification flyer
+    revision: "01/24"
+    url: https://www.spirol.com/assets/files/cmpl-cl8000-cl8100-specification-flyer-us.pdf
+    sha256: 03d9a64aa3d018c695675bec6e71d0c29c72cb3638c3b67e6f4fdaa3fda3e58d
+drawing:
+  type: vendor_specification
+  datum_features:
+    A: {feature: installed_end, role: plane}
+    B: {feature: bore, role: axis}
+  coordinate_frame:
+    origin: {intersection: [A, B]}
+    z: {parallel_to: B, toward: far_end}
+  views:
+    - {id: elevation, kind: orthographic, perpendicular_to: B}
+    - {id: end, kind: orthographic, along_axis: B, toward: installed_end}
+  dimensions:
+    - {id: bore_diameter, operation: diameter, features: [bore], tolerance: {deviation_mm: [-0.05, 0.05]}}
+    - {id: length, operation: plane_separation, features: [installed_end, far_end], tolerance: {deviation_mm: [-0.15, 0.0]}}
+    - {id: knurl_diameter, operation: diameter, features: [knurl], reference: true}
+  notes:
+    - {kind: general, text: "Inner diameter A and length L per the specification; the knurl diameter C is its published nominal."}
+    - {kind: inspection, text: "Heat-set into the LMP-0001 bushing seat, flush with the boss top (DR-004)."}
+  sheet: {sizes: [A4, A3], scale: auto}

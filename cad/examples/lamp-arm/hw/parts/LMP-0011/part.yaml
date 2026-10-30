@@ -1,0 +1,21 @@
+PN: LMP-0011
+rev: X1
+title: Retaining ring DIN 471 - 5x0.6
+material: Spring steel C60S
+process: purchased
+finish: Phosphated and oiled
+mass_target: 0.081
+make_buy: buy
+supplier: null
+decisions: [DR-004]
+model_frame: part_local
+procurement:
+  mode: catalog
+  manufacturer: Beneri
+  designation: "Retaining ring DIN 471 - 5x0.6, spring steel C60S, phosphated and oiled"
+  standard: DIN 471
+  specification:
+    reference: Beneri DIN 471 datasheet
+    revision: "undated, retrieved 2026-10-27"
+    url: https://www.beneri.com/files/schedetecniche/7f91c971879a15a58dd911afa79f2fba.pdf
+    sha256: 0fe9e28736fde2bd995a269da97c057a612a5ed72fa4c5bdcafd7cf95e0a6baf

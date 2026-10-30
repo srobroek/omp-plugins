@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://srobroek.com/cad/schemas/bundle-manifest.schema.json",
+  "title": "CAD bundle manifest",
+  "description": "manifest.json of a bundle that cad-record layout.py publish() sealed: what it is, which build it binds, the recipe that made it, its files, and the bundle it replaced",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "layout", "path", "params", "version_manifest_sha256", "producer", "recipe", "recipe_sha256", "files", "replaces"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "layout": {"description": "the layout.json entry id", "type": "string", "pattern": "^[a-z]+(\\.[a-z_]+)*$"},
+    "path": {"description": "the bundle directory, project-relative", "type": "string", "pattern": "^hw/(?!.*(^|/)\\.{1,2}(/|$))[^\\\\]+$"},
+    "params": {"description": "the path template's tokens, such as V and S", "type": "object", "additionalProperties": {"type": "string", "minLength": 1}},
+    "version_manifest_sha256": {"description": "sha256 of hw/versions/<V>/manifest.json, or null for a bundle bound to no version", "oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]},
+    "producer": {"description": "the writing tool and its version", "type": "string", "minLength": 1},
+    "status": {"description": "the producer's verdict, such as pass, warn or fail", "type": "string", "minLength": 1},
+    "recipe": {"description": "the producer's normalized inputs and options; no wall time, ports, absolute paths or random ids", "type": "object"},
+    "recipe_sha256": {"description": "sha256 of the recipe as canonical JSON (sorted keys, no whitespace)", "$ref": "#/$defs/sha256"},
+    "files": {
+      "description": "every file in the bundle but manifest.json, by bundle-relative path",
+      "type": "object", "minProperties": 1,
+      "propertyNames": {"pattern": "^(?!/)(?!.*(^|/)\\.{1,2}(/|$))(?!manifest\\.json$)[^\\\\]+$"},
+      "additionalProperties": {"$ref": "#/$defs/sha256"}
+    },
+    "replaces": {
+      "description": "the bundle this one superseded with --replace, retained under .cad-work/replaced/",
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["manifest_sha256", "recipe_sha256", "moved_to"],
+          "properties": {
+            "manifest_sha256": {"oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]},
+            "recipe_sha256": {"oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]},
+            "moved_to": {"type": "string", "pattern": "^\\.cad-work/replaced/"}
+          }
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

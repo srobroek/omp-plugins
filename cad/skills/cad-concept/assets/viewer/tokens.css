@@ -1,0 +1,70 @@
+/*
+ * Viewer-local design tokens for the cad-concept viewer. Every colour, spacing,
+ * radius, and type value in viewer.css and viewer.js resolves to one of these.
+ * The model palette (--color-part-*) and scene chrome are read by viewer.js
+ * through getComputedStyle, so the 3D view and the UI share one source.
+ */
+:root {
+  /* neutrals, tinted toward slate */
+  --color-canvas: #e7e9ec;
+  --color-surface: #f6f7f8;
+  --color-surface-raised: #fcfcfd;
+  --color-border: #cfd4da;
+  --color-border-strong: #9aa3ad;
+  --color-fg: #1c2330;
+  --color-fg-muted: #586271;
+  --color-fg-inverse: #f6f7f8;
+
+  /* interaction */
+  --color-accent: #b4531f;
+  --color-accent-strong: #8f3f14;
+  --color-accent-subtle: #f6e6dc;
+  --color-focus: #1f5fb4;
+  --color-danger: #a3262a;
+  --color-danger-subtle: #fbeceb;
+  --color-success: #2e6b3a;
+
+  /* 3D scene */
+  --color-grid: #cdd2d8;
+  --color-grid-major: #a9b1ba;
+  --color-sky: #f4f6f8;
+  --color-part-1: #7d8fa3;
+  --color-part-2: #c9b48f;
+  --color-part-3: #8fae9a;
+  --color-part-4: #b98f8f;
+  --color-part-5: #9c93b5;
+  --color-part-6: #a7a39a;
+
+  /* labels over the canvas */
+  --color-label-part-bg: rgb(252 252 253 / 0.88);
+  --color-label-group-bg: rgb(28 35 48 / 0.86);
+  --color-label-variant-bg: #b4531f;
+
+  /* spacing: 4 px base */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+
+  --radius-1: 3px;
+  --radius-2: 6px;
+
+  --font-ui: "Helvetica Neue", "Segoe UI", "Noto Sans", Arial, sans-serif;
+  --font-mono: "SF Mono", "Cascadia Mono", "DejaVu Sans Mono", Menlo, monospace;
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-md: 14px;
+  --text-lg: 17px;
+  --leading-tight: 1.25;
+  --leading-normal: 1.45;
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+
+  --panel-width: 320px;
+  --target-min: 28px;
+  --duration-fast: 120ms;
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+}

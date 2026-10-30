@@ -1,0 +1,12 @@
+{
+  "name": "cad",
+  "description": "Agent-assisted mechanical CAD from rapid concept through verified STEP AP242 release.",
+  "agents": [
+    "./harness/claude/agents/cad-analyst.md",
+    "./harness/claude/agents/cad-concept-designer.md",
+    "./harness/claude/agents/cad-dfm-reviewer.md",
+    "./harness/claude/agents/cad-mech-reviewer.md",
+    "./harness/claude/agents/cad-part-designer.md",
+    "./harness/claude/agents/cad-sourcing-researcher.md"
+  ]
+}

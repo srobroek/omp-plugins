@@ -1,0 +1,42 @@
+PN: LMP-0009
+rev: X1
+title: Bushing SPIROL CMPL 4 X 6 EK CL8100
+material: Brass C36000
+process: purchased
+finish: Plain
+mass_target: 1.9
+make_buy: buy
+supplier: null
+decisions: [DR-004]
+procurement:
+  mode: catalog
+  manufacturer: SPIROL International Corporation
+  manufacturer_part_number: CMPL 4 X 6 EK CL8100
+  designation: "Headed compression limiter CL8100, M4 x 6, brass (E), plain (K)"
+  specification:
+    reference: SPIROL CL8000/CL8100 specification flyer
+    revision: "01/24"
+    url: https://www.spirol.com/assets/files/cmpl-cl8000-cl8100-specification-flyer-us.pdf
+    sha256: 03d9a64aa3d018c695675bec6e71d0c29c72cb3638c3b67e6f4fdaa3fda3e58d
+drawing:
+  type: vendor_specification
+  datum_features:
+    A: {feature: head_underside, role: plane}
+    B: {feature: bore, role: axis}
+  coordinate_frame:
+    origin: {intersection: [A, B]}
+    z: {parallel_to: B, toward: body_end}
+  views:
+    - {id: elevation, kind: orthographic, perpendicular_to: B}
+    - {id: head_end, kind: orthographic, along_axis: B, toward: head_top}
+  dimensions:
+    - {id: bore_diameter, operation: diameter, features: [bore], tolerance: {deviation_mm: [-0.05, 0.05]}}
+    - {id: head_diameter, operation: diameter, features: [head], tolerance: {deviation_mm: [-0.125, 0.125]}}
+    - {id: body_length, operation: plane_separation, features: [head_underside, body_end], tolerance: {deviation_mm: [-0.15, 0.0]}}
+    - {id: overall_length, operation: plane_separation, features: [head_top, body_end], tolerance: {deviation_mm: [-0.15, 0.0]}}
+    - {id: head_thickness, operation: plane_separation, features: [head_underside, head_top], reference: true}
+    - {id: knurl_diameter, operation: diameter, features: [knurl], reference: true}
+  notes:
+    - {kind: general, text: "Inner diameter A, head diameter H, length L and OAL per the specification; head thickness T and the knurl diameter C are its published reference and nominal values."}
+    - {kind: inspection, text: "Heat-set into the LMP-0004 bushing seat with the head in the counterbore (DR-004)."}
+  sheet: {sizes: [A4, A3], scale: auto}

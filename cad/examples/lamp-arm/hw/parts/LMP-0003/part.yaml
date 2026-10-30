@@ -1,0 +1,61 @@
+PN: LMP-0003
+rev: X1
+title: Upper link
+material: Aluminum 6061-T6
+process: cnc
+finish: As machined; deburred
+mass_target: 138
+make_buy: make
+supplier: null
+decisions: [DR-002, DR-003, DR-004]
+drawing:
+  type: detail
+  tolerance_policy: machining
+  datum_features:
+    A: {feature: tongue_seating_face, role: plane}
+    B: {feature: elbow_bore, role: axis}
+    C: {feature: tip_bore, role: axis}
+  coordinate_frame:
+    origin: {intersection: [A, B]}
+    y: {normal_to: A}
+    x: {toward: C}
+  views:
+    - {id: side, kind: orthographic, along_axis: B, toward: tongue_seating_face}
+    - {id: plan, kind: orthographic, along_axis: lightening_pocket}
+    - {id: section_bores, kind: section, through: [B, C]}
+    - {id: section_pocket, kind: section, through: lightening_pocket, scale: "1:1"}
+    - {id: underside, kind: orthographic, opposite: plan}
+  features:
+    tongue_seating_face: {size: general}
+    tongue_far_face: {size: general}
+    elbow_bore: {size: interface}
+    tip_bore: {size: interface}
+    bore_entry_chamfers: {size: general}
+    head_clevis: {size: general}
+    head_cheek_face: {size: general}
+    far_cheek_face: {size: general}
+    lightening_pocket: {size: general}
+    cable_channel: {profile: controlled_model}
+    outer_contour: {profile: controlled_model}
+    elbow_end: {size: general}
+    tip_end: {size: general}
+    flare_rounds: {size: general}
+    sag_blends: {size: general}
+    silhouette_rounds: {size: general}
+  dimensions:
+    - {id: head_clevis_width, operation: width, features: [head_clevis], tolerance: {deviation_mm: [-0.05, 0.05]}}
+    - {id: far_cheek_thickness, operation: thickness, features: [head_clevis, far_cheek_face]}
+    - {id: head_cheek_thickness, operation: thickness, features: [head_clevis, head_cheek_face]}
+    - {id: head_width, operation: plane_separation, features: [far_cheek_face, head_cheek_face], reference: true}
+    - {id: cable_channel_radius, operation: radius, features: [cable_channel]}
+  geometric_tolerances:
+    - {id: elbow_bore_perpendicularity, characteristic: perpendicularity, features: [elbow_bore], zone_mm: 0.1, diameter_zone: true, datum_frame: [A]}
+    - {id: tip_bore_position, characteristic: position, features: [tip_bore], zone_mm: 0.1, diameter_zone: true, datum_frame: [A, B]}
+    - {id: cheek_bore_coaxiality, characteristic: coaxiality, features: [tip_bore], zone_mm: 0.01, diameter_zone: true, datum_frame: [C]}
+    - {id: contour_profile, characteristic: profile_surface, features: [outer_contour, cable_channel], zone_mm: 1.0, datum_frame: [A, B, C]}
+  edges: {external: [-0.3, 0.0], internal: [0.0, 0.3]}
+  surface_texture: {open: "no standard clause or vendor specification in the record gives a roughness for the 5 H8 and 5 H7 bores or the machined surfaces; ISO 2338 and ISO 8734 control only the pin (DR-004)"}
+  notes:
+    - {kind: process, text: "CNC machined from 6061-T6; ream the tip bore through both cheeks in one pass."}
+    - {kind: finish, text: "As machined, no coating; the 5 H8 and 5 H7 bores are final as machined."}
+  sheet: {sizes: [A3, A2], scale: auto}

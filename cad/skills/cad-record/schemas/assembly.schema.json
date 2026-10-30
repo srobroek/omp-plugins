@@ -1,0 +1,224 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://srobroek.com/cad/schemas/assembly.schema.json",
+  "title": "CAD assembly record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["subassemblies", "joints"],
+  "properties": {
+    "occurrences": {
+      "description": "Explicit placements of part definitions; a PN listed in a subassembly's parts is one implicit occurrence at the identity placement instead",
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "PN"],
+        "properties": {
+          "id": {"$ref": "#/$defs/occurrence_id"},
+          "PN": {"$ref": "#/$defs/pn"},
+          "placement": {"$ref": "#/$defs/placement"}
+        }
+      }
+    },
+    "profiles": {
+      "description": "Reusable periodic tables a periodic_table coupling evaluates, by name",
+      "type": "object", "minProperties": 1,
+      "propertyNames": {"pattern": "^[a-z][a-z0-9_-]*$"},
+      "additionalProperties": {"$ref": "#/$defs/profile"}
+    },
+    "mechanisms": {
+      "description": "Shared mechanism parameters whose outputs several slider_crank couplings follow",
+      "type": "array", "minItems": 1,
+      "items": {"$ref": "#/$defs/mechanism"}
+    },
+    "subassemblies": {
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "title"],
+        "anyOf": [{"required": ["parts"]}, {"required": ["occurrences"]}],
+        "properties": {
+          "id": {"type": "string", "pattern": "^[a-z][a-z0-9_-]*$"},
+          "title": {"type": "string", "minLength": 1},
+          "parts": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/pn"}},
+          "occurrences": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/occurrence_ref"}}
+        }
+      }
+    },
+    "joints": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "type", "parent", "child", "axis", "origin", "min", "max"],
+        "oneOf": [{"required": ["nominal"]}, {"required": ["coupling"]}],
+        "if": {"properties": {"type": {"const": "fixed"}}},
+        "then": {"required": ["nominal"]},
+        "properties": {
+          "id": {"$ref": "#/$defs/joint_id"},
+          "type": {"type": "string", "enum": ["revolute", "prismatic", "fixed"]},
+          "parent": {"$ref": "#/$defs/part_ref"},
+          "child": {"$ref": "#/$defs/part_ref"},
+          "axis": {"$ref": "#/$defs/vector"},
+          "origin": {"$ref": "#/$defs/vector"},
+          "min": {"type": "number"},
+          "max": {"type": "number"},
+          "nominal": {"description": "The value of an independent joint; a coupled joint has none", "type": "number"},
+          "coupling": {"$ref": "#/$defs/coupling"}
+        }
+      }
+    },
+    "drawing": {"$ref": "#/$defs/assembly_drawing"}
+  },
+  "$defs": {
+    "vector": {"type": "array", "prefixItems": [{"type": "number"}, {"type": "number"}, {"type": "number"}], "minItems": 3, "maxItems": 3},
+    "joint_id": {"type": "string", "pattern": "^J-[0-9]{3}$"},
+    "coupling": {
+      "description": "A dependent joint's law (cad-motion coupling.py): its value derives from a driver joint",
+      "oneOf": [
+        {
+          "description": "q = ratio * q_driver + offset; ratio in dependent units per driver unit",
+          "type": "object", "additionalProperties": false, "required": ["type", "driver", "ratio"],
+          "properties": {
+            "type": {"const": "linear"},
+            "driver": {"$ref": "#/$defs/joint_id"},
+            "ratio": {"type": "number"},
+            "offset": {"type": "number"}
+          }
+        },
+        {
+          "description": "q = profile((q_driver + phase_deg) mod period_deg); the driver is revolute",
+          "type": "object", "additionalProperties": false, "required": ["type", "driver", "profile"],
+          "properties": {
+            "type": {"const": "periodic_table"},
+            "driver": {"$ref": "#/$defs/joint_id"},
+            "profile": {"type": "string", "pattern": "^[a-z][a-z0-9_-]*$"},
+            "phase_deg": {"type": "number"}
+          }
+        },
+        {
+          "description": "One output of a slider_crank mechanism: piston displacement (prismatic) or rod angle (revolute)",
+          "type": "object", "additionalProperties": false, "required": ["type", "mechanism", "output"],
+          "properties": {
+            "type": {"const": "slider_crank"},
+            "mechanism": {"type": "string", "pattern": "^[a-z][a-z0-9_-]*$"},
+            "output": {"enum": ["displacement", "rod_angle"]}
+          }
+        }
+      ]
+    },
+    "profile": {
+      "description": "Piecewise-linear periodic table: samples from 0 to period_deg with matching end values",
+      "type": "object", "additionalProperties": false,
+      "required": ["input_unit", "output_unit", "period_deg", "interpolation", "samples"],
+      "properties": {
+        "input_unit": {"const": "deg"},
+        "output_unit": {"enum": ["mm", "deg"]},
+        "period_deg": {"type": "number", "exclusiveMinimum": 0},
+        "interpolation": {"const": "linear"},
+        "samples": {
+          "type": "array", "minItems": 2,
+          "items": {"type": "array", "prefixItems": [{"type": "number"}, {"type": "number"}], "minItems": 2, "maxItems": 2}
+        }
+      }
+    },
+    "mechanism": {
+      "description": "A centred slider-crank: the driver turns the crank about crank_axis through origin_mm; the piston slides along bank_axis",
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "type", "driver", "origin_mm", "crank_axis", "bank_axis", "crank_radius_mm", "rod_length_mm"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^[a-z][a-z0-9_-]*$"},
+        "type": {"const": "slider_crank"},
+        "driver": {"$ref": "#/$defs/joint_id"},
+        "origin_mm": {"$ref": "#/$defs/vector"},
+        "crank_axis": {"$ref": "#/$defs/vector"},
+        "bank_axis": {"$ref": "#/$defs/vector"},
+        "crank_radius_mm": {"type": "number", "exclusiveMinimum": 0},
+        "rod_length_mm": {"type": "number", "exclusiveMinimum": 0},
+        "phase_deg": {"type": "number"}
+      }
+    },
+    "pn": {"type": "string", "pattern": "^[A-Z]{2,5}-[0-9]{4}$"},
+    "occurrence_id": {"type": "string", "pattern": "^[a-z][a-z0-9_-]*$"},
+    "occurrence_ref": {"description": "One physical instance: @ followed by an occurrence id", "type": "string", "pattern": "^@[a-z][a-z0-9_-]*$"},
+    "part_ref": {"description": "An occurrence reference, or a PN that has exactly one occurrence", "anyOf": [{"$ref": "#/$defs/pn"}, {"$ref": "#/$defs/occurrence_ref"}]},
+    "placement": {
+      "description": "Rest placement x -> R x + t: rotation about the definition's local origin, then translation (mm)",
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "translation_mm": {"$ref": "#/$defs/vector"},
+        "rotation": {
+          "type": "object", "additionalProperties": false, "required": ["axis", "angle_deg"],
+          "properties": {
+            "axis": {"$ref": "#/$defs/vector"},
+            "angle_deg": {"type": "number"}
+          }
+        }
+      }
+    },
+    "drawing_item": {
+      "description": "One assembly-drawing item row: a PN and, when it is placed more than once, the occurrences it stands for",
+      "type": "object", "additionalProperties": false, "required": ["item", "PN"],
+      "properties": {
+        "item": {"type": "integer", "minimum": 1},
+        "PN": {"$ref": "#/$defs/pn"},
+        "occurrences": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/occurrence_ref"}}
+      }
+    },
+    "assembly_drawing": {
+      "description": "Assembly drawing intent: identity, views, presentation-only explode offsets, parts-list items, subassembly sheets and installation operations",
+      "type": "object", "additionalProperties": false,
+      "required": ["number", "rev", "title", "views", "items"],
+      "properties": {
+        "number": {"type": "string", "minLength": 1},
+        "rev": {"type": "string", "minLength": 1},
+        "title": {"type": "string", "minLength": 1},
+        "scope": {"enum": ["modeled_mechanical_assembly", "complete_assembly"]},
+        "excludes": {"description": "What a modelled scope leaves out, named on the drawing", "type": "array", "items": {"type": "string", "minLength": 1}},
+        "views": {
+          "type": "array", "minItems": 1,
+          "items": {
+            "type": "object", "additionalProperties": false, "required": ["id", "kind", "direction"],
+            "properties": {
+              "id": {"type": "string", "pattern": "^[a-z][a-z0-9_-]*$"},
+              "kind": {"enum": ["assembled", "exploded"]},
+              "direction": {"enum": ["front", "back", "left", "right", "top", "bottom", "iso"]}
+            }
+          }
+        },
+        "explode": {
+          "description": "Exploded-view offsets in mm, assembly frame; each occurrence also moves by its kinematic ancestors' offsets",
+          "type": "array",
+          "items": {
+            "type": "object", "additionalProperties": false, "required": ["ref", "offset_mm"],
+            "properties": {"ref": {"$ref": "#/$defs/part_ref"}, "offset_mm": {"$ref": "#/$defs/vector"}}
+          }
+        },
+        "items": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/drawing_item"}},
+        "subassembly_sheets": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z][a-z0-9_-]*$"}},
+        "operations": {"type": "array", "items": {"$ref": "#/$defs/assembly_operation"}}
+      }
+    },
+    "assembly_operation": {
+      "description": "One installation step: `part` goes into `into` along `direction` (in the receiving part's model frame) until the acceptance holds; the fit, insert or ring comes from the interface limit of the same kind",
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "kind", "part", "into", "interface", "direction", "acceptance"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^[a-z][a-z0-9_-]*$"},
+        "kind": {"enum": ["press_fit", "heat_set", "retaining_ring"]},
+        "part": {"$ref": "#/$defs/part_ref"},
+        "into": {"$ref": "#/$defs/part_ref"},
+        "interface": {"type": "string", "pattern": "^IF-[0-9]{3}$"},
+        "direction": {"$ref": "#/$defs/vector"},
+        "acceptance": {
+          "type": "object", "additionalProperties": false, "required": ["kind", "features"],
+          "properties": {
+            "kind": {"enum": ["seated", "standoff", "flush", "engaged"]},
+            "features": {"type": "array", "minItems": 1, "maxItems": 2, "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"}}
+          }
+        },
+        "tools": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "consumables": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "verify_joint": {"type": "string", "pattern": "^J-[0-9]{3}$"}
+      }
+    }
+  }
+}

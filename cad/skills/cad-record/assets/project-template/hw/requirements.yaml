@@ -1,0 +1,9 @@
+requirements:
+  - id: REQ-001
+    text: "Replace with a measurable product requirement."
+    rationale: "Explain why this requirement matters."
+    source: "Project brief or other source"
+    priority: must
+    verification:
+      method: T
+      criteria: "Describe the acceptance criteria for verification."

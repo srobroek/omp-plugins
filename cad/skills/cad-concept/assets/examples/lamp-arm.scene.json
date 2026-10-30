@@ -1,0 +1,462 @@
+{
+  "format": "cad.concept-scene",
+  "version": 1,
+  "id": "lamp-arm",
+  "title": "Desk lamp arm",
+  "units": "mm",
+  "notes": "Example L0 concept: three reach and base trade-offs for a two-link desk lamp arm.",
+  "variants": [
+    {
+      "id": "short-reach",
+      "label": "A · Short reach",
+      "summary": "Compact two-link arm on a small round base.",
+      "params": {
+        "lower_link_mm": 220,
+        "upper_link_mm": 220,
+        "base_footprint_mm": 140
+      },
+      "root": {
+        "kind": "group",
+        "id": "lamp",
+        "label": "Lamp",
+        "children": [
+          {
+            "kind": "group",
+            "id": "base",
+            "label": "Base",
+            "children": [
+              {
+                "kind": "part",
+                "id": "base-plate",
+                "label": "Base plate",
+                "position": [0, 0, 9.0],
+                "shape": {
+                  "type": "cylinder",
+                  "radius": 70,
+                  "height": 18
+                }
+              },
+              {
+                "kind": "part",
+                "id": "shoulder-mount",
+                "label": "Shoulder mount",
+                "position": [0, 0, 38],
+                "shape": {
+                  "type": "box",
+                  "size": [40, 50, 40]
+                }
+              },
+              {
+                "kind": "group",
+                "id": "lower-arm",
+                "label": "Lower arm",
+                "position": [0, 0, 58],
+                "children": [
+                  {
+                    "kind": "part",
+                    "id": "lower-link",
+                    "label": "Lower link",
+                    "position": [0, 0, 110.0],
+                    "shape": {
+                      "type": "capsule",
+                      "radius": 10,
+                      "height": 240
+                    }
+                  },
+                  {
+                    "kind": "group",
+                    "id": "upper-arm",
+                    "label": "Upper arm",
+                    "position": [0, 0, 220],
+                    "children": [
+                      {
+                        "kind": "part",
+                        "id": "upper-link",
+                        "label": "Upper link",
+                        "position": [0, 0, 110.0],
+                        "shape": {
+                          "type": "capsule",
+                          "radius": 8,
+                          "height": 236
+                        }
+                      },
+                      {
+                        "kind": "group",
+                        "id": "head",
+                        "label": "Head",
+                        "position": [0, 0, 220],
+                        "children": [
+                          {
+                            "kind": "part",
+                            "id": "shade",
+                            "label": "Shade",
+                            "position": [30.3, 0, 17.5],
+                            "rotation": [0, 60, 0],
+                            "shape": {
+                              "type": "cylinder",
+                              "radius": 45,
+                              "height": 70
+                            }
+                          },
+                          {
+                            "kind": "part",
+                            "id": "bulb",
+                            "label": "Bulb",
+                            "position": [65.0, 0, 37.5],
+                            "shape": {
+                              "type": "sphere",
+                              "radius": 18
+                            }
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "joints": [
+        {
+          "id": "base",
+          "label": "Base",
+          "type": "revolute",
+          "parent": "base",
+          "child": "lower-arm",
+          "axis": [0, 1, 0],
+          "origin": [0, 0, 58],
+          "min": -10,
+          "max": 80,
+          "nominal": 30
+        },
+        {
+          "id": "elbow",
+          "label": "Elbow",
+          "type": "revolute",
+          "parent": "lower-arm",
+          "child": "upper-arm",
+          "axis": [0, -1, 0],
+          "origin": [0, 0, 220],
+          "min": -120,
+          "max": 0,
+          "nominal": -90
+        },
+        {
+          "id": "head",
+          "label": "Head",
+          "type": "revolute",
+          "parent": "upper-arm",
+          "child": "head",
+          "axis": [0, 1, 0],
+          "origin": [0, 0, 220],
+          "min": -45,
+          "max": 45,
+          "nominal": 0
+        }
+      ]
+    },
+    {
+      "id": "long-reach",
+      "label": "B · Long reach",
+      "summary": "Long links; a wider, heavier round base resists tipping.",
+      "params": {
+        "lower_link_mm": 340,
+        "upper_link_mm": 340,
+        "base_footprint_mm": 220
+      },
+      "root": {
+        "kind": "group",
+        "id": "lamp",
+        "label": "Lamp",
+        "children": [
+          {
+            "kind": "group",
+            "id": "base",
+            "label": "Base",
+            "children": [
+              {
+                "kind": "part",
+                "id": "base-plate",
+                "label": "Base plate",
+                "position": [0, 0, 12.0],
+                "shape": {
+                  "type": "cylinder",
+                  "radius": 110,
+                  "height": 24
+                }
+              },
+              {
+                "kind": "part",
+                "id": "shoulder-mount",
+                "label": "Shoulder mount",
+                "position": [0, 0, 44],
+                "shape": {
+                  "type": "box",
+                  "size": [40, 50, 40]
+                }
+              },
+              {
+                "kind": "group",
+                "id": "lower-arm",
+                "label": "Lower arm",
+                "position": [0, 0, 64],
+                "children": [
+                  {
+                    "kind": "part",
+                    "id": "lower-link",
+                    "label": "Lower link",
+                    "position": [0, 0, 170.0],
+                    "shape": {
+                      "type": "capsule",
+                      "radius": 10,
+                      "height": 360
+                    }
+                  },
+                  {
+                    "kind": "group",
+                    "id": "upper-arm",
+                    "label": "Upper arm",
+                    "position": [0, 0, 340],
+                    "children": [
+                      {
+                        "kind": "part",
+                        "id": "upper-link",
+                        "label": "Upper link",
+                        "position": [0, 0, 170.0],
+                        "shape": {
+                          "type": "capsule",
+                          "radius": 8,
+                          "height": 356
+                        }
+                      },
+                      {
+                        "kind": "group",
+                        "id": "head",
+                        "label": "Head",
+                        "position": [0, 0, 340],
+                        "children": [
+                          {
+                            "kind": "part",
+                            "id": "shade",
+                            "label": "Shade",
+                            "position": [30.3, 0, 17.5],
+                            "rotation": [0, 60, 0],
+                            "shape": {
+                              "type": "cylinder",
+                              "radius": 45,
+                              "height": 70
+                            }
+                          },
+                          {
+                            "kind": "part",
+                            "id": "bulb",
+                            "label": "Bulb",
+                            "position": [65.0, 0, 37.5],
+                            "shape": {
+                              "type": "sphere",
+                              "radius": 18
+                            }
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "joints": [
+        {
+          "id": "base",
+          "label": "Base",
+          "type": "revolute",
+          "parent": "base",
+          "child": "lower-arm",
+          "axis": [0, 1, 0],
+          "origin": [0, 0, 64],
+          "min": -10,
+          "max": 80,
+          "nominal": 30
+        },
+        {
+          "id": "elbow",
+          "label": "Elbow",
+          "type": "revolute",
+          "parent": "lower-arm",
+          "child": "upper-arm",
+          "axis": [0, -1, 0],
+          "origin": [0, 0, 340],
+          "min": -120,
+          "max": 0,
+          "nominal": -90
+        },
+        {
+          "id": "head",
+          "label": "Head",
+          "type": "revolute",
+          "parent": "upper-arm",
+          "child": "head",
+          "axis": [0, 1, 0],
+          "origin": [0, 0, 340],
+          "min": -45,
+          "max": 45,
+          "nominal": 0
+        }
+      ]
+    },
+    {
+      "id": "square-base",
+      "label": "C · Square base",
+      "summary": "Mid-length links on a square plate that fits a desk corner.",
+      "params": {
+        "lower_link_mm": 280,
+        "upper_link_mm": 260,
+        "base_footprint_mm": 180
+      },
+      "root": {
+        "kind": "group",
+        "id": "lamp",
+        "label": "Lamp",
+        "children": [
+          {
+            "kind": "group",
+            "id": "base",
+            "label": "Base",
+            "children": [
+              {
+                "kind": "part",
+                "id": "base-plate",
+                "label": "Base plate",
+                "position": [0, 0, 13.0],
+                "shape": {
+                  "type": "box",
+                  "size": [180, 180, 26]
+                }
+              },
+              {
+                "kind": "part",
+                "id": "shoulder-mount",
+                "label": "Shoulder mount",
+                "position": [0, 0, 46],
+                "shape": {
+                  "type": "box",
+                  "size": [40, 50, 40]
+                }
+              },
+              {
+                "kind": "group",
+                "id": "lower-arm",
+                "label": "Lower arm",
+                "position": [0, 0, 66],
+                "children": [
+                  {
+                    "kind": "part",
+                    "id": "lower-link",
+                    "label": "Lower link",
+                    "position": [0, 0, 140.0],
+                    "shape": {
+                      "type": "capsule",
+                      "radius": 10,
+                      "height": 300
+                    }
+                  },
+                  {
+                    "kind": "group",
+                    "id": "upper-arm",
+                    "label": "Upper arm",
+                    "position": [0, 0, 280],
+                    "children": [
+                      {
+                        "kind": "part",
+                        "id": "upper-link",
+                        "label": "Upper link",
+                        "position": [0, 0, 130.0],
+                        "shape": {
+                          "type": "capsule",
+                          "radius": 8,
+                          "height": 276
+                        }
+                      },
+                      {
+                        "kind": "group",
+                        "id": "head",
+                        "label": "Head",
+                        "position": [0, 0, 260],
+                        "children": [
+                          {
+                            "kind": "part",
+                            "id": "shade",
+                            "label": "Shade",
+                            "position": [30.3, 0, 17.5],
+                            "rotation": [0, 60, 0],
+                            "shape": {
+                              "type": "cylinder",
+                              "radius": 45,
+                              "height": 70
+                            }
+                          },
+                          {
+                            "kind": "part",
+                            "id": "bulb",
+                            "label": "Bulb",
+                            "position": [65.0, 0, 37.5],
+                            "shape": {
+                              "type": "sphere",
+                              "radius": 18
+                            }
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "joints": [
+        {
+          "id": "base",
+          "label": "Base",
+          "type": "revolute",
+          "parent": "base",
+          "child": "lower-arm",
+          "axis": [0, 1, 0],
+          "origin": [0, 0, 66],
+          "min": -10,
+          "max": 80,
+          "nominal": 30
+        },
+        {
+          "id": "elbow",
+          "label": "Elbow",
+          "type": "revolute",
+          "parent": "lower-arm",
+          "child": "upper-arm",
+          "axis": [0, -1, 0],
+          "origin": [0, 0, 280],
+          "min": -120,
+          "max": 0,
+          "nominal": -90
+        },
+        {
+          "id": "head",
+          "label": "Head",
+          "type": "revolute",
+          "parent": "upper-arm",
+          "child": "head",
+          "axis": [0, 1, 0],
+          "origin": [0, 0, 260],
+          "min": -45,
+          "max": 45,
+          "nominal": 0
+        }
+      ]
+    }
+  ]
+}

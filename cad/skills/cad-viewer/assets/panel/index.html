@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>cad-viewer</title>
+    <link rel="stylesheet" href="/tokens.css" />
+    <link rel="stylesheet" href="/panel.css" />
+    <script type="module" src="/panel.js"></script>
+  </head>
+  <body data-ready="false" data-state="loading">
+    <div class="app">
+      <header class="bar">
+        <h1 id="product">cad-viewer</h1>
+        <span class="version-badge" id="badge">—</span>
+        <div class="segmented" role="group" aria-label="Version">
+          <button type="button" class="segment" id="show-a" data-key="show-a" aria-pressed="true">A</button>
+          <button type="button" class="segment" id="show-b" data-key="show-b" aria-pressed="false" disabled>B</button>
+        </div>
+        <button type="button" class="button button-ghost" id="split" data-key="split" aria-pressed="false" disabled>
+          Side by side
+        </button>
+        <p class="status" id="status" role="status" aria-live="polite">Connecting to the viewer host…</p>
+      </header>
+      <div class="workspace">
+        <main class="stage" id="stage" data-mode="single" aria-label="3D views">
+          <figure class="viewer" id="figure-a">
+            <iframe id="viewer-a" title="OCP CAD Viewer, version A"></iframe>
+            <figcaption class="viewer-caption" id="caption-a" hidden>A</figcaption>
+          </figure>
+          <figure class="viewer" id="figure-b" hidden>
+            <iframe id="viewer-b" title="OCP CAD Viewer, version B"></iframe>
+            <figcaption class="viewer-caption" id="caption-b">B</figcaption>
+          </figure>
+        </main>
+        <aside class="panel" aria-label="Model panel">
+          <section class="panel-section" aria-labelledby="versions-heading">
+            <h2 id="versions-heading">Versions</h2>
+            <div class="fields">
+              <div class="field" id="field-A">
+                <label class="field-label" for="version-A">Version A</label>
+                <select class="field-select" id="version-A" data-key="version-A" aria-describedby="version-A-note" disabled>
+                  <option value="">Nothing shown</option>
+                </select>
+                <p class="field-note" id="version-A-note" hidden></p>
+              </div>
+              <div class="field" id="field-B" hidden>
+                <label class="field-label" for="version-B">Version B</label>
+                <select class="field-select" id="version-B" data-key="version-B" aria-describedby="version-B-note" disabled>
+                  <option value="">Nothing shown</option>
+                </select>
+                <p class="field-note" id="version-B-note" hidden></p>
+              </div>
+            </div>
+          </section>
+          <section class="panel-section" aria-labelledby="check-heading">
+            <h2 id="check-heading">Check</h2>
+            <div id="check"></div>
+          </section>
+          <section class="panel-section" aria-labelledby="parts-heading">
+            <div class="section-head">
+              <h2 id="parts-heading">Parts and groups</h2>
+              <div class="actions">
+                <button type="button" class="button button-ghost" id="ghost" data-key="ghost" aria-pressed="false" disabled>
+                  Ghost rest
+                </button>
+                <button type="button" class="button button-ghost" id="reset" data-key="reset">Reset</button>
+              </div>
+            </div>
+            <h3 class="list-heading">Groups</h3>
+            <ul class="item-list" id="groups"></ul>
+            <h3 class="list-heading">Parts</h3>
+            <ul class="item-list" id="parts"></ul>
+          </section>
+          <section class="panel-section" aria-labelledby="measure-heading">
+            <h2 id="measure-heading">Measurements</h2>
+            <div id="measure"></div>
+          </section>
+        </aside>
+      </div>
+    </div>
+  </body>
+</html>

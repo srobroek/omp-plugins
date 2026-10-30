@@ -1,0 +1,38 @@
+cad-model
+=========
+
+Parts of this skill's scripts are adapted, in modified form, from:
+
+  Project:     AgentCAD 0.7.0
+  Repository:  https://github.com/jdilla1277/agentcad
+  Author:      James Dillard
+  Source path: agentcad/helpers.py (safe_cut, safe_fuse, safe_intersection, _run_safe_boolean,
+               _boolean_input, _canonical_occupied_shape, _volume_slack, _unwrap_shape,
+               _rewrap_like), agentcad/validation.py (_layer_advisory thresholds),
+               agentcad/solid_compare.py (_canonicalize_occupied_volume, shared/exclusive
+               volume method)
+  Copied:      2026-10-26, from the installed agentcad 0.7.0 wheel
+  Licence:     Apache License, Version 2.0 (same as this repository)
+
+AgentCAD 0.7.0 ships no NOTICE file of its own; its licence is the unmodified Apache-2.0 text.
+
+Adapted files and their modifications:
+  scripts/cadmodel/safe.py
+    1. safe_intersection(left, right) became safe_intersect(shape, *others), chaining COMMON
+       over every input; an empty intersection is refused.
+    2. safe_cut gained a lower bound: it cannot remove more than its tools' total volume.
+    3. Results are re-wrapped for CadQuery 2.8 and build123d 0.13 without importing either
+       kernel; AgentCAD's build123d compatibility classes are not carried over.
+    4. Kernel warnings no longer raise Python warnings; refusals raise SafeEditError.
+  scripts/cadmodel/occ.py
+    1. The non-destructive BOPAlgo_BOP runner, occupied-volume partition (BOPAlgo_CellsBuilder)
+       and the 1e-7 relative volume slack, rewritten as kernel-neutral functions over raw
+       TopoDS_Shape that run unchanged on OCP 7.9 (cadquery-ocp 7.9.3.1.1) and OCP 8.0
+       (cadquery-ocp-novtk 8.0.1.1.0).
+  scripts/cadmodel/check.py
+    1. The sliver-face (1e-3 mm^2) threshold is AgentCAD's advisory value; the loose-tolerance
+       threshold is tightened from 0.1 mm to 0.01 mm. Both stay advisory.
+  scripts/cadmodel/diff.py
+    1. Shared / A-only / B-only volumes per part follow AgentCAD's exact-comparison method
+       (COMMON and both CUTs of occupied volumes), without its alignment, timeout workers, or
+       approximate fallback.

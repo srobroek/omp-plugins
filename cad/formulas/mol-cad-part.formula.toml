@@ -1,0 +1,59 @@
+# mol-cad-part: one L2 subassembly designed and checked by a cad-part-designer worker in a scratch copy.
+# Bond one per subassembly onto the L2 fan-out step, all in one batch:
+#   bd mol bond mol-cad-part <fanout-step> --type parallel --ref part-<subassembly> --var subassembly=<id> ...
+# The worker never builds hw/ itself; the lead builds one integrated version after the batch.
+formula = "mol-cad-part"
+description = "Design and scratch-check L2 subassembly {{subassembly}} of {{product}} using {{kernel}} and {{process_default}}"
+type = "workflow"
+
+[vars.product]
+required = true
+description = "hardware product id"
+
+[vars.scope]
+required = true
+description = "hardware project paths this unit may change"
+
+[vars.subassembly]
+required = true
+pattern = "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+description = "one stable subassembly id from hw/assembly.yaml, or one part id; the unit id is part-<subassembly>"
+
+[vars.change]
+required = true
+description = "what this unit changes, from the lead's plan"
+
+[vars.kernel]
+default = "cadquery"
+pattern = "^(cadquery|build123d)$"
+description = "modeling kernel; use its dedicated environment"
+
+[vars.process_default]
+default = "fdm"
+pattern = "^(fdm|cnc)$"
+description = "default process for parts without an explicit override"
+
+[[steps]]
+id = "design"
+title = "DESIGN subassembly {{subassembly}} in a scratch copy"
+type = "task"
+labels = ["cad", "phase:parts"]
+description = "Unit part-{{subassembly}}: {{change}}. Create the scratch copy with `uv run --script skill://cad-flow/scripts/scratch.py init --hw hw --unit part-{{subassembly}} --part <PN> [--part <PN> ...]`, naming every PN the lead assigns from {{subassembly}} in hw/assembly.yaml. Edit only `.cad-work/part-{{subassembly}}/hw/parts/<PN>/part.yaml` and `model.py`, following the skill://cad-model model.py contract in the {{kernel}} environment and {{process_default}} unless approved part metadata says otherwise. Keep the frozen interfaces, envelopes, datums, and joints. Change a shared record only in the scratch copy, as a proposal."
+
+[steps.metadata]
+skill_hints = "cad-model, cad-design"
+execution_mode = "subagent"
+execution_agent_type = "cad-part-designer"
+
+[[steps]]
+id = "scratch-check"
+title = "CHECK subassembly {{subassembly}} on its scratch build, then deliver"
+type = "task"
+needs = ["design"]
+labels = ["cad", "phase:parts"]
+description = "Run `uv run --script skill://cad-flow/scripts/scratch.py build --hw hw --unit part-{{subassembly}} --kernel {{kernel}} --fidelity F2`: it builds the scratch copy, runs cad-model check, and runs form_check at F2 on the unit's PNs. Fix your parts and rerun until it exits 0, or stop when the fix needs a shared-record change. Then run `uv run --script skill://cad-flow/scripts/scratch.py deliver --hw hw --unit part-{{subassembly}}`, which copies only the unit's hw/parts/<PN>/ directories into hw/ and lists every other changed file as a proposal. Never build, check, or render hw/ itself. Return the delivered files, the scratch check and form JSON paths (absolute), and each proposal with its reason."
+
+[steps.metadata]
+skill_hints = "cad-model, cad-design"
+execution_mode = "subagent"
+execution_agent_type = "cad-part-designer"

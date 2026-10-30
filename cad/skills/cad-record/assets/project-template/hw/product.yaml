@@ -1,0 +1,8 @@
+id: example-product
+rigor: pro
+units: mm
+regime: iso
+general_tolerance: "ISO 2768-m"
+flow:
+  stage: ground
+  recheck_from: ground

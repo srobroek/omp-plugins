@@ -1,0 +1,64 @@
+# Cross-harness, cross-model eval matrix for the cad plugin.
+# A cell is one (harness, model) pair; each cell writes its own ratchet variant
+# directory <out>/<cell-slug>/ with results.jsonl, errors.jsonl and train traces.
+
+reps = 2
+concurrency = 2          # trials in flight across all cells; keep near the Bedrock rate limit
+case_timeout_s = 1800    # hard wall-clock ceiling per (case, rep) attempt, all turns included
+max_turns = 4            # first prompt plus scripted gate answers
+
+[retry]                  # infrastructure retries only (throttling, 5xx, network); strict scoring otherwise
+attempts = 3
+base_s = 10
+max_s = 120
+
+[pilot]                  # `run.py run --pilot`: 3 cases x 1 rep per cell
+cases = ["t1-lower-link-cq", "t1-lower-link-b3d", "t1-base-plate-cq"]
+reps = 1
+
+[auth]                   # trials get no ~/.aws: credentials are exported from this profile into env
+# aws_profile = "<profile>"   # a dedicated Bedrock-only profile (README "Credentials"); --aws-profile overrides; default: $AWS_PROFILE
+aws_region = "us-east-1"
+
+[judge]                  # pairwise blind judge; must differ from every model under test
+harness = "omp"
+model = "amazon-bedrock/global.anthropic.claude-sonnet-5-5"
+flags = ["--no-tools", "--no-skills", "--no-rules", "--no-extensions"]
+
+# Every harness runs with a clean config (see README "Isolation"); each row is
+# tagged isolation = clean|contaminated with the leaks the harness reported.
+[harness.omp]
+bin = "omp"
+models = [
+  "amazon-bedrock/global.anthropic.claude-opus-5-5",
+  "amazon-bedrock/global.openai.gpt-6.1-sol",
+  "amazon-bedrock/global.moonshotai.kimi-k3",
+]
+
+[harness.opencode]       # verified with OpenCode v2.1.4
+bin = "opencode"         # resolution: $OPENCODE_BIN, then PATH if it runs, then ~/.cache/.bun/bin/opencode
+models = [
+  "amazon-bedrock/global.anthropic.claude-opus-5-5",
+  "amazon-bedrock/global.openai.gpt-6.1-sol",
+  "amazon-bedrock/global.moonshotai.kimi-k3",
+]
+
+[harness.kiro]          # --trust-all-tools pre-approves every tool, like the other harnesses' bypass modes; nothing confines it to the trial
+bin = "kiro-cli"
+models = ["claude-opus-5.5", "kimi-k3"]
+
+[harness.claude]
+bin = "claude"           # an Amazon toolbox launcher runs as the real binary behind it; without one, the cells are refused
+bare = false             # --bare drops the Skill, Task, Write, Glob and Grep tools: cad skills become unreachable
+setting_sources = "project,local"   # user settings (enabledPlugins, hooks, env) never load
+models = ["global.anthropic.claude-opus-5-5"]
+
+[harness.claude.env]
+CLAUDE_CODE_USE_BEDROCK = "1"
+AWS_REGION = "us-west-2"
+AWS_DEFAULT_REGION = "us-west-2"
+
+# Optional served-model overrides: a regex the served id must match, keyed by
+# "<harness>:<model>". Without one, both ids are normalised (provider, Bedrock
+# region and vendor prefixes dropped) and must be equal up to a date/-vN suffix.
+[expect]

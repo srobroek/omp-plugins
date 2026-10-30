@@ -16,12 +16,22 @@ exclude = [
   ".beads/**",
 ]
 
+# These files are generated for plugin-relative native harness discovery; test_install.py
+# validates their real Claude plugin and OpenCode project loading. Only suppress agnix's
+# mismatched skill-resolution and filename-derived-name assumptions for those outputs.
+[[overrides]]
+paths = ["cad/harness/claude/agents/*.md"]
+disabled_rules = ["CC-AG-005"]
+
+[[overrides]]
+paths = ["cad/harness/opencode/agents/*.md"]
+disabled_rules = ["CC-AG-001"]
+
 [rules]
 # Keep all categories enabled. The overrides below are path-scoped exceptions,
 # not a global opt-out from frontmatter, references, or skill validation.
 disabled_rules = []
 disabled_validators = []
-
 # OMP agents use OMP model aliases and tool names, plus native routing metadata
 # (advisor, spawns, thinking-level, and autoloadSkills). These fields are not
 # Claude Code agent schema, so only the corresponding Claude checks are carved
