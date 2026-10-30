@@ -79,10 +79,40 @@ When `run` sealed a version but could not write `latest.json`, it exits 2, keeps
 names the command that points the pointer at it: `cad_model.py latest <hw> --label vN`. That
 command checks every file of the newest version against its manifest first and rebuilds nothing.
 
-`run` stdout: `status`, `label`, `version_dir`, per-part `kernel`/`volume_mm3`/`solids`/`mass_g`,
-`manufacturing` per custom-made PN (`status`, `complete`, `path`, `process`, `state`),
-`warnings` (`[{pn, message}]`, including non-functional fillet edges skipped after all radius retries),
-and `timings_s` (`<kernel>_import_s`, `<kernel>_runner_wall_s`, `manufacturing_s`, `glb_s`, `total_s`).
+Reused outputs: `run` builds only the parts whose build inputs changed since an earlier build of the
+same project:
+
+- the files of `hw/parts/<PN>/` other than `part.yaml` (`model.py`, `sources/**`; hidden names and
+  `__pycache__/` excepted);
+- the part.yaml fields the runner uses: the product name `"<PN> <title>"`, `model_frame` and
+  `manufacture.relationship`;
+- the kernel environment: the interpreter, platform and every installed distribution, which
+  `run_<kernel>.py --tools` reports without importing the kernel;
+- the plugin and project Python files the runner loaded, recorded with the build and hashed again.
+
+Every other part reuses its earlier STEP (and `build_manufacture` state) byte for byte, with the
+runner facts the manifest records (`params`, kernel volume, solids, validity, drawing features,
+warnings). A kernel whose parts are all reused does not start; the manifest's `tools.<kernel>` then
+comes from `--tools` and has no `import_s`. A custom-made part's `manufacturing/<PN>/` files,
+placement and checks are reused the same way while its manifest facts, its state's geometry and the
+orchestrator's code and runtime are unchanged. The parts built in a run that then fails are kept
+for the next run.
+
+Each output is stored once in the part store, `hw/.cad/parts/<sha256>`, named by the sha256 of its
+bytes; `hw/.cad/builds/<sha256>.json` maps the sha256 of a build's inputs to its objects and facts.
+A version holds a hard link to each object where the filesystem allows one, else a byte copy, at
+its usual path. An output is reused only after its object still hashes to its name. Manifests hash
+file content, so verification is unchanged. Never edit a version file in place: a hard link shares
+the bytes with every version that reused them, and each of them then fails verification. The store
+ignores itself in git. Deleting it frees the space of deleted versions and costs one full rebuild.
+
+`run` stdout: `status`, `label`, `version_dir`, per-part `kernel`/`build`/`volume_mm3`/`solids`/`mass_g`,
+`manufacturing` per custom-made PN (`status`, `complete`, `path`, `process`, `state`, `build`),
+`cache` (`parts` and `manufacturing`, each `{built, reused}`: how many outputs this run made and how
+many it reused), `warnings` (`[{pn, message}]`, including non-functional fillet edges skipped after
+all radius retries; a reused part repeats its build's warnings), and `timings_s` (`<kernel>_import_s`
+and `<kernel>_runner_wall_s` for each kernel that started, `kernels_s`, `manufacturing_s`, `glb_s`,
+`total_s`). `build` is `built` or `reused` (null for a manufacturing entry without a model).
 On exit 1: `findings`, one per failed part: `pn`, `check`, `type`, `message`, `where`, plus
 `runners` timings when the kernels ran. `check` is one of:
 

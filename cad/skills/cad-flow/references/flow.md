@@ -75,7 +75,9 @@ The full sweep, a FreeCAD assembly run, an FEA case, and the first run of a new 
 
 ## Storage of generated results
 
-Before the first build, ask the user explicitly whether generated results (STEP, GLB, renders and check bundles) are stored in git. Record the answer as `product.yaml` `storage.results_in_git` with a DR. Only `true` tracks them, with Git LFS for STEP and GLB. With `false` they stay out of git, and the record remains valid. While the setting is absent the question is open: ask it, and commit no generated result.
+Before the first build, ask the user explicitly whether generated results (STEP, GLB, renders and check bundles) are stored in git. Record the answer as `product.yaml` `storage.results_in_git` with a DR. Then run `uv run --script skill://cad-flow/scripts/setup.py --storage --yes` from the project root. It writes the rules for the answer into `hw/.gitignore` or `hw/.gitattributes` (cad-record `references/layout.md` "Git storage"); run it again whenever the answer changes. Only `true` tracks them, with Git LFS for STEP and GLB. With `false` they stay out of git, and the record remains valid. While the setting is absent the question is open: ask it, and commit no generated result.
+
+A `.gitignore` untracks nothing. When git already tracks results and the answer is not `true`, setup lists those paths. The user stops tracking them with `git rm -r --cached <path>` (the files stay on disk) and a commit; never run it yourself. With `true`, setup never runs `git lfs` either: the user installs Git LFS and runs `git lfs install` once per clone.
 
 ## Delegation
 

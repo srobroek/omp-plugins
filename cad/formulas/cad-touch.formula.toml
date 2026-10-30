@@ -70,7 +70,7 @@ title = "INTENT gate: approve ECO {{decision}}"
 type = "task"
 needs = ["eco-impact"]
 labels = ["cad", "phase:gate"]
-description = "Present the ECO rationale, changed part, impact set, and proposed revision bump. Ask whether a changed process or material can still meet each appearance or property requirement (a transparent part printed in FDM is a known contradiction). When product.yaml has no `storage.results_in_git`, ask explicitly whether generated results (STEP, GLB, renders, check bundles) are stored in git and record the answer there with a DR; only true tracks them, with Git LFS for STEP and GLB. Obtain explicit approval of this intent and its affected-part/dependent set. Do not treat the original release or a recommendation as consent. Only bd gate resolve closes this human gate."
+description = "Present the ECO rationale, changed part, impact set, and proposed revision bump. Ask whether a changed process or material can still meet each appearance or property requirement (a transparent part printed in FDM is a known contradiction). When product.yaml has no `storage.results_in_git`, ask explicitly whether generated results (STEP, GLB, renders, check bundles) are stored in git and record the answer there with a DR; only true tracks them, with Git LFS for STEP and GLB. Then write the git rules for that answer with `uv run --script skill://cad-flow/scripts/setup.py --storage --yes` from the project root. Obtain explicit approval of this intent and its affected-part/dependent set. Do not treat the original release or a recommendation as consent. Only bd gate resolve closes this human gate."
 
 [steps.gate]
 type = "human"

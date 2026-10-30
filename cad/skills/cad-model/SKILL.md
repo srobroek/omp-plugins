@@ -31,7 +31,9 @@ TRIGGER
    requires every part to declare that kernel. The version snapshots its records in `record/` and
    holds `manufacturing/<PN>/` for every custom-made part: `part.step` (AP242, mm), `part.stl`
    for FDM (binary, mm, on the printer bed) and `manufacturing.json`. A manufacturing output that
-   fails its checks fails the run: no version, latest unchanged.
+   fails its checks fails the run: no version, latest unchanged. Only parts whose build inputs
+   changed are built; the others reuse their stored output byte for byte (`cache` in the summary,
+   `references/outputs.md`).
 3. Check: `uv run --script skill://cad-flow/scripts/run.py cad-model/scripts/cad_model.py check vN --hw hw [--out .cad-work/<unit>/check.json] [--changed-only [--since-version vM]] [--exact] [--jobs 1|N|auto] [--cache DIR | --no-cache]` (explicit results must be new `.cad-work/` paths).
    → check result JSON; press fits and heat-set inserts declared in the version's `interfaces.yaml`
    are allowed to interfere automatically. `build_volume` checks each FDM part, in the state it is

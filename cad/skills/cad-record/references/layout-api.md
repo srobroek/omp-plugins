@@ -126,6 +126,15 @@ A catalogue buy returns false.
 - `volume_tolerance_mm3(installed_volume)`: the allowed volume difference. A part made in its
   installed shape gets 1e-9 relative. A part with a `different` state gets its declared tolerance.
 
+## Read the git storage rules
+
+`git_storage(results_in_git)` returns `{".gitignore": [...], ".gitattributes": [...]}`, the rules for
+product.yaml `storage.results_in_git`, relative to `hw/`. `True` gives Git LFS attribute lines for
+the STEP and GLB files of every result folder and no ignore lines. `False` and `None` (not asked)
+give one ignore line per result folder and no attribute lines. `result_root(rel)` names the result
+folder that holds `rel`, a path below `hw/`, such as `motion/v3`, or returns `None`. cad-flow
+`setup.py --storage` writes the rules; [layout.md](layout.md) "Git storage" lists them.
+
 ## Audit a record
 
 `audit(hw, references)` walks every file and folder under `hw/`, including untracked and ignored

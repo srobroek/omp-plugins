@@ -15,6 +15,7 @@ register the module in `sys.modules` before executing it, because dataclasses lo
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import functools
 import hashlib
 import json
@@ -189,6 +190,7 @@ class Layout:
         if unknown:
             raise LayoutError(f"layout.json: rules use finding codes {unknown} that findings does not define")
         self.manufacturing: Mapping[str, Any] = data["manufacturing"]
+        self.storage: Mapping[str, Any] = data["storage"]
         self._directories = tuple({p.pattern: p for p in self._directory_patterns()}.values())
 
     def _entry(self, item: Mapping[str, Any]) -> Entry:
@@ -946,6 +948,33 @@ def claim(staged: Path, target: Path, target_rel: str) -> None:
         raise LayoutError(f"cannot publish {target_rel}: {error}") from error
 
 
+# --- git storage of generated results ------------------------------------------------------------------------------
+
+GIT_LFS = "filter=lfs diff=lfs merge=lfs -text"
+
+
+def result_root(rel: str) -> str | None:
+    """The `storage.results` directory below hw/ that holds `rel` (a POSIX path below hw/), with its
+    globs resolved, such as `motion/v3`; None when `rel` is no generated result."""
+    names = PurePosixPath(rel).parts
+    for pattern in load().storage["results"]:
+        globs = pattern.split("/")
+        if len(names) >= len(globs) and all(fnmatch.fnmatchcase(n, g) for n, g in zip(names, globs)):
+            return "/".join(names[:len(globs)])
+    return None
+
+
+def git_storage(results_in_git: bool | None) -> dict[str, list[str]]:
+    """The rules of hw/.gitignore and hw/.gitattributes for product.yaml `storage.results_in_git`:
+    true tracks the generated results, with Git LFS for the `lfs_suffixes`; false, and absent (the
+    user was not asked yet), ignore them. Paths are relative to hw/."""
+    storage = load().storage
+    if results_in_git is True:
+        return {".gitignore": [], ".gitattributes": [f"{root}/**/*{suffix} {GIT_LFS}" for root in storage["results"]
+                                                      for suffix in storage["lfs_suffixes"]]}
+    return {".gitignore": [f"/{root}/" for root in storage["results"]], ".gitattributes": []}
+
+
 # --- references/layout.md ------------------------------------------------------------------------------------------
 
 def _cell(text: str) -> str:
@@ -1038,6 +1067,40 @@ def markdown() -> str:
               "part. A part made in its installed shape compares the manufactured volume to the installed one within",
               f"{rules['same_state_volume_rel_tolerance']:g} relative. A part with `manufacture.relationship: different`",
               "declares its own `volume_rel_tolerance` or `volume_abs_tolerance_mm3`.", ""]
+    lines += ["## Part store", "",
+              "`cad-model run` stores each part output once: the definition and state STEP of every part and the",
+              "manufacturing files of every custom-made part, in `hw/.cad/parts/{SHA}`, named by the sha256 of its",
+              "bytes. A version's `parts/{PN}.step` and `manufacturing/{PN}/` files are hard links to those objects",
+              "where the filesystem allows them, else byte copies; the paths and manifests are those of any version,",
+              "and verification hashes file content, never the inode. `hw/.cad/builds/{SHA}.json` records, under",
+              "the sha256 of a part's build inputs, the objects and facts its build produced. A part whose inputs",
+              "are unchanged reuses them once every object still hashes to its name, so a run builds only the",
+              "changed parts. Never edit a version file in place: a hard link shares its bytes with every version",
+              "that reuses it, and each of those then fails verification. Both folders ignore themselves in git and",
+              "are disposable: deleting them frees the space of deleted versions and makes the next run build every",
+              "part once.", ""]
+    storage = lay.storage
+    approved, ignored = git_storage(True)[".gitattributes"], git_storage(None)[".gitignore"]
+    lfs = ", ".join(f"`*{suffix}`" for suffix in storage["lfs_suffixes"])
+    lines += ["## Git storage", "",
+              "Generated results stay out of git unless the user approved storing them: `product.yaml`",
+              f"`{storage['setting']}: true`. Absent means not asked yet and counts as not approved.",
+              "`uv run --script skill://cad-flow/scripts/setup.py --storage --yes`, run from the project root, writes the",
+              "rules below into one managed block of `hw/.gitignore` or `hw/.gitattributes` and removes the other",
+              "block, so changing the answer and running it again changes the rules. Other lines of both files are",
+              "kept. The project template's `hw/.gitignore` holds the not-approved block.", "",
+              "| Results below `hw/` | Not approved: `hw/.gitignore` | Approved: `hw/.gitattributes` |", "|---|---|---|"]
+    for root, ignore in zip(storage["results"], ignored):
+        rules = ", ".join(f"`{line.split(' ', 1)[0]}`" for line in approved if line.startswith(f"{root}/"))
+        lines.append(f"| `{root}/` | `{ignore}` | {rules} with `{GIT_LFS}` |")
+    lines += ["",
+              f"- Approved: Git LFS stores the {lfs} files. Install Git LFS and run `git lfs install` once per clone",
+              "  before committing results. Setup never runs `git lfs`. Files committed before the rules keep their",
+              "  history; converting it, such as with `git lfs migrate import`, rewrites history and is the user's call.",
+              "- Not approved: `.gitignore` keeps new results out but untracks nothing. For results git already",
+              "  tracks, the user runs `git rm -r --cached <path>` (the files stay on disk) and commits. Setup lists",
+              "  those paths and never runs it.",
+              "- Either way the part store stays out of git through its own `.gitignore` files.", ""]
     return "\n".join(lines)
 
 

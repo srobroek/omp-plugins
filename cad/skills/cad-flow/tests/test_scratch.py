@@ -188,6 +188,26 @@ class InitAndDeliver(ScratchCase):
         self.assertFalse((self.hw / "parts" / "PRT-0001" / "__pycache__").exists())
         self.assertFalse((self.hw / "__pycache__").exists())
 
+    def test_init_and_deliver_leave_the_part_store_out(self) -> None:
+        """The lead's part store (hw/.cad/parts, hw/.cad/builds) is a cache as large as every version: it is
+        never copied or hashed, and a scratch build's own store is never delivered."""
+        for rel in (f".cad/parts/{'a' * 64}", ".cad/parts/.gitignore", f".cad/builds/{'a' * 64}.json"):
+            (self.hw / rel).parent.mkdir(parents=True, exist_ok=True)
+            (self.hw / rel).write_text("stored\n", encoding="utf-8")
+        scratch_hw = Path(self.init("part-base_sub", "PRT-0001")["scratch_hw"])
+        self.assertEqual([p.name for p in (scratch_hw / ".cad").iterdir()], [])
+        baseline = json.loads((scratch_hw.parent / "baseline.json").read_text(encoding="utf-8"))
+        self.assertFalse([path for path in baseline["files"] if path.startswith(".cad/")])
+        (scratch_hw / "parts" / "PRT-0001" / "model.py").write_text("def build(params):\n    return None\n",
+                                                                     encoding="utf-8")
+        for rel in (f".cad/parts/{'b' * 64}", f".cad/builds/{'b' * 64}.json"):  # the scratch build's own store
+            (scratch_hw / rel).parent.mkdir(parents=True, exist_ok=True)
+            (scratch_hw / rel).write_text("scratch\n", encoding="utf-8")
+        code, report = self.scratch("deliver", "--hw", "hw", "--unit", "part-base_sub")
+        self.assertEqual((code, report["status"]), (0, "delivered"), report)
+        self.assertEqual(report["proposals"], [])
+        self.assertFalse((self.hw / ".cad" / "parts" / ("b" * 64)).exists())
+
     def test_build_passes_each_attach_to_cad_model_run_and_reports_it(self) -> None:
         scratch_module = load_scratch()
         self.init("part-base_sub", "PRT-0001")

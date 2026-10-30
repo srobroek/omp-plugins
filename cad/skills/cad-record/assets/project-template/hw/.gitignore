@@ -1,0 +1,11 @@
+# >>> cad storage: written by cad-flow setup.py from product.yaml storage.results_in_git; do not edit
+/versions/
+/checks/
+/drawings/
+/renders/
+/captures/
+/motion/v*/
+/analysis/v*/
+/concept/screenshots/
+/releases/
+# <<< cad storage

@@ -12,6 +12,7 @@ and reads one JSON result from that file once the runner exits, identical in sha
 
     {"kernel": "cadquery", "tools": {"python": "3.12.13", "cadquery": "2.8.0", ...},
      "import_s": 3.7,
+     "sources": {"/abs/cad/skills/cad-model/scripts/cadmodel/occ.py": "<sha256>", ...},
      "parts": {"LMP-0003": {"ok": true, "params": {...}, "kernel_volume_mm3": 1234.5,
                             "kernel_solids": 1, "kernel_valid": true, "kernel_errors": [], "build_s": 0.4,
                             "drawing_features": {"elbow_bore": {...}} or null,
@@ -19,6 +20,11 @@ and reads one JSON result from that file once the runner exits, identical in sha
                                             "kernel_valid": true, "kernel_errors": []} or null},
                "LMP-0004": {"ok": false, "error": {"type": "SafeEditError", "message": "...",
                                                    "where": "model.py:42 in build"}}}}
+
+`sources` hashes every Python file the runner loaded from the plugin or the project, the part models
+themselves excepted: with `tools` and the part's own files they are what a cached build depends on.
+`run_<kernel>.py --tools` prints `cadmodel.provenance.runtime` of the environment instead, without
+importing the kernel or reading stdin, so `run` can decide which parts to build before starting one.
 
 `drawing_features` is the optional `drawing_features(params, shape)` hook's result, checked by
 `feature_locators`: JSON primitives only, never a kernel object; null when the model has no hook.
@@ -53,7 +59,7 @@ import traceback
 from pathlib import Path
 from typing import Any, Mapping
 
-from cadmodel import occ
+from cadmodel import occ, provenance
 from cadmodel.fonts import osifont_path
 from cadmodel.motion import load_pose
 
@@ -81,8 +87,11 @@ def tool_versions(dists: tuple[str, ...]) -> dict[str, str]:
     return versions
 
 
+MODEL_MODULE = "cad_model_part_"  # the module name prefix of a loaded part model
+
+
 def _load_model(pn: str, path: Path) -> Any:
-    name = "cad_model_part_" + re.sub(r"\W", "_", pn)
+    name = MODEL_MODULE + re.sub(r"\W", "_", pn)
     spec = importlib.util.spec_from_file_location(name, path)
     if spec is None or spec.loader is None:
         raise ContractError(f"cannot load {path}")
@@ -296,6 +305,9 @@ def _failure(error: BaseException, model: str) -> dict[str, Any]:
 
 def main(kernel: str, dists: tuple[str, ...]) -> int:
     sys.dont_write_bytecode = True  # never leave __pycache__ beside hw/parts/<PN>/model.py
+    if sys.argv[1:] == ["--tools"]:
+        print(json.dumps(provenance.runtime(tool_versions(dists))))
+        return 0
     try:
         request = json.load(sys.stdin)
         parts = request["parts"]
@@ -312,6 +324,8 @@ def main(kernel: str, dists: tuple[str, ...]) -> int:
             results[part["pn"]] = build_part(kernel, part)
         except Exception as error:  # noqa: BLE001 - every model failure is reported per part
             results[part["pn"]] = _failure(error, str(Path(part["model"])))
+    projects = {Path(part["model"]).resolve().parents[2] for part in parts}  # hw/ of hw/parts/<PN>/model.py
     result.write_text(json.dumps({"kernel": kernel, "tools": tool_versions(dists), "import_s": import_s,
+                                  "sources": provenance.sources([provenance.SKILLS, *projects], MODEL_MODULE),
                                   "parts": results}) + "\n", encoding="utf-8")
     return 0

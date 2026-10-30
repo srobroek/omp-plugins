@@ -533,6 +533,41 @@ class KernelChecks:
         self.assertEqual(checked["checks"]["build_volume"]["parts"][STRAP]["status"], "pass")
         self.assertEqual(checked["checks"]["artifact_integrity"], {"status": "pass", "blocking": True, "problems": []})
 
+    def test_only_the_changed_part_is_built_and_unchanged_outputs_are_stored_once(self) -> None:
+        """v2-v4 each change only the arm: the base is reused byte for byte, as hard links to one stored
+        copy, and each version adds new inodes only for the arm's outputs; every version still verifies."""
+        hw = self.runs["hw"]
+        self.assertEqual(self.runs["v1"][1]["cache"], {"parts": {"built": 2, "reused": 0},
+                                                     "manufacturing": {"built": 2, "reused": 0}})
+        for label in ("v2", "v3", "v4"):
+            with self.subTest(label=label):
+                result = self.runs[label][1]
+                self.assertEqual(result["cache"]["parts"], {"built": 1, "reused": 1})
+                self.assertEqual({pn: part["build"] for pn, part in result["parts"].items()},
+                                 {"TST-0001": "reused", "TST-0002": "built"})
+                self.assertEqual(result["manufacturing"]["TST-0001"]["build"], "reused")
+        versions = [hw / "versions" / label for label in ("v1", "v2", "v3", "v4")]
+        for rel in ("parts/TST-0001.step", "manufacturing/TST-0001/part.step",
+                    "manufacturing/TST-0001/manufacturing.json"):
+            for folder in versions[1:]:
+                with self.subTest(rel=rel, version=folder.name):
+                    self.assertEqual((folder / rel).read_bytes(), (versions[0] / rel).read_bytes())
+                    self.assertTrue(os.path.samefile(folder / rel, versions[0] / rel))
+
+        def inodes(folder: Path) -> dict[int, str]:
+            return {p.stat().st_ino: p.relative_to(folder).as_posix()
+                    for sub in ("parts", "manufacturing") for p in (folder / sub).rglob("*") if p.is_file()}
+        added = {inode: rel for inode, rel in inodes(versions[1]).items() if inode not in inodes(versions[0])}
+        self.assertEqual(sorted(added.values()), ["manufacturing/TST-0002/manufacturing.json",
+                                                  "manufacturing/TST-0002/part.step", "parts/TST-0002.step"])
+        layout = build.record.load_layout()
+        for folder in versions:
+            self.assertEqual(layout.verify(folder), [], folder.name)
+        store = hw / ".cad" / "parts"
+        base = versions[0] / "parts" / "TST-0001.step"
+        self.assertTrue(os.path.samefile(base, store / build.store.file_sha(base)))
+        self.assertEqual((store / ".gitignore").read_text(encoding="utf-8"), "*\n")
+
 
 @unittest.skipUnless(shutil.which("uv"), "uv is required for the kernel environments")
 class CadQueryTests(KernelChecks, unittest.TestCase):
@@ -690,6 +725,30 @@ class ManufacturingStateTests(unittest.TestCase):
         self.assertEqual((result["changed"], result["added"], result["removed"]), ([], [], []))
         self.assertEqual(result["manufacturing"]["changed"], [STRAP])
         self.assertEqual(result["manufacturing"]["parts"][STRAP]["changed"], ["tolerance"])
+
+    def test_a_record_only_change_makes_only_the_outputs_it_changes(self) -> None:
+        """v2 changes only the strap's declared tolerance: both definitions and the base's manufacturing
+        outputs are reused and no kernel starts; the strap's outputs are made again. v3 changes nothing,
+        so every part output is the very file v2 holds, and the manifest still names the kernel."""
+        result = self.runs["v2"][1]
+        self.assertEqual(result["cache"], {"parts": {"built": 0, "reused": 2},
+                                           "manufacturing": {"built": 1, "reused": 1}})
+        self.assertEqual({pn: row["build"] for pn, row in result["manufacturing"].items()},
+                         {"TST-0001": "reused", STRAP: "built"})
+        self.assertNotIn("cadquery_import_s", result["timings_s"])
+        v1, v2, v3 = (self.hw / "versions" / label for label in ("v1", "v2", "v3"))
+        self.assertTrue(os.path.samefile(v1 / "parts" / f"{STRAP}.step", v2 / "parts" / f"{STRAP}.step"))
+        self.assertTrue(os.path.samefile(v1 / "manufacturing" / "TST-0001" / "part.step",
+                                         v2 / "manufacturing" / "TST-0001" / "part.step"))
+        self.assertFalse(os.path.samefile(v1 / "manufacturing" / STRAP / "manufacturing.json",
+                                          v2 / "manufacturing" / STRAP / "manufacturing.json"))
+        outputs = [p for sub in ("parts", "manufacturing") for p in sorted((v2 / sub).rglob("*")) if p.is_file()]
+        self.assertEqual(len(outputs), 7)
+        for path in outputs:
+            self.assertTrue(os.path.samefile(path, v3 / path.relative_to(v2)), path.relative_to(v2))
+        tools = json.loads((v3 / "manifest.json").read_text(encoding="utf-8"))["tools"]["cadquery"]
+        self.assertEqual(tools["cadquery"], "2.8.0")
+        self.assertNotIn("import_s", tools)  # the kernel never started
 
     def test_a_cracked_stl_fails_check(self) -> None:
         proc, result, _ = self.runs["tampered"]

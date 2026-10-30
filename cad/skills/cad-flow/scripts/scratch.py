@@ -13,9 +13,10 @@ Usage:
 
 The workspace is <project>/.cad-work/<UNIT>/, <project> being the directory that holds HW.
 
-init    copies HW into <workspace>/hw/ without versions/, renders/, releases/, .git/ and
-        __pycache__/, then records the unit's PNs and the sha256 of every copied file in
-        <workspace>/baseline.json. An existing workspace is kept unless --reset replaces it.
+init    copies HW into <workspace>/hw/ without versions/, renders/, releases/, .git/, the part
+        store (.cad/parts/, .cad/builds/) and __pycache__/, then records the unit's PNs and the
+        sha256 of every copied file in <workspace>/baseline.json. An existing workspace is kept
+        unless --reset replaces it.
 build   runs cad-model `run` on the scratch hw/ under the next scratch label, cad-model `check`
         on that version, and cad-design form_check at --fidelity. HW itself is never passed to
         any of them, so HW/versions/ is neither created nor changed. Form findings are split
@@ -25,7 +26,8 @@ build   runs cad-model `run` on the scratch hw/ under the next scratch label, ca
 deliver copies each unit PN's scratch hw/parts/<PN>/ over HW/parts/<PN>/ and lists every other
         scratch file that differs from the baseline as a proposal for the lead. When any
         HW/parts/<PN>/ changed since init it writes nothing and exits 1. Generated
-        versions/, renders/, and releases/ output and every __pycache__/ are ignored during delivery.
+        versions/, renders/, and releases/ output, the part store and every __pycache__/ are
+        ignored during delivery.
 
 stdout: one JSON document; every path in it is absolute. build writes each tool's diagnostics to
 <workspace>/<tool>-<label>.log and names the log in the JSON, so its output stays small.
@@ -45,7 +47,7 @@ import re
 import shutil
 import subprocess
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 SKILLS = Path(__file__).resolve().parents[2]
@@ -75,6 +77,10 @@ def load_layout():
 
 
 layout = load_layout()
+# The part store below hw/ (cad-record layout cache.part_objects, cache.part_records): the cache of
+# every build, as large as every version together. It is never copied, hashed or delivered.
+STORE = frozenset(PurePosixPath(layout.load().entry(entry_id).path).parent.relative_to("hw").parts
+                  for entry_id in ("cache.part_objects", "cache.part_records"))
 
 
 class UsageError(Exception):
@@ -89,11 +95,18 @@ def workspace(hw: Path, unit: str) -> Path:
     return hw.parent / WORK_DIR / unit
 
 
+def is_skipped(relative: PurePosixPath, top: frozenset[str]) -> bool:
+    """Whether a path relative to the copied root is left out: `top` directly below it, the part
+    store, and __pycache__ anywhere."""
+    return (relative.parts[0] in top or "__pycache__" in relative.parts
+            or any(relative.parts[:len(store)] == store for store in STORE))
+
+
 def skips(root: Path, top: frozenset[str] = NOT_COPIED):
-    """A copytree `ignore` that leaves out `top` directly below `root` and __pycache__ anywhere."""
+    """A copytree `ignore` that leaves out what `is_skipped` names."""
     def ignore(directory: str, names: list[str]) -> set[str]:
-        at_top = Path(directory) == root
-        return {name for name in names if name == "__pycache__" or (at_top and name in top)}
+        below = PurePosixPath(Path(directory).relative_to(root).as_posix())
+        return {name for name in names if is_skipped(below / name, top)}
     return ignore
 
 
@@ -101,8 +114,8 @@ def tree_hashes(root: Path, top: frozenset[str] = NOT_COPIED) -> dict[str, str]:
     """sha256 per file below `root`, keyed by POSIX path relative to it, skipping what `skips` leaves out."""
     hashes = {}
     for path in sorted(root.rglob("*")):
-        relative = path.relative_to(root)
-        if relative.parts[0] in top or "__pycache__" in relative.parts or not path.is_file():
+        relative = PurePosixPath(path.relative_to(root).as_posix())
+        if is_skipped(relative, top) or not path.is_file():
             continue
         hashes[relative.as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
     return hashes
