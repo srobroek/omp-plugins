@@ -68,8 +68,9 @@ Verify coupled motion with `pose.py` and `sweep.py`.
    count, at most 8. Workers pay off for many small parts and on a busy host. The result is the
    same either way. Workers die with the sweep, mid-measurement too. Stop a sweep by its process
    group (Ctrl-C, or `kill -TERM -- -PGID` with PGID from `ps -o pgid= -p PID`). A sweep records
-   its process group (`hw/motion/vN/.sweep-<case>.json`, or `WORST.step.sweep.json`) and refuses to
-   start while a recorded group still runs, printing the `kill` command that stops it.
+   its process group (`hw/motion/vN/.sweep-<case>.json`, or `WORST.step.sweep.json`). On start it
+   reads every such record in the hw tree (every version and case, and `.cad-work`) and refuses
+   while any recorded group still runs, printing the `kill -TERM -- -PGID` command that stops it.
    Fast mode is the default; see [Fast sweeps](#fast-sweeps). `--exact` measures every request that
    could set a pair's minimum.
    Measurements persist in the pair cache, `$XDG_CACHE_HOME/cad-motion/pairs.sqlite` (else
@@ -138,14 +139,17 @@ which pair-poses need it (pair_measure.py, mesh_bound.py).
   [lower, upper] (upper null when only the box gap is known). Collisions, findings, verdicts,
   `pair_clearance` rows within the band, the worst case whenever its margin is within the band, and
   every `method: "exact"` row equal `--exact`'s; bounded rows do not, by design.
-- Suspects: every measurement that may decide a result is checked against the mesh, in fast mode
-  each one, with `--exact` one below a threshold or in contact without overlap. Its distance is
-  suspect below the box gap, or more than max(10 x the deflection, the mesh spread) from the mesh
-  distance (BRepExtrema has read 0 mm for parts 8 mm apart). A suspect value answers nothing: it is
-  re-measured with every independent joint +-0.1 and with the two parts swapped. If each lies in
-  its mesh interval and the bounds clear the pair's thresholds, the pose reads as its bounds,
-  `method: "mesh (exact suspect)"`; otherwise the sweep fails. Both are listed in
-  `suspect_measurements` with their re-measurements: a suspect never passes or fails silently.
+- Suspects: every exact measurement is checked against the mesh, in fast mode and with `--exact`
+  alike. Its distance is suspect below the box gap, or more than max(10 x the deflection, the mesh
+  spread) from the mesh distance (BRepExtrema has read 0 mm for parts 8 mm apart); a too-high
+  reading that hides a near miss is caught too. A suspect value answers nothing: it is re-measured
+  with every independent joint +-0.1 and with the two parts swapped. It resolves only where each
+  re-measurement lies in its mesh interval and the bounds clear the pair's thresholds plus the band
+  (the run's band, 2 mm with `--exact`), as clearing requires; the pose then reads as its bounds,
+  `method: "mesh (exact suspect)"`. In fast mode a measured pose lies inside the band, so a suspect
+  never resolves: the sweep fails and reports its evidence; rerun with `--exact` to resolve it.
+  Every suspect is listed in `suspect_measurements` with its re-measurements: a suspect never
+  passes or fails silently.
 - Spot check, on by default in fast mode (`--no-spot-check` skips it): per pair with a
   mesh-cleared request, the one of the smallest bound is measured exactly, about one exact
   evaluation per such pair: inside its bounds, without overlap, or the sweep fails (`spot_check`).
