@@ -33,11 +33,12 @@ done
 
 formula_counts() {
   local formula=$1 file="$work/.beads/formulas/$1.formula.toml"
-  local steps gates workers
+  local steps gates provisional workers
   steps=$(grep -c '^\[\[steps\]\]$' "$file")
   gates=$(grep -c '^type = "human"$' "$file" || true)
+  provisional=$(grep -c '^labels = .*"provisional"' "$file" || true)
   workers=$(grep -c '^execution_mode = "subagent"$' "$file" || true)
-  printf '%s: %s steps, %s gates, %s worker steps\n' "$formula" "$steps" "$gates" "$workers"
+  printf '%s: %s steps, %s gates, %s provisional gates, %s worker steps\n' "$formula" "$steps" "$gates" "$provisional" "$workers"
 }
 
 pour() {
@@ -100,9 +101,9 @@ detail=$(step "$product_root" fanout phase:detail)
 bond mol-cad-detail "$detail" "${product[@]}" "${build[@]}" --var part=SMK-0001 --var change='L3 detail' --ref detail-SMK-0001
 bond mol-cad-detail "$detail" "${product[@]}" "${build[@]}" --var part=SMK-0002 --var change='L3 detail' --ref detail-SMK-0002
 
-analysis=$(step "$product_root" fanout phase:analysis)
-bond mol-cad-analysis "$analysis" "${product[@]}" --var case=sweep --var kind=sweep --var version=v4 --ref analysis-sweep
-bond mol-cad-analysis "$analysis" "${product[@]}" --var case=pins-stack --var kind=stackup --var version=v4 --ref analysis-pins-stack
+# The joint sweep is L4's full check: it bonds onto the full-check step, every other case onto the fan-out step.
+bond mol-cad-analysis "$(step "$product_root" full-check phase:analysis)" "${product[@]}" --var case=sweep --var kind=sweep --var version=v4 --ref analysis-sweep-v4
+bond mol-cad-analysis "$(step "$product_root" fanout phase:analysis)" "${product[@]}" --var case=pins-stack --var kind=stackup --var version=v4 --ref analysis-pins-stack
 
 variant_gate=$(bd list --parent "$product_root" --label phase:gate --title 'VARIANT gate' --json | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["id"])')
 bond mol-cad-concept "$variant_gate" "${product[@]}" "${build[@]}" --var round=2 --ref concept-round-2
@@ -125,7 +126,7 @@ eco=(--var product=smoke-part --var scope=hw/ --var kernel=cadquery --var proces
 revise=$(step "$eco_root" fanout phase:eco)
 bond mol-cad-detail "$revise" "${eco[@]}" --var part=SMK-0001 --var change='ECO DR-001; set rev B' --ref detail-SMK-0001
 bond mol-cad-detail "$revise" "${eco[@]}" --var part=SMK-0002 --var change='ECO DR-001 dependent; set rev B' --ref detail-SMK-0002
-bond mol-cad-analysis "$(step "$eco_root" fanout phase:analysis)" "${eco[@]}" --var case=sweep --var kind=sweep --var version=v2 --ref analysis-sweep
+bond mol-cad-analysis "$(step "$eco_root" full-check phase:analysis)" "${eco[@]}" --var case=sweep --var kind=sweep --var version=v2 --ref analysis-sweep-v2
 # Also exercise an ECO-specific target rather than relying on another pour root.
 bond mol-cad-release "$eco_root" "${eco[@]}" --var release_rev=B --ref release-B
 
@@ -156,4 +157,65 @@ print(f"ready batch under {fanout}: {len(batch)} worker steps for {sorted(agents
 PY
 bd ready --json --limit 0 | python3 -c 'import json,sys; sys.exit("FAIL: revise-integrate ready before its units closed" if any(i["title"].startswith("Integrate the revised parts") for i in json.load(sys.stdin)) else 0)'
 
-echo "PASS: poured cad-part, cad-product, cad-touch; bonded all eight mol-cad formulas onto their fan-out steps in $BEADS_DIR"
+# Dry walk of one stage's two gates on a fresh cad-product root. L1 LAYOUT: the provisional gate opens the
+# full check and L2 PARTS, a VOID reopen blocks both again, and the human gate opens only after the full check.
+walk_root=$(pour cad-product --var product=smoke-walk --var scope=hw/ --var kernel=cadquery --var process_default=fdm)
+bd list --parent "$walk_root" --all --json >"$work/walk.json"
+# The id of the one walk step whose title starts with $1.
+walk_step() {
+  python3 - "$work/walk.json" "$1" <<'PY'
+import json, sys
+found = [i["id"] for i in json.load(open(sys.argv[1])) if i["title"].startswith(sys.argv[2])]
+if len(found) != 1:
+    sys.exit(f"FAIL: {len(found)} walk steps titled {sys.argv[2]!r}")
+print(found[0])
+PY
+}
+walk_pass() { bd close "$(walk_step "$1")" --reason "$2" >/dev/null; }
+walk_approve() {
+  local id=$1
+  bd show "$id" --json >"$work/gated.json"
+  gate=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d=d[0] if isinstance(d,list) else d; print(next(x["id"] for x in d["dependencies"] if x["title"].startswith("Gate:")))' "$work/gated.json")
+  bd gate resolve "$gate" --reason 'smoke: user approved' >/dev/null
+}
+# $1 names the moment; each further argument is +TITLE (must be ready) or -TITLE (must not be), as a title prefix.
+walk_ready() {
+  local moment=$1
+  shift
+  bd ready --json --limit 0 >"$work/ready.json"
+  python3 - "$work/ready.json" "$work/walk.json" "$moment" "$@" <<'PY'
+import json, sys
+ready_path, walk_path, moment, *wants = sys.argv[1:]
+walk = {i["id"] for i in json.load(open(walk_path))}
+titles = sorted(i["title"] for i in json.load(open(ready_path)) if i["id"] in walk)
+for want in wants:
+    sign, title = want[0], want[1:]
+    if (sign == "+") != any(t.startswith(title) for t in titles):
+        sys.exit(f"FAIL: walk {moment}: {title!r} is {'not ' if sign == '+' else ''}ready; ready: {titles}")
+print(f"walk {moment}: ready {titles}")
+PY
+}
+walk_pass GROUND 'smoke: grounded'
+walk_approve "$(walk_step 'INTENT gate')"
+walk_pass 'INTENT gate' 'smoke: user approved'
+walk_pass SPECIFY 'smoke: specified'
+walk_pass 'L0 CONCEPT: fan out' 'smoke: no variants'
+walk_pass 'L0 CONCEPT: merge' 'smoke: merged'
+walk_approve "$(walk_step 'VARIANT gate')"
+walk_pass 'VARIANT gate' 'smoke: user selected'
+walk_ready 'v1 fast checks running' '+L1 LAYOUT' '-LAYOUT provisional gate' '-L2 PARTS: fan out'
+walk_pass 'L1 LAYOUT' 'smoke: v1 built, fast checks 1-4 passed'
+walk_ready 'v1 fast checks passed' '+LAYOUT provisional gate' '-LAYOUT full check' '-L2 PARTS: fan out' '-LAYOUT freeze gate'
+walk_pass 'LAYOUT provisional gate' 'PROVISIONAL, temporary until layout-full-check: v1 passed fast checks 1-4'
+walk_ready 'v1 provisional' '+LAYOUT full check' '+L2 PARTS: fan out' '-LAYOUT freeze gate'
+bd reopen "$(walk_step 'L1 LAYOUT')" "$(walk_step 'LAYOUT provisional gate')" --reason 'VOID: v1 full sweep failed' >/dev/null
+walk_ready 'v1 full check failed (VOID)' '+L1 LAYOUT' '-LAYOUT provisional gate' '-LAYOUT full check' '-L2 PARTS: fan out'
+walk_pass 'L1 LAYOUT' 'smoke: v2 built, fast checks 1-4 passed'
+walk_pass 'LAYOUT provisional gate' 'PROVISIONAL, temporary until layout-full-check: v2 passed fast checks 1-4'
+walk_ready 'v2 provisional' '+LAYOUT full check' '+L2 PARTS: fan out' '-LAYOUT freeze gate'
+walk_pass 'LAYOUT full check' 'smoke: v2 full check passed'
+walk_ready 'v2 full check passed, human gate open' '-LAYOUT freeze gate' '+L2 PARTS: fan out'
+walk_approve "$(walk_step 'LAYOUT freeze gate')"
+walk_ready 'user approved the freeze' '+LAYOUT freeze gate'
+
+echo "PASS: poured cad-part, cad-product, cad-touch; bonded all eight mol-cad formulas onto their fan-out and full-check steps; walked the LAYOUT provisional, full-check and human gates in $BEADS_DIR"

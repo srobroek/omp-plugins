@@ -6,20 +6,20 @@ Keep the source of truth in the hardware project's `hw/` design record. `cad-rec
 
 | Stage | Work and user gate | Design-record output | Skill / command |
 |---|---|---|---|
-| GROUND | Inspect needs and existing hardware; on an existing project run `validate.py PROJECT --migration-plan` before freezing. | Product identity, rigor, units, regime, tolerances; initial requirements and interface evidence. The migration plan is read-only; nothing is moved. | `cad-record`: `uv run --script skill://cad-record/scripts/validate.py <project-dir> [--migration-plan]` |
-| INTENT | Present purpose, users, envelope, constraints, unknowns; wait for approval. | Approved intent, requirement sources, rationales, priorities, and gate decision. | `cad-record`: validate project |
+| GROUND | Inspect needs and existing hardware; on an existing project run `validate.py PROJECT --migration-plan` before freezing. Ask whether generated results are stored in git ([Storage of generated results](#storage-of-generated-results)). | Product identity, rigor, units, regime, tolerances; initial requirements and interface evidence; `storage.results_in_git`. The migration plan is read-only; nothing is moved. | `cad-record`: `uv run --script skill://cad-record/scripts/validate.py <project-dir> [--migration-plan]` |
+| INTENT | Present purpose, users, envelope, constraints, unknowns, the planned processes, and whether each process and material can meet each appearance or property requirement (a transparent part printed in FDM is a known contradiction); wait for approval. | Approved intent, `manufacturing.processes`, requirement sources, rationales, priorities, feasibility decisions, and gate decision. | `cad-record`: validate project; resolve each `feasibility.*` finding with a DR and a record change |
 | SPECIFY | Set measurable requirements and verification criteria. | Requirements with rationale, source, priority, verification method and criteria; updated interfaces. | `cad-record`: validate project |
 | concept | One `cad-concept-designer` per variant drafts 2-4 rapid three.js variants in one batch; merge them, then refine, merge, or drop by feedback. | Scene, options and selection in a decision record. Preview is not verified CAD. | `cad-concept`: `concept.py check <scene>`; handoff: `concept.py handoff <scene>` |
 | VARIANT gate | Get explicit concept selection. | Selected concept and gate evidence in workflow record and decision. | `cad-concept`: checked handoff |
-| layout | Define subassemblies, interfaces, joints/limits, BOM skeleton. | Assembly and interfaces; preliminary EBOM. | `cad-record`: validate. `cad-model run hw --label vN`, then `cad-model check vN --hw hw`. `cad-render hw --version vN`. Once a joint moves, `cad-motion` `motion.py render --hw hw --version vN --case default --outputs glb,sheet`. |
-| LAYOUT freeze | Present layout, interfaces, BOM skeleton, and the default motion render for approval. | Frozen decision and gate evidence; `flow.recheck_from: layout`. | `cad-viewer`: serve, show version and compare checks; `viewer.py animate --case default` plays the motion. |
-| parts | One `cad-part-designer` per subassembly and one `cad-sourcing-researcher` per purchased family, in one batch; build one integrated version; PARTS gate. | Part records and models; PN, revision, material, process, finish, mass target, make/buy, supplier. | Run build, check, render and `cad-design form_check.py --hw hw --parts-dir <version parts> --fidelity F2`. |
-| detail | One `cad-part-designer` per made part applies fits, fasteners, tolerances, and process rules in one batch. Build, check, and draw one integrated version for the DETAIL gate. | Part revisions, fit decisions, drawings, and evidence. | `cad-fits`; `cad-design form_check.py` at F3; `cad-drawings` publishes each part drawing for that version. |
+| layout | Define subassemblies, interfaces, joints/limits, BOM skeleton. Lay out each clearance at its minimum plus the [clearance margin](#clearance-margin). | Assembly and interfaces; preliminary EBOM. | `cad-record`: validate. Each version runs the [fail-fast checks](#fail-fast-check-order), then the full check. |
+| LAYOUT freeze | Provisional gate after the fast checks; L2 may start. Human gate after the full check: present layout, interfaces, BOM skeleton, and the default motion render for approval. | Provisional and frozen decisions with gate evidence; `flow.recheck_from: layout`. | `cad-viewer`: serve, show version and compare checks; `viewer.py animate --case default` plays the motion. |
+| parts | One `cad-part-designer` per subassembly and one `cad-sourcing-researcher` per purchased family, in one batch; build one integrated version; a light mechanical and DFM review runs beside its full check; PARTS gates. | Part records and models; PN, revision, material, process, finish, mass target, make/buy, supplier; torque paths and axial retainers. | Fail-fast checks with `cad-design form_check.py --hw hw --parts-dir <version parts> --fidelity F2`; `cad-mech-reviewer` and `cad-dfm-reviewer` for the light review. |
+| detail | One `cad-part-designer` per made part applies fits, fasteners, tolerances, and process rules in one batch. Build and check one integrated version, and draw it while its full check runs, for the DETAIL gates. | Part revisions, fit decisions, drawings, and evidence. | `cad-fits`; `cad-design form_check.py` at F3; `cad-drawings` publishes each part drawing for that version. |
 | bom | Reconcile part numbers, revisions, quantities, make/buy, suppliers, and assemblies. | Released-intent EBOM. | `cad-bom`: `bom.py --hw hw` or `bom.py --version vN --hw hw` to reconcile against a version snapshot. |
-| analysis | One `cad-analyst` per case checks interference, clearance, stack-up, kinematics, static FEA at the worst pose, or a motion case, in one batch; FEA at the worst pose follows the sweep; ANALYSIS gate. | Verification tied to requirements/configurations; analysis artifacts and assumptions; accepted motion cases in `hw/motion/cases/<case>/plan.yaml`. | Use `cad-motion`, `cad-analysis` and `cad-fits` on the selected version. Case results publish through cad-record layout; verification links identify the versioned evidence bundle. The lead publishes an accepted motion plan with `motion.py render --hw hw --version vN --case <case> --outputs glb,sheet,video`; a record with coupled joints adds `--crosscheck freecad` and a verification row from `crosscheck.json`, where only `solved` joints count as independent evidence. |
-| critique | Spawn mechanical and DFM reviewers in one parallel read-only batch. | Preserve both verdicts and evidence in workflow record. Neither reviewer waits for the other. | `cad-review-mech`; `cad-review-dfm` |
+| analysis | One `cad-analyst` per case checks interference, clearance, stack-up, kinematics, static FEA, or a motion case, in one batch. The joint sweep, then FEA at its worst pose, run as the stage's full check; ANALYSIS gates. | Verification tied to requirements/configurations; analysis artifacts and assumptions; accepted motion cases in `hw/motion/cases/<case>/plan.yaml`. | Use `cad-motion`, `cad-analysis` and `cad-fits` on the selected version. Case results publish through cad-record layout; verification links identify the versioned evidence bundle. The lead publishes an accepted motion plan with `motion.py render --hw hw --version vN --case <case> --outputs glb,sheet,video`; a record with coupled joints adds `--crosscheck freecad` and a verification row from `crosscheck.json`, where only `solved` joints count as independent evidence. |
+| critique | Spawn mechanical and DFM reviewers in one parallel read-only batch; it may start on the provisional ANALYSIS gate, while the full check runs. | Preserve both verdicts and evidence in workflow record. Neither reviewer waits for the other. | `cad-review-mech`; `cad-review-dfm` |
 | reconcile | Resolve critique findings. Rerun affected checks. | Updated decisions, verification, revisions, dispositions. | `cad-flow`; `cad-recheck` stamps the exact staged `hw/` tree only after checks pass. |
-| design_freeze | Present reconciled design, analyses, and record for approval. | Frozen anchor pins the exact built version and its manifest hash. | `cad-record`: validate project and confirm every custom-made part has complete manufacturing outputs. |
+| design_freeze | After every stage's human gate, present reconciled design, analyses, and record for approval. | Frozen anchor pins the exact built version and its manifest hash. | `cad-record`: validate project and confirm every custom-made part has complete manufacturing outputs. |
 | RELEASE gate | Show the frozen version, the revision letter to issue, its contents and verification. Get approval before release. | Gate decision, recorded as the release approval `decisions/DR-###`. | `cad-record`: `validate.py` and the structured checks. |
 | release | After approval, seal the traceable release package. | Immutable release package with definitions, manufacturing outputs, selected bundles, EBOM, verification, and docs. | `cad-record`: `release.py HW --rev A --version vN --decision DR-###`; a missing/stale/failing item refuses and seals nothing. Never reuse a revision. |
 When a stage starts the CAD viewer, keep it available through that stage's review. When the stage is complete, tell the user its URL is going away, then run the exact `stop` command printed by `serve` and record `ports_free` before ending the stage.
@@ -31,7 +31,7 @@ The full endpoint is STEP AP242 plus drawings, EBOM, verification matrix, and do
 ## Stage loop and recheck boundary
 
 Draft, show live previews, and collect feedback. Continue until the user says “commit” or “commit batch”. Do not check on every edit.
- - Each L1-L4 commit batch runs `cad-model run`, then `cad-model check`. Stop on any blocking failure. Render that exact version and show its images at the stage gate.
+- Each L1-L4 commit batch builds one version and checks it in the [fail-fast order](#fail-fast-check-order). Stop on any blocking failure. Show that exact version's renders at the stage gates.
 - An explicit check output is a new path under `.cad-work/`; generated version and producer paths come from the cad-record layout API.
 - The user's commit, the layout threshold, or the hardware git pre-commit hook triggers broader changed-parts/dependents recheck. Use `flow.recheck_from` and applicable earlier-stage checks; stamp the exact staged `hw/` only after every required check passes.
 - Record changed items, dependents, checks, results, and artifacts. A later edit starts a new batch on the next commit.
@@ -47,9 +47,38 @@ L1 MOTION RENDER vN default: PASS|FLAGGED|FAIL, {frames} frames, {segments} segm
    Files -- {contact-sheet.png absolute path}, {motion.glb absolute path}
 ```
 
+### Clearance margin
+
+Lay out every clearance at its required minimum plus the margin: the interface's `margin_mm`, else `product.yaml` `design.clearance_margin_mm` (0.1 mm when absent). A 0.5 mm minimum is laid out at 0.6 mm. A measured clearance at or above the minimum but inside the margin is a `margin` warning, never a failure; below the minimum it fails.
+
+## Fail-fast check order
+
+Check each version a commit batch builds cheapest first. Steps 1-4 are the fast checks; step 5 is the full check. Start each fast check once its input exists and run independent ones in parallel: `validate.py` reads only the record, so it runs beside the build; the form check and steps 2-4 need the built version and run in parallel once it exists. Read the results in step order. A failure stops the batch: stop the fast checks still running by their process groups, fix the cause, and build the next version. Never start step 5 on a version with a failed fast check. Run each command through `skill://cad-flow/scripts/run.py` as `skill://cad-flow` shows.
+
+1. Build the changed parts: `cad-model run hw --label vN`. Run the record validator, `validate.py <project-dir>`; from `parts` on it reports the retention rules (`retention.torque_path`, `retention.axial_retainer`) and process feasibility (`feasibility.transparent_fdm`) as errors. From L2, run `form_check.py --hw hw --parts-dir <version parts> --fidelity F2` (F3 at L3); it applies the DFM rules, such as each process's minimum wall (`product.yaml` `manufacturing.min_wall_mm`).
+2. Static interference on the changed pairs: `cad-model check vN --hw hw --changed-only [--since-version vM]`. The baseline defaults to the previous built version; without one, every pair is selected.
+3. Once the version has an independent movable joint, the smoke sweep on the changed pairs: `cad-motion/scripts/sweep.py --hw hw --version vN --smoke --changed-only [--since-version vM]`. It samples every 60 degrees of each revolute range plus its endpoints, and each TDC and dwell event.
+4. Renders with `cad-render`; once a joint moves, the default motion render; and the visibility check of each `visibility` binding in `requirements.yaml`, which `cad-render` provides. Until `skill://cad-render` documents that check, report each binding as untested at the gate and show its view's render.
+5. The full check, after the provisional gate: `cad-model check vN --hw hw` over every pair and, once a joint moves, the full sweep `cad-motion/scripts/sweep.py --hw hw --version vN` with its between-sample check, which runs by default. Gate evidence never uses `--no-continuous` or `--no-spot-check`. Both are [long jobs](#long-jobs).
+
+A changed-only check or a smoke sweep is fast-check evidence only. Its result reports an incomplete scope (the static check's `scope.complete: false`) and never counts as a full check, a full assembly pass, or verification evidence. The pair cache makes unchanged pairs cheap in step 5; never skip step 5 because an earlier version passed it.
+
+## Long jobs
+
+The full sweep, a FreeCAD assembly run, an FEA case, and the first run of a new tool are long jobs.
+
+- Smoke first: run the sweep with `--smoke` before the full sweep, a FreeCAD run on its first few frames, and a new tool on a tiny fixture. Start the full run only after its smoke run passed.
+- Before starting, check for stray runs: a sweep refuses while a recorded process group still runs and prints the `kill -TERM -- -PGID` command. Stop a run by its process group, never by its parent PID.
+- Run it in the background and wait for its result file, such as the sweep's `result.json` in its version bundle or the check's `--out` file, not for its process or shell. A run that ended without its result file produced no result; rerun it.
+- While it runs, prepare the gate packet ([Gate control](#gate-control)).
+
+## Storage of generated results
+
+Before the first build, ask the user explicitly whether generated results (STEP, GLB, renders and check bundles) are stored in git. Record the answer as `product.yaml` `storage.results_in_git` with a DR. Only `true` tracks them, with Git LFS for STEP and GLB. With `false` they stay out of git, and the record remains valid. While the setting is absent the question is open: ask it, and commit no generated result.
+
 ## Delegation
 
-The lead orchestrates; workers do the independent units of a stage in parallel. One stage runs as: fan out every unit, dispatch all of them in one parallel batch, integrate their results once, build one version, present one gate. Gates belong to stages, not molecules, and only the lead builds `hw/versions/`.
+The lead orchestrates; workers do the independent units of a stage in parallel. One stage runs as: fan out every unit, dispatch all of them in one parallel batch, integrate their results once, build one version, present the stage's gates. Gates belong to stages, not molecules, and only the lead builds `hw/versions/`.
 
 | Fan-out step | Molecule and variables | Unit id | Agent | Worker writes |
 |---|---|---|---|---|
@@ -58,6 +87,8 @@ The lead orchestrates; workers do the independent units of a stage in parallel. 
 | `parts-fanout` | `mol-cad-sourcing`: `family`, `parts` | `source-<family>` | `cad-sourcing-researcher` | nothing |
 | `detail-fanout`; `cad-touch` `revise-fanout`; `mol-cad-iterate` `reopen-fanout` | `mol-cad-detail`: `part`, `change`, `kernel`, `process_default` | `detail-<PN>` | `cad-part-designer` | `.cad-work/detail-<PN>/`, then `hw/parts/<PN>/` through `scratch.py deliver` |
 | `analysis-fanout` | `mol-cad-analysis`: `case`, `kind`, `version` | `analysis-<case>` | `cad-analyst` | `.cad-work/analysis-<case>/` |
+| `analysis-full-check` | `mol-cad-analysis`: the joint sweep (`kind=sweep`), then FEA at its worst pose | `analysis-<case>-<vN>` | `cad-analyst` | `.cad-work/analysis-<case>/` |
+| `parts-mech-review`, `parts-dfm-review` root steps (L2 light review) | none | none | `cad-mech-reviewer`, `cad-dfm-reviewer` | nothing |
 | `mech-critique`, `dfm-critique` root steps | none | none | `cad-mech-reviewer`, `cad-dfm-reviewer` | nothing |
 
 Every molecule also takes `product` and `scope`. The lead owns everything else: `product.yaml`, `requirements.yaml`, `assembly.yaml`, `interfaces.yaml`, `bom.csv`, `verification.csv`, `decisions/`, the concept scene, every `hw/versions/` build, renders, drawings of integrated versions, gates, Beads writes, and every question to the user. A part designer's hold on `hw/parts/<PN>/` ends with its batch; after that, the lead edits part records too, such as adopting sourcing values. Give each PN to exactly one unit in a batch.
@@ -69,7 +100,9 @@ Every molecule also takes `product` and `scope`. The lead owns everything else: 
 3. Only the lead writes the ledger. When a worker returns, close its molecule's steps with the evidence as the reason, then the molecule root `<fan-out-step>.<unit>`. A failed or `BLOCKED` unit stays open: remove the cause, such as by applying the shared-record change it proposed, then dispatch it again in the next batch.
 4. Close the fan-out step once every child is closed; Beads refuses earlier. The integration step waits for all of them (`waits_for = "all-children"`) and becomes ready next.
 
-A static FEA case at the worst-case pose needs the sweep's `worst_case`. Bond and dispatch those cases as a second batch, once the sweep molecule closes; every other L4 case runs in the first batch.
+At L4 the joint sweep is the stage's full check. Bond it onto `analysis-full-check` once the provisional ANALYSIS gate closes, with the version in its ref so that a rerun on a fixed version gets a fresh molecule. A static FEA case at the worst-case pose needs the sweep's `worst_case`: bond and dispatch those cases there as the next batch, once the sweep molecule closes. Every other L4 case runs in the fan-out batch.
+
+The L2 light review runs `cad-mech-reviewer` and `cad-dfm-reviewer` read-only in one parallel batch while the PARTS full check runs. Its scope is the rules a check can miss at L2: every torque path and axial retainer, the anchorage of covers and mounts, and each made part's walls against its process minimum. It is not the final critique.
 
 ### Batch without Beads
 
@@ -87,7 +120,7 @@ Each worker's brief is self-contained. It names:
 
 ### Integrate
 
-Read every report of the batch before you change anything. Accept a part delivery only when its scratch build passed; otherwise dispatch the unit again. Decide each proposal: apply an accepted one to the shared record yourself, and record why a declined one was declined. Merge concept variants into the scene, adopt cited sourcing values, write verification rows from analysis results, and copy an accepted motion plan to `hw/motion/cases/<case>/plan.yaml` before publishing it. Then run the stage's commit batch once on `hw/`; at L2 and L3 that is `cad-model run` and `check`, the form check, the render, the L3 drawings, and the recheck. Present the stage gate with the absolute path of every file it shows.
+Read every report of the batch before you change anything. Accept a part delivery only when its scratch build passed; otherwise dispatch the unit again. Decide each proposal: apply an accepted one to the shared record yourself, and record why a declined one was declined. Merge concept variants into the scene, adopt cited sourcing values, write verification rows from analysis results, and copy an accepted motion plan to `hw/motion/cases/<case>/plan.yaml` before publishing it. Then run the stage's commit batch once on `hw/`: the build and the fast checks in the [fail-fast order](#fail-fast-check-order), and the recheck. Present the stage's gates with the absolute path of every file they show.
 
 ### Scratch workspace
 
@@ -96,10 +129,18 @@ A part designer works in `.cad-work/<unit>/` next to `hw/`; `scratch.py` writes 
 - `uv run --script skill://cad-flow/scripts/scratch.py init --hw hw --unit <unit> --part <PN> [--part <PN> ...]` copies `hw/` without `versions/`, `renders/`, `releases/`, or `.git/` and records a baseline.
  - `scratch.py deliver --hw hw --unit <unit>` accepts only canonical source files under authorized part records (including a PN authorized at `init`), rejects generated subtrees, stray paths and unauthorized PNs, and writes nothing when a conflict is detected. The lead integrates the returned part files only after the passing scratch build.
 
-Every path in its JSON output is absolute. `.cad-work/` is disposable once the stage gate passes.
+Every path in its JSON output is absolute. `.cad-work/` is disposable once the stage's human gate passes.
 
 ## Gate control
 
-Gates remain open until explicit user approval is recorded through `bd gate resolve`. Never infer approval from silence, a preview, a successful build, an agent verdict, or a release artifact. If the current harness or workspace cannot resolve the gate through that command, leave it open and hand the gate to someone who can; do not substitute another gate-closing mechanism.
+INTENT, VARIANT, DESIGN freeze and RELEASE are single human gates. Every other stage gate approves a built version and comes as two gates: LAYOUT freeze, PARTS, DETAIL and ANALYSIS; the `cad-touch` REVISION and ANALYSIS gates; and in `mol-cad-iterate` the DETAIL gate and the analysis before its DESIGN freeze gate. Each such stage runs three steps in order:
+
+1. **Provisional gate** (`<stage>-provisional-gate`, labels `phase:gate` and `provisional`). Resolve it yourself, without asking the user, once version vN passed every fast check. It is a plain step, not a Beads gate: close it with `bd close <step> --reason 'PROVISIONAL, temporary until the full check: vN passed fast checks 1-4: <result files>'`, and mark the stage's design entry provisional too. It lets the next stage start. It approves, freezes and releases nothing.
+2. **Full check** (`<stage>-full-check`). Run fail-fast step 5 on the same vN. At L2 the light review runs beside it; at L4 the joint sweep case is the full check. While it runs, prepare the human gate's packet: renders and contact sheet, fast-check and form results, review verdicts, decisions, open findings and a short summary, and at L3 the drawings. Close the step with its result files once they pass.
+3. **Human gate.** It opens only after the full check passed and after the previous stage's human gate passed. Present the packet; only explicit user approval resolves it, through `bd gate resolve`.
+
+A failing full check, a MAJOR light-review finding, or a change the user names at the human gate voids the provisional approval and reopens the stage. Run `bd reopen <integrate-step> <provisional-gate-step> --reason 'VOID: vN <check> failed: <result file>'`, where the integrate step is the stage's build step (`layout` at L1). Beads then blocks the full check and the next stage's integration until you build a fixed version in that integrate step, it passes the fast checks, and you close the provisional gate again with the new evidence. Downstream units that already started continue in their scratch copies; integrate them only after that. Nothing is frozen or released before the human gates.
+
+Human gates remain open until explicit user approval is recorded through `bd gate resolve`. Never infer approval from silence, a preview, a successful build, a provisional gate, an agent verdict, or a release artifact. If the current harness or workspace cannot resolve the gate through that command, leave it open and hand the gate to someone who can; do not substitute another gate-closing mechanism. Without Beads, keep the same three steps in your plan, and record each provisional approval and each VOID in the stage's design entry.
 
 Every gate report, question, and summary gives each file it mentions as an absolute path on its own line: records, decisions, model.py, STEP and GLB, check JSON, renders, captures, drawing previews and PDFs, and the BOM. A relative path such as `hw/renders/v2/iso.png` is not enough. Add the URL of the live viewer or preview gallery while one runs.
