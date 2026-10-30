@@ -200,11 +200,13 @@ partial scope cannot run) and `blocking`.
 removed_pairs, changes}`, with `full_selection` when there is no baseline. It measures only the
 pairs cad-motion `incremental.py` selects against `--since-version` (default: the newest built
 version before the checked one): new pairs, pairs whose part geometry changed (the STEP DATA
-section, so a rebuild that only changes the header is no change), whose relative placement moved,
-or whose declarations (joints, fits, inserts, clearance requirement and margin) changed. A
-displacement of the whole product moves no pair. `interference` and `pair_clearance` cover the
-selected pairs only. `min_clearance` is null, and `connection` is `skipped`. A changed-only result
-is early evidence, never a complete assembly check: never stamp or release from it.
+section, so a rebuild that only changes the header is no change), whose relative placement has
+other bits, however small the move, or whose declarations (joints, fits, inserts, clearance
+requirement and margin) changed. A displacement of the whole product can leave rounding-only
+differences; those pairs are measured again and meet their cached readings in the pair cache.
+`interference` and `pair_clearance` cover the selected pairs only. `min_clearance` is null, and
+`connection` is `skipped`. A changed-only result is early evidence, never a complete assembly
+check: never stamp or release from it.
 
 | Check | Blocking | Fails when |
 |---|---|---|

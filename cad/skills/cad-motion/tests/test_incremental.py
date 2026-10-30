@@ -103,17 +103,23 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual((scope["kind"], scope["complete"], scope["baseline"]), ("changed_pairs", False, "v1"))
         self.assertEqual(scope["reasons"], {"geometry": 3})
 
-    def test_a_moved_occurrence_selects_its_pairs_and_a_moved_product_none(self) -> None:
-        shift = pose.Rigid.translation((1.0, 0.0, 0.0), 0.5)
-        placements = dict(self.base.placements)
-        placements["TST-0004"] = shift @ placements["TST-0004"]
-        moved = incremental.select_pairs(self.pairs, state("v2", self.chain, placements=placements), self.base)
-        self.assertEqual(sorted(moved.selected), [p for p in self.pairs if "TST-0004" in p])
-        self.assertEqual(set(moved.selected.values()), {("placement",)})
+    def test_a_moved_occurrence_selects_its_pairs_and_a_moved_product_only_rounding(self) -> None:
+        for distance in (0.5, 5e-6):  # 5e-6 mm: under any tolerance a selection could have had
+            with self.subTest(distance=distance):
+                shift = pose.Rigid.translation((1.0, 0.0, 0.0), distance)
+                placements = dict(self.base.placements)
+                placements["TST-0004"] = shift @ placements["TST-0004"]
+                moved = incremental.select_pairs(self.pairs, state("v2", self.chain, placements=placements), self.base)
+                self.assertEqual(sorted(moved.selected), [p for p in self.pairs if "TST-0004" in p])
+                self.assertEqual(set(moved.selected.values()), {("placement",)})
         whole = pose.Rigid.rotation((0.3, 0.4, math.sqrt(0.75)), 37.0, (12.0, -40.0, 7.0))
         everything = {oid: whole @ placement for oid, placement in self.base.placements.items()}
         product = incremental.select_pairs(self.pairs, state("v2", self.chain, placements=everything), self.base)
-        self.assertEqual(product.selected, {})
+        self.assertLessEqual(set(product.selected.values()), {("placement",)})
+        for a, b in product.selected:  # remeasured, so the pair cache's rounded bucket meets them
+            now = everything[a].inverse() @ everything[b]
+            then = self.base.placements[a].inverse() @ self.base.placements[b]
+            self.assertLess(max(abs(x - y) for x, y in zip(rows(now), rows(then))), 1e-9)
 
     def test_a_policy_change_selects_that_pair_alone(self) -> None:
         policies = {("TST-0002", "TST-0004"): '{"kind": "clearance", "min_clearance_mm": 0.5}'}
@@ -146,10 +152,21 @@ class SelectionTests(unittest.TestCase):
         wider = incremental.select_pairs(self.pairs, state("v2", chain_of(arm(limit=70.0))), self.base, moving=True)
         self.assertEqual(sorted(wider.selected), sorted(p for p in self.pairs if "TST-0003" in p or "TST-0004" in p))
 
-    def test_a_displaced_product_moves_no_pair_through_its_motion(self) -> None:
+    def test_a_displaced_product_moves_pairs_through_its_motion_by_rounding_only(self) -> None:
         whole = pose.Rigid.rotation((0.0, 0.6, 0.8), 25.0, (5.0, 6.0, 7.0))
         displaced = state("v2", chain_of(arm(), whole))
-        self.assertEqual(incremental.select_pairs(self.pairs, displaced, self.base, moving=True).selected, {})
+        selection = incremental.select_pairs(self.pairs, displaced, self.base, moving=True)
+        self.assertLessEqual(set(selection.selected.values()), {("motion",), ("placement", "motion")})
+        now, then = incremental._Motion(displaced.chain), incremental._Motion(self.base.chain)
+        now.measure(self.pairs)
+        then.measure(self.pairs)
+        for pair in selection.selected:
+            for x, y in zip(now.relative[pair], then.relative[pair]):
+                self.assertLess(max(abs(u - v) for u, v in zip(rows(x), rows(y))), 1e-9)
+
+
+def rows(rigid) -> list[float]:
+    return [v for row in rigid.rot for v in row] + list(rigid.trans)
 
 
 def custom_v6(**changes) -> dict:

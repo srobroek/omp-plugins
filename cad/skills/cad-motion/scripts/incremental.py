@@ -14,9 +14,10 @@ What a pair check depends on is a version's state (`version_state`):
     that requirement's margin.
 
 `select_pairs` selects a pair that is new, whose definition geometry changed on either side, whose
-relative nominal placement T_a^-1 T_b moved by more than SAME_MM or SAME_ROT, or whose policy
-changed. A displacement of the whole product cancels in every relative placement, so it selects
-nothing. With `moving` (sweeps), it also selects a pair whose relative placement moved at any
+relative nominal placement T_a^-1 T_b has other bits, or whose policy changed. No tolerance hides a
+small move: a pair whose placement differs only by rounding, as a displacement of the whole
+product leaves it, is measured again and meets its cached reading through the pair cache's rounded
+bucket. With `moving` (sweeps), it also selects a pair whose relative placement has other bits at any
 probe pose: the nominal pose, plus PROBES values across each independent joint's range with the
 other joints at nominal. It selects a pair, too, when a coupling law on the joint paths from the
 pair's common ancestor changed. Removed occurrences and pairs are reported. With no baseline,
@@ -66,8 +67,6 @@ pair_policy = _load("cad_motion_pair_policy", HERE / "pair_policy.py")
 coupling = pose.coupling
 MotionError = pose.MotionError
 
-SAME_MM = 1e-5    # relative placements this close (translation, mm) are unchanged
-SAME_ROT = 1e-7   # ... and rotation-matrix entries
 PROBES = 9        # probe values per independent joint for moving-pair selection, endpoints included
 SMOKE_STEP_DEG = 60.0
 FINE_STEP = 0.25  # deg or mm: how finely a non-linear mapping's root is sampled for its events
@@ -220,9 +219,9 @@ class ChangeSet:
                 "removed_occurrences": list(self.removed), "moved_occurrences": list(self.moved)}
 
 
-def _close(a: Any, b: Any) -> bool:
-    return (all(abs(x - y) <= SAME_ROT for ra, rb in zip(a.rot, b.rot) for x, y in zip(ra, rb))
-            and all(abs(x - y) <= SAME_MM for x, y in zip(a.trans, b.trans)))
+def _same(a: Any, b: Any) -> bool:
+    """Whether two placements have the same bits (-0.0 is 0.0)."""
+    return a.rot == b.rot and a.trans == b.trans
 
 
 def _label_number(label: str) -> int:
@@ -253,7 +252,7 @@ def compare_versions(hw: Path, current: str, baseline: str | None = None) -> Cha
     added = tuple(sorted(set(state.occurrences) - set(base.occurrences)))
     removed = tuple(sorted(set(base.occurrences) - set(state.occurrences)))
     moved = tuple(sorted(oid for oid, placement in state.placements.items()
-                         if oid in base.placements and not _close(placement, base.placements[oid])))
+                         if oid in base.placements and not _same(placement, base.placements[oid])))
     return ChangeSet(state, base, f"baseline {base.label}: {how}", geometry, source_only, added, removed, moved)
 
 
@@ -334,14 +333,14 @@ def select_pairs(pairs: Iterable[Pair], current: VersionState, baseline: Version
             reasons.append("geometry")
         now = current.placements[a].inverse() @ current.placements[b]
         then = baseline.placements[a].inverse() @ baseline.placements[b]
-        if not _close(now, then):
+        if not _same(now, then):
             reasons.append("placement")
         if current.policies.get(pair) != baseline.policies.get(pair):
             reasons.append("policy")
         if motion_now is not None and motion_then is not None:
             seen_now, seen_then = motion_now.relative.get(pair), motion_then.relative.get(pair)
             if (not comparable or seen_now is None or seen_then is None
-                    or not all(_close(x, y) for x, y in zip(seen_now, seen_then))
+                    or not all(_same(x, y) for x, y in zip(seen_now, seen_then))
                     or motion_now.laws(pair) != motion_then.laws(pair)):
                 reasons.append("motion")
         if reasons:
