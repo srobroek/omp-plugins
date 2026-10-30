@@ -142,6 +142,19 @@ class QualityHeuristics(unittest.TestCase):
         self.assertEqual(quality.failures, [])
         self.assertEqual(quality.warnings, ["NO_SHADOW"])
 
+    def test_shadowless_full_view_warns_when_floor_is_in_frame(self) -> None:
+        quality = render.assess(frame(subject=GOOD["subject"]), floor_in_frame=True)
+        self.assertEqual(quality.warnings, ["NO_SHADOW"])
+
+    def test_closeup_without_floor_in_frame_does_not_warn_for_missing_shadow(self) -> None:
+        quality = render.assess(frame(subject=GOOD["subject"]), closeup=True, floor_in_frame=False)
+        self.assertTrue(quality.passed, quality.failures)
+        self.assertNotIn("NO_SHADOW", quality.warnings)
+
+    def test_missing_shadow_still_warns_for_closeup_when_floor_is_in_frame(self) -> None:
+        quality = render.assess(frame(subject=GOOD["subject"]), closeup=True, floor_in_frame=True)
+        self.assertEqual(quality.warnings, ["NO_SHADOW"])
+
     def test_faint_shadow_is_a_cosmetic_warning(self) -> None:
         self.assertEqual(render.assess(frame(**GOOD, shadow_drop=3)).warnings, ["NO_SHADOW"])
 
@@ -201,13 +214,15 @@ class QualityHeuristics(unittest.TestCase):
 
 class RetryLadder(unittest.TestCase):
     @staticmethod
-    def capture_frame(name: str, rendered, *, fraction: float = 1.0) -> dict:
+    def capture_frame(name: str, rendered, *, fraction: float = 1.0, floor_in_frame: bool = True) -> dict:
         rgba = rendered.rgba
         return {"view": name, "width": rendered.width, "height": rendered.height,
                 "png": "data:image/png;base64,AA==", "rgba": rgba,
                 "mask": rendered.mask, "floor": rendered.floor, "visible_subject_fraction": fraction,
+                "floor_in_frame": floor_in_frame,
                 "camera": {"position": [0, 0, 1], "target": [0, 0, 0], "up": [0, 1, 0],
                            "fov_deg": 28, "aspect": 1.33}}
+
 
     def test_enclosed_subject_retries_and_records_each_attempt(self) -> None:
         calls = []
@@ -263,11 +278,20 @@ class RetryLadder(unittest.TestCase):
         self.assertTrue(hidden[-1])
         self.assertNotIn(1, mask)
 
-    def test_shadowless_closeup_passes_as_warning_without_retry(self) -> None:
+    def test_shadowless_closeup_without_floor_passes_without_shadow_warning_or_retry(self) -> None:
         rendered = frame(subject=GOOD["subject"])
         _, quality, attempts = asyncio.run(render._retry_view(
-            "closeup-LMP-0004", lambda options, attempt: self.capture_frame("closeup-LMP-0004", rendered)))
+            "closeup-LMP-0004", lambda options, attempt: self.capture_frame(
+                "closeup-LMP-0004", rendered, floor_in_frame=False)))
         self.assertTrue(quality.passed)
+        self.assertEqual(quality.warnings, [])
+        self.assertEqual([row["strategy"] for row in attempts], ["original"])
+
+
+    def test_shadowless_full_view_warns_when_floor_is_in_frame(self) -> None:
+        rendered = frame(subject=GOOD["subject"])
+        _, quality, attempts = asyncio.run(render._retry_view(
+            "iso", lambda options, attempt: self.capture_frame("iso", rendered, floor_in_frame=True)))
         self.assertEqual(quality.warnings, ["NO_SHADOW"])
         self.assertEqual([row["strategy"] for row in attempts], ["original"])
 
@@ -516,9 +540,10 @@ class CacheKey(unittest.TestCase):
     def write(path: Path, data: dict) -> None:
         path.write_text(json.dumps(data), encoding="utf-8")
 
-    def key(self) -> dict:
+    def key(self, views: list[str] | None = None) -> dict:
         version = render.resolve_version(self.hw, "latest")
-        return render.build_scene(self.hw, version, ["iso", "exploded"], (800, 600), materials.MaterialTable.load())[2]["key"]
+        return render.build_scene(self.hw, version, views if views is not None else ["iso", "exploded"],
+                                 (800, 600), materials.MaterialTable.load())[2]["key"]
 
     def test_every_input_the_scene_reads_changes_the_key(self) -> None:
         folder = self.hw / "versions" / "v1"
@@ -561,6 +586,11 @@ class CacheKey(unittest.TestCase):
         self.assertIn("parity", key)
         self.assertEqual(key["parity"]["version"], parity.POLICY_VERSION)
 
+    def test_custom_direction_is_in_the_cache_key(self) -> None:
+        first = self.key(["dir-p1-m1-p0"])
+        second = self.key(["dir-m1-m1-p0"])
+        self.assertNotEqual(first["views"], second["views"])
+
     def test_a_file_the_render_does_not_read_keeps_the_key(self) -> None:
         before = self.key()
         (self.hw / "bom.csv").write_text("edited\n", encoding="utf-8")
@@ -576,6 +606,7 @@ class CacheKey(unittest.TestCase):
         self.assertEqual(render.resolve_version(self.hw, "v1").label, "v1")
 
 
+
 class Views(unittest.TestCase):
     def test_closeup_and_part_views_require_existing_parts(self) -> None:
         singletons = {"LMP-0004": "LMP-0004", "LMP-0005": "LMP-0005"}
@@ -585,6 +616,35 @@ class Views(unittest.TestCase):
         for token in ("closeup-LMP-0009", "part-LMP-0009", "top", "closeup-@ring-1"):
             with self.subTest(token=token), self.assertRaises(render.InfraError):
                 render.parse_views([token], {"LMP-0004": "LMP-0004"})
+
+    def test_custom_direction_is_normalized_and_has_layout_safe_name(self) -> None:
+        name, direction = render.parse_direction_view("dir-p3-m4-p0")
+        self.assertEqual(name, "dir-p3-m4-p0")
+        self.assertEqual(direction, (0.6, -0.8, 0.0))
+        self.assertRegex(name, r"^[a-z][A-Za-z0-9_-]*$")
+        self.assertEqual(render.parse_views([name], {})[0], name)
+
+    def test_custom_direction_stores_stable_up_for_parallel_camera(self) -> None:
+        self.assertEqual(render.camera_up_reference((0.0, 0.0, 1.0)), (0.0, 0.0, 1.0))
+        self.assertEqual(render.camera_up_reference((0.0, 1.0, 0.0)), (0.0, 1.0, 0.0))
+
+    def test_layout_view_grammar_controls_custom_direction_names(self) -> None:
+        self.assertRegex("dir-p1-m1d5-p0-closeup-LMP-0004",
+                         render.layout.load().tokens["VIEW"]["pattern"])
+        self.assertEqual(render.parse_views(["dir-p1-m1d5-p0-closeup-LMP-0004"], {"LMP-0004": "LMP-0004"}),
+                         ["dir-p1-m1d5-p0-closeup-LMP-0004"])
+
+        views = render.parse_views(["dir-p0-m0-p1-closeup-@ring_head"], {"ring_head": "LMP-0011"})
+        self.assertEqual(views, ["dir-p0-m0-p1-closeup-@ring_head"])
+        self.assertEqual(render.view_kind(views[0]), "closeup")
+        self.assertEqual(render.view_direction(views[0]), (0.0, 0.0, 1.0))
+        self.assertEqual(render.view_subject(views[0], {"ring_head": "LMP-0011"}), "ring_head")
+
+    def test_invalid_custom_directions_are_rejected(self) -> None:
+        for name in ("dir-p0-p0-p0", "dir-p1-p2", "dir-p01-p0-p0", "dir-nan-p1-p0",
+                     "dir-p99999999999999999999999999999999999999-p0-p0", "dir-p1-p1e999-p0"):
+            with self.subTest(name=name), self.assertRaises(render.InfraError):
+                render.parse_views([name], {})
 
     def test_a_repeated_part_needs_an_occurrence_reference(self) -> None:
         rings = {"LMP-0004": "LMP-0004", "ring-1": "LMP-0011", "ring-2": "LMP-0011"}

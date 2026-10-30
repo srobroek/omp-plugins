@@ -8,9 +8,9 @@
 # ///
 """Render verified cad-model versions to product PNG bundles via the static three.js PBR page.
 
+
 Usage:
-    uv run --script skill://cad-flow/scripts/run.py cad-render/scripts/render.py HW [--version latest|vN] [--views iso front side exploded] [--subject S]
-        [--size 1600x1200] [--jobs N] [--cache-dir DIR] [--replace] [--out-dir .cad-work/PATH]
+    uv run --script skill://cad-flow/scripts/run.py cad-render/scripts/render.py HW [--version latest|vN] [--views iso front side exploded dir-X-Y-Z[-closeup-REF|-part-REF]] [--subject S]
     uv run --script skill://cad-flow/scripts/run.py cad-render/scripts/render.py HW --version vN --motion SPEC.json
         --out-dir .cad-work/PATH [--size 1280x720] [--cache-dir DIR]
 
@@ -23,9 +23,8 @@ scratch-only under .cad-work/.
 Scene objects are occurrences: one per placed instance, with its own GLB node; materials stay per
 PN. A close-up or part view names one occurrence: `closeup-@ring-head`, or `closeup-LMP-0004` for a
 PN placed once; a bare PN placed several times is ambiguous and refused.
-
-Each frame is graded from its pixels and subject mask. BLANK, CLIPPED, and close-up OCCLUDED (less than 25% of the subject's isolated visible pixels remain visible) make a view unusable; NO_SHADOW and INVERTED_SHADOW are cosmetic warnings and keep the PNG.
-A verified bundle for an identical recipe is reused, including with `--replace`; `--replace` only renders again when the recipe differs.
+Each frame is graded from its pixels and subject mask. BLANK, CLIPPED, and close-up OCCLUDED (less than 25% of the subject's isolated visible pixels remain visible) make a view unusable; NO_SHADOW and INVERTED_SHADOW are cosmetic warnings, with NO_SHADOW considered only when the camera frustum intersects the ground plane.
+A custom view uses `dir-pX-mY-Z`, with signed decimal components encoded as p/m and d for the decimal point; its direction is normalized, and `-closeup-REF` or `-part-REF` optionally names a subject.
 
 Motion frames (`--motion`, written by cad-motion motion.py render): every spec frame moves each
 occurrence by a rigid delta from the version's built pose; cad-render derives no kinematics. One
@@ -80,7 +79,11 @@ THREE_VERSION = "0.186.1"
 CHROMIUM_ARGS = ["--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist",
                  *( ["--num-raster-threads=1"] if os.environ.get("CAD_RENDER_RASTER_THREADS") == "1" else [])]
 BOOT_TIMEOUT_MS = 180_000
-VIEW_NAME = re.compile(r"^(iso|front|side|exploded|(closeup|part)-([A-Z]{2,5}-[0-9]{4}|@[a-z][a-z0-9_-]*))$")
+_DIR_COMPONENT = r"[pm](?:0|[1-9][0-9]{0,5})(?:d[0-9]{0,5}[1-9])?"
+_DIRECTION = rf"dir-{_DIR_COMPONENT}-{_DIR_COMPONENT}-{_DIR_COMPONENT}"
+_REFERENCE = r"(?:[A-Z]{2,5}-[0-9]{4}|@[a-z][a-z0-9_-]*|[a-z][A-Za-z0-9_-]*)"
+DIR_TOKEN = re.compile(rf"^(?P<direction>{_DIRECTION})(?:-(?P<kind>closeup|part)-(?P<ref>{_REFERENCE}|@[a-z][a-z0-9_-]*))?$")
+VIEW_NAME = re.compile(r"^(?:iso|front|side|exploded|(?:closeup|part)-" + _REFERENCE + r"|" + _DIRECTION + r"(?:-(?:closeup|part)-" + _REFERENCE + r")?)$")
 SIZE = re.compile(r"^([1-9][0-9]{2,3})x([1-9][0-9]{2,3})$")
 DEFAULT_VIEWS = ["iso", "front", "side", "exploded"]
 DEFAULT_JOBS = 1
@@ -103,7 +106,7 @@ def _load_layout() -> Any:
 
 
 layout = _load_layout()
-# View directions from the subject towards the camera, assembly frame (mm, +Z up, front = -Y).
+LAYOUT_VIEW_NAME = re.compile(layout.load().tokens["VIEW"]["pattern"])
 # Front and side keep a low elevation so the ground plane, and the shadow on it, stays in view.
 DIRECTIONS = {
     "iso": (0.9, -1.3, 1.1),
@@ -250,6 +253,42 @@ def _rotate(t: list[list[float]], v: Vec) -> Vec:
 def _unit(v: Vec) -> Vec | None:
     n = math.sqrt(sum(c * c for c in v))
     return None if n < 1e-9 else (v[0] / n, v[1] / n, v[2] / n)
+
+
+def parse_direction_view(token: str) -> tuple[str, Vec]:
+    """Parse a layout-safe custom direction view into a normalized vector."""
+    match = DIR_TOKEN.fullmatch(token)
+    if not match:
+        raise InfraError(f"invalid direction view {token!r}; use dir-pX-mY-Z with finite numeric components")
+    direction_match = re.fullmatch(
+        rf"dir-({_DIR_COMPONENT})-({_DIR_COMPONENT})-({_DIR_COMPONENT})", match.group("direction"))
+
+    def component(encoded: str) -> float:
+        sign, number = encoded[0], encoded[1:].replace("d", ".")
+        return float(number) * (-1 if sign == "m" else 1)
+
+    try:
+        components = tuple(component(direction_match.group(axis)) for axis in (1, 2, 3))
+    except (OverflowError, ValueError) as exc:
+        raise InfraError(f"invalid direction view {token!r}; components must be finite numbers") from exc
+    if not all(math.isfinite(value) for value in components):
+        raise InfraError(f"invalid direction view {token!r}; components must be finite numbers")
+    scale = max(abs(value) for value in components)
+    if scale == 0:
+        raise InfraError(f"invalid direction view {token!r}; direction must be non-zero")
+    scaled = tuple(value / scale for value in components)
+    length = math.hypot(*scaled)
+    direction = tuple(value / length for value in scaled)
+    direction_name = match.group("direction")
+    if LAYOUT_VIEW_NAME.fullmatch(direction_name) is None:
+        raise InfraError(f"invalid direction view {token!r}; name is not a valid layout VIEW token")
+    return token, direction  # type: ignore[return-value]
+
+
+def camera_up_reference(direction: Vec) -> Vec:
+    """GLB-frame reference up, avoiding parallelism with the camera direction."""
+    glb_direction = to_glb(direction)
+    return (0.0, 0.0, 1.0) if abs(glb_direction[1]) > 0.98 else (0.0, 1.0, 0.0)
 
 
 def to_glb(v: Vec, scale: float = 1.0) -> list[float]:
@@ -411,7 +450,7 @@ def _contact_lumas(frame: Frame) -> list[float]:
 
 
 def assess(frame: Frame, *, closeup: bool = False, isolated: bool = False,
-           visible_fraction: float | None = None) -> Quality:
+           visible_fraction: float | None = None, floor_in_frame: bool = True) -> Quality:
     """Classify composition defects as unusable and shadow findings as cosmetic warnings."""
     w, h, rgba, mask = frame.width, frame.height, frame.rgba, frame.mask
     total = w * h
@@ -491,7 +530,7 @@ def assess(frame: Frame, *, closeup: bool = False, isolated: bool = False,
             not closeup and not isolated and contact_depth is not None and contact_depth >= min_depth
         )
         support_pass = closeup and support_ratio >= 0.025 and support_depth >= SHADOW_DELTA
-        if not floor_pass and not support_pass:
+        if floor_in_frame and not floor_pass and not support_pass:
             findings.append("NO_SHADOW")
         if not isolated and contact_depth is not None and overhang_depth is not None and contact_depth <= overhang_depth:
             findings.append("INVERTED_SHADOW")
@@ -540,8 +579,18 @@ def renderer_sha256() -> str:
     return digest.hexdigest()
 
 
+def view_direction(name: str) -> Vec:
+    """Assembly-frame camera direction for a named view."""
+    if name.startswith("dir-"):
+        return parse_direction_view(name)[1]
+    return DIRECTIONS[view_kind(name)]
+
+
 def view_kind(name: str) -> str:
-    """Return the scene behavior for a named view."""
+    """Return the scene behavior for a view, independent of its camera direction."""
+    if name.startswith("dir-"):
+        match = DIR_TOKEN.fullmatch(name)
+        return match.group("kind") or "direction"
     if name.startswith("closeup-"):
         return "closeup"
     if name.startswith("part-"):
@@ -550,10 +599,14 @@ def view_kind(name: str) -> str:
 
 
 def view_subject(name: str, occurrences: dict[str, str]) -> str:
-    """The occurrence id a close-up or part view names: `@id`, or a PN placed exactly once.
-
-    `occurrences` maps occurrence id -> PN; a legacy singleton's id is its PN, an explicit id never is."""
-    kind, ref = name.split("-", 1)
+    """The occurrence id a close-up or part view names: `@id`, or a PN placed exactly once."""
+    if name.startswith("dir-"):
+        match = DIR_TOKEN.fullmatch(name)
+        kind, ref = match.group("kind"), match.group("ref")
+        if not kind:
+            raise InfraError(f"{name}: custom direction view does not name a subject")
+    else:
+        kind, ref = name.split("-", 1)
     if ref.startswith("@"):
         if occurrences.get(ref[1:], ref[1:]) != ref[1:]:
             return ref[1:]
@@ -562,20 +615,28 @@ def view_subject(name: str, occurrences: dict[str, str]) -> str:
     if len(found) == 1:
         return found[0]
     if not found:
-        raise InfraError(f"{name}: no part {ref} in this version")
+        raise InfraError(f"{name}: no part or occurrence {ref} in this version")
     raise InfraError(f"{name}: {ref} is placed {len(found)} times; name one: "
                      + ", ".join(f"{kind}-@{oid}" for oid in found))
 
 
 def parse_views(tokens: list[str], occurrences: dict[str, str]) -> list[str]:
-    """The requested views, deduplicated; a close-up or part view must name one occurrence (`view_subject`)."""
+    """The requested views, deduplicated; subject views must name one occurrence."""
     views = []
     for token in tokens:
-        if not VIEW_NAME.match(token):
-            raise InfraError(f"unknown view {token!r}; use iso, front, side, exploded, closeup-<REF>, or part-<REF> "
-                             "with REF a PN placed once or @occurrence")
-        if token.startswith(("closeup-", "part-")):
-            view_subject(token, occurrences)
+        if token.startswith("dir-"):
+            if DIR_TOKEN.fullmatch(token) is None:
+                raise InfraError(f"unknown view {token!r}; expected dir-X-Y-Z[-closeup-<REF>|-part-<REF>]")
+            parse_direction_view(token)
+            if view_kind(token) in {"closeup", "part"}:
+                view_subject(token, occurrences)
+        else:
+            if token not in {"iso", "front", "side", "exploded"} and not token.startswith(("closeup-", "part-")):
+                raise InfraError(f"unknown view {token!r}; use iso, front, side, exploded, closeup-<REF>, part-<REF>, or a custom dir-X-Y-Z view")
+            if not VIEW_NAME.fullmatch(token):
+                raise InfraError(f"unknown view {token!r}; use iso, front, side, exploded, closeup-<REF>, part-<REF>, or a custom dir-X-Y-Z view")
+            if token.startswith(("closeup-", "part-")):
+                view_subject(token, occurrences)
         if token not in views:
             views.append(token)
     return views
@@ -613,10 +674,12 @@ def build_scene(hw: Path, version: Version, views: list[str], size: tuple[int, i
     by_pn = {oid: o.pn for oid, o in occurrences.items()}
     view_specs = []
     for name in views:
-        kind = view_kind(name)
-        view_specs.append({"name": name, "direction": to_glb(DIRECTIONS[kind]),
-                           "subject": [view_subject(name, by_pn)] if kind in {"closeup", "part"} else None,
-                           "explode": kind == "exploded", "isolated": kind == "part"})
+        subject_kind = view_kind(name)
+        direction = view_direction(name)
+        view_specs.append({"name": name, "direction": to_glb(direction),
+                           "up": list(camera_up_reference(direction)),
+                           "subject": [view_subject(name, by_pn)] if subject_kind in {"closeup", "part"} else None,
+                           "explode": subject_kind == "exploded", "isolated": subject_kind == "part"})
     scene = {
         "version": version.label,
         "glb": "/render/model.glb",
@@ -634,6 +697,7 @@ def build_scene(hw: Path, version: Version, views: list[str], size: tuple[int, i
         "materials_sha256": sha256(canonical({pn: [m["rule"], m["pbr"]] for pn, m in materials.items()})),
         "renderer_sha256": renderer_sha256(),
         "image": f"{size[0]}x{size[1]}",
+        "views": {name: list(view_direction(name)) for name in views},
         "parity": parity_policy.cache_key(),
     }
     extra = {"explode_offsets_mm": {oid: [round(c, 3) for c in offsets[oid]] for oid in occurrences if oid in offsets},
@@ -768,7 +832,8 @@ async def _retry_view(name: str, capture: Callable[[dict[str, Any], int], Any]) 
         encode_ms += float(result.get("encode_ms", 0))
         quality = assess(_frame_from_capture(result), closeup=closeup and not bool(options and options.get("isolated")),
                          isolated=isolated or bool(options and options.get("isolated")),
-                         visible_fraction=result.get("visible_subject_fraction"))
+                         visible_fraction=result.get("visible_subject_fraction"),
+                         floor_in_frame=result.get("floor_in_frame", True))
         attempts.append({"strategy": strategy, "camera": camera_record(result["camera"]),
                          "camera_options": options or {}, "metrics": quality.metrics,
                          "failures": quality.failures, "warnings": quality.warnings})
@@ -797,7 +862,9 @@ async def _retry_view(name: str, capture: Callable[[dict[str, Any], int], Any]) 
             result, quality = await attempt("reframe", {"frameScale": 0.8})
             strategy = "reframe"
         if quality.failures and "BLANK" in quality.failures:
-            result, quality = await attempt("blank-retry", {"direction": to_glb(DIRECTIONS[view_kind(name)])})
+            direction = view_direction(name)
+            result, quality = await attempt("blank-retry", {"direction": to_glb(direction),
+                                                              "up": list(camera_up_reference(direction))})
             strategy = "blank-retry"
     result["retry"] = {"strategy": strategy, "attempts": attempts}
     result["_capture_timing_ms"] = {"playwright_call": round(capture_wall_ms, 1),
@@ -1239,7 +1306,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("hw", type=Path, help="the project's hw/ directory")
     parser.add_argument("--version", default="latest", help="latest or vN")
     parser.add_argument("--views", nargs="+",
-                        help="iso front side exploded closeup-<PN> part-<PN> (default: iso front side exploded)")
+                        help="iso front side exploded dir-X-Y-Z[-closeup-<PN>|-part-<PN>] closeup-<PN> part-<PN> (default: iso front side exploded)")
     parser.add_argument("--size", default="1600x1200", help="frame size WIDTHxHEIGHT")
     parser.add_argument("--subject", default="assembly", help="bundle subject (default: assembly)")
     parser.add_argument("--jobs", type=int, default=DEFAULT_JOBS,
