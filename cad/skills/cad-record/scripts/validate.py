@@ -564,18 +564,43 @@ def stage_reached(product: Any, stage: str) -> bool:
     return current not in stages() or stages().index(current) >= stages().index(stage)
 
 
+def check_retention_decisions(hw: Path, documents: Mapping[str, Any], valid: Mapping[str, bool],
+                              findings: list[dict[str, Any]]) -> None:
+    """Each `torque_path` and `axial_retainer` decision exists under decisions/, like every DR link."""
+    def missing(decision: str | None) -> bool:
+        return decision is not None and not (hw / "decisions" / f"{decision}.md").is_file()
+
+    if valid.get("assembly.yaml"):
+        for joint in documents["assembly.yaml"].get("joints", []):
+            decision = (joint.get("torque_path") or {}).get("decision")
+            if missing(decision):
+                findings.append(finding(str(hw / "assembly.yaml"), f"{joint['id']} torque_path/decision {decision} "
+                                                                   f"does not exist at decisions/{decision}.md"))
+    if valid.get("interfaces.yaml"):
+        for index, interface in enumerate(documents["interfaces.yaml"]["interfaces"]):
+            for kind in ("press_fit", "running_fit", "locating_fit"):
+                fit = (interface.get("limits") or {}).get(kind)
+                decision = ((fit or {}).get("axial_retainer") or {}).get("decision")
+                if missing(decision):
+                    findings.append(finding(str(hw / "interfaces.yaml"),
+                                            f"interfaces/{index}/limits/{kind}/axial_retainer/decision {decision} "
+                                            f"does not exist at decisions/{decision}.md"))
+
+
 def check_design_rules(hw: Path, documents: Mapping[str, Any], valid: Mapping[str, bool],
                        part_records: Mapping[str, tuple[dict[str, Any], str]],
                        inventory: assembly_data.Inventory | None, findings: list[dict[str, Any]]) -> None:
     """design_rules.py over the schema-valid record: visibility bindings resolve at every stage; the
-    retention rules are errors from stage parts on and unreported before it; process feasibility is a
-    warning before stage parts and an error from it on."""
+    retention rules are errors from stage parts on and unreported before it; a structured transparent-FDM
+    contradiction is a warning before stage parts and an error from it on; a transparency claim in prose is
+    only ever a warning."""
     product = documents.get("product.yaml") if valid.get("product.yaml") else None
     at_parts = stage_reached(product, "parts")
 
     def report(path: Path | str, items: Iterable[design_rules.RuleFinding], severity: str = "error") -> None:
         for item in items:
-            findings.append({**finding(f"{path}#/{item.location}", item.message, severity=severity), "code": item.code})
+            graded = "warning" if item.code == design_rules.TRANSPARENCY_CLAIM_CODE else severity
+            findings.append({**finding(f"{path}#/{item.location}", item.message, severity=graded), "code": item.code})
 
     def resolve(ref: str) -> str | None:
         try:
@@ -583,6 +608,7 @@ def check_design_rules(hw: Path, documents: Mapping[str, Any], valid: Mapping[st
         except assembly_data.UnresolvedReference:
             return None
 
+    check_retention_decisions(hw, documents, valid, findings)
     if inventory is not None and at_parts:
         report(hw / "assembly.yaml", design_rules.torque_path_findings(documents["assembly.yaml"], resolve))
         if valid.get("interfaces.yaml"):

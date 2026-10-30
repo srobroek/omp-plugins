@@ -124,7 +124,7 @@ MUST Keep BOM columns in this order: `level,PN,rev,qty,title,material,process,ma
   - `validate.py` rejects a requirement with an unresolved reference or a value of 0 or less. It also rejects two references to one occurrence, and a second requirement on one occurrence pair.
   - cad-model `check` holds a requirement at the nominal pose, and cad-motion `sweep.py` at every sample. A joint or a fit on the pair does not exempt it.
 - `assembly.yaml`: optional top-level `occurrences` (`id` lowercase, `PN`, optional `placement`: `translation_mm` and `rotation: {axis, angle_deg}`, rotation about the part's local origin first), subassemblies listing `parts` (each PN one implicit occurrence at the identity) and/or `occurrences: ["@id", ...]` (each explicit occurrence in exactly one subassembly; a PN with explicit occurrences is never also in `parts`), and joints with travel limits. `scripts/assembly_data.py` is the shared normalizer and reference resolver.
-  - A revolute or fixed joint may declare `torque: transmitted | none`. A `transmitted` joint also declares `torque_path: {type, parts?, decision?}`, where `type` is `key`, `set_screw`, `d_flat`, `press_fit`, `spline`, `clamp`, `pin` or `adhesive`. A prismatic joint declares neither.
+  - `torque: transmitted | none` on a revolute or fixed joint, never a prismatic one; from stage `parts` on every revolute declares it. A fixed `transmitted` joint also declares `torque_path: {type, parts?, decision?}`, where `type` is `key`, `set_screw`, `d_flat`, `press_fit`, `spline`, `clamp`, `pin` or `adhesive`.
 - `parts/<PN>/part.yaml` optional `model_frame`: `assembly_zero` (default; geometry in assembly coordinates at the zero joint pose, one identity-placed occurrence) or `part_local` (the part's own frame, placed by its occurrences).
 - `parts/<PN>/part.yaml`: part number and revision, material, process, finish, mass target in grams, make/buy, optional supplier, and optional `decisions: [DR-###, ...]` references validated against `hw/decisions/`; `model.py` is the parametric CAD source.
   - Optional `form_class`: `solid` (default), `frame`, `plate`, `skeleton` or `shell`. The cad-design form check judges only a `solid` part `block_like`.
@@ -149,8 +149,8 @@ MUST Keep BOM columns in this order: `level,PN,rev,qty,title,material,process,ma
 `validate.py` also runs `scripts/design_rules.py`; each finding carries a stable `code`. LOAD [references/design-rules.md](references/design-rules.md) before fixing one or reading the clearance margin.
 
 - Clearance margin: distance < minimum fails; minimum ≤ distance < minimum + margin is a `margin` warning. cad-model check and cad-motion sweep read the margin through `load_clearance_margins`.
-- Retention (`retention.torque_path`, `retention.axial_retainer`): errors from stage `parts` on. Every fixed joint in a rotating drive train declares `torque`; every `press_fit` and `locating_fit` declares an `axial_retainer`; hardware is a modelled part.
-- Process feasibility (`feasibility.transparent_fdm`): a warning before stage `parts`, an error from it on. FDM cannot make a see-through part.
+- Retention (`retention.torque_path`, `retention.axial_retainer`): errors from stage `parts` on. Every revolute declares `torque`, as does every fixed joint on the child of a revolute not declared `none`; every `press_fit` and `locating_fit` declares an `axial_retainer`; hardware is a modelled part.
+- Process feasibility: an FDM part declared `transparency: transparent` is `feasibility.transparent_fdm`, a warning before stage `parts` and an error from it on. See-through prose is only ever a `feasibility.transparency_claim` warning.
 - Visibility bindings (`visibility.binding`): window and target parts resolve, at every stage.
 
 ## Rules
