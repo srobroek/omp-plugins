@@ -50,8 +50,12 @@
         "type": "object", "additionalProperties": false,
         "required": ["id", "type", "parent", "child", "axis", "origin", "min", "max"],
         "oneOf": [{"required": ["nominal"]}, {"required": ["coupling"]}],
-        "if": {"properties": {"type": {"const": "fixed"}}},
-        "then": {"required": ["nominal"]},
+        "allOf": [
+          {"if": {"properties": {"type": {"const": "fixed"}}}, "then": {"required": ["nominal"]}},
+          {"if": {"properties": {"type": {"const": "prismatic"}}},
+           "then": {"not": {"anyOf": [{"required": ["torque"]}, {"required": ["torque_path"]}]}}},
+          {"if": {"required": ["torque_path"]}, "then": {"required": ["torque"], "properties": {"torque": {"const": "transmitted"}}}}
+        ],
         "properties": {
           "id": {"$ref": "#/$defs/joint_id"},
           "type": {"type": "string", "enum": ["revolute", "prismatic", "fixed"]},
@@ -62,7 +66,12 @@
           "min": {"type": "number"},
           "max": {"type": "number"},
           "nominal": {"description": "The value of an independent joint; a coupled joint has none", "type": "number"},
-          "coupling": {"$ref": "#/$defs/coupling"}
+          "coupling": {"$ref": "#/$defs/coupling"},
+          "torque": {
+            "description": "Whether the child carries drive torque. From stage parts on, every revolute declares it (none for a hand-positioned or free-running joint), and so does every fixed joint inside the drive train that a revolute not declared none starts; a fixed joint declared transmitted names its torque_path",
+            "type": "string", "enum": ["transmitted", "none"]
+          },
+          "torque_path": {"$ref": "#/$defs/torque_path"}
         }
       }
     },
@@ -71,6 +80,15 @@
   "$defs": {
     "vector": {"type": "array", "prefixItems": [{"type": "number"}, {"type": "number"}, {"type": "number"}], "minItems": 3, "maxItems": 3},
     "joint_id": {"type": "string", "pattern": "^J-[0-9]{3}$"},
+    "torque_path": {
+      "description": "What carries the drive torque across a torque: transmitted joint; required on a fixed joint, optional on a revolute driven through an unmodelled shaft. Hardware types (key, set_screw, pin) name their modelled occurrences in parts",
+      "type": "object", "additionalProperties": false, "required": ["type"],
+      "properties": {
+        "type": {"type": "string", "enum": ["key", "set_screw", "d_flat", "press_fit", "spline", "clamp", "pin", "adhesive"]},
+        "parts": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/part_ref"}},
+        "decision": {"type": "string", "pattern": "^DR-[0-9]{3}$"}
+      }
+    },
     "coupling": {
       "description": "A dependent joint's law (cad-motion coupling.py): its value derives from a driver joint",
       "oneOf": [

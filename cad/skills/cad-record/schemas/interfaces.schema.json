@@ -26,6 +26,10 @@
             "description": "The smallest distance the pair may come to, at the nominal pose and at every swept pose",
             "type": "number", "exclusiveMinimum": 0
           },
+          "margin_mm": {
+            "description": "This requirement's margin above min_clearance_mm, overriding product.yaml design.clearance_margin_mm",
+            "type": "number", "minimum": 0
+          },
           "limits": {
             "type": "object",
             "properties": {
@@ -36,7 +40,7 @@
             }
           }
         },
-        "dependentRequired": {"pair": ["min_clearance_mm"], "min_clearance_mm": ["pair"]},
+        "dependentRequired": {"pair": ["min_clearance_mm"], "min_clearance_mm": ["pair"], "margin_mm": ["min_clearance_mm"]},
         "if": {"required": ["pair"]},
         "then": {"properties": {"type": {"const": "clearance"}}}
       }

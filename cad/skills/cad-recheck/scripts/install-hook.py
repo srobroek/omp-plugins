@@ -120,7 +120,8 @@ def install(project: Path, source: Path, stamp_source: Path, *, force: bool = Fa
     shutil.copyfile(record_root / "layout.json", hook_layout / "layout.json")
     shutil.copytree(record_root / "schemas", hook_layout / "schemas", dirs_exist_ok=True)
     shutil.copyfile(record_root / "scripts" / "validate.py", hook_layout / "scripts" / "validate.py")
-    shutil.copyfile(record_root / "scripts" / "assembly_data.py", hook_layout / "scripts" / "assembly_data.py")
+    for module in ("assembly_data.py", "design_rules.py"):  # validate.py's sibling imports
+        shutil.copyfile(record_root / "scripts" / module, hook_layout / "scripts" / module)
     hook.chmod(hook.stat().st_mode | 0o111)
     stamp.chmod(stamp.stat().st_mode | 0o111)
     git("config", "core.hooksPath", ".githooks", cwd=root)

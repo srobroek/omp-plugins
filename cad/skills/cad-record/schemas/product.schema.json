@@ -36,10 +36,46 @@
         "margin_mm": {"type": "number", "minimum": 0}
       }
     },
+    "design": {
+      "description": "Product-wide design rules",
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "clearance_margin_mm": {
+          "description": "Margin above each clearance requirement's minimum (default 0.1); a distance at or above the minimum but below minimum + margin is a margin warning, never a failure. A clearance interface's margin_mm overrides it",
+          "type": "number", "minimum": 0
+        }
+      }
+    },
+    "manufacturing": {
+      "description": "Product-wide manufacturing plan and rules",
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "processes": {
+          "description": "The processes planned at INTENT, before any part record exists",
+          "type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/process"}
+        },
+        "min_wall_mm": {
+          "description": "Minimum wall per made-part process, overriding the cad-design form check's built-in defaults",
+          "type": "object", "additionalProperties": false, "minProperties": 1,
+          "properties": {
+            "fdm": {"type": "number", "exclusiveMinimum": 0},
+            "cnc": {"type": "number", "exclusiveMinimum": 0}
+          }
+        }
+      }
+    },
+    "storage": {
+      "description": "Repository storage choices the user made",
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "results_in_git": {"description": "Whether generated results (STEP, GLB, renders, check bundles) are tracked in git; absent means the user has not been asked", "type": "boolean"}
+      }
+    },
     "drawing": {"$ref": "drawing.schema.json#/$defs/product_drawing"}
   },
   "$defs": {
     "stage": {"type": "string", "enum": ["ground", "intent", "specify", "concept", "layout", "parts", "detail", "bom", "analysis", "critique", "reconcile", "design_freeze", "release"]},
+    "process": {"type": "string", "enum": ["fdm", "cnc", "purchased"]},
     "version": {"type": "string", "pattern": "^v[1-9][0-9]*$"},
     "decision": {"type": "string", "pattern": "^DR-[0-9]{3}$"},
     "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
