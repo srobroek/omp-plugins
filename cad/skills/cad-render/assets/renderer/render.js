@@ -2,6 +2,8 @@
 // (parts, PBR materials, views, explode offsets) and /render/model.glb (the version GLB), then
 // calls window.cadRender.capture(view) once per view. Each capture returns the beauty frame as a
 // PNG data URL plus its raw RGBA pixels, and a subject mask, so render.py can grade the frame.
+// measureVisibility(check) counts mask pixels for one requirement visibility check, which
+// render.py grades.
 import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
@@ -166,6 +168,14 @@ function fitCamera(camera, points, direction, frameScale = 1, upReference) {
   camera.lookAt(target);
   camera.updateProjectionMatrix();
   return { target, distance };
+}
+
+// The camera as render.py records it (camera_record), in the GLB frame.
+function cameraRecord(camera, target) {
+  return {
+    frame: "glb", position: camera.position.toArray(), target: target.toArray(), up: camera.up.toArray(),
+    fov_deg: camera.fov, aspect: camera.aspect, near: camera.near, far: camera.far,
+  };
 }
 
 function toBase64(bytes) {
@@ -418,7 +428,6 @@ async function boot() {
     transparent: true,
     depthWrite: false,
   });
-  const maskTransparentWindow = maskGhost;
   const maskFloor = new THREE.ShaderMaterial({
     uniforms: { heights: { value: heights.texture }, overhang: zones.overhang },
     vertexShader: UV_VERTEX,
@@ -620,17 +629,14 @@ async function boot() {
     return radius;
   }
 
-  // Class mask (0 empty, 1 other part, 2 subject) and floor zones (1 grounded rim on a part,
-  // 2 overhung floor, else 0), both one byte per pixel in top-down rows.
-  function renderMask(subject, ghostOccluders = false) {
+  // One mask pass into maskTarget: each part drawn by partMaterial(id), the floor by floorMaterial
+  // (left out when null). Returns the RGBA bytes in bottom-up rows; maskClass reads a pixel's class.
+  function readMask(partMaterial, floorMaterial) {
     const rgba = new Uint8Array(width * height * 4);
     world.background = null;
     const toneMapping = renderer.toneMapping;
     renderer.toneMapping = THREE.NoToneMapping;
-    withMaterials((id) => {
-      if (subject.has(id)) return maskSubject;
-      return ghostOccluders ? maskGhost : maskOther;
-    }, maskFloor, () => {
+    withMaterials(partMaterial, floorMaterial, () => {
       renderer.setRenderTarget(maskTarget);
       renderer.setClearColor(0x000000, 1);
       renderer.clear();
@@ -640,126 +646,30 @@ async function boot() {
     renderer.setRenderTarget(null);
     renderer.toneMapping = toneMapping;
     world.background = backdrop;
+    return rgba;
+  }
+  const maskClass = (r) => (r > 200 ? 2 : r > 60 ? 1 : 0);
+
+  // Class mask (0 empty, 1 other part, 2 subject) and floor zones (1 grounded rim on a part,
+  // 2 overhung floor, else 0), both one byte per pixel in top-down rows.
+  function renderMask(subject, ghostOccluders = false) {
+    const rgba = readMask((id) => {
+      if (subject.has(id)) return maskSubject;
+      return ghostOccluders ? maskGhost : maskOther;
+    }, maskFloor);
     const mask = new Uint8Array(width * height);
     const floor = new Uint8Array(width * height);
     for (let y = 0; y < height; y += 1) {
       const src = (height - 1 - y) * width * 4, dst = y * width;
       for (let x = 0; x < width; x += 1) {
         const [r, g, b] = rgba.subarray(src + x * 4, src + x * 4 + 3);
-        const cls = r > 200 ? 2 : r > 60 ? 1 : 0;
+        const cls = maskClass(r);
         mask[dst + x] = cls;
         floor[dst + x] = cls ? (g > 127 ? 1 : 0) : b > 127 ? 2 : 0;
       }
     }
     return { mask, floor };
   }
-  function renderVisibilityMask(target, visibleParts, transparentWindows) {
-    const savedNodes = [];
-    for (const [id, part] of parts) {
-      if (visibleParts.has(id)) continue;
-      for (const node of part.nodes) {
-        savedNodes.push([node, node.visible]);
-        node.visible = false;
-      }
-    }
-    try {
-      root.updateMatrixWorld(true);
-      world.background = null;
-      const toneMapping = renderer.toneMapping;
-      renderer.toneMapping = THREE.NoToneMapping;
-      withMaterials((id) => {
-        if (target.has(id)) return maskSubject;
-        if (visibleParts.has(id) && transparentWindows.has(id)) return maskTransparentWindow;
-        if (visibleParts.has(id)) return maskOther;
-        return maskGhost;
-      }, null, () => {
-        renderer.setRenderTarget(maskTarget);
-        renderer.setClearColor(0x000000, 1);
-        renderer.clear();
-        renderer.render(world, camera);
-        renderer.readRenderTargetPixels(maskTarget, 0, 0, width, height, rgba);
-      });
-      renderer.setRenderTarget(null);
-      renderer.toneMapping = toneMapping;
-      world.background = backdrop;
-      const mask = new Uint8Array(width * height);
-      for (let y = 0; y < height; y += 1) {
-        const src = (height - 1 - y) * width * 4, dst = y * width;
-        for (let x = 0; x < width; x += 1) {
-          const offset = src + x * 4;
-          mask[dst + x] = rgba[offset] > 200 ? 2 : rgba[offset] > 60 ? 1 : 0;
-        }
-      }
-      return mask;
-    } finally {
-      for (const [node, visible] of savedNodes) node.visible = visible;
-      root.updateMatrixWorld(true);
-    }
-  }
-
-  function visibilityCapture(binding) {
-    const targets = new Set(binding.targets);
-    const windows = new Set(binding.window);
-    const unknown = [...targets, ...windows].filter((id) => !parts.has(id));
-    if (unknown.length) throw new Error(`visibility names unknown occurrences ${unknown.join(", ")}`);
-    const transparentWindows = new Set(binding.transparentWindows);
-    const perTarget = {};
-    let totalVisible = 0;
-    let totalIsolated = 0;
-    for (const id of targets) {
-      const visible = renderVisibilityMask(new Set([id]), new Set([...targets, ...windows]), transparentWindows);
-      const isolated = renderVisibilityMask(new Set([id]), new Set([id]), new Set());
-      let seen = 0, silhouette = 0;
-      for (let index = 0; index < isolated.length; index += 1) {
-        if (isolated[index] !== 2) continue;
-        silhouette += 1;
-        if (visible[index] === 2) seen += 1;
-      }
-      perTarget[id] = { visible_pixels: seen, isolated_pixels: silhouette,
-                        visible_fraction: silhouette ? seen / silhouette : 0 };
-      totalVisible += seen;
-      totalIsolated += silhouette;
-    }
-    const fraction = totalIsolated ? totalVisible / totalIsolated : 0;
-    return { visible_fraction: fraction, visible_pixels: totalVisible, isolated_pixels: totalIsolated,
-             per_target: perTarget, min_visible_fraction: binding.minVisibleFraction,
-             status: fraction < binding.minVisibleFraction ? "fail" : "pass" };
-  }
-
-  function captureVisibility(viewName, binding) {
-    const view = scene.views.find((candidate) => candidate.name === viewName);
-    if (!view) throw new Error(`unknown visibility view ${viewName}`);
-    const saved = [];
-    try {
-      applyExplode(false);
-      for (const [id, part] of parts) {
-        part.nodes.forEach((node, index) => {
-          saved.push([node, node.visible]);
-          node.visible = part.rest[index].visible;
-        });
-      }
-      const included = new Set([...binding.targets, ...binding.window]);
-      for (const [id, part] of parts) {
-        if (included.has(id)) continue;
-        for (const node of part.nodes) node.visible = false;
-      }
-      root.updateMatrixWorld(true);
-      const meshes = [...included].flatMap((id) => parts.get(id).meshes);
-      const box = new THREE.Box3().makeEmpty();
-      meshes.forEach((mesh) => box.expandByObject(mesh));
-      stage(box, false);
-      const points = vertexSample(meshes);
-      const fit = fitCamera(camera, points, view.direction, 1.0, view.up);
-      const result = visibilityCapture(binding);
-      return { view: viewName, visibility: result, camera: { position: camera.position.toArray(),
-        target: fit.target.toArray(), up: camera.up.toArray(), fov_deg: camera.fov, aspect: camera.aspect,
-        near: camera.near, far: camera.far } };
-    } finally {
-      for (const [node, visible] of saved) node.visible = visible;
-      root.updateMatrixWorld(true);
-    }
-  }
- 
   function withGhostContext(subject, body) {
     const saved = new Map();
     for (const [id, part] of parts) {
@@ -786,7 +696,8 @@ async function boot() {
     const hidden = [];
     for (const [id, part] of parts) {
       if (subject.has(id)) continue;
-      for (const object of [...part.nodes, ...part.meshes]) {
+      // A GLB node holding one primitive is itself the mesh: list it once, so it is restored visible.
+      for (const object of new Set([...part.nodes, ...part.meshes])) {
         hidden.push([object, object.visible]);
         object.visible = false;
       }
@@ -796,6 +707,32 @@ async function boot() {
       for (const [object, visible] of hidden) object.visible = visible;
       root.updateMatrixWorld(true);
     }
+  }
+
+  // A requirement visibility check at the built (nominal) pose. The camera looks along the check's
+  // direction, framed on its window and target parts; every other part is hidden and the floor left
+  // out. Per target: its silhouette drawn alone, and the pixels where it stays the nearest surface
+  // with the occluders drawn too, which are the other window and target parts except see-through ones.
+  function measureVisibility(check) {
+    applyExplode(false);
+    for (const part of parts.values()) part.nodes.forEach((node, i) => { node.visible = part.rest[i].visible; });
+    const drawn = [...new Set([...check.window, ...check.targets])];
+    const unknown = drawn.filter((id) => !parts.has(id));
+    if (unknown.length) throw new Error(`visibility check names unknown occurrences ${unknown.join(", ")}`);
+    const seeThrough = new Set(check.see_through);
+    const fit = fitCamera(camera, vertexSample(drawn.flatMap((id) => parts.get(id).meshes)), check.direction, 1, check.up);
+    const nearestPixels = (target, shown) => withIsolatedSubject(shown, () => {
+      const rgba = readMask((id) => (id === target ? maskSubject : maskOther), null);
+      let count = 0;
+      for (let i = 0; i < rgba.length; i += 4) if (maskClass(rgba[i]) === 2) count += 1;
+      return count;
+    });
+    const targets = check.targets.map((id) => ({
+      occurrence: id,
+      silhouette_px: nearestPixels(id, new Set([id])),
+      visible_px: nearestPixels(id, new Set([id, ...drawn.filter((other) => other !== id && !seeThrough.has(other))])),
+    }));
+    return { targets, camera: cameraRecord(camera, fit.target) };
   }
   // Clip the renderer's square floor against the camera frustum, rather than testing its bounding
   // sphere (which can overlap the view when the floor itself is entirely out of frame).
@@ -881,8 +818,6 @@ async function boot() {
     const isolatedMask = view.subject ? withIsolatedSubject(subject, () => renderMask(subject).mask) : finalFrame.mask;
     const isolatedSubjectPixels = isolatedMask.reduce((count, cls) => count + (cls === 2), 0);
     const { mask, floor, pixels, png, encodeMs } = finalFrame;
-    const applied = {};
-    for (const part of parts.values()) applied[part.pn] = readBack(part.material);
     return {
       view: name,
       width,
@@ -891,21 +826,11 @@ async function boot() {
       rgba: toBase64(new Uint8Array(pixels.buffer)),
       mask: toBase64(mask),
       floor: toBase64(floor),
-      camera: {
-        frame: "glb",
-        position: camera.position.toArray(),
-        target: fit.target.toArray(),
-        up: camera.up.toArray(),
-        fov_deg: camera.fov,
-        aspect: camera.aspect,
-        near: camera.near,
-        far: camera.far,
-      },
+      camera: cameraRecord(camera, fit.target),
       subject: [...subject],
       visible_subject_fraction: isolatedSubjectPixels ? visibleSubjectPixels / isolatedSubjectPixels : 0,
       floor_in_frame: floorInFrame,
       explode: Boolean(view.explode),
-      materials: applied,
       scene_radius_m: radius,
       render_ms: Math.round(performance.now() - started),
       encode_ms: Math.round(encodeMs),
@@ -979,10 +904,7 @@ async function boot() {
     const aoRadius = partRadius * STUDIO.aoRadius;
     gtao.updateGtaoMaterial({ radius: aoRadius, thickness: aoRadius, distanceExponent: 1, distanceFallOff: 1, scale: 1 });
     gtao.updatePdMaterial({ lumaPhi: 10, depthPhi: 2, normalPhi: 3, radius: 6, rings: 2, samples: 16 });
-    return {
-      frame: "glb", position: camera.position.toArray(), target: fit.target.toArray(), up: camera.up.toArray(),
-      fov_deg: camera.fov, aspect: camera.aspect, near: camera.near, far: camera.far, swept_radius_m: radius,
-    };
+    return { ...cameraRecord(camera, fit.target), swept_radius_m: radius };
   }
 
   // Renders one frame with the current group camera; `check` also returns each occurrence's first
@@ -1038,13 +960,15 @@ async function boot() {
     capture,
     motionCamera,
     captureMotion,
-    captureVisibility,
+    measureVisibility,
     contactSheet,
     info: {
       three: THREE.REVISION,
       parts: [...parts.keys()],
       unmapped_meshes: unmapped,
       ground_y_m: groundY,
+      // The material each PN is drawn in, read back from three.js: render.json materials.<PN>.applied.
+      materials: Object.fromEntries([...parts.values()].map((part) => [part.pn, readBack(part.material)])),
       studio: {
         ...STUDIO,
         toneMapping: "ACESFilmic",
@@ -1069,5 +993,5 @@ window.cadRender = {
   motionCamera: async (poses, direction, seed) => (await ready).motionCamera(poses, direction, seed),
   captureMotion: async (deltas, check) => (await ready).captureMotion(deltas, check),
   contactSheet: async (tiles, columns, tileWidth) => (await ready).contactSheet(tiles, columns, tileWidth),
-  captureVisibility: async (view, binding) => (await ready).captureVisibility(view, binding),
+  measureVisibility: async (check) => (await ready).measureVisibility(check),
 };
