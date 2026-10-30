@@ -136,19 +136,31 @@ class Cleared:
     by: str
 
 
+# An exact distance this many mesh deflections from the mesh distance, or the mesh spread if larger,
+# contradicts the mesh: a Suspect.
+SUSPECT_DEFLECTIONS = 10
+
+
 @dataclass
 class Suspect:
-    """Fast mode: a measurement outside the interval its own bounds prove, [`lower`, `upper`]: the
-    kernel's (distance, volume), the requests it answered (it still answers them), and its
-    re-evaluations, (shift mm, outcome) with b moved that far along +-(1, 1, 1)/sqrt(3), each
-    within the shift of the true distance where the kernel holds."""
+    """A kernel measurement its own bounds contradict: its distance is below the box gap, or more
+    than max(SUSPECT_DEFLECTIONS x the mesh deflection, the mesh spread) from the mesh distance
+    (below it only where the mesh proves a lower bound). Its value answers nothing. Its
+    re-evaluations, (label, outcome, mesh interval or None): the caller's neighbouring placements
+    (sweep: every independent joint +-0.1), else b moved +-REEVALUATE_MM along (1, 1, 1)/sqrt(3),
+    and the same placement with a and b swapped. `resolved` when each lies in its own mesh interval
+    (the swapped one, and one without a mesh, in the suspect's [lower, upper]) and `lower` clears
+    the gate and every threshold of the requests: they are answered Cleared, by "mesh (exact
+    suspect)"; otherwise by "suspect", which the caller must fail."""
 
     requests: tuple[int, ...]
     distance: float
     volume: float
     lower: float
     upper: float
-    reevaluated: list[tuple[float, tuple[float, float] | Failure]]
+    reevaluated: list[tuple[str, tuple[float, float] | Failure, tuple[float, float, float] | None]]
+    expected: int = 0
+    resolved: bool | None = None
 
 
 Outcome = tuple[float, float] | Pruned | Cleared | Failure
@@ -168,9 +180,11 @@ class PairMeasurer:
     first looked up there, and this process alone writes each new measurement to it.
 
     With `band` (mm, fast mode; None: exact) a pruned `measure` clears every grouped request whose
-    own lower bound exceeds its gate and thresholds by more than `band`, and checks each
-    measurement against its own bounds (`suspects`). `mesh` (mesh_bound.MeshBounds, or None: the
-    box gap alone) supplies the mesh bounds."""
+    own lower bound exceeds its gate and thresholds by more than `band`. `mesh`
+    (mesh_bound.MeshBounds, or None: the box gap alone) supplies the mesh intervals, computed with
+    the measurements, in each worker by its own MeshBounds; with it every measurement that may
+    decide a result is checked against its bounds (`suspects`): in fast mode each one, in exact
+    mode one below a threshold or in contact without overlap."""
 
     def __init__(self, shapes: Mapping[str, Any], jobs: int = 1, start_method: str | None = None,
                  threads: bool = True, cache: PairCache | None = None, band: float | None = None,
@@ -194,23 +208,31 @@ class PairMeasurer:
         self.pruned = 0  # requests the broad phase answered without a measurement
         self.disk_hits = 0  # measurements read from the cache
         self.cleared = {"box": 0, "mesh": 0}  # fast mode: requests cleared, by what
-        self.reevaluations = 0  # fast mode: kernel measurements of suspects' moved placements
-        self.suspects: list[Suspect] = []  # fast mode: the last `measure` call's
+        self.mesh_bounds = 0  # mesh intervals computed, in whichever process
+        self.mesh_seconds = 0.0  # spent on them
+        self.parent_seconds = 0.0  # this process's time in `measure`, waiting for workers left out
+        self.reevaluations = 0  # kernel measurements of suspects' re-evaluations
+        self.suspects: list[Suspect] = []  # the last `measure` call's
 
     def measure(self, requests: Sequence[Request], deadline: float = math.inf, stop_on_failure: bool = False,
-                prune: bool = False) -> list[Outcome | None]:
+                prune: bool = False, neighbours: Any = None) -> list[Outcome | None]:
         """One outcome per request, in request order; None for the requests the deadline left
-        unanswered, and for those still open after a failure when `stop_on_failure`."""
+        unanswered, and for those still open after a failure when `stop_on_failure`.
+        `neighbours(index)`, if given, lists a suspect's re-evaluation placements as (label,
+        pose.Rigid) pairs."""
         self.suspects = []
-        run = _Run(self, requests, prune)
-        executor = (_InProcess(self.shapes, self.threads) if self.jobs <= 1
-                    else _Workers(self.shapes, self.jobs, self.start_method))
+        started = time.monotonic()
+        run = _Run(self, requests, prune, neighbours)
+        options = None if self.mesh is None else (self.mesh.linear, self.mesh.angular)
+        executor = (_InProcess(self.shapes, self.mesh, self.threads) if self.jobs <= 1
+                    else _Workers(self.shapes, self.jobs, self.start_method, options))
         try:
             run.execute(executor, deadline, stop_on_failure)
         finally:
             executor.close()
             if self.cache is not None:
                 self.cache.flush()
+            self.parent_seconds += time.monotonic() - started - run.waited
         return run.outcomes
 
     def moved_corners(self, request: Request) -> tuple[list[tuple[float, float, float]], list[tuple[float, float, float]]]:
@@ -241,7 +263,7 @@ class PairMeasurer:
 class _Run:
     """One `measure` call: the requests' units (distinct exact measurements) and groups."""
 
-    def __init__(self, measurer: PairMeasurer, requests: Sequence[Request], prune: bool) -> None:
+    def __init__(self, measurer: PairMeasurer, requests: Sequence[Request], prune: bool, neighbours: Any) -> None:
         self.measurer, self.requests, self.prune = measurer, requests, prune
         count = len(requests)
         self.outcomes: list[Outcome | None] = [None] * count
@@ -269,14 +291,19 @@ class _Run:
         self.order: list[Hashable] = []
         self.turn = 0
         # Fast mode (the measurer's `band`, with prune): a request whose own lower bound clears its cap
-        # is answered Cleared, and every request is classified so before anything else answers it.
+        # is answered Cleared. A unit whose box gap leaves a grouped request within its cap is pending
+        # until its mesh interval, computed with its measurement, comes back; nothing answers it before.
         self.band = measurer.band if prune else None
-        self.bound: dict[int, tuple[float, float, str]] = {}  # unit -> its own (lower, upper, "box" | "mesh")
+        self.meshing = measurer.mesh is not None
+        self.neighbours = neighbours or self.translated
+        self.interval: dict[int, tuple[float, float, float]] = {}  # unit -> mesh (lower, upper, spread)
         self.near: set[int] = set()  # requests fast mode found within their cap
-        self.ahead = 0  # the next request fast mode classifies while the workers measure
+        self.stored: dict[int, tuple[float, float]] = {}  # pending units' cache hits
+        self.keys: dict[int, bytes] = {}  # unit -> cache key
         self.extra: deque[tuple[int, Task]] = deque()  # suspects' re-evaluations waiting for a worker
-        self.extra_of: dict[int, tuple[Suspect, float]] = {}  # task id beyond the units -> (suspect, shift)
+        self.extra_of: dict[int, tuple[Suspect, str, int]] = {}  # task id beyond the units -> (suspect, label, unit)
         self.next_id = len(self.unit_request)
+        self.waited = 0.0  # seconds this process waited for a result
 
     # -- answers -------------------------------------------------------------------------------
 
@@ -292,7 +319,12 @@ class _Run:
         return self.gaps[unit]
 
     def lower(self, unit: int) -> float:
-        own = self.bound[unit][0] if unit in self.bound else self.gap(unit)
+        """The unit's lower bound for pruning: its box gap, a nearby measurement's motion bound, and in
+        fast mode its mesh bound less the band, so a request the mesh alone puts beyond its group
+        minimum is still measured inside the band, as clearing would measure it."""
+        own = self.gap(unit)
+        if self.band is not None and unit in self.interval:
+            own = max(own, self.interval[unit][0] - self.band)
         return max(own, self.motion.get(unit, -math.inf))
 
     def settle(self, index: int, outcome: Outcome) -> None:
@@ -315,28 +347,34 @@ class _Run:
         plus the band."""
         return max((pose.OVERLAP_GATE_MM, *self.requests[index].thresholds)) + self.band
 
+    def grouped(self, unit: int) -> list[int]:
+        return [index for index in self.own[unit] if self.requests[index].group is not None]
+
+    def pending(self, unit: int) -> bool:
+        """Fast mode: whether the unit waits for its mesh interval: none is known, and the box gap
+        leaves a grouped request of it within its cap."""
+        return (self.meshing and unit not in self.interval
+                and any(self.gap(unit) - SLACK_MM <= self.cap(index) for index in self.grouped(unit)))
+
     def own_bound(self, unit: int) -> tuple[float, float, str]:
         """The unit's own (lower, upper) bounds on its distance and what proved the lower: the box
-        gap, raised by the mesh bound where the gap leaves a grouped request of the unit within its
-        cap. Both depend on the unit alone, never on what was measured first, so a fast run clears
-        the same requests in any order."""
-        if unit not in self.bound:
-            best = (self.gap(unit), math.inf, "box")
-            mesh = self.measurer.mesh
-            if mesh is not None and any(best[0] - SLACK_MM <= self.cap(index) for index in self.own[unit]
-                                        if self.requests[index].group is not None):
-                request = self.requests[self.unit_request[unit]]
-                lower, upper = mesh.interval(request.a, request.b, request.placement)
-                best = (lower, upper, "mesh") if lower > best[0] else (best[0], upper, "box")
-            self.bound[unit] = best
-        return self.bound[unit]
+        gap, raised by the mesh interval where one is known. Both depend on the unit alone, never on
+        what was measured first, so a fast run clears the same requests in any order."""
+        gap = self.gap(unit)
+        if unit in self.interval:
+            lower, upper, _ = self.interval[unit]
+            return (lower, upper, "mesh") if lower > gap else (gap, upper, "box")
+        return gap, math.inf, "box"
 
-    def clear(self, index: int) -> bool:
+    def clear(self, index: int) -> bool | None:
         """Fast mode: answer the open request `index` Cleared when its unit's own lower bound
-        exceeds its cap by SLACK_MM; whether it did."""
+        exceeds its cap by SLACK_MM: True; False when it does not; None while its unit is pending."""
         if self.band is None or self.requests[index].group is None or index in self.near:
             return False
-        lower, upper, by = self.own_bound(self.unit_of[index])
+        unit = self.unit_of[index]
+        if self.pending(unit):
+            return None
+        lower, upper, by = self.own_bound(unit)
         if lower - SLACK_MM > self.cap(index):
             self.measurer.cleared[by] += 1
             self.settle(index, Cleared(lower, upper, by))
@@ -344,33 +382,90 @@ class _Run:
         self.near.add(index)
         return False
 
-    def check(self, unit: int, outcome: tuple[float, float]) -> None:
-        """Fast mode: a measurement outside its unit's own bounds by more than SLACK_MM is a
-        Suspect; queue its re-evaluations at b moved by +-REEVALUATE_MM."""
-        if unit not in self.bound:
-            return
-        lower, upper, _ = self.bound[unit]
-        if lower - SLACK_MM <= outcome[0] <= upper + SLACK_MM:
-            return
+    def suspicious(self, unit: int, distance: float) -> bool:
+        """Whether a measured distance contradicts the unit's own bounds (see Suspect)."""
+        if distance < self.gap(unit) - SLACK_MM:
+            return True
+        if unit not in self.interval:
+            return False
+        lower, upper, spread = self.interval[unit]
+        estimate = upper - spread
+        tolerance = max(SUSPECT_DEFLECTIONS * self.measurer.mesh.linear, spread)
+        return distance > estimate + tolerance or (lower > 0.0 and distance < estimate - tolerance)
+
+    def suspect(self, unit: int, outcome: tuple[float, float]) -> None:
+        """Hold the unit's requests and queue the re-evaluations of its suspect measurement."""
+        lower, upper, _ = self.own_bound(unit)
         suspect = Suspect(tuple(self.own[unit]), outcome[0], outcome[1], lower, upper, [])
         self.measurer.suspects.append(suspect)
-        request = self.requests[self.unit_request[unit]]
+        index = self.unit_request[unit]
+        request = self.requests[index]
+        tasks = [(label, request.a, request.b, placement, ("both",)) for label, placement in self.neighbours(index)]
+        tasks.append(("swapped", request.b, request.a, request.placement.inverse(), ("plain",)))
+        suspect.expected = len(tasks)
+        for label, a, b, placement, mode in tasks:
+            self.extra_of[self.next_id] = (suspect, label, unit)
+            self.extra.append((self.next_id, (a, b, (placement.rot, placement.trans), 0.0, mode)))
+            self.next_id += 1
+
+    def translated(self, index: int) -> list[tuple[str, Any]]:
+        """The default re-evaluation placements: b moved +-REEVALUATE_MM along (1, 1, 1)/sqrt(3)."""
+        placement = self.requests[index].placement
+        moved = []
         for shift in (REEVALUATE_MM, -REEVALUATE_MM):
             step = shift / math.sqrt(3.0)
-            trans = tuple(value + step for value in request.placement.trans)
-            self.extra_of[self.next_id] = (suspect, shift)
-            self.extra.append((self.next_id, (request.a, request.b, (request.placement.rot, trans), 0.0)))
-            self.next_id += 1
+            moved.append((f"{shift:+g} mm", pose.Rigid(placement.rot, tuple(v + step for v in placement.trans))))
+        return moved
+
+    def reevaluated(self, task_id: int, result: Any, interval: tuple[float, float, float] | None) -> None:
+        """A suspect's re-evaluation is back; with the last, resolve the suspect and answer its requests."""
+        suspect, label, unit = self.extra_of.pop(task_id)
+        suspect.reevaluated.append((label, _outcome(result), interval))
+        if len(suspect.reevaluated) < suspect.expected:
+            return
+
+        def agrees(outcome: Any, bounds: tuple[float, float, float] | None) -> bool:
+            low, high = (bounds[0], bounds[1]) if bounds is not None else (suspect.lower, suspect.upper)
+            return isinstance(outcome, tuple) and low - SLACK_MM <= outcome[0] <= high + SLACK_MM
+
+        consistent = all(agrees(outcome, bounds) for _, outcome, bounds in suspect.reevaluated)
+        decided = all(suspect.lower - SLACK_MM > max((pose.OVERLAP_GATE_MM, *self.requests[index].thresholds))
+                      for index in self.own[unit])
+        suspect.resolved = consistent and decided
+        by = "mesh (exact suspect)" if suspect.resolved else "suspect"
+        for index in self.own[unit]:
+            if self.outcomes[index] is None:
+                self.settle(index, Cleared(suspect.lower, suspect.upper, by))
 
     def prune_group(self, group: Hashable) -> None:
         for index in self.members[group]:
             if self.outcomes[index] is None and self.unit_of[index] not in self.inflight \
-                    and not self.clear(index) and self.prunable(index):
+                    and self.clear(index) is False and self.prunable(index):
                 self.measurer.pruned += 1
                 self.settle(index, Pruned(self.floor[group][1]))
 
-    def learn(self, unit: int, outcome: tuple[float, float] | Failure) -> None:
-        """A unit's outcome is known: answer its open requests, bound their group neighbours."""
+    def classify(self, unit: int) -> None:
+        """Fast mode: the unit's mesh interval came back without a measurement: answer the requests
+        it clears or proves prunable, and queue the rest to be measured."""
+        for index in self.own[unit]:
+            if self.outcomes[index] is not None or self.clear(index):
+                continue
+            if self.prunable(index):
+                self.measurer.pruned += 1
+                self.settle(index, Pruned(self.floor[self.requests[index].group][1]))
+                continue
+            if self.requests[index].group not in self.queues:
+                self.order.append(self.requests[index].group)
+            self.queue(index)
+
+    def learn(self, unit: int, outcome: tuple[float, float] | Failure, store: bool = False) -> None:
+        """A unit's outcome is known: hold it as a suspect, else write it to the cache (`store`),
+        answer its open requests and bound their group neighbours."""
+        if self.meshing and isinstance(outcome, tuple) and self.suspicious(unit, outcome[0]):
+            self.suspect(unit, outcome)
+            return
+        if store and self.measurer.cache is not None and isinstance(outcome, tuple):
+            self.measurer.cache.store(self.keys[unit], outcome)
         self.known[unit] = outcome
         for index in self.own[unit]:
             if self.outcomes[index] is None and not self.clear(index):
@@ -378,8 +473,6 @@ class _Run:
                     self.measurer.reused += 1
                 self.answering.add(unit)
                 self.settle(index, outcome)
-        if self.band is not None and isinstance(outcome, tuple):
-            self.check(unit, outcome)
         if self.prune and isinstance(outcome, tuple):
             for index in self.own[unit]:
                 group = self.requests[index].group
@@ -418,26 +511,47 @@ class _Run:
                 unit = self.unit_of[index]
                 if self.outcomes[index] is not None or unit in self.inflight:
                     continue
-                if self.clear(index):
+                verdict = self.clear(index)
+                if verdict:
                     continue
-                if self.prune and self.prunable(index):
+                if verdict is False and self.prune and self.prunable(index):
                     self.measurer.pruned += 1
                     self.settle(index, Pruned(self.floor[self.requests[index].group][1]))
                     continue
                 return unit
         return None
 
+    def task(self, unit: int) -> Task:
+        """The unit's task (see _run_task): a pending unit's mesh interval first, its measurement
+        skipped where the interval clears every request or proves each prunable, and always for a
+        cache hit; in exact mode with a mesh, the interval after a measurement that may decide."""
+        request = self.requests[self.unit_request[unit]]
+        if self.band is not None and self.pending(unit):
+            limit = math.inf
+            if all(self.requests[index].group in self.floor for index in self.own[unit]):
+                limit = self.band + max(max(self.floor[self.requests[index].group][0], pose.OVERLAP_GATE_MM,
+                                            *self.requests[index].thresholds) for index in self.own[unit])
+            mode: tuple = ("fast", max(self.cap(index) for index in self.grouped(unit)), limit, unit not in self.stored)
+        elif self.band is None and self.meshing:
+            mode = ("decide", max((t for index in self.own[unit] for t in self.requests[index].thresholds), default=0.0))
+        else:
+            mode = ("plain",)
+        return request.a, request.b, (request.placement.rot, request.placement.trans), self.gap(unit), mode
+
     def execute(self, executor: _InProcess | _Workers, deadline: float, stop_on_failure: bool) -> None:
         if time.monotonic() > deadline:
             return
-        cache, keys = self.measurer.cache, {}
+        cache = self.measurer.cache
         if cache is not None:
-            keys = {unit: self.measurer.cache_key(self.requests[index]) for unit, index in self.unit_request.items()}
-            stored = cache.lookup(list(keys.values()))
-            for unit, key in keys.items():
+            self.keys = {unit: self.measurer.cache_key(self.requests[index]) for unit, index in self.unit_request.items()}
+            stored = cache.lookup(list(self.keys.values()))
+            for unit, key in self.keys.items():
                 if key in stored:
                     self.measurer.disk_hits += 1
-                    self.learn(unit, stored[key])
+                    if self.band is not None and self.pending(unit):
+                        self.stored[unit] = stored[key]  # answered once its interval classifies it
+                    else:
+                        self.learn(unit, stored[key])
             self.touched.clear()
         for index in range(len(self.requests)):
             if self.outcomes[index] is None:
@@ -457,52 +571,80 @@ class _Run:
                 if unit is None:
                     break
                 self.inflight.add(unit)
-                self.measurer.measured += 1
-                request = self.requests[self.unit_request[unit]]
-                executor.submit(unit, (request.a, request.b, (request.placement.rot, request.placement.trans),
-                                       self.gap(unit)))
+                executor.submit(unit, self.task(unit))
             if not self.inflight:
                 return
-            if self.band is not None:
-                self.classify_ahead(executor)
-            unit, outcome = executor.next()
+            waiting = time.monotonic()
+            unit, (result, interval, seconds) = executor.next()
+            self.waited += time.monotonic() - waiting
             self.inflight.discard(unit)
+            self.measurer.mesh_seconds += seconds
+            self.measurer.mesh_bounds += interval is not None
             if unit in self.extra_of:
-                suspect, shift = self.extra_of.pop(unit)
-                suspect.reevaluated.append((shift, outcome))
+                self.reevaluated(unit, result, interval)
                 continue
-            if cache is not None and isinstance(outcome, tuple):
-                cache.store(keys[unit], outcome)
-            self.learn(unit, outcome)
-            if isinstance(outcome, Failure) and stop_on_failure:
-                return
+            if interval is not None:
+                self.interval[unit] = interval
+            if result is not None:
+                self.measurer.measured += 1
+                outcome = _outcome(result)
+                self.learn(unit, outcome, store=True)
+                if isinstance(outcome, Failure) and stop_on_failure:
+                    return
+            elif unit in self.stored:
+                self.learn(unit, self.stored.pop(unit))
+            else:
+                self.classify(unit)
             if self.prune:
                 for group in self.touched:
                     if group in self.floor:
                         self.prune_group(group)
             self.touched.clear()
 
-    def classify_ahead(self, executor: _InProcess | _Workers) -> None:
-        """Fast mode, while the workers measure: classify open requests in request order, the
-        parent's share of the work, until a measurement is ready."""
-        while self.ahead < len(self.requests) and not executor.ready():
-            index = self.ahead
-            self.ahead += 1
-            if self.outcomes[index] is None and self.unit_of[index] not in self.inflight:
-                self.clear(index)
+
+Task = tuple[str, str, Any, float, tuple]  # (a, b, b's placement rows, box gap, mode)
+# (the measurement, the kernel error's message or None when skipped; the mesh interval (lower, upper,
+# spread) or None; seconds spent on the interval)
+Result = tuple[Any, Any, float]
 
 
-Task = tuple[str, str, Any, float]  # (a, b, b's placement rows, box gap)
-
-
-def _measure(shapes: Mapping[str, Any], task: Task, threads: bool = False) -> tuple[float, float] | str:
-    """pose.interference on one task: (distance, volume), or the kernel error's message."""
-    a, b, b_rows, box_gap = task
+def _measure(shapes: Mapping[str, Any], a: str, b: str, placement: Any, box_gap: float,
+             threads: bool = False) -> tuple[float, float] | str:
+    """pose.interference of definition a and definition b at `placement` in a's frame: (distance,
+    volume), or the kernel error's message."""
     try:
-        return pose.interference(shapes[a], pose.placed(shapes[b], pose.Rigid(*b_rows)), box_gap=box_gap,
-                                 threads=threads)
+        return pose.interference(shapes[a], pose.placed(shapes[b], placement), box_gap=box_gap, threads=threads)
     except Exception as error:  # noqa: BLE001 - OCP raises Standard_Failure on broken input
         return str(error) or type(error).__name__
+
+
+def _interval(mesh: Any, a: str, b: str, placement: Any) -> tuple[tuple[float, float, float], float]:
+    started = time.perf_counter()
+    lower, upper = mesh.interval(a, b, placement)
+    return (lower, upper, mesh.spread(a, b)), time.perf_counter() - started
+
+
+def _decides(result: tuple[float, float], threshold: float) -> bool:
+    """Whether a measurement may decide a result: below a threshold, or in contact without overlap."""
+    return result[0] < threshold or (result[0] <= pose.OVERLAP_GATE_MM and result[1] <= pose.INTERFERENCE_MM3)
+
+
+def _run_task(shapes: Mapping[str, Any], mesh: Any, task: Task, threads: bool = False) -> Result:
+    """One task. Mode ("plain",) measures; ("decide", threshold) measures, then computes the mesh
+    interval where the measurement may decide (`_decides`); ("both",) does both; ("fast", cap,
+    limit, measure) computes the interval first and skips the measurement where its lower bound
+    exceeds the cap or the prune limit by SLACK_MM, or where `measure` is false."""
+    a, b, rows, box_gap, mode = task
+    placement = pose.Rigid(*rows)
+    interval, seconds = None, 0.0
+    if mesh is not None and mode[0] in ("fast", "both"):
+        interval, seconds = _interval(mesh, a, b, placement)
+        if mode[0] == "fast" and (not mode[3] or interval[0] - SLACK_MM > min(mode[1], mode[2])):
+            return None, interval, seconds
+    result = _measure(shapes, a, b, placement, box_gap, threads)
+    if mesh is not None and mode[0] == "decide" and isinstance(result, tuple) and _decides(result, mode[1]):
+        interval, seconds = _interval(mesh, a, b, placement)
+    return result, interval, seconds
 
 
 def _outcome(result: tuple[float, float] | str) -> tuple[float, float] | Failure:
@@ -510,22 +652,19 @@ def _outcome(result: tuple[float, float] | str) -> tuple[float, float] | Failure
 
 
 class _InProcess:
-    """Measures in this process, one unit at a time."""
+    """Runs tasks in this process, one at a time."""
 
     capacity = 1
 
-    def __init__(self, shapes: Mapping[str, Any], threads: bool) -> None:
-        self.shapes, self.threads = shapes, threads
-        self.done: deque[tuple[int, tuple[float, float] | Failure]] = deque()
+    def __init__(self, shapes: Mapping[str, Any], mesh: Any, threads: bool) -> None:
+        self.shapes, self.mesh, self.threads = shapes, mesh, threads
+        self.done: deque[tuple[int, Result]] = deque()
 
     def submit(self, unit: int, task: Task) -> None:
-        self.done.append((unit, _outcome(_measure(self.shapes, task, self.threads))))
+        self.done.append((unit, _run_task(self.shapes, self.mesh, task, self.threads)))
 
-    def next(self) -> tuple[int, tuple[float, float] | Failure]:
+    def next(self) -> tuple[int, Result]:
         return self.done.popleft()
-
-    def ready(self) -> bool:
-        return bool(self.done)
 
     def close(self) -> None:
         pass
@@ -540,9 +679,10 @@ if "cad_motion_pair_measure" not in sys.modules:
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
-sys.modules["cad_motion_pair_measure"]._start_worker(blobs, parent)
+sys.modules["cad_motion_pair_measure"]._start_worker(blobs, parent, mesh)
 """
 _WORKER_SHAPES: dict[str, Any] = {}
+_WORKER_MESH: Any = None  # this worker's mesh_bound.MeshBounds, built in its initializer
 # The watchdog of a worker where the kernel offers no parent-death signal: kqueue reports the exit
 # of the measuring process or of the worker, whichever is first; the first kills the worker.
 _WATCHDOG = """
@@ -564,7 +704,10 @@ if ended == parent:
 """
 
 
-def _start_worker(blobs: Mapping[str, bytes], parent: int) -> None:
+def _start_worker(blobs: Mapping[str, bytes], parent: int, mesh: tuple[float, float] | None) -> None:
+    """A worker's initializer: die with `parent`, rebuild the definitions and, with `mesh` (linear,
+    angular deflections), build the worker's own MeshBounds over them, meshing each on first use."""
+    global _WORKER_MESH
     from OCP.BinTools import BinTools
     from OCP.TopoDS import TopoDS_Shape
 
@@ -573,6 +716,10 @@ def _start_worker(blobs: Mapping[str, bytes], parent: int) -> None:
         shape = TopoDS_Shape()
         BinTools.Read_s(shape, io.BytesIO(blob))
         _WORKER_SHAPES[key] = shape
+    if mesh is not None:
+        name = "cad_motion_mesh_bound"
+        module = sys.modules.get(name) or _load(name, Path(__file__).with_name("mesh_bound.py"))
+        _WORKER_MESH = module.MeshBounds(_WORKER_SHAPES, *mesh)
 
 
 def die_with(parent: int) -> None:
@@ -609,16 +756,17 @@ def _alive(pid: int) -> bool:
     return True
 
 
-def _work(task: Task) -> tuple[float, float] | str:
-    return _measure(_WORKER_SHAPES, task)
+def _work(task: Task) -> Result:
+    return _run_task(_WORKER_SHAPES, _WORKER_MESH, task)
 
 
 class _Workers:
-    """Measures in `jobs` worker processes, keeping two units per worker in flight; the pool
-    starts with the first unit, so a run that measures nothing starts none."""
+    """Runs tasks in `jobs` worker processes, keeping two per worker in flight; the pool starts
+    with the first task, so a run that measures nothing starts none."""
 
-    def __init__(self, shapes: Mapping[str, Any], jobs: int, start_method: str) -> None:
-        self.shapes, self.jobs, self.start_method = shapes, jobs, start_method
+    def __init__(self, shapes: Mapping[str, Any], jobs: int, start_method: str,
+                 mesh: tuple[float, float] | None) -> None:
+        self.shapes, self.jobs, self.start_method, self.mesh = shapes, jobs, start_method, mesh
         self.capacity = 2 * jobs
         self.pool: concurrent.futures.ProcessPoolExecutor | None = None
         self.pending: dict[concurrent.futures.Future, int] = {}
@@ -629,21 +777,17 @@ class _Workers:
             self.pool = concurrent.futures.ProcessPoolExecutor(
                 self.jobs, mp_context=multiprocessing.get_context(self.start_method), initializer=exec,
                 initargs=(_WORKER_START, {"path": str(Path(__file__).resolve()), "blobs": blobs,
-                                          "parent": os.getpid()}))
+                                          "parent": os.getpid(), "mesh": self.mesh}))
         self.pending[self.pool.submit(_work, task)] = unit
 
-    def next(self) -> tuple[int, tuple[float, float] | Failure]:
+    def next(self) -> tuple[int, Result]:
         done, _ = concurrent.futures.wait(self.pending, return_when=concurrent.futures.FIRST_COMPLETED)
         future = done.pop()
         unit = self.pending.pop(future)
         try:
-            return unit, _outcome(future.result())
+            return unit, future.result()
         except concurrent.futures.process.BrokenProcessPool as error:
             raise pose.MotionError(f"a pair measuring worker process died: {error}") from error
-
-    def ready(self) -> bool:
-        """Whether a measurement is done, so `next` returns without waiting."""
-        return any(future.done() for future in self.pending)
 
     def close(self) -> None:
         if self.pool is not None:

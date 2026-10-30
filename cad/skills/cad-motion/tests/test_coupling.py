@@ -351,6 +351,17 @@ class CoupledChain(unittest.TestCase):
 
         self.assertEqual(calls(720), calls(360))
 
+    def test_a_tenth_degree_grid_repeats_every_crank_turn_bitwise(self) -> None:
+        """sweep.linspace's 0.1 degree grid over 720 degrees: every sample and the one 360 degrees on
+        reduce to the same angle, and place the crank train with the same bits."""
+        values = sweep.linspace(0.0, 720.0, 7201)
+        self.assertEqual(sum(coupling.canonical_degrees(values[k]) == coupling.canonical_degrees(values[k + 3600])
+                             for k in range(3601)), 3601)
+        pairs = self.crank_train()
+        for k in range(0, 3601, 97):
+            now, later = self.relative(values[k], pairs), self.relative(values[k + 3600], pairs)
+            self.assertEqual([self.bits(now[p]) for p in pairs], [self.bits(later[p]) for p in pairs], values[k])
+
     def test_a_chain_without_the_record_couplings_is_refused(self) -> None:
         data = v6_record.record()
         inventory = pose.assembly_data.normalize(data, {pn: f for pn, (_, f) in v6_record.PARTS.items()})

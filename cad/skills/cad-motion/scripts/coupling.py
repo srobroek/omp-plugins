@@ -64,16 +64,23 @@ class CouplingError(ValueError):
         self.problems = list(problems)
 
 
-def canonical_degrees(angle: float) -> float:
-    """`angle` reduced to (-180, 180] exactly: one representative per rotation, -0.0 read as 0.0.
+ANGLE_SNAP_DIGITS = 9  # canonical_degrees: decimals a reduced angle keeps
 
-    IEEE remainder is exact, so angles a whole number of turns apart, each exactly representable,
-    reduce to the very same double, and every trigonometric function of them returns the same bits:
-    a crank at q and q + 360 places its 360 degree periodic train identically, which an exact
-    measurement key then finds. As cosine is even and sine odd in every libm we use, a slider-crank
-    at -theta also displaces its piston by the bits it does at theta.
+
+def canonical_degrees(angle: float) -> float:
+    """`angle` reduced to (-180, 180] and snapped to ANGLE_SNAP_DIGITS decimals: one representative
+    per rotation, -0.0 read as 0.0.
+
+    IEEE remainder is exact, but a sample angle q + 360 built as low + span * k / (n - 1) is not
+    exactly q's plus 360 (a 0.1 degree grid over 720 degrees leaves 1233 of 3601 pairs a few ulps
+    apart). Snapping the reduced angle to 1e-9 degree (a crankpin moves 2e-10 mm per 1e-9 degree at
+    13 mm) maps angles a whole number of turns apart to the very same double, so every
+    trigonometric function of them returns the same bits: a crank at q and q + 360 places its 360
+    degree periodic train identically, which an exact measurement key then finds. As cosine is even
+    and sine odd in every libm we use, a slider-crank at -theta also displaces its piston by the
+    bits it does at theta.
     """
-    reduced = math.remainder(angle, 360.0) + 0.0
+    reduced = round(math.remainder(angle, 360.0), ANGLE_SNAP_DIGITS) + 0.0
     return 180.0 if reduced == -180.0 else reduced
 
 

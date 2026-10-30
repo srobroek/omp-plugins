@@ -59,7 +59,7 @@ Verify coupled motion with `pose.py` and `sweep.py`.
 2. Sweep: `uv run --script skill://cad-flow/scripts/run.py cad-motion/scripts/sweep.py --hw hw --version vN
    [--case ID] [--replace] [--steps 19] [--grid 3] [--min-clearance MM] [--pair-clearance REF:REF=MM]
    [--include-pair REF:REF] [--end-effector REF] [--jobs 1|N|auto] [--cache DIR | --no-cache]
-   [--exact | --mesh-band 2 [--spot-check]]`
+   [--exact | --mesh-band 2 [--no-spot-check]]`
    → immutable `hw/motion/vN/<case>/` with `worst.step`, `worst.step.json`, and `result.json`; also reports
    collisions, clearances, `reach_envelope`, and `timings_s`. With scratch geometry, `--worst-step` must be a
    new path under `.cad-work/`.
@@ -67,8 +67,9 @@ Verify coupled motion with `pose.py` and `sweep.py`.
    pairs in N worker processes (forkserver; spawn on macOS), each about 110 MB; `auto` is the CPU
    count, at most 8. Workers pay off for many small parts and on a busy host. The result is the
    same either way. Workers die with the sweep, mid-measurement too. Stop a sweep by its process
-   group (Ctrl-C, or `kill -TERM -- -PGID` with PGID from `ps -o pgid= -p PID`), and before a long
-   sweep check that no earlier one still runs: `pgrep -fl multiprocessing`.
+   group (Ctrl-C, or `kill -TERM -- -PGID` with PGID from `ps -o pgid= -p PID`). A sweep records
+   its process group (`hw/motion/vN/.sweep-<case>.json`, or `WORST.step.sweep.json`) and refuses to
+   start while a recorded group still runs, printing the `kill` command that stops it.
    Fast mode is the default; see [Fast sweeps](#fast-sweeps). `--exact` measures every request that
    could set a pair's minimum.
    Measurements persist in the pair cache, `$XDG_CACHE_HOME/cad-motion/pairs.sqlite` (else
@@ -113,12 +114,14 @@ Exit codes for all scripts:
 A sweep measures a pair-pose with pose.py's `interference`, the one rule; fast mode only decides
 which pair-poses need it (pair_measure.py, mesh_bound.py).
 
-- Repeats: a revolute angle and a slider-crank angle are reduced exactly to (-180, 180] before
-  their sine and cosine, so a crank at q and q + 360 places its 360 degree train with the very same
-  bits, and a piston at -theta from TDC as at +theta. The exact measurement key then measures each
-  once, so a 720 degree four-stroke sweep measures its crank train over one turn. The key stays
-  exact: a reused value is the one a fresh measurement gives. A gear at a non-integer ratio does not
-  repeat within the sweep and gets no reuse; nothing is rounded to make it repeat.
+- Repeats: a revolute angle and a slider-crank angle are reduced to (-180, 180] and snapped to
+  1e-9 degree before their sine and cosine, so a crank at q and q + 360 places its 360 degree train
+  with the very same bits, on any grid (a 0.1 degree linspace grid included), and a piston at
+  -theta from TDC as at +theta. The exact measurement key then measures each once, so a 720 degree
+  four-stroke sweep measures its crank train over one turn. The key stays exact: a reused value is
+  the one a fresh measurement gives. A gear at a non-integer ratio does not repeat within the sweep
+  and gets no reuse. The deviation bound holds on freeform faces too: mesh_probe.py measures a
+  B-spline loft and a filleted block at 0.82 x the deflection, under the 2 x it allows.
 - Clearing: a request whose own lower bound exceeds 1e-6 mm and every threshold of its pair by
   more than `--mesh-band` (default 2 mm) is not measured (`cleared_box`, `cleared_mesh` in
   `timings_s`). The bound is the posed box gap, else the mesh bound: each part tessellated once
@@ -135,15 +138,22 @@ which pair-poses need it (pair_measure.py, mesh_bound.py).
   [lower, upper] (upper null when only the box gap is known). Collisions, findings, verdicts,
   `pair_clearance` rows within the band, the worst case whenever its margin is within the band, and
   every `method: "exact"` row equal `--exact`'s; bounded rows do not, by design.
-- Suspects: a measurement outside its own bounds (the kernel or a bound is wrong; BRepExtrema has
-  read 0 mm for parts 8 mm apart) goes to `suspect_measurements` with two re-measurements 0.01 mm
-  either way and fails the sweep until dispositioned; it is never dropped and never trusted silently.
-  `--exact` runs no such check.
-- `--spot-check` measures, per pair with a mesh-cleared request, the one of the smallest bound
-  exactly: inside its bounds, without overlap, or the sweep fails (`spot_check`).
-- Without python-fcl (no wheel for the platform), the box gap alone clears and `broad_phase.mesh`
-  says why; `--exact` never imports numpy or python-fcl. cad-model `check` stays exact: it reports
-  every pair's distance.
+- Suspects: every measurement that may decide a result is checked against the mesh, in fast mode
+  each one, with `--exact` one below a threshold or in contact without overlap. Its distance is
+  suspect below the box gap, or more than max(10 x the deflection, the mesh spread) from the mesh
+  distance (BRepExtrema has read 0 mm for parts 8 mm apart). A suspect value answers nothing: it is
+  re-measured with every independent joint +-0.1 and with the two parts swapped. If each lies in
+  its mesh interval and the bounds clear the pair's thresholds, the pose reads as its bounds,
+  `method: "mesh (exact suspect)"`; otherwise the sweep fails. Both are listed in
+  `suspect_measurements` with their re-measurements: a suspect never passes or fails silently.
+- Spot check, on by default in fast mode (`--no-spot-check` skips it): per pair with a
+  mesh-cleared request, the one of the smallest bound is measured exactly, about one exact
+  evaluation per such pair: inside its bounds, without overlap, or the sweep fails (`spot_check`).
+- Mesh intervals are computed with the measurements, in each worker by its own meshes
+  (`mesh_s`; `parent_s` is the sweep process's own time).
+- Without python-fcl (no wheel for the platform), the box gap alone clears, nothing is checked,
+  and `broad_phase.mesh` says why. cad-model `check` stays exact and unchecked: it reports every
+  pair's distance.
 
 ## Motion render
 

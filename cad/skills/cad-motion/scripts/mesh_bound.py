@@ -120,6 +120,11 @@ class MeshBounds:
         return self._distance(mesh_a, mesh_b, np.asarray(placement.rot, dtype=float),
                               np.asarray(placement.trans, dtype=float))
 
+    def spread(self, a: str, b: str) -> float:
+        """Both meshes' deviations, the interval's half width around the mesh distance; 0 without both meshes."""
+        mesh_a, mesh_b = self.mesh(a), self.mesh(b)
+        return 0.0 if mesh_a is None or mesh_b is None else mesh_a.deviation + mesh_b.deviation
+
     @staticmethod
     def _distance(mesh_a: _Mesh, mesh_b: _Mesh, rot: Any, trans: Any) -> float:
         mesh_b.moving.setTransform(fcl.Transform(rot, trans))

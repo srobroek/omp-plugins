@@ -167,6 +167,52 @@ def case(shapes: dict, placement) -> dict:
     return {"lower": lower, "upper": upper, "distance": distance, "volume": volume}
 
 
+def freeform_shapes(block) -> dict:
+    """A B-spline loft through a circle, an ellipse and a smaller circle, and the 20 mm block with
+    every edge filleted at 3 mm: the faces whose deviation the planar 4/3 argument does not cover."""
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge, BRepBuilderAPI_MakeWire
+    from OCP.BRepFilletAPI import BRepFilletAPI_MakeFillet
+    from OCP.BRepOffsetAPI import BRepOffsetAPI_ThruSections
+    from OCP.gp import gp_Ax2, gp_Circ, gp_Dir, gp_Elips, gp_Pnt
+    from OCP.TopAbs import TopAbs_EDGE
+    from OCP.TopExp import TopExp_Explorer
+    from OCP.TopoDS import TopoDS
+
+    loft = BRepOffsetAPI_ThruSections(True, False)
+    for curve in (gp_Circ(gp_Ax2(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)), 6.0),
+                  gp_Elips(gp_Ax2(gp_Pnt(1, 0, 9), gp_Dir(0, 0, 1)), 9.0, 4.0),
+                  gp_Circ(gp_Ax2(gp_Pnt(0, 2, 18), gp_Dir(0, 0, 1)), 3.0)):
+        loft.AddWire(BRepBuilderAPI_MakeWire(BRepBuilderAPI_MakeEdge(curve).Edge()).Wire())
+    loft.Build()
+    fillet = BRepFilletAPI_MakeFillet(block)
+    as_edge = getattr(TopoDS, "Edge_s", None) or TopoDS.Edge
+    explorer = TopExp_Explorer(block, TopAbs_EDGE)
+    while explorer.More():
+        fillet.Add(3.0, as_edge(explorer.Current()))
+        explorer.Next()
+    fillet.Build()
+    return {"loft": loft.Shape(), "fillet": fillet.Shape()}
+
+
+def face_types(shapes: dict) -> dict:
+    """Face count per surface type over `shapes`."""
+    from OCP.BRepAdaptor import BRepAdaptor_Surface
+    from OCP.TopAbs import TopAbs_FACE
+    from OCP.TopExp import TopExp_Explorer
+    from OCP.TopoDS import TopoDS
+
+    as_face = getattr(TopoDS, "Face_s", None) or TopoDS.Face
+    counts: dict = {}
+    for shape in shapes.values():
+        explorer = TopExp_Explorer(shape, TopAbs_FACE)
+        while explorer.More():
+            kind = str(BRepAdaptor_Surface(as_face(explorer.Current())).GetType()).rsplit("_", 1)[-1]
+            counts[kind] = counts.get(kind, 0) + 1
+            explorer.Next()
+    return counts
+
+
+
 def made_shapes() -> dict:
     from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut
     from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox, BRepPrimAPI_MakeCylinder
@@ -260,6 +306,10 @@ def main(root: Path) -> dict:
     with pose.stdout_to_stderr():
         made = made_shapes()
         deviation(report["deviation"], "made", made)
+        freeform = freeform_shapes(made["block"])
+        report["freeform"] = {"definitions": 0, "samples": 0, "max_ratio": 0.0, "violations": []}
+        deviation(report["freeform"], "freeform", freeform)
+        report["freeform"]["faces"] = face_types(freeform)
         for name in SETS:
             shapes = {pn: part.shape for pn, part in pose.load_definitions(root / name, root / name).items()}
             deviation(report["deviation"], name, shapes)

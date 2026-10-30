@@ -478,7 +478,7 @@ class BroadPhaseTests(unittest.TestCase):
         requests = [measure.Request("A", "B", rigid(rigid.identity().rot, (x, 0.0, 0.0)), thresholds=thresholds,
                                     group="pair") for x in offsets]
         distance = kernel or (lambda x: max(0.0, abs(x) - 1.0))
-        with mock.patch.object(measure.pose, "placed", side_effect=lambda shape, at: at.trans[0] if shape == "b" else shape), \
+        with mock.patch.object(measure.pose, "placed", side_effect=lambda shape, at: at.trans[0]), \
                 mock.patch.object(measure.pose, "interference",
                                   side_effect=lambda a, x, box_gap=0.0, threads=False: (distance(x), 0.0)) as calls:
             return measurer.measure(requests, prune=prune), calls.call_count, measurer
@@ -522,7 +522,9 @@ class BroadPhaseTests(unittest.TestCase):
         self.assertEqual((outcomes, calls), ([(2.0, 0.0), (2.0, 0.0), (above - 1.0, 0.0), (2.0, 0.0)], 2))
 
     class Mesh:
-        """mesh_bound.MeshBounds' stand-in: the cubes' distance -+ 0.05 mm."""
+        """mesh_bound.MeshBounds' stand-in: the cubes' distance -+ 0.05 mm, deflection 0.02 mm."""
+
+        linear, angular = 0.02, 0.2
 
         def __init__(self) -> None:
             self.calls = 0
@@ -531,6 +533,10 @@ class BroadPhaseTests(unittest.TestCase):
             self.calls += 1
             distance = max(0.0, abs(placement.trans[0]) - 1.0)
             return distance - 0.05, distance + 0.05
+
+        @staticmethod
+        def spread(a: str, b: str) -> float:
+            return 0.05
 
     def test_fast_mode_clears_requests_proved_beyond_their_thresholds_plus_the_band(self) -> None:
         """Band 2 over a 1 mm threshold: distances 5 and 4 are cleared on their box gaps, 3 is within
@@ -561,28 +567,45 @@ class BroadPhaseTests(unittest.TestCase):
                 self.assertEqual(one, other)  # a measured request may be pruned in the other order
         self.assertEqual(sum(isinstance(outcome, cleared) for outcome in forward), 5)  # all but distances 2 and 1.5
 
-    def test_a_measurement_outside_its_own_bounds_is_a_suspect_and_is_reevaluated(self) -> None:
-        """The kernel reads 0 where the cubes are 3 mm apart, below their 3 mm box gap: the value still
-        answers the request, and two re-measurements 0.01 mm either way read 3 -+ 0.01 / sqrt(3)."""
-        outcomes, calls, measurer = self.run_measurer(
-            [4.0], thresholds=(2.5,), band=1.0, mesh=self.Mesh(),
-            kernel=lambda x: 0.0 if x == 4.0 else max(0.0, abs(x) - 1.0))
-        self.assertEqual((outcomes, calls, measurer.reevaluations), ([(0.0, 0.0)], 3, 2))
+    def test_a_mesh_bound_inside_the_band_does_not_prune(self) -> None:
+        """Band 1, boxes 1 mm larger: the request at distance 0.8 has the mesh bound 0.75, above the
+        measured minimum 0.5 but inside the band, so it is measured, not pruned."""
+        outcomes, calls, _ = self.run_measurer([1.5, 1.8], band=1.0, mesh=self.Mesh(), box=1.0)
+        self.assertEqual((outcomes, calls), ([(0.5, 0.0), (0.8, 0.0)], 2))
+
+    def degenerate(self, kernel, band: float | None = 1.0):
+        """One request at distance 3 (box gap 3, mesh interval [2.95, 3.05]), threshold 2.5, whose
+        kernel `kernel` reads at x = 4."""
+        mesh = self.Mesh()
+        outcomes, calls, measurer = self.run_measurer([4.0], thresholds=(2.5,), band=band, mesh=mesh, kernel=kernel)
         (suspect,) = measurer.suspects
         self.assertEqual((suspect.requests, suspect.distance, suspect.lower, suspect.upper), ((0,), 0.0, 3.0, 3.05))
-        shifts = sorted(suspect.reevaluated, key=lambda item: item[0])
-        self.assertEqual([shift for shift, _ in shifts], [-0.01, 0.01])
-        for shift, (distance, volume) in shifts:
-            self.assertAlmostEqual(distance, 3.0 + shift / math.sqrt(3.0), places=12)
-            self.assertEqual(volume, 0.0)
+        self.assertEqual([label for label, _, _ in sorted(suspect.reevaluated)], ["+0.01 mm", "-0.01 mm", "swapped"])
+        self.assertEqual((calls, measurer.measured, measurer.reevaluations, mesh.calls), (4, 1, 3, 3))
+        return outcomes, suspect
 
-    def test_without_a_band_nothing_is_cleared_or_checked_mesh_or_not(self) -> None:
-        """Exact mode: the degenerate 0 at distance 3 is the group minimum, unchecked, and the mesh is never asked."""
+    def test_a_degenerate_zero_is_a_suspect_resolved_by_its_reevaluations_and_feeds_no_result(self) -> None:
+        """The kernel reads 0 at x = 4 only: the re-measurements 0.01 mm either way and with the parts
+        swapped agree with their mesh intervals, so the request reads as the mesh bounds, not 0."""
+        for band in (1.0, None):  # fast mode, and exact mode, where a reading below a threshold is checked
+            with self.subTest(band=band):
+                outcomes, suspect = self.degenerate(lambda x: 0.0 if x == 4.0 else max(0.0, abs(x) - 1.0), band)
+                self.assertEqual(outcomes, [sweep.pair_measure.Cleared(3.0, 3.05, "mesh (exact suspect)")])
+                self.assertTrue(suspect.resolved)
+                for label, (distance, volume), bounds in suspect.reevaluated:
+                    if label != "swapped":
+                        self.assertTrue(bounds[0] <= distance <= bounds[1], label)
+
+    def test_a_suspect_its_reevaluations_do_not_resolve_stays_unresolved(self) -> None:
+        outcomes, suspect = self.degenerate(lambda x: 0.0)
+        self.assertEqual((outcomes, suspect.resolved), ([sweep.pair_measure.Cleared(3.0, 3.05, "suspect")], False))
+
+    def test_exact_mode_asks_the_mesh_only_where_a_value_decides(self) -> None:
+        """No threshold and no contact: neither measured distance can decide, so no interval is computed."""
         mesh = self.Mesh()
-        outcomes, calls, measurer = self.run_measurer([6.0, 4.0], mesh=mesh,
-                                                      kernel=lambda x: 0.0 if x == 4.0 else max(0.0, abs(x) - 1.0))
+        outcomes, calls, measurer = self.run_measurer([6.0, 4.0], mesh=mesh)
         self.assertEqual((outcomes, calls, mesh.calls, measurer.cleared, measurer.suspects),
-                         ([sweep.pair_measure.Pruned(1), (0.0, 0.0)], 1, 0, {"box": 0, "mesh": 0}, []))
+                         ([sweep.pair_measure.Pruned(1), (3.0, 0.0)], 1, 0, {"box": 0, "mesh": 0}, []))
 
     def test_a_stopped_sweep_reduces_only_samples_whose_pruned_requests_are_proved_inside_them(self) -> None:
         """One pair, one request per sample: sample 1 is pruned on sample 3's distance."""
@@ -1200,6 +1223,11 @@ class StepTests(unittest.TestCase):
         self.assertTrue(bracket["all_mesh"] and bracket["brackets"], bracket)
         self.assertLess(bracket["box_gap_minimum"], bracket["band"])  # the box gap alone clears none of it
         self.assertLess(bracket["outside_by"], 0.1, bracket)
+        freeform = report["freeform"]
+        self.assertEqual(freeform["violations"], [])
+        self.assertGreater(freeform["faces"].get("BSplineSurface", 0), 0, freeform)
+        self.assertGreater(freeform["samples"], 1000, freeform)
+        self.assertLess(freeform["max_ratio"], 2.0, freeform)  # mesh_bound.DEVIATION_FACTOR x the deflection
 
     def twins(self, assembly: str) -> Path:
         """A record over the twins fixture: TST-0201 assembly_zero, TST-0202 part_local."""
@@ -1407,6 +1435,25 @@ class StepTests(unittest.TestCase):
         (version / "manifest.json").write_text(json.dumps({"label": "v1", "files": files}), encoding="utf-8")
         (hw / "versions" / "latest.json").write_text(json.dumps({"label": "v1"}), encoding="utf-8")
         return hw, version
+
+    def test_a_sweep_refuses_to_start_while_a_recorded_sweep_group_still_runs(self) -> None:
+        hw, _ = self.sealed_planar_version()
+        holder = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], start_new_session=True)
+        self.addCleanup(holder.wait)
+        self.addCleanup(holder.kill)
+        lock = hw / "motion" / "v1" / ".sweep-locked.json"
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        lock.write_text(json.dumps({"pgid": holder.pid, "pid": holder.pid}), encoding="utf-8")
+        proc, _ = self.run_script("sweep.py", "--hw", str(hw), "--version", "v1", "--case", "locked", "--steps", "3",
+                                  "--grid", "0")
+        self.assertEqual(proc.returncode, 2, proc.stderr[-2000:])
+        self.assertIn(f"kill -TERM -- -{holder.pid}", proc.stderr)
+        holder.kill()
+        holder.wait()
+        proc, _ = self.run_script("sweep.py", "--hw", str(hw), "--version", "v1", "--case", "locked", "--steps", "3",
+                                  "--grid", "0")
+        self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+        self.assertFalse(lock.exists())  # a finished sweep removes its record
 
     def test_versioned_sweep_reuses_and_replaces_without_changing_old_bundle(self) -> None:
         hw, version = self.sealed_planar_version()
@@ -1656,8 +1703,7 @@ class StepTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
         runs = []
         for _ in range(2):
-            hw, proc, result = self.v6_sweep(None, "minimum_clearance", "--mesh-band", "0.5", "--cache", str(cache),
-                                             "--spot-check")
+            hw, proc, result = self.v6_sweep(None, "minimum_clearance", "--mesh-band", "0.5", "--cache", str(cache))
             self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
             runs.append((hw, result))
         self.assert_same_sweeps(runs)
@@ -1666,8 +1712,8 @@ class StepTests(unittest.TestCase):
                          (0, cold["timings_s"]["pair_evaluations"] + cold["spot_check"]["checked"]))
         self.assertLess(cold["timings_s"]["pair_evaluations"], exact["timings_s"]["pair_evaluations"] // 10)
         self.assertGreater(cold["timings_s"]["cleared_mesh"], 0)
-        self.assertEqual((exact["broad_phase"], cold["broad_phase"]["mode"], cold["broad_phase"]["band_mm"]),
-                         ({"mode": "exact"}, "fast", 0.5))
+        self.assertEqual((exact["broad_phase"]["mode"], cold["broad_phase"]["mode"], cold["broad_phase"]["band_mm"]),
+                         ("exact", "fast", 0.5))
         for key in ("status", "collisions", "limit_findings", "clearance_findings", "suspect_measurements",
                     "pair_clearance"):  # every requirement's minimum lies within the band
             self.assertEqual(cold[key], exact[key], key)

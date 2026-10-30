@@ -11,7 +11,7 @@ Usage:
         [--steps 19] [--grid 3] [--end-effector REF] [--include-pair REF:REF ...]
         [--min-clearance 0] [--pair-clearance REF:REF=MM ...] [--volume-tol 0.001]
         [--max-poses 5000] [--time-limit 600] [--jobs 1|N|auto] [--cache DIR | --no-cache]
-        [--exact | --mesh-band 2 [--spot-check]]
+        [--exact | --mesh-band 2 [--no-spot-check]]
         [--worst-criterion max_horizontal_reach|minimum_clearance|maximum_interference]
 
 Inputs and kinematics are pose.py's (same options, same occurrence chain): the
@@ -71,21 +71,31 @@ lower bound and `bound_mm` [lower, upper] (upper null when only the box gap is
 known), where an exact pair reads `method` "exact". So collisions, findings,
 every `exact` row, the worst case whenever its margin is within the band, and
 every verdict are identical to `--exact`'s; a bounded row is not, by design.
-Each measurement is checked against its own bounds: one outside them (the
-kernel, or a bound, is wrong; BRepExtrema has returned 0 for parts 8 mm apart)
-is listed in `suspect_measurements` with the bounds and two re-measurements
-with b moved 0.01 mm either way, and fails the sweep until dispositioned: a
-suspect never passes or fails silently. Without python-fcl the box gap alone
-clears (`broad_phase.mesh` says why). After the sweep, `--spot-check` measures every
-mesh-bounded pair exactly at its reported sample (`spot_check`: each check,
-and the largest |mesh estimate - exact|); one outside its bounds, or with
+Every measurement that may decide a result is checked against the mesh: in fast
+mode each one, with `--exact` one below a threshold or in contact without
+overlap. Its distance is suspect below the box gap, or more than max(10 x the
+deflection, the mesh spread) from the mesh distance (below it only where the
+mesh proves a lower bound); BRepExtrema has returned 0 for parts 8 mm apart. A
+suspect value answers nothing: it is re-measured with every independent joint
+moved +-0.1 and with the two parts swapped, and listed in
+`suspect_measurements`. If each re-measurement lies in its mesh interval and
+the bounds clear the pair's thresholds, that pose reads as its bounds, `method`
+"mesh (exact suspect)"; otherwise the sweep fails: a suspect never passes or
+fails silently. Without python-fcl the box gap alone clears and nothing is
+checked (`broad_phase.mesh` says why). After the sweep, unless
+`--no-spot-check`, each pair with a mesh-cleared request has its closest one
+measured exactly (`spot_check`: each check, and the largest |mesh estimate -
+exact|); one outside its bounds, or with
 overlap, fails the sweep. The counters in `timings_s` (`cleared_box`,
 `cleared_mesh`, `mesh_bounds`, `mesh_s`, `reevaluations`) let a fast and an
 exact run diff.
 
 Workers die with the sweep, inside a measurement too (pair_measure.die_with).
 Stop a sweep by its process group, so no worker outlives it: Ctrl-C in its
-terminal, or `kill -TERM -- -PGID` with PGID from `ps -o pgid= -p PID`.
+terminal, or `kill -TERM -- -PGID` with PGID from `ps -o pgid= -p PID`. A
+sweep records its process group beside its output (hw/motion/vN/.sweep-CASE.json,
+or WORST.step.sweep.json) and refuses to start while a recorded group still
+runs, printing the command that stops it.
 
 Checks: a collision is an overlap volume above `--volume-tol` mm^3 (default
 pose.py's INTERFERENCE_MM3, 1e-3) on a pair whose overlap hw/interfaces.yaml
@@ -156,11 +166,13 @@ infrastructure error, or an incomplete sweep.
 from __future__ import annotations
 
 import argparse
+import atexit
 import hashlib
 import importlib.util
 import itertools
 import json
 import math
+import os
 import shutil
 import sys
 import time
@@ -196,6 +208,53 @@ CRITERIA = {
 MAX_LISTED = 50
 EVIDENCE_SCHEMA = 1
 DEFAULT_BAND_MM = 2.0  # fast mode: how far beyond its thresholds a request's proved bound must lie
+REEVALUATE_STEP = 0.1  # deg or mm: how far a suspect's re-evaluations move every independent joint
+
+
+def claim_sweep(path: Path) -> None:
+    """Record this sweep's process group at `path`, removed at exit; refuse while the group of a
+    recorded sweep still runs, as a stopped sweep's stray workers would keep it."""
+    if path.is_file():
+        try:
+            recorded = json.loads(path.read_text(encoding="utf-8"))
+            group, pid = int(recorded["pgid"]), int(recorded["pid"])
+        except (OSError, ValueError, KeyError, TypeError):
+            group = pid = None
+        if group is not None and group_alive(group, pid):
+            raise pose.MotionError(f"a sweep recorded in {path} still runs in process group {group}; stop it with "
+                                   f"`kill -TERM -- -{group}`, or delete {path} if that group runs no sweep")
+    if not hasattr(os, "getpgrp"):
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    record = {"pgid": os.getpgrp(), "pid": os.getpid()}
+    path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+
+    def release() -> None:
+        try:
+            if json.loads(path.read_text(encoding="utf-8")) == record:
+                path.unlink()
+        except (OSError, ValueError):
+            pass
+
+    atexit.register(release)
+
+
+def group_alive(group: int, pid: int) -> bool:
+    """Whether process group `group` still runs; for this process's own group, whether `pid` does."""
+    if not hasattr(os, "killpg"):
+        return False
+    try:
+        if group == os.getpgrp():
+            if pid == os.getpid():
+                return False
+            os.kill(pid, 0)
+        else:
+            os.killpg(group, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
 
 
 def mesh_bounds(shapes: dict[str, Any]) -> tuple[Any, str]:
@@ -488,7 +547,8 @@ def sweep(chain: Any, geometry: Geometry, measurer: Any, samples: list[Sample], 
     `deadline`, and reduce the samples measured in full: (the reduction, the plan). `fitted` pairs
     are declared as a fit or insert, which `required` (--min-clearance) does not bind."""
     planned = plan(chain, samples, pairs, fitted, requirements, required)
-    outcomes = measurer.measure(planned.requests, deadline, stop_on_failure=True, prune=True)
+    outcomes = measurer.measure(planned.requests, deadline, stop_on_failure=True, prune=True,
+                                neighbours=neighbours(chain, planned))
     state = reduce(chain, geometry, planned, outcomes, measured_prefix(chain, planned, outcomes), allowed,
                    requirements, effector, reference, volume_tol, criterion)
     return state, planned
@@ -500,22 +560,44 @@ def request_places(plan: Plan) -> dict[int, tuple[Sample, tuple[str, str]]]:
             for k, pair in enumerate(plan.measured)}
 
 
+def neighbours(chain: Any, plan: Plan) -> Any:
+    """pair_measure's re-evaluation placements of a suspect request: its pair at its sample with
+    every independent joint moved +-REEVALUATE_STEP (deg or mm), couplings derived."""
+    places = request_places(plan)
+
+    def shifted(index: int) -> list[tuple[str, Any]]:
+        sample, pair = places[index]
+        moved = []
+        for step in (REEVALUATE_STEP, -REEVALUATE_STEP):
+            values = chain.complete({jid: value + step for jid, value in sample.settings.items()})
+            moved.append((f"independent {step:+g}", chain.relative_transforms(values, [pair])[pair]))
+        return moved
+
+    return shifted
+
+
 def suspect_report(chain: Any, plan: Plan, suspects: list[Any]) -> list[dict[str, Any]]:
-    """Each measurement outside its own bounds (pair_measure.Suspect): the kernel's value, the
-    bounds, the requests it answered, and its re-evaluations."""
+    """Each measurement its own bounds contradict (pair_measure.Suspect): the kernel's value, which
+    answers nothing, the bounds, the requests it was for, its re-evaluations, and whether they
+    resolved it (its requests then read as `mesh (exact suspect)` bounds); an unresolved one fails."""
     places = request_places(plan)
     rows = []
     for suspect in sorted(suspects, key=lambda suspect: suspect.requests[0]):
         sample, (a, b) = places[suspect.requests[0]]
+        reevaluated = []
+        for label, outcome, interval in suspect.reevaluated:
+            row = {"at": label, **({"error": outcome.message} if isinstance(outcome, pair_measure.Failure)
+                                   else {"distance_mm": outcome[0], "overlap_mm3": outcome[1]})}
+            if interval is not None:
+                row["bound_mm"] = [interval[0], None if math.isinf(interval[1]) else interval[1]]
+            reevaluated.append(row)
         rows.append({
             "pair": [chain.ref(a), chain.ref(b)], "sample": sample.index, "independent_pose": rounded(sample.settings),
             "distance_mm": suspect.distance, "overlap_mm3": suspect.volume,
             "bound_mm": [suspect.lower, None if math.isinf(suspect.upper) else suspect.upper],
             "requests": [{"pair": [chain.ref(places[i][1][0]), chain.ref(places[i][1][1])], "sample": places[i][0].index}
                          for i in suspect.requests],
-            "reevaluated": [{"shift_mm": shift, "error": outcome.message} if isinstance(outcome, pair_measure.Failure)
-                            else {"shift_mm": shift, "distance_mm": outcome[0], "overlap_mm3": outcome[1]}
-                            for shift, outcome in sorted(suspect.reevaluated, key=lambda item: item[0])],
+            "reevaluated": sorted(reevaluated, key=lambda row: row["at"]), "resolved": bool(suspect.resolved),
         })
     return rows
 
@@ -795,15 +877,15 @@ def main(argv: list[str] | None = None) -> int:
     filtering.add_argument("--mesh-band", type=float, default=DEFAULT_BAND_MM, metavar="MM",
                            help=f"fast mode: leave unmeasured a request whose proved lower bound is more than MM "
                                 f"beyond 1e-6 mm and its pair's thresholds (default {DEFAULT_BAND_MM})")
-    parser.add_argument("--spot-check", action="store_true",
-                        help="fast mode: measure each pair's closest mesh-cleared request exactly, after the sweep")
+    parser.add_argument("--no-spot-check", action="store_true",
+                        help="fast mode: skip measuring each pair's closest mesh-cleared request exactly after the sweep")
     parser.add_argument("--worst-step", type=Path, help="STEP path for scratch; versioned sweeps publish to hw/motion")
     args = parser.parse_args(argv)
     if args.steps < 2 or args.grid == 1 or args.grid < 0:
         print("sweep: --steps must be >= 2, and --grid 0 or >= 2", file=sys.stderr)
         return 2
-    if not args.mesh_band >= 0 or (args.exact and args.spot_check):
-        print("sweep: --mesh-band must be >= 0, and --spot-check needs fast mode (no --exact)", file=sys.stderr)
+    if not args.mesh_band > 0:
+        print("sweep: --mesh-band must be > 0", file=sys.stderr)
         return 2
     started = time.monotonic()
     try:
@@ -820,7 +902,7 @@ def main(argv: list[str] | None = None) -> int:
                                   "volume_tol": args.volume_tol, "max_poses": args.max_poses,
                                   "time_limit": args.time_limit, "jobs": args.jobs, "no_cache": args.no_cache,
                                   "exact": args.exact, "mesh_band": None if args.exact else args.mesh_band,
-                                  "spot_check": args.spot_check},
+                                  "spot_check": not (args.exact or args.no_spot_check)},
                       "attach": list(args.attach),
                       "inputs_sha256": pose.input_sha256(version_dir)}
             reused = pose.LAYOUT.reusable(args.hw, "bundle.motion", {"V": version, "S": args.case}, recipe,
@@ -836,6 +918,9 @@ def main(argv: list[str] | None = None) -> int:
             args.worst_step = pose.LAYOUT.scratch_path(args.hw, args.worst_step, "--worst-step")
             if args.worst_step.exists() or evidence_path_for(args.worst_step).exists():
                 raise pose.MotionError(f"--worst-step or its evidence already exists; refusing to overwrite: {args.worst_step}")
+        lock = (pose.LAYOUT.bundle_dir(args.hw, "motion", version, args.case).parent / f".sweep-{args.case}.json"
+                if version else args.worst_step.with_name(args.worst_step.name + ".sweep.json"))
+        claim_sweep(lock)
         assembly, chain, definitions = pose.load_inputs(args)
         if not chain.independent:
             raise pose.MotionError("the chain has no independent movable joint to sweep")
@@ -853,10 +938,9 @@ def main(argv: list[str] | None = None) -> int:
         geometry = Geometry(chain, used)
         cache = None if args.no_cache else pair_measure.PairCache(args.cache or pair_measure.default_cache_dir())
         shapes = {pn: part.shape for pn, part in used.items()}
-        mesh, broad_phase = None, {"mode": "exact"}
-        if not args.exact:
-            broad_phase = {"mode": "fast", "band_mm": args.mesh_band, "mesh": None}
-            mesh, broad_phase["mesh"] = mesh_bounds(shapes)
+        mesh, description = mesh_bounds(shapes)
+        broad_phase = ({"mode": "exact", "mesh": description} if args.exact
+                       else {"mode": "fast", "band_mm": args.mesh_band, "mesh": description})
         measurer = pair_measure.PairMeasurer(shapes, jobs=args.jobs, cache=cache,
                                              band=None if args.exact else args.mesh_band, mesh=mesh)
         loaded = time.monotonic()
@@ -872,9 +956,10 @@ def main(argv: list[str] | None = None) -> int:
                         "cache_hits": measurer.reused, "disk_hits": measurer.disk_hits, "pruned": measurer.pruned,
                         "cleared_box": measurer.cleared["box"], "cleared_mesh": measurer.cleared["mesh"],
                         "reevaluations": measurer.reevaluations,
-                        "mesh_bounds": mesh.evaluations if mesh else 0, "mesh_s": round(mesh.seconds, 2) if mesh else 0.0}
+                        "mesh_bounds": measurer.mesh_bounds, "mesh_s": round(measurer.mesh_seconds, 2),
+                        "parent_s": round(measurer.parent_seconds, 2)}
             suspects = suspect_report(chain, planned, measurer.suspects)
-            if args.spot_check and complete:
+            if not (args.exact or args.no_spot_check) and mesh is not None and complete:
                 checked = spot_check(chain, state, measurer, swept + args.time_limit)
         finally:
             if cache is not None:
@@ -885,7 +970,7 @@ def main(argv: list[str] | None = None) -> int:
                                                {pair: bound for pair, bound in state.bounds.items() if pair in checked_pairs})
         requirement_rows = pair_clearance_report(chain, requirements, state.pair_clearance, state.bounds)
         failed = bool(state.collisions or findings or state.limits or any(row["status"] == "fail" for row in requirement_rows)
-                      or suspects or (checked is not None and checked["failures"]))
+                      or any(not row["resolved"] for row in suspects) or (checked is not None and checked["failures"]))
         status = "incomplete" if not complete else ("fail" if failed else "pass")
         refs = [[chain.ref(a), chain.ref(b)] for a, b in pairs]
         result: dict[str, Any] = {
