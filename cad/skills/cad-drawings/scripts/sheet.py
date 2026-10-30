@@ -66,8 +66,14 @@ def signed(value: Decimal) -> str:
 
 def tolerance_text(tol: Tolerance | None, measured: float, regime: str) -> tuple[str, str]:
     """(nominal text, tolerance suffix) of a size: fits print class and limits, never the modelled value."""
-    if tol is None or tol.kind == "general":
+    if tol is None:
         return number(measured), ""
+    if tol.kind == "general" and not tol.feature_specific:
+        return number(measured), ""
+    if tol.kind == "general":
+        if tol.lower == -tol.upper:
+            return number(measured), f" ±{number(tol.upper)}"
+        return number(measured), f" {signed(tol.upper)}/{signed(tol.lower)}"
     if tol.kind == "basic":
         return number(measured), ""
     nominal = tol.nominal if tol.nominal is not None else Decimal(number(measured))
@@ -407,6 +413,7 @@ class Presentation:
     linears: list[Linear] = field(default_factory=list)
     placed: dict[str, dict[str, Any]] = field(default_factory=dict)    # characteristic id -> annotation and view
     unplaced: list[dict[str, Any]] = field(default_factory=list)
+    annotation_markup: dict[str, str] = field(default_factory=dict)
 
 
 LINEAR_OPERATIONS = ("location", "axis_location", "floor_location", "plane_separation", "thickness", "distance")
@@ -485,6 +492,9 @@ def _datum_reference(axis: str, frame: DatumFrame, binding: Mapping[str, Resolve
 
 def dimension_key(char: Characteristic) -> tuple[Any, ...] | None:
     """What a location dimension states: its frame axis, coordinate and control; None for other operations."""
+    if char.details.get("axis_dimension"):
+        tolerance = None if char.tolerance is None else (char.tolerance.kind, char.tolerance.lower, char.tolerance.upper)
+        return ("datum_axis", char.details["datum_feature"], char.axis, round(char.value, 6), tolerance, char.reference)
     if char.operation not in ("location", "axis_location", "floor_location") or char.axis is None:
         return None
     tolerance = None if char.tolerance is None else (char.tolerance.kind, char.tolerance.lower, char.tolerance.upper)
@@ -537,6 +547,7 @@ def build_presentation(chars: Sequence[Characteristic], frame: DatumFrame, bindi
                 _, plan, item = best
                 result.linears.append(item)
                 result.placed[char.id] = {"annotation": item.id, "view": plan.id, "anchor": list(item.target)}
+                result.annotation_markup[item.id] = _text(item.text, 0, 0, 1)
                 if dimension_key(char) is not None:
                     stated[dimension_key(char)] = item
                 placed = True
@@ -557,6 +568,7 @@ def build_presentation(chars: Sequence[Characteristic], frame: DatumFrame, bindi
                     existing.lines.append(line)
                 existing.characteristics.append(char.id)
                 result.placed[char.id] = {"annotation": existing.id, "view": plan_id, "anchor": list(existing.anchor)}
+                result.annotation_markup[existing.id] = "\n".join(existing.lines)
                 placed = True
         if not placed and char.operation != "profile":
             result.unplaced.append({"characteristic": char.id, "feature": char.feature, "operation": char.operation,
@@ -665,6 +677,10 @@ def _callout_text(char: Characteristic, regime: str) -> str | None:
     if op == "depth":
         nominal, suffix = tolerance_text(char.tolerance, char.value, regime)
         return f"↧{nominal}{suffix}" if asme else f"depth {nominal}{suffix}"
+    if op == "distance" and char.details.get("axis_dimension"):
+        nominal, suffix = tolerance_text(char.tolerance, char.value, regime)
+        word = "DISTANCE" if asme else "distance"
+        return f"{count_prefix(char.quantity, regime)}{nominal}{suffix} {word}"
     if op in ("width", "length"):
         nominal, suffix = tolerance_text(char.tolerance, char.value, regime)
         count = count_prefix(char.quantity, regime)
@@ -672,9 +688,9 @@ def _callout_text(char: Characteristic, regime: str) -> str | None:
         return f"{count}{word} {nominal}{suffix}"
     if op == "across_flats":
         sides = char.details.get("sides", 6)
-        name = {6: "hexagon socket", 4: "square socket"}.get(sides, f"{sides}-sided socket")
+        name = {6: "hexagonal socket", 4: "square socket"}.get(sides, f"{sides}-sided socket")
         nominal, suffix = tolerance_text(char.tolerance, char.value, regime)
-        return f"{name.upper()} {nominal}{suffix} A/F" if asme else f"{name} s {nominal}{suffix}"
+        return f"{name.upper()} {nominal}{suffix} A/F" if asme else f"{name} across flats {nominal}{suffix}"
     if op == "angle":
         nominal, suffix = tolerance_text(char.tolerance, char.value, regime)
         count = count_prefix(char.quantity, regime)
@@ -731,14 +747,26 @@ def _linear(char: Characteristic, frame: DatumFrame, binding: Mapping[str, Resol
     horizontal = fg.parallel(vector, plan.x_direction)
     if not horizontal and not fg.parallel(vector, plan.up):
         return None
-    origin = _datum_reference(char.axis, frame, binding, faces, view)
-    if char.operation in ("plane_separation", "thickness", "distance") and len(char.details.get("features", ())) == 2:
-        start_faces = char.details.get("from_faces") or binding[char.details["features"][0]].faces
+    if char.details.get("axis_dimension"):
+        datum_feature = char.details["datum_feature"]
+        datum = next((d for d in frame.datums.values() if d.feature == datum_feature), None)
+        if datum is None:
+            return None
+        origin = view.project(datum.point)
+    else:
+        origin = _datum_reference(char.axis, frame, binding, faces, view)
+    if not char.details.get("axis_dimension") and char.operation in (
+            "plane_separation", "thickness", "distance") and len(char.details.get("features", ())) == 2:
+        start_features = char.details["features"]
+        source = next((name for name in start_features if name not in (char.details.get("target_feature"),
+                                                                         char.details.get("datum_feature"))),
+                      start_features[0])
+        start_faces = char.details.get("from_faces") or binding[source].faces
         start = visible_anchors([faces[i] for i in start_faces], view)
-        origin = start[0] if start else None   # between two planes: from the first one, not the datum
+        origin = start[0] if start else None
     if origin is None:
         return None
-    if char.operation == "axis_location":
+    if char.operation == "axis_location" or char.details.get("axis_dimension"):
         point = char.details.get("axis_point")
         if point is None:
             return None

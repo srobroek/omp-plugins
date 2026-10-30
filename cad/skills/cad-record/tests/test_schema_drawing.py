@@ -62,6 +62,8 @@ BASE = {
                      "boss": {"size": "general", "axial_location_from": "A", "tolerance_policy": "fdm_supplier"}},
         "dimensions": [{"id": "boss_height", "operation": "distance", "features": ["boss", "bed_face"],
                         "datum_frame": ["A"], "tolerance": {"deviation_mm": [-0.2, 0.2]}},
+                       {"id": "hole_x", "operation": "distance", "features": ["bed_face", "pivot_bore"],
+                        "instance": 1, "tolerance": {"deviation_mm": [-0.2, 0.2]}},
                        {"id": "overall_height", "operation": "length", "features": ["base_profile"], "reference": True}],
         "edges": {"external": [-0.5, 0.0], "internal": [0.0, 0.5]},
         "surface_texture": {"open": "no published roughness for the bureau's as-printed PETG"},

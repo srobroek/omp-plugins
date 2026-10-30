@@ -34,6 +34,7 @@ from drawing_intent import FIT_KEYS, Characteristic, Measured, finding
 from feature_geometry import Binding, Face
 from feature_recognition import Recognition
 from sheet import Presentation, dimension_key
+import sheet
 
 UNTOLERANCED = ("profile", "thread")   # controlled by their frame or designation
 
@@ -114,6 +115,14 @@ def evaluate(pn: str, part: Mapping[str, Any], interfaces: Sequence[Mapping[str,
         placed = presentation.placed.get(char.id) if presentation is not None else None
         if presentation is not None and placed is None:
             status = "fail"
+        if char.tolerance is not None and char.tolerance.feature_specific and presentation is not None:
+            annotation_id = placed["annotation"] if placed is not None else None
+            markup = presentation.annotation_markup.get(annotation_id, "") if annotation_id else ""
+            nominal, suffix = sheet.tolerance_text(char.tolerance, char.value, "iso")
+            if not suffix or nominal + suffix not in markup:
+                findings.append(finding("tolerance_not_printed", f"{char.id} has a feature-specific tolerance not shown "
+                                     "on its drawing annotation", feature=char.feature, characteristic=char.id))
+                status = "fail"
         rows.append({"feature": char.feature, "requirement": char.operation, "characteristic": char.id,
                      "value_mm": round(char.value, 6), "quantity": char.quantity, "axis": char.axis,
                      "faces": list(char.faces), "step_sha256": step_sha256,

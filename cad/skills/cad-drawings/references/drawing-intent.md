@@ -53,18 +53,18 @@ datums. Instances with a missing or extra node keep one location each.
   exceptions to the drawing's general ones and print in the feature's callout. A `round` or `chamfer`
   that is an edge fillet or edge break may take `presentation: general_note`: its size prints once in
   the general note of undimensioned fillets and edge chamfers. A contour radius gets its own callout.
-- `dimensions`: extra measured requests (`length`, `plane_separation`, `axis_distance`, `location`, ...)
-  with an explicit `tolerance` (`deviation_mm` or a named policy); below 0.5 mm ISO 2768-1 has no general
-  value. A `width` between two features is a callout counting every opposed pair of their planes at
-  that width (`4× width 0.6`): use it for ribs or webs whose planes are not normal to a frame axis.
   `presentation: section` on a feature or a request draws its sizes and locations in a section first.
+  A `distance` request can measure from a `plane_face` to one or more cylindrical `bore`/`shaft` axes
+  parallel to that datum plane; the measured distance is the perpendicular centre-to-plane distance.
+  Set `instance` to select a one-based group of hole centres ordered by distance from the datum plane;
+  centres at the same distance share one callout. Each group uses the selected feature's tolerance
+  policy or the request's explicit tolerance, which is printed on the location dimension.
   A `plane_separation` or `thickness` is drawn from its first feature's plane to its second's,
   at the pair of parallel planes nearest each other (a slot's wall facing the other feature). Unless it
   is `reference: true`, it locates a second `plane_face` feature from the first in place of that
   plane's datum location, so a wall thickness is a chain dimension, never a redundant third one. A
   `location` on a plane feature replaces its datum-frame location, so a depth such as a counterbore
   floor's carries its own limits; the deviation applies to the printed distance from the datum.
-  Two planes that are not parallel have no width of their own: a `thickness` or `width` with `at: <plane
   feature>` is stated at that reference plane (ISO 129-1), as the distance between the lines where the
   two planes meet it. Use it for a drafted wall (thickness at the rim or parting plane, with the draft
   as an `angle` request) and for a width between inclined flanks (a dovetail's width at its bed, with

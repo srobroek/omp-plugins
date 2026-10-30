@@ -12,6 +12,7 @@ import math
 import sys
 import unittest
 from dataclasses import replace
+from decimal import Decimal
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -20,8 +21,9 @@ import drawing  # noqa: E402
 import drawing_intent  # noqa: E402
 import part_views  # noqa: E402
 import sheet  # noqa: E402
-from drawing_intent import Characteristic, Datum, DatumFrame, Instance, IntentError  # noqa: E402
+from drawing_intent import Characteristic, Datum, DatumFrame, Instance, IntentError, Tolerance  # noqa: E402
 from feature_geometry import Binding, Edge, Face, ResolvedFeature  # noqa: E402
+from freecad_views import ViewGeometry  # noqa: E402
 from layout_check import Box  # noqa: E402
 
 X, Y, Z = (1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0)
@@ -196,6 +198,86 @@ class WidthRequest(unittest.TestCase):
         self.assertEqual((char.operation, char.quantity, char.axis), ("width", 4, None))
         self.assertAlmostEqual(char.value, 0.6)
         self.assertEqual(sheet._callout_text(char, "iso"), "4× width 0.6")
+
+
+
+def cylinder(index: int, centre, radius: float = 1.0) -> Face:
+    return Face(index, "cylinder", 1.0, (*centre, *centre), (), (), axis_point=tuple(centre), axis_dir=Z,
+                radius=radius, inward=True, axial=(0.0, 5.0), span_deg=360.0)
+
+
+class DatumAxisDistance(unittest.TestCase):
+    def test_distance_from_a_datum_plane_to_each_distinct_hole_centre_is_measured_and_toleranced(self) -> None:
+        plane_face = Face(0, "plane", 100.0, (0, -10, 0, 0, 10, 0), (), (), point=(0, 0, 0), normal=X)
+        holes = [cylinder(index, centre) for index, centre in enumerate(((7, 0, 0), (7, 10, 0), (87, 0, 0)), 1)]
+        faces = [plane_face, *holes]
+        features = {"datum": ResolvedFeature("datum", "plane_face", (0,)),
+                    "holes": ResolvedFeature("holes", "bore", (1, 2, 3))}
+        tolerance = {"deviation_mm": [-0.2, 0.2]}
+        requests = [{"id": name, "operation": "distance", "features": ["datum", "holes"], "instance": index,
+                     "tolerance": tolerance} for index, name in enumerate(("near", "far"), 1)]
+        # Two distinct distance groups: 7 mm shared by the first two holes, and 87 mm for the third.
+        binding = Binding(features, {0: "datum", 1: "holes", 2: "holes", 3: "holes"}, ())
+        measurer = drawing_intent.Measurer("TST-0001", {"drawing": {"type": "detail", "dimensions": requests}},
+                                           {}, [], binding, faces)
+        measurer._requests(FRAME)
+        self.assertEqual(measurer.result.findings, [])
+        near, far = measurer.result.characteristics
+        self.assertEqual((near.value, far.value), (7.0, 87.0))
+        self.assertEqual(near.quantity, 2)
+        self.assertEqual((near.axis, near.tolerance.lower, near.tolerance.upper),
+                         ("x", Decimal("-0.2"), Decimal("0.2")))
+        self.assertTrue(near.details["axis_dimension"])
+
+    def test_same_distance_holes_share_one_characteristic(self) -> None:
+        datum = ResolvedFeature("datum", "plane_face", (0,))
+        holes = ResolvedFeature("holes", "bore", (1, 2))
+        faces = [Face(0, "plane", 1.0, (0, 0, 0, 0, 1, 1), (), (), point=(0, 0, 0), normal=X),
+                 cylinder(1, (7, 0, 0)), cylinder(2, (7, 10, 0))]
+        measurer = drawing_intent.Measurer("TST-0001", {"drawing": {"type": "detail", "dimensions": [
+            {"id": "distance", "operation": "distance", "features": ["datum", "holes"], "instance": 1}]}},
+            {}, [], Binding({"datum": datum, "holes": holes}, {}, ()), faces)
+        measurer._requests(FRAME)
+        self.assertEqual(measurer.result.findings, [])
+        (characteristic,) = measurer.result.characteristics
+        self.assertEqual((characteristic.value, characteristic.quantity), (7.0, 2))
+        self.assertEqual(sheet._callout_text(characteristic, "iso"), "2× 7 distance")
+
+    def test_socket_callout_names_hexagonal_across_flats(self) -> None:
+        char = Characteristic("nut", "socket", "across_flats", 5.6, (1, 2),
+                              tolerance=drawing_intent.Tolerance("explicit", -0.1, 0.1), details={"sides": 6})
+        self.assertEqual(sheet._callout_text(char, "iso"), "hexagonal socket across flats 5.6 ±0.1")
+        self.assertEqual(sheet._callout_text(char, "asme"), "HEXAGONAL SOCKET 5.6 ±0.1 A/F")
+    def test_hole_centre_dimension_is_placed_from_the_datum_plane_with_its_tolerance(self) -> None:
+        plane_face = Face(0, "plane", 100.0, (0, -5, 0, 0, 5, 10), (), (), point=(0, 0, 5), normal=X)
+        hole_face = Face(1, "cylinder", 10.0, (6, 9, 0, 8, 11, 10), (), (),
+                         axis_point=(7, 10, 5), axis_dir=Z, radius=1.0, inward=True, axial=(0, 10), span_deg=360)
+        features = {"datum": ResolvedFeature("datum", "plane_face", (0,)), "hole": ResolvedFeature("hole", "bore", (1,))}
+        binding = Binding(features, {0: "datum", 1: "hole"}, ())
+        part = {"drawing": {"type": "detail", "coordinate_frame": {"origin": {"at": "A"}, "x": {"normal_to": "A"},
+                                                                        "y": {"toward": "hole"}},
+                             "datum_features": {"A": {"feature": "datum", "role": "plane"}},
+                             "features": {"datum": {"size": "general"}, "hole": {"size": "general"}},
+                             "dimensions": [{"id": "hole_location", "operation": "distance", "features": ["datum", "hole"],
+                                             "tolerance": {"deviation_mm": [-0.2, 0.2]}}]}}
+        frame = drawing_intent.resolve_frame(part["drawing"], binding.features, {0: plane_face, 1: hole_face})
+        measurer = drawing_intent.Measurer("TST-0001", part, {}, [], binding, [plane_face, hole_face])
+        measurer._requests(frame)
+        measured = measurer.result
+        self.assertEqual(measured.findings, [])
+        char = next(item for item in measured.characteristics if item.id == "hole_location")
+        plan = part_views.ViewPlan("front", "part", "orthographic", Y, X)
+        geometry = ViewGeometry("front", "fixture", "part", (0.0, 0.0), 1.0, 0.0, Y, X,
+                                ("M 0 0 L 0 -10 M 6 0 L 6 -10 M 8 0 L 8 -10",), (), (),
+                                (0.0, -10.0, 8.0, 0.0))
+        view_data = sheet.ViewData(plan, geometry, ((1.0, 0.0, 0.0, 0.0), (0.0, 0.0, -1.0, 5.0)))
+        presentation = sheet.build_presentation([char], frame, binding.features, {0: plane_face, 1: hole_face},
+                                                {"front": view_data}, "iso", [], {})
+        self.assertEqual(len(presentation.linears), 1)
+        dimension = presentation.linears[0]
+        self.assertEqual(dimension.text, "7 ±0.2")
+        self.assertEqual(presentation.annotation_markup[dimension.id], sheet._text("7 ±0.2", 0, 0, 1))
+        self.assertEqual(sheet._callout_text(char, "iso"), "7 ±0.2 distance")
 
 
 def strip(index: int, ends: tuple, normal) -> Face:

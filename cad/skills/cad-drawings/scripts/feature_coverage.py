@@ -45,7 +45,7 @@ SEPARATIONS = ("width", "length", "depth", "thickness", "height")
 SEPARATION_OPERATIONS = ("width", "length", "depth", "thickness", "plane_separation", "distance", "across_flats",
                          "extent", "height")
 LOCATIONS = ("location", "floor_location")
-POSITIONS = ("axis_location", "pattern", "slot_location", "location")
+POSITIONS = ("axis_location", "pattern", "slot_location", "location", "distance")
 LOCATED = ("hole", "boss", "shaft", "slot", "arc")
 NOT_DIMENSIONED = ("outline",)
 MODEL_DEFINED = ("dish", "taper", "engraving", "outline")   # freeform or defined by its own kind's callout

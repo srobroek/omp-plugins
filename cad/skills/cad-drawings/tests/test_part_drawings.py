@@ -98,6 +98,24 @@ class RepeatedDimensions(unittest.TestCase):
             self.assertEqual(sum(f["code"] == "dimension_conflict" for f in report.findings), expected, report.findings)
 
 
+
+class PerFeatureToleranceCoverage(unittest.TestCase):
+    def test_coverage_rejects_a_missing_feature_tolerance_and_accepts_the_printed_suffix(self) -> None:
+        tolerance = Tolerance("explicit", Decimal("-0.2"), Decimal("0.2"), feature_specific=True)
+        char = Characteristic("foot_location", "foot_recess", "distance", 7.0, (), axis="x",
+                             tolerance=tolerance, details={"axis_dimension": True})
+        measured = Measured(frame=None, characteristics=[char])
+        binding = Binding({}, {}, ())
+        missing = Presentation(placed={char.id: {"annotation": "dim-foot-location", "view": "front"}}, annotation_markup={})
+        report = completeness.evaluate("TST-0001", {"drawing": {}}, [], binding, measured, missing, "0" * 64)
+        self.assertIn("tolerance_not_printed", {item["code"] for item in report.findings})
+        self.assertEqual(report.rows[0]["status"], "fail")
+        printed = Presentation(placed=missing.placed, annotation_markup={"dim-foot-location": "7 ±0.2"})
+        report = completeness.evaluate("TST-0001", {"drawing": {}}, [], binding, measured, printed, "0" * 64)
+        self.assertNotIn("tolerance_not_printed", {item["code"] for item in report.findings})
+        self.assertEqual(report.rows[0]["status"], "pass")
+
+
 class EdgeAndTextureIndications(unittest.TestCase):
     """ISO 13715 edge sizes and their ASME notes, ISO 21920-1 symbols, and the gate's edge and texture rows."""
 
