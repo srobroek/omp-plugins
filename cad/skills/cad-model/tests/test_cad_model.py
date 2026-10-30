@@ -1369,6 +1369,46 @@ class VersionLabelTests(unittest.TestCase):
             with self.assertRaisesRegex(build.UsageError, "pick v4"):
                 build.run(hw, "v2", "auto", [])
 
+    @staticmethod
+    def published(hw: Path) -> Path:
+        """A sealed v1 under hw/versions/, as a finished run leaves it."""
+        final = hw / "versions" / "v1"
+        (final / "parts").mkdir(parents=True)
+        (final / "manifest.json").write_text('{"label": "v1"}', encoding="utf-8")
+        (final / "parts" / "TST-0001.step").write_bytes(b"ISO-10303-21; v1")
+        return final
+
+    @staticmethod
+    def tree(folder: Path) -> dict[str, bytes]:
+        return {p.relative_to(folder).as_posix(): p.read_bytes() for p in sorted(folder.rglob("*")) if p.is_file()}
+
+    @staticmethod
+    def exists_message(final: Path) -> str:
+        return f"^version v1 already exists at {re.escape(str(final))}; .*choose a new label$"
+
+    def test_an_existing_label_is_refused_and_kept(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            hw = Path(tmp).resolve()  # run resolves hw/; the message names the resolved version path
+            final = self.published(hw)
+            before = self.tree(final)
+            with self.assertRaisesRegex(build.UsageError, self.exists_message(final)):
+                build.run(hw, "v1", "auto", [])
+            self.assertEqual(self.tree(final), before)
+            self.assertEqual(sorted(p.name for p in (hw / "versions").iterdir()), ["v1"], "no staging left behind")
+
+    def test_a_version_published_after_the_check_is_kept(self) -> None:
+        """Another run sealed the same label while this one built: the final rename refuses, never merges."""
+        with tempfile.TemporaryDirectory() as tmp:
+            hw = Path(tmp)
+            work = hw / "versions" / f".v1.partial-{os.getpid()}"
+            (work / "parts").mkdir(parents=True)
+            (work / "manifest.json").write_text('{"label": "v1", "run": "late"}', encoding="utf-8")
+            final = self.published(hw)
+            before = self.tree(final)
+            with self.assertRaisesRegex(build.UsageError, self.exists_message(final)):
+                build.publish(work, final, "v1")
+            self.assertEqual(self.tree(final), before)
+
 
 class DiffRuleTests(unittest.TestCase):
     def test_a_kernel_failure_is_an_error_not_a_change(self) -> None:

@@ -318,7 +318,7 @@ def run(hw: Path, label: str, kernel: str, attach: Iterable[str]) -> tuple[int, 
     versions = hw / "versions"
     final = versions / label
     if final.exists():
-        raise UsageError(f"{final} exists; versions are immutable, pick the next label")
+        raise version_exists(label, final)
     newest = max(built_numbers(hw), default=0)
     if number <= newest:
         raise UsageError(f"{label} is not after the newest version v{newest}; labels increase, pick v{newest + 1}")
@@ -469,7 +469,7 @@ def run(hw: Path, label: str, kernel: str, attach: Iterable[str]) -> tuple[int, 
         if stray:
             raise UsageError(f"run staged files outside the cad-record layout: {stray}")
         write_json(work / "manifest.json", manifest)
-        os.replace(work, final)
+        publish(work, final, label)
     finally:
         shutil.rmtree(work, ignore_errors=True)
         shutil.rmtree(states, ignore_errors=True)
@@ -529,6 +529,22 @@ def reconcile_latest(hw: Path, label: str) -> tuple[int, dict[str, Any]]:
     point_latest(hw, label, manifest)
     return 0, {"status": "pass", "label": label, "latest": str(hw / "versions" / "latest.json"),
                "verified_files": len(manifest["files"])}
+
+
+def version_exists(label: str, final: Path) -> UsageError:
+    return UsageError(f"version {label} already exists at {final}; versions are immutable, choose a new label")
+
+
+def publish(work: Path, final: Path, label: str) -> None:
+    """Rename the staged version into place. A version another run published under the same label after
+    `run` checked it is kept as it is: the rename fails rather than merging into or replacing it."""
+    try:
+        os.replace(work, final)
+    except OSError as error:
+        if final.exists():
+            raise version_exists(label, final) from error
+        raise
+
 
 
 def version_dir(hw: Path, label: str) -> Path:
