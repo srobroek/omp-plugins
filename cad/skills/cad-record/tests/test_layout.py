@@ -400,6 +400,27 @@ class TreeAudit(TempProject):
         self.assertEqual(canonical["hw/specs/datasheet.pdf"], "hw/parts/LMP-0008/sources/datasheet.pdf")
         self.assertEqual(canonical["hw/parts/LMP-0001/helper.py"], ".cad-work/migration/parts/LMP-0001/helper.py")
 
+    def test_the_pair_cache_and_run_records_are_accepted_disposable_files(self) -> None:
+        """The SQLite cache, its WAL and SHM, run records and their lock are accepted where their writers put
+        them, are not sealed, earn no geometry or release role, and are disposable; interrupted claims and
+        an earlier release's sweep lock are reported as transient."""
+        accepted = (".cad/recheck.json", ".cad/.gitignore", ".cad/pairs-v2.sqlite", ".cad/pairs-v2.sqlite-wal",
+                    ".cad/pairs-v2.sqlite-shm", ".cad/runs/.gitignore", ".cad/runs/.lock",
+                    ".cad/runs/3f2b9c1e8d7a4b6c9e0f1a2b3c4d5e6f.json", ".cad/runs/sweep-v3.case_1.json")
+        for rel in (*accepted, ".cad/runs/.3f2b9c1e.json.4242.tmp", "motion/v3/.sweep-sweep.json"):
+            write(self.hw / rel)
+        self.assertEqual(self.codes(), {"hw/.cad/runs/.3f2b9c1e.json.4242.tmp": "layout.transient",
+                                        "hw/motion/v3/.sweep-sweep.json": "layout.transient"})
+        for rel in accepted[2:]:
+            if rel.endswith(".gitignore"):
+                continue
+            with self.subTest(rel):
+                match = layout.classify(f"hw/{rel}")
+                self.assertEqual((match.entry.kind, match.entry.manifest, match.entry.mutability),
+                                 ("generated", None, "scratch"))
+                self.assertNotIn(match.role, ("definition", "manufacture", "evidence"))
+        self.assertIsNone(layout.classify("hw/.cad/pairs.sqlite"))  # the old global cache never lived in hw/
+
 
 class ValidatorLayout(TempProject):
     """validate.py on a copy of the lamp example: layout findings, their severity and the exit code."""
