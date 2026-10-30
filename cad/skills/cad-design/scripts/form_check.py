@@ -312,6 +312,7 @@ def check(args: argparse.Namespace, pose: Any) -> dict[str, Any]:
         if (has_blocky_faces and row["obb_fill_fraction"] >= BLOCK_MIN_FILL_FRACTION
                 and row["obb_thickness_fraction"] > BLOCK_MAX_THICKNESS_FRACTION):
             findings.append({"check": "block_like", "part": pn, "axis_planar_fraction": row["axis_planar_fraction"],
+                             "blend_faces": row["blend_faces"], "freeform_faces": row["freeform_faces"],
                              "obb_fill_fraction": row["obb_fill_fraction"],
                              "obb_thickness_fraction": row["obb_thickness_fraction"]})
         if row["process"] == "fdm" and row["min_convex_radius"] is not None and row["min_convex_radius"] < args.fdm_min_radius:
