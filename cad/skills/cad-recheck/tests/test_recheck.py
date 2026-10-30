@@ -275,6 +275,25 @@ class RecheckHookTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn("CAD layout has", result.stderr)
         self.assertFalse((self.root / "hw" / ".cad" / "recheck.json").exists())
+
+    def test_stamp_refuses_a_partial_changed_only_check(self) -> None:
+        self.stage_product("detail")
+        checks = self.root / ".checks.json"
+        checks.write_text(json.dumps({"status": "pass", "scope": {"kind": "changed_pairs", "complete": False,
+                                                                  "baseline": "v1"}, "checks": {}}), encoding="utf-8")
+        result = self.run_python(STAMP, "--stage", "detail", "--checks", str(checks), "--passed", cwd=self.root)
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("is a partial check (changed_pairs scope, complete: false); run the full check", result.stderr)
+        self.assertFalse((self.root / "hw" / ".cad" / "recheck.json").exists())
+        checks.write_text(json.dumps({"status": "pass", "scope": {"kind": "all_pairs", "complete": True}, "checks": {}}),
+                          encoding="utf-8")
+        self.assertTrue(self.stamp_with(checks)["passed"])
+
+    def stamp_with(self, checks: Path) -> dict[str, object]:
+        result = self.run_python(STAMP, "--stage", "detail", "--checks", str(checks), "--passed", cwd=self.root)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        return json.loads(result.stdout)
+
     def test_editing_staged_file_makes_stamp_stale(self) -> None:
         self.stage_product("detail")
         self.stamp(passed=True, stage="detail")

@@ -23,7 +23,8 @@ TRIGGER
    `safe_intersect`). Add `drawing_features(params, shape)` for a part that needs a production
    drawing. Add `build_manufacture(params)`, declared in part.yaml `manufacture`, for a part made in
    another state than it is installed in, such as a strap printed flat. LOAD references/contract.md
-   when writing or reviewing a model.py.
+   when writing or reviewing a model.py. For a cosmetic round that may fail (`StdFail_NotDone`),
+   use the [Fillet fallback](references/fillets.md) helper.
 2. Build: `uv run --script skill://cad-flow/scripts/run.py cad-model/scripts/cad_model.py run hw --label vN [--kernel auto]`
    → `hw/versions/vN/` and `hw/versions/latest.json`; JSON summary on stdout. `auto` runs each
    part in its declared kernel's own uv environment; `cadquery` or `build123d` additionally
@@ -31,22 +32,27 @@ TRIGGER
    holds `manufacturing/<PN>/` for every custom-made part: `part.step` (AP242, mm), `part.stl`
    for FDM (binary, mm, on the printer bed) and `manufacturing.json`. A manufacturing output that
    fails its checks fails the run: no version, latest unchanged.
-3. Check: `uv run --script skill://cad-flow/scripts/run.py cad-model/scripts/cad_model.py check vN --hw hw [--out .cad-work/<unit>/check.json] [--jobs 1|N|auto] [--cache DIR | --no-cache]` (explicit results must be new `.cad-work/` paths).
-   → check result JSON; press fits and heat-set inserts declared in `hw/interfaces.yaml` are allowed
-   to interfere automatically. `build_volume` checks each FDM part, in the state it is printed in,
-   against the printer envelope of the version's `product.yaml`.
+3. Check: `uv run --script skill://cad-flow/scripts/run.py cad-model/scripts/cad_model.py check vN --hw hw [--out .cad-work/<unit>/check.json] [--changed-only [--since-version vM]] [--exact] [--jobs 1|N|auto] [--cache DIR | --no-cache]` (explicit results must be new `.cad-work/` paths).
+   → check result JSON; press fits and heat-set inserts declared in the version's `interfaces.yaml`
+   are allowed to interfere automatically. `build_volume` checks each FDM part, in the state it is
+   printed in, against the printer envelope of the version's `product.yaml`.
    It reports an axis-aligned orientation when one fits. Otherwise, it reports the oriented box axes.
    Oversized parts block the check. An undeclared volume warns without blocking.
    `manufacturing` judges every manufacturing output again on the sealed files, and
    `artifact_integrity` every file of the version against its manifest.
-   `pair_clearance` holds each clearance requirement in `hw/interfaces.yaml` (`type: clearance`,
-   `pair`, `min_clearance_mm`) at the nominal pose, joint-connected and fitted pairs included; a
-   pair below its requirement blocks the check.
+   `pair_clearance` holds each clearance requirement (`type: clearance`, `pair`, `min_clearance_mm`)
+   at the nominal pose, joint-connected and fitted pairs included; a pair below its requirement
+   blocks the check, and one inside the requirement's margin warns (`margin`).
+   Pairs are measured as the sweep measures them, sharing its cache in `hw/.cad/`. A far pair
+   passes on its proven bounds, a degenerate kernel reading is a re-evaluated suspect, and
+   `--exact` measures every pair. `--changed-only` measures only the pairs a change since
+   `--since-version` (default: the previous built version) can affect. It is the fast early check
+   of a commit batch, `scope.complete: false`, and never replaces the full check.
    `blocking_failures` names every failed blocking check.
 4. Diff: `uv run --script skill://cad-flow/scripts/run.py cad-model/scripts/cad_model.py diff vA vB --hw hw` → per-part
    volume and bbox deltas, added/removed parts, exact shared / A-only / B-only volumes, and the
    manufacturing state, tolerance, output policy and placement changes per custom-made part.
-5. Recheck: write the check JSON with `--out`, then pass it to `cad-recheck` `stamp.py --checks`,
+5. Recheck: write the full check JSON with `--out`, then pass it to `cad-recheck` `stamp.py --checks`,
    adding `--passed` only when `check` exited 0. A check with `status: warn` is advisory.
 6. LOAD references/outputs.md when reading a version file, a check field, or a threshold.
 
@@ -59,6 +65,8 @@ hw --label vN` command it names; never rebuild the sealed label.
 
 MUST Pick the next label above the newest version; versions are immutable and `run` refuses an existing or lower label.
 MUST Treat `check` exit 1 as a failed stage gate; report `blocking_failures` and the numbers verbatim.
+MUST Stop the runs a `check` exit 2 names as still running or left behind with the `kill` commands it prints (`uv run --script skill://cad-flow/scripts/process_lifecycle.py strays --hw hw` lists them); never delete a run record whose processes still run.
+NOT Stamp, gate or release from a `--changed-only` check; run the full check first.
 MUST Use the cad-record layout API for version and manufacturing paths; its generated `references/layout.md` is the one canonical path table.
 MUST Add a missing material density to `assets/materials.yaml` with its source; `mass_g: null` means unknown.
 MUST Declare press fits, as a part `pair` or as `hole` and `shaft` feature endpoints, and heat-set inserts in `hw/interfaces.yaml`; `check` classifies each fit and allows measured interference only for intentional interference fits and heat-set pairs.

@@ -7,11 +7,11 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
 import math
 import re
-import signal
 import subprocess
 import uuid
 import os
@@ -26,15 +26,24 @@ import importlib.util
 import shutil
 import sys
 
-LAYOUT_PATH = Path(__file__).resolve().parents[2] / "cad-record" / "scripts" / "layout.py"
-_LAYOUT_SPEC = importlib.util.spec_from_file_location("cad_record_layout", LAYOUT_PATH)
-if _LAYOUT_SPEC is None or _LAYOUT_SPEC.loader is None:
-    raise ImportError(f"{LAYOUT_PATH} not found")
-LAYOUT = sys.modules.get("cad_record_layout")
-if LAYOUT is None:
-    LAYOUT = importlib.util.module_from_spec(_LAYOUT_SPEC)
-    sys.modules["cad_record_layout"] = LAYOUT
-    _LAYOUT_SPEC.loader.exec_module(LAYOUT)
+
+def _load_module(name: str, path: Path) -> Any:
+    """A sibling skill's script module, loaded once per process under `name`."""
+    if name in sys.modules:
+        return sys.modules[name]
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"{path} not found")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+SKILLS = Path(__file__).resolve().parents[2]
+LAYOUT = _load_module("cad_record_layout", SKILLS / "cad-record" / "scripts" / "layout.py")
+# The FreeCAD job runs in a private process group that dies with this process, Gmsh and ccx included.
+lifecycle = _load_module("cad_flow_process_lifecycle", SKILLS / "cad-flow" / "scripts" / "process_lifecycle.py")
 
 POSE_TOL = 1e-6  # cad-motion's sweep reports pose values rounded to 6 decimals
 DEFAULT_TIMEOUT_SECONDS = 600.0  # a case's timeout_seconds overrides it
@@ -232,7 +241,9 @@ def run_directory(case_path: Path, run_id: str, scratch_root: Path | None = None
 
 def run_job(case_path: Path, case: dict[str, Any], *, scratch_root: Path | None = None,
             result_path: Path | None = None,
-            solver_versions: dict[str, dict[str, str]] | None = None) -> tuple[dict[str, Any], int]:
+            solver_versions: dict[str, dict[str, str]] | None = None,
+            guard: Any = None) -> tuple[dict[str, Any], int]:
+    """Run one case; `guard` (process_lifecycle.RunGuard) records the FreeCAD job's process group."""
     timeout = case.get("timeout_seconds", DEFAULT_TIMEOUT_SECONDS)
     versions = solver_versions or {}
     freecad = find_freecad()
@@ -421,7 +432,8 @@ except Exception as e:
 '''
     job_path.write_text(script, encoding="utf-8")
     try:
-        completed = _run_process_group([str(freecad), str(job_path)], run_dir, timeout)
+        completed = lifecycle.run([str(freecad), str(job_path)], cwd=run_dir, timeout=timeout, capture_output=True,
+                                  text=True, guard=guard)
     except subprocess.TimeoutExpired:
         phase = _job_phase(phase_path)
         during = {
@@ -438,7 +450,7 @@ except Exception as e:
         result.update({"run_id": run_id, "run_directory": str(run_dir)})
         output_path.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
         return result, 2
-    except OSError as exc:
+    except (OSError, lifecycle.LifecycleError) as exc:
         return error(f"cannot start FreeCAD: {exc}", code="freecad_unavailable"), 2
     if not marker_path.is_file():
         result = error("FreeCAD job did not write its run-specific completion marker", code="missing_completion_marker")
@@ -471,23 +483,6 @@ except Exception as e:
         result = error("FreeCAD result has an unknown status", code="invalid_result")
     output_path.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     return result, status
-
-
-def _run_process_group(command: list[str], cwd: Path, timeout: float) -> subprocess.CompletedProcess[str]:
-    """Run the FreeCAD job as its own process group; a timeout or interruption kills the whole group,
-    so a Gmsh or ccx child cannot outlive the job."""
-    process = subprocess.Popen(command, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                               start_new_session=True)
-    try:
-        stdout, stderr = process.communicate(timeout=timeout)
-    except BaseException:
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        process.communicate()
-        raise
-    return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
 
 
 def _job_phase(path: Path) -> str | None:
@@ -652,12 +647,14 @@ def main(argv: list[str] | None = None) -> int:
                 result["reused"] = True
                 status = result_exit_code(result)
             else:
-                stage = LAYOUT.staging(args.hw, "bundle.analysis")
-                output = stage / "results.json"
-                job_scratch = Path(args.hw).parent / ".cad-work"
-                job_scratch.mkdir(parents=True, exist_ok=True)
-                result, status = run_job(case_path, case, scratch_root=job_scratch,
-                                         result_path=output, solver_versions=tools)
+                # one run per case and version: refused while this very case or a stray run runs
+                with lifecycle.claim_run(args.hw, "fea", scope=f"{version}/{case_id}") as guard:
+                    stage = LAYOUT.staging(args.hw, "bundle.analysis")
+                    output = stage / "results.json"
+                    job_scratch = Path(args.hw).parent / ".cad-work"
+                    job_scratch.mkdir(parents=True, exist_ok=True)
+                    result, status = run_job(case_path, case, scratch_root=job_scratch,
+                                             result_path=output, solver_versions=tools, guard=guard)
                 if status != 2:
                     run_dir = Path(result["run_directory"])
                     evidence_files = []
@@ -685,13 +682,21 @@ def main(argv: list[str] | None = None) -> int:
                 else:
                     shutil.rmtree(stage, ignore_errors=True)
         else:
-            output = None
+            output, project_hw = None, None
             if args.out is not None:
-                output = LAYOUT.scratch_path(_scratch_hw(args.out), args.out, "--out")
+                project_hw = _scratch_hw(args.out)
+                output = LAYOUT.scratch_path(project_hw, args.out, "--out")
             scratch_root = output.parent if output is not None else None
             if output is not None:
                 output.parent.mkdir(parents=True, exist_ok=True)
-            result, status = run_job(case_path, case, scratch_root=scratch_root, result_path=output)
+            # A scratch run is recorded in its project's hw/, one per case file; it is supervised either way.
+            with (lifecycle.claim_run(project_hw, "fea", scope=str(case_path)) if project_hw is not None and project_hw.is_dir()
+                  else contextlib.nullcontext()) as guard:
+                result, status = run_job(case_path, case, scratch_root=scratch_root, result_path=output, guard=guard)
+    except lifecycle.LifecycleError as exc:
+        refused = isinstance(exc, lifecycle.RunRefused)
+        print(json.dumps(error(str(exc), code="run_refused" if refused else "process_supervision_unavailable")))
+        return 2
     except (CaseError, OSError, LAYOUT.LayoutError) as exc:
         print(json.dumps(error(str(exc), code="invalid_case")))
         return 2

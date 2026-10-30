@@ -58,6 +58,56 @@ mesh_size: 5
 """
 
 
+def hanging_freecad(root: Path, child_pid: Path) -> Path:
+    """A FreeCAD stand-in that runs the real job script, starts a solver-like child, writes its pid to
+    `child_pid`, and hangs in the job's STEP import."""
+    freecad = root / "freecadcmd"
+    freecad.write_text(f"""#!{sys.executable}
+import runpy, subprocess, sys, time
+from unittest import mock
+child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"])
+open({str(child_pid)!r}, "w").write(str(child.pid))
+for name in ("Part", "Import", "ObjectsFem", "femmesh", "femmesh.gmshtools", "femtools", "femtools.ccxtools"):
+    sys.modules[name] = mock.MagicMock()
+app = mock.MagicMock()
+app.newDocument.side_effect = lambda name: time.sleep(120)
+sys.modules["FreeCAD"] = app
+runpy.run_path(sys.argv[1], run_name="__main__")
+""", encoding="utf-8")
+    freecad.chmod(0o755)
+    return freecad
+
+
+def hanging_case(step: Path, timeout_seconds: float) -> dict:
+    return {"_step": str(step), "material": {"E": 1, "nu": 0.3, "density": 1, "yield": 1},
+            "fixed_faces": {"indices": [1]}, "loads": [], "mesh_size": 1, "timeout_seconds": timeout_seconds}
+
+
+def wait_until(predicate, timeout: float = 10.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.05)
+    return predicate()
+
+
+def pid_runs(pid: int) -> bool:
+    """Whether process `pid` runs; a zombie waiting to be reaped has ended."""
+    state = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()
+    return bool(state) and not state.startswith("Z")
+
+
+def group_runs(pgid: int) -> bool:
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
 def load_pose():
     """cad-motion's pose module: the writer of `<PN> <title> [@id]` component names."""
     import importlib.util
@@ -460,26 +510,8 @@ if len(sys.argv) > 1:
             step = root / "part.step"
             step.touch()
             child_pid = root / "child.pid"
-            # A FreeCAD stand-in that runs the real job script, starts a solver-like child, and hangs in
-            # the job's STEP import.
-            freecad = root / "freecadcmd"
-            freecad.write_text(f"""#!{sys.executable}
-import runpy, subprocess, sys, time
-from unittest import mock
-child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"])
-open({str(child_pid)!r}, "w").write(str(child.pid))
-for name in ("Part", "Import", "ObjectsFem", "femmesh", "femmesh.gmshtools", "femtools", "femtools.ccxtools"):
-    sys.modules[name] = mock.MagicMock()
-app = mock.MagicMock()
-app.newDocument.side_effect = lambda name: time.sleep(120)
-sys.modules["FreeCAD"] = app
-runpy.run_path(sys.argv[1], run_name="__main__")
-""", encoding="utf-8")
-            freecad.chmod(0o755)
-            case = {
-                "_step": str(step), "material": {"E": 1, "nu": 0.3, "density": 1, "yield": 1},
-                "fixed_faces": {"indices": [1]}, "loads": [], "mesh_size": 1, "timeout_seconds": 5,
-            }
+            freecad = hanging_freecad(root, child_pid)
+            case = hanging_case(step, timeout_seconds=5)
             with patch("fea_static.find_freecad", return_value=freecad):
                 result, status = run_job(root / "case.yaml", case,
                                          solver_versions={"calculix": {"path": "/unused/ccx", "version": "2.23"}})
@@ -489,15 +521,77 @@ runpy.run_path(sys.argv[1], run_name="__main__")
             self.assertIn("timeout_seconds of 5 while importing the STEP; raise timeout_seconds in the case YAML",
                           result["error"]["message"])
             pid = int(child_pid.read_text(encoding="utf-8"))
-            deadline = time.monotonic() + 5
-            while time.monotonic() < deadline:
-                try:
-                    os.kill(pid, 0)
-                except ProcessLookupError:
-                    break
-                time.sleep(0.05)
-            else:
-                self.fail("a child of the timed-out FreeCAD job is still running")
+            self.assertTrue(wait_until(lambda: not pid_runs(pid)), "a child of the timed-out FreeCAD job is still running")
+
+    def test_killing_the_fea_process_outright_stops_the_job_and_frees_its_run_record(self) -> None:
+        lifecycle = fea_static.lifecycle
+        with tempfile.TemporaryDirectory(prefix="cad-fea-killed-") as directory:
+            root = Path(directory).resolve()
+            hw = root / "hw"
+            hw.mkdir()
+            step = root / "part.step"
+            step.touch()
+            child_pid = root / "child.pid"
+            freecad = hanging_freecad(root, child_pid)
+            parent_code = (f"import sys\nfrom pathlib import Path\nfrom unittest.mock import patch\n"
+                           f"sys.path.insert(0, {str(SCRIPT.parent)!r})\nimport fea_static\n"
+                           f"guard = fea_static.lifecycle.claim_run(Path({str(hw)!r}), 'fea')\n"
+                           f"with patch('fea_static.find_freecad', return_value=Path({str(freecad)!r})):\n"
+                           f"    fea_static.run_job(Path({str(root)!r}) / 'case.yaml', {hanging_case(step, 600)!r}, "
+                           "guard=guard, solver_versions={'calculix': {'path': '/unused/ccx', 'version': '2.23'}})\n")
+            parent = subprocess.Popen([sys.executable, "-c", parent_code], start_new_session=True,
+                                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self.addCleanup(parent.wait)
+            self.addCleanup(lambda: parent.poll() is None and os.killpg(parent.pid, signal.SIGKILL))
+            self.assertTrue(wait_until(child_pid.is_file, 60), "the FreeCAD stand-in did not start its child")
+            pid = int(child_pid.read_text(encoding="utf-8"))
+            self.addCleanup(lambda: pid_runs(pid) and os.kill(pid, signal.SIGKILL))
+            [record] = lifecycle.runs_dir(hw).glob("*.json")
+            [group] = json.loads(record.read_text(encoding="utf-8"))["groups"]
+            with self.assertRaises(lifecycle.RunRefused):  # one FEA run at a time
+                lifecycle.claim_run(hw, "fea")
+            os.killpg(parent.pid, signal.SIGKILL)  # the FEA process and its own group, with no chance to clean up
+            parent.wait()
+            self.assertTrue(wait_until(lambda: not pid_runs(pid)), "the FreeCAD job's child outlived the killed FEA run")
+            self.assertTrue(wait_until(lambda: not group_runs(group["pgid"])), "the FreeCAD job's group outlived it")
+            self.assertEqual(lifecycle.strays(hw), [])
+            lifecycle.claim_run(hw, "fea").release()
+
+    def test_two_fea_cases_run_at_once_and_the_same_case_twice_is_refused(self) -> None:
+        lifecycle = fea_static.lifecycle
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory).resolve()
+            (project / "hw").mkdir()
+            step = project / "beam.step"
+            step.touch()
+            cases = {}
+            for name in ("bending", "torsion"):
+                cases[name] = project / name / "case.yaml"
+                cases[name].parent.mkdir()
+                cases[name].write_text(f"step: {step}\n{CANTILEVER_TAIL}", encoding="utf-8")
+            # a running FEA run of the bending case, recorded as fea_static.py records a scratch case
+            holder = subprocess.Popen([sys.executable, "-c", f"import sys, time\nsys.path.insert(0, {str(SCRIPT.parent)!r})\n"
+                                       f"import fea_static\nfea_static.lifecycle.claim_run({str(project / 'hw')!r}, 'fea', "
+                                       f"scope={str(cases['bending'])!r})\nprint('claimed', flush=True)\ntime.sleep(600)\n"],
+                                      stdout=subprocess.PIPE, text=True)
+            self.addCleanup(lambda: (holder.kill(), holder.wait(), holder.stdout.close()))
+            self.assertEqual(holder.stdout.readline().strip(), "claimed")
+
+            def run(name: str) -> tuple:
+                printed = __import__("io").StringIO()
+                with patch("fea_static.find_freecad", return_value=Path("/fake/freecadcmd")), patch("sys.stdout", printed), \
+                     patch("fea_static.run_job", return_value=({"status": "pass", "run_directory": None}, 0)) as job:
+                    status = fea_static.main([str(cases[name]), "--out", str(project / ".cad-work" / name / "result.json")])
+                return status, json.loads(printed.getvalue()), job
+
+            status, report, job = run("torsion")  # another case runs beside it, recorded while it runs
+            self.assertEqual((status, report["status"], job.call_count), (0, "pass", 1), report)
+            self.assertIsNotNone(job.call_args.kwargs["guard"])
+            status, report, job = run("bending")  # the same case again is refused before it starts
+            self.assertEqual((status, report["error"]["code"], job.call_count), (2, "run_refused", 0))
+            self.assertIn(f"still runs as process {holder.pid}; stop it with `kill -TERM {holder.pid}`",
+                          report["error"]["message"])
+            self.assertEqual(len(list(lifecycle.runs_dir(project / "hw").glob("*.json"))), 1)
 
     def test_timeout_seconds_must_be_a_positive_number(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -668,7 +762,7 @@ class VersionedPublicationTests(unittest.TestCase):
             case = {"_step": str(step), "material": {"E": 1, "nu": 0.3, "density": 1, "yield": 1},
                     "fixed_faces": {"indices": [1]}, "loads": [], "mesh_size": 1, "timeout_seconds": 0.01}
             with patch("fea_static.find_freecad", return_value=Path("/fake/freecadcmd")), \
-                 patch("fea_static._run_process_group",
+                 patch("fea_static.lifecycle.run",
                        side_effect=subprocess.TimeoutExpired("freecadcmd", 0.01)) as run:
                 fea_static.run_job(root / "case.yaml", case, scratch_root=root,
                                    solver_versions={"calculix": {"path": "/fake/ccx", "version": "2.23"}})

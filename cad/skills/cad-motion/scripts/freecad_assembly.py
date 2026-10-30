@@ -81,11 +81,14 @@ sys.path.insert(0, str(Path(__file__).parents[2] / "cad-analysis" / "scripts"))
 from freecad_lookup import find_freecad
 
 POSE_PATH = Path(__file__).with_name("pose.py")
-_spec = importlib.util.spec_from_file_location("cad_motion_pose", POSE_PATH)
-assert _spec and _spec.loader
-pose = importlib.util.module_from_spec(_spec)
-sys.modules["cad_motion_pose"] = pose
-_spec.loader.exec_module(pose)
+# Reuse a loaded pose: replacing it would leave modules already bound to it (pair_measure) on another copy.
+pose = sys.modules.get("cad_motion_pose")
+if pose is None:
+    _spec = importlib.util.spec_from_file_location("cad_motion_pose", POSE_PATH)
+    assert _spec and _spec.loader
+    pose = importlib.util.module_from_spec(_spec)
+    sys.modules["cad_motion_pose"] = pose
+    _spec.loader.exec_module(pose)
 coupling = pose.coupling
 
 

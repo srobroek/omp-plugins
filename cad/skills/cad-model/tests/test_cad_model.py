@@ -18,6 +18,7 @@ import math
 import os
 import re
 import shutil
+import signal
 import struct
 import subprocess
 import sys
@@ -36,6 +37,7 @@ FREECAD_PRESENT = FREECADCMD is not None and FREECADCMD.is_file() and os.access(
 FIXTURES = HERE / "fixtures"
 SCRIPTS = HERE.parent / "scripts"
 CLI = SCRIPTS / "cad_model.py"
+LIFECYCLE_SCRIPT = HERE.parents[1] / "cad-flow" / "scripts" / "process_lifecycle.py"
 BOM_SCRIPT = HERE.parents[1] / "cad-bom" / "scripts" / "bom.py"
 KERNELS = ("cadquery", "build123d")
 FINDING_KEYS = {"pn", "check", "type", "message", "where"}
@@ -376,17 +378,22 @@ class KernelChecks:
         self.assertEqual(part_map["TST-0002"]["nodes"], ["TST-0002 Swing arm"])
         self.assertEqual(part_map["TST-0002"]["meshes"], ["TST-0002 Swing arm"])
 
-
-    def test_check_reports_template_declared_press_pairs(self) -> None:
+    def test_check_reads_declarations_from_the_version_snapshot_not_hw(self) -> None:
         hw = self.runs["hw"]
         template = HERE.parents[2] / "examples" / "lamp-arm" / "hw" / "interfaces.yaml"
-        shutil.copy(template, hw / "interfaces.yaml")
-        _, result, _ = cli("check", "v1", "--hw", str(hw))
-        declared = result["checks"]["interference"]["declared_pairs"]
-        self.assertEqual({tuple(item["pair"]) for item in declared}, {
-            ("LMP-0002", "LMP-0005"), ("LMP-0002", "LMP-0006"), ("LMP-0003", "LMP-0007")})
-        self.assertTrue(all(item["classification"] == "interference" for item in declared))
-        self.assertTrue(all("interfaces.yaml#/interfaces/" in item["source"] for item in declared))
+        original = (hw / "interfaces.yaml").read_bytes() if (hw / "interfaces.yaml").is_file() else None
+        shutil.copy(template, hw / "interfaces.yaml")  # edited after v1 was built: not v1's declarations
+        try:
+            proc, result, _ = cli("check", "v1", "--hw", str(hw))
+        finally:
+            if original is None:
+                (hw / "interfaces.yaml").unlink()
+            else:
+                (hw / "interfaces.yaml").write_bytes(original)
+        self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+        self.assertEqual((result["checks"]["interference"]["declared_pairs"], result["checks"]["interference"]["unknown_allowed"]),
+                         ([], []))
+
     def test_clean_versions_pass_check(self) -> None:
         for label in ("v1", "v2"):
             proc, result, _ = self.runs["checks"][label]
@@ -763,10 +770,33 @@ class AttachedPartTests(unittest.TestCase):
         self.assertFalse((self.hw / "versions" / "v2").exists())
 
 
+def process_runs(pid: int) -> bool:
+    """Whether process `pid` runs; a zombie waiting to be reaped has ended."""
+    state = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()
+    return bool(state) and not state.startswith("Z")
+
+
+def descendants(pid: int) -> dict[int, str]:
+    """Every live descendant of process `pid`: pid -> command line."""
+    table = subprocess.run(["ps", "-A", "-o", "pid=,ppid=,command="], capture_output=True, text=True).stdout
+    children: dict[int, list[tuple[int, str]]] = {}
+    for line in table.splitlines():
+        fields = line.split(None, 2)
+        if len(fields) >= 2:
+            children.setdefault(int(fields[1]), []).append((int(fields[0]), fields[2] if len(fields) > 2 else ""))
+    found, todo = {}, [pid]
+    while todo:
+        for child, command in children.get(todo.pop(), []):
+            found[child] = command
+            todo.append(child)
+    return found
+
+
 @unittest.skipUnless(shutil.which("uv"), "uv is required for the kernel environments")
 class CheckPairCacheTests(unittest.TestCase):
-    """check through cad-motion's pair cache: base, arm and attached spacer, then a v2 that changes
-    only the arm (CadQuery only)."""
+    """check through cad-motion's pair evaluator: base, arm and attached spacer, then a v2 that
+    changes only the arm (CadQuery only). The arm sits on the base and the spacer 1 mm below it, so
+    the arm and the spacer are 21 mm apart: fast mode clears that pair on its bounds."""
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -778,32 +808,157 @@ class CheckPairCacheTests(unittest.TestCase):
         set_arm(cls.hw, "cadquery", length=80.0)
         cls.built.append(cli("run", str(cls.hw), "--label", "v2", "--attach", "TST-0003=TST-0001"))
         cache = str(Path(cls.tmp.name) / "cache")
-        cls.checks = {name: cli("check", label, "--hw", str(cls.hw), *option)[1] for name, label, option in (
+        cls.runs = {name: cli("check", label, "--hw", str(cls.hw), *option) for name, label, option in (
             ("v1 no cache", "v1", ["--no-cache"]), ("v1 cold", "v1", ["--cache", cache]),
             ("v1 warm", "v1", ["--cache", cache]), ("v2 seeded", "v2", ["--cache", cache]),
-            ("v2 no cache", "v2", ["--no-cache"]))}
+            ("v2 no cache", "v2", ["--no-cache"]), ("v1 exact", "v1", ["--no-cache", "--exact"]),
+            ("v2 changed", "v2", ["--no-cache", "--changed-only"]),
+            ("v2 since v1", "v2", ["--no-cache", "--changed-only", "--since-version", "v1"]),
+            ("v1 changed", "v1", ["--no-cache", "--changed-only"]),
+            ("v2 since v9", "v2", ["--no-cache", "--changed-only", "--since-version", "v9"]))}
+        cls.checks = {name: result for name, (_, result, _) in cls.runs.items()}
 
     @classmethod
     def tearDownClass(cls) -> None:
         cls.tmp.cleanup()
 
+    @staticmethod
+    def without_timings(result: dict) -> dict:
+        return {k: v for k, v in result.items() if k != "timings_s"}
+
     def kept(self, name: str) -> dict:
-        return {k: v for k, v in self.checks[name].items() if k != "timings_s"}
+        return self.without_timings(self.checks[name])
 
     def counts(self, name: str) -> tuple[int, int]:
         timings = self.checks[name]["timings_s"]
-        return timings["pair_evaluations"], timings["disk_hits"]
+        return timings["kernel_evaluations"], timings["exact_hits"]
 
     def test_a_cold_and_a_warm_cache_report_what_no_cache_does(self) -> None:
         for proc, result, _ in self.built:
             self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
         self.assertEqual(self.kept("v1 cold"), self.kept("v1 no cache"))
         self.assertEqual(self.kept("v1 warm"), self.kept("v1 no cache"))
-        self.assertEqual((self.counts("v1 cold"), self.counts("v1 warm")), ((3, 0), (0, 3)))
+        self.assertEqual((self.counts("v1 cold"), self.counts("v1 warm")), ((2, 0), (0, 2)))
+        self.assertEqual(self.checks["v1 cold"]["timings_s"]["cleared"]["box"], 1)
 
     def test_the_next_version_measures_only_the_pairs_of_its_changed_part(self) -> None:
         self.assertEqual(self.kept("v2 seeded"), self.kept("v2 no cache"))
-        self.assertEqual(self.counts("v2 seeded"), (2, 1))
+        self.assertEqual(self.counts("v2 seeded"), (1, 1))
+
+    def test_fast_and_exact_checks_agree(self) -> None:
+        fast, exact = self.checks["v1 no cache"], self.checks["v1 exact"]
+        self.assertEqual((fast["evaluation"]["mode"], exact["evaluation"]["mode"]), ("fast", "exact"))
+        self.assertEqual({k: c["status"] for k, c in fast["checks"].items()},
+                         {k: c["status"] for k, c in exact["checks"].items()})
+        self.assertEqual(fast["checks"]["connection"], exact["checks"]["connection"])
+        self.assertEqual(fast["checks"]["interference"]["min_clearance"], exact["checks"]["interference"]["min_clearance"])
+        exact_rows = {tuple(r["pair"]): r for r in exact["checks"]["interference"]["pairs"]}
+        for row in fast["checks"]["interference"]["pairs"]:
+            other = exact_rows[tuple(row["pair"])]
+            with self.subTest(pair=row["pair"], method=row["method"]):
+                self.assertEqual(other["method"], "exact")
+                if row["method"] == "exact":
+                    self.assertEqual((row["clearance_mm"], row["interference_mm3"]),
+                                     (other["clearance_mm"], other["interference_mm3"]))
+                else:  # a far pair's bounds bracket the exact distance
+                    self.assertLessEqual(row["lower_mm"], other["clearance_mm"])
+                    self.assertTrue(row["upper_mm"] is None or other["clearance_mm"] <= row["upper_mm"])
+                    self.assertEqual((row["clearance_mm"], other["interference_mm3"]), (None, 0.0))
+        self.assertEqual(self.counts("v1 exact"), (3, 0))
+
+    def swept(self, label: str, cache: Path) -> dict:
+        """fixtures/share_probe.py: the version's pairs at the nominal pose, loaded and placed as the sweep does."""
+        proc = subprocess.run(["uv", "run", "--quiet", "--script", str(FIXTURES / "share_probe.py"), str(self.hw), label,
+                               str(cache)], capture_output=True, text=True, check=False)
+        self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+        return json.loads(proc.stdout)
+
+    def test_the_sweeps_nominal_pose_and_the_check_share_exact_readings(self) -> None:
+        check_first, sweep_first = Path(self.tmp.name) / "check-first", Path(self.tmp.name) / "sweep-first"
+        checked = cli("check", "v1", "--hw", str(self.hw), "--cache", str(check_first))[1]
+        rows = checked["checks"]["interference"]["pairs"] + checked["checks"]["interference"]["joint_pairs"]
+        exact = {" ".join(r["pair"]): [r["clearance_mm"], r["interference_mm3"]] for r in rows if r["method"] == "exact"}
+        self.assertEqual(len(exact), 2)
+        swept = self.swept("v1", check_first)
+        self.assertEqual((swept["exact_hits"], swept["kernel_evaluations"]), (2, 1))  # only the cleared pair is new
+        self.assertEqual({key: swept["readings"][key] for key in exact}, exact)
+        everything = self.swept("v1", sweep_first)
+        again = cli("check", "v1", "--hw", str(self.hw), "--cache", str(sweep_first))[1]
+        # every pair is a cache hit, the far pair's exact reading too; the verdicts are the check's own
+        self.assertEqual((again["timings_s"]["kernel_evaluations"], again["timings_s"]["exact_hits"]), (0, 3))
+        self.assertEqual({k: c["status"] for k, c in again["checks"].items()},
+                         {k: c["status"] for k, c in checked["checks"].items()})
+        again_rows = again["checks"]["interference"]["pairs"] + again["checks"]["interference"]["joint_pairs"]
+        self.assertEqual({" ".join(r["pair"]): [r["clearance_mm"], r["interference_mm3"]] for r in again_rows
+                          if " ".join(r["pair"]) in exact}, exact)
+        self.assertEqual({key: everything["readings"][key] for key in exact}, exact)
+
+    def test_a_changed_only_check_measures_only_the_changed_parts_pairs(self) -> None:
+        for name in ("v2 changed", "v2 since v1"):
+            with self.subTest(name=name):
+                result = self.checks[name]
+                scope = result["scope"]
+                self.assertEqual((scope["kind"], scope["complete"], scope["baseline"]), ("changed_pairs", False, "v1"))
+                self.assertEqual((scope["selected_pairs"], scope["unchanged_pairs"], scope["reasons"]),
+                                 (2, 1, {"geometry": 2}))
+                self.assertEqual(scope["changes"]["geometry_changed"], ["TST-0002"])
+                rows = result["checks"]["interference"]["pairs"] + result["checks"]["interference"]["joint_pairs"]
+                self.assertEqual(sorted(tuple(r["pair"]) for r in rows), [("TST-0001", "TST-0002"), ("TST-0002", "TST-0003")])
+                self.assertEqual(result["checks"]["interference"]["min_clearance"], None)
+                self.assertEqual(result["checks"]["connection"]["status"], "skipped")
+                self.assertEqual(self.counts(name), (1, 0))  # the unchanged base-spacer pair is not evaluated
+        self.assertEqual(self.checks["v2 changed"]["scope"]["reasons"], self.checks["v2 since v1"]["scope"]["reasons"])
+
+    def test_a_changed_only_check_without_a_baseline_selects_every_pair(self) -> None:
+        scope = self.checks["v1 changed"]["scope"]
+        self.assertEqual((scope["kind"], scope["complete"], scope["baseline"], scope["selected_pairs"]),
+                         ("changed_pairs", False, None, 3))
+        self.assertEqual(scope["full_selection"], "no built version before v1: every pair is selected")
+
+    def test_a_baseline_that_is_not_built_is_an_error(self) -> None:
+        proc, result, _ = self.runs["v2 since v9"]
+        self.assertEqual((proc.returncode, result), (2, {}))
+        self.assertIn("v9", proc.stderr)
+
+    def test_a_check_refuses_while_the_same_check_runs_and_runs_beside_another(self) -> None:
+        code = (f"import importlib.util, sys, time\nspec = importlib.util.spec_from_file_location('l', {str(LIFECYCLE_SCRIPT)!r})\n"
+                "module = importlib.util.module_from_spec(spec)\nsys.modules['l'] = module\nspec.loader.exec_module(module)\n"
+                f"module.claim_run({str(self.hw)!r}, 'static', scope='v1 all-pairs')\nprint('claimed', flush=True)\n"
+                "time.sleep(600)\n")
+        holder = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, text=True)
+        self.addCleanup(lambda: (holder.kill(), holder.wait(), holder.stdout.close()))
+        self.assertEqual(holder.stdout.readline().strip(), "claimed")
+        proc, result, _ = cli("check", "v1", "--hw", str(self.hw), "--no-cache")
+        self.assertEqual((proc.returncode, result), (2, {}))
+        self.assertIn(f"a static run of v1 all-pairs still runs as process {holder.pid}; stop it with "
+                      f"`kill -TERM {holder.pid}`", proc.stderr)
+        for args in (("v2",), ("v1", "--changed-only")):  # another version, another selection: run side by side
+            with self.subTest(args=args):
+                proc, result, _ = cli("check", *args, "--hw", str(self.hw), "--no-cache")
+                self.assertIn(proc.returncode, (0, 1), proc.stderr[-2000:])
+                self.assertEqual(result["label"], args[0])
+
+    def test_killing_a_check_outright_leaves_no_worker_running(self) -> None:
+        check = subprocess.Popen(["uv", "run", "--quiet", "--script", str(CLI), "check", "v1", "--hw", str(self.hw),
+                                  "--no-cache", "--exact", "--jobs", "2"],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        self.addCleanup(check.wait)
+        self.addCleanup(lambda: check.poll() is None and os.killpg(check.pid, signal.SIGKILL))
+        deadline, family = time.monotonic() + 600, {}
+        while time.monotonic() < deadline and check.poll() is None:
+            family = descendants(check.pid)
+            if sum("multiprocessing" in command for command in family.values()) >= 2:
+                break
+            time.sleep(0.05)
+        else:
+            self.fail(f"no worker processes appeared before the check ended: {family}")
+        parent = next(pid for pid, command in family.items() if "cad_model.py" in command and "multiprocessing" not in command)
+        os.kill(parent, signal.SIGKILL)  # the check itself: nothing of it can clean up
+        for pid, command in family.items():
+            deadline = time.monotonic() + 15
+            while process_runs(pid) and time.monotonic() < deadline:
+                time.sleep(0.05)
+            self.assertFalse(process_runs(pid), f"{command} outlived the killed check")
 
 
 BASE, ARM_PN, PIN = "TST-0001", "TST-0002", "TST-0003"
@@ -815,8 +970,10 @@ def joints(*specs: tuple[str, str, str, str]) -> list[dict]:
 
 
 def gaps(pairs: dict[tuple[str, str], float | None]) -> dict:
-    """check's pair geometry from clearances; no shared volume, none measured where the gap is None."""
-    return {pair: {"clearance_mm": gap, "interference_mm3": None if gap is None else 0.0} for pair, gap in pairs.items()}
+    """check's pair geometry from exact clearances; no shared volume, a failed row where the gap is None."""
+    return {pair: {"clearance_mm": gap, "interference_mm3": 0.0, "method": "exact"} if gap is not None
+            else {"clearance_mm": None, "interference_mm3": None, "method": None, "error": "not measured"}
+            for pair, gap in pairs.items()}
 
 
 INSERT = "TST-0003"
@@ -966,25 +1123,31 @@ class OccurrenceBuildTests(unittest.TestCase):
 @unittest.skipUnless(shutil.which("uv"), "uv is required for the kernel environments")
 class PairClearanceBuildTests(unittest.TestCase):
     """The swing arm built 0.8 mm above the base, on its revolute joint, against a clearance
-    requirement on that joint-connected pair (CadQuery only)."""
+    requirement on that joint-connected pair (CadQuery only): 1.0 mm in v1, 0.5 mm in v2. check
+    reads the requirement from the version's record snapshot."""
+
+    LABELS = {1.0: "v1", 0.5: "v2"}
 
     @classmethod
     def setUpClass(cls) -> None:
         cls.tmp = tempfile.TemporaryDirectory()
         cls.hw = two_part_project(Path(cls.tmp.name), "cadquery")
         set_arm(cls.hw, "cadquery", z0=20.8)  # the plate's underside 0.8 mm above the base top at z 20
-        cls.built = cli("run", str(cls.hw), "--label", "v1")
+        cls.built = []
+        for minimum, label in cls.LABELS.items():
+            (cls.hw / "interfaces.yaml").write_text(
+                "interfaces:\n  - {id: IF-001, from: arm, to: base, type: clearance, description: The arm clears the base.,"
+                f" pair: [{ARM_PN}, {BASE}], min_clearance_mm: {minimum}}}\n", encoding="utf-8")
+            cls.built.append(cli("run", str(cls.hw), "--label", label))
 
     @classmethod
     def tearDownClass(cls) -> None:
         cls.tmp.cleanup()
 
     def checked(self, minimum: float) -> tuple[subprocess.CompletedProcess[str], dict]:
-        self.assertEqual(self.built[0].returncode, 0, self.built[0].stderr[-3000:])
-        (self.hw / "interfaces.yaml").write_text(
-            "interfaces:\n  - {id: IF-001, from: arm, to: base, type: clearance, description: The arm clears the base.,"
-            f" pair: [{ARM_PN}, {BASE}], min_clearance_mm: {minimum}}}\n", encoding="utf-8")
-        proc, result, _ = cli("check", "v1", "--hw", str(self.hw))
+        for proc, _, _ in self.built:
+            self.assertEqual(proc.returncode, 0, proc.stderr[-3000:])
+        proc, result, _ = cli("check", self.LABELS[minimum], "--hw", str(self.hw))
         return proc, result
 
     def test_a_requirement_above_the_gap_blocks_and_one_below_it_passes(self) -> None:
@@ -1107,7 +1270,7 @@ class CheckRuleTests(unittest.TestCase):
         pair = (BASE, ARM_PN)
         declared = [{"pair": list(pair), "fit": "5 H7/p6", "classification": "interference",
                      "interface": "IF-001", "source": "interfaces.yaml#/interfaces/0/limits/press_fit"}]
-        geometry = {pair: {"clearance_mm": -0.01, "interference_mm3": 0.1}}
+        geometry = {pair: {"clearance_mm": -0.01, "interference_mm3": 0.1, "method": "exact"}}
         with mock.patch.object(check, "load_pose", return_value=mock.Mock(INTERFERENCE_MM3=0.001)):
             result = check.interference(geometry, None, set(), set(), declared)
         self.assertEqual(result["status"], "pass")
@@ -1115,7 +1278,7 @@ class CheckRuleTests(unittest.TestCase):
         self.assertTrue(result["pairs"][0]["allowed"])
 
     def test_undeclared_overlap_still_fails(self) -> None:
-        geometry = {(BASE, ARM_PN): {"clearance_mm": -0.01, "interference_mm3": 0.1}}
+        geometry = {(BASE, ARM_PN): {"clearance_mm": -0.01, "interference_mm3": 0.1, "method": "exact"}}
         with mock.patch.object(check, "load_pose", return_value=mock.Mock(INTERFERENCE_MM3=0.001)):
             result = check.interference(geometry, None, set(), set())
         self.assertEqual((result["status"], result["pairs"][0]["ok"]), ("fail", False))
@@ -1124,7 +1287,7 @@ class CheckRuleTests(unittest.TestCase):
         pair = (BASE, ARM_PN)
         declared = [{"pair": list(pair), "fit": "5 H7/p6", "classification": "interference",
                      "interface": "IF-001", "source": "interfaces.yaml#/interfaces/0/limits/press_fit"}]
-        geometry = {pair: {"clearance_mm": 0.01, "interference_mm3": 0.0}}
+        geometry = {pair: {"clearance_mm": 0.01, "interference_mm3": 0.0, "method": "exact"}}
         with mock.patch.object(check, "load_pose", return_value=mock.Mock(INTERFERENCE_MM3=0.001)):
             result = check.interference(geometry, None, set(), set(), declared)
         self.assertEqual(result["status"], "fail")
@@ -1132,8 +1295,8 @@ class CheckRuleTests(unittest.TestCase):
         self.assertEqual(result["declared_fit_findings"][0]["source"], declared[0]["source"])
 
     @staticmethod
-    def requirement(pair: tuple[str, str], minimum: float) -> dict:
-        return {"pair": list(pair), "min_clearance_mm": minimum, "interface": "IF-002",
+    def requirement(pair: tuple[str, str], minimum: float, margin: float = 0.0) -> dict:
+        return {"pair": list(pair), "min_clearance_mm": minimum, "margin_mm": margin, "interface": "IF-002",
                 "source": "interfaces.yaml#/interfaces/1"}
 
     def test_a_pair_requirement_fails_above_the_measured_clearance_and_passes_at_or_below_it(self) -> None:
@@ -1143,8 +1306,30 @@ class CheckRuleTests(unittest.TestCase):
                 result = check.pair_clearance(geometry, [self.requirement((BASE, ARM_PN), minimum)], {ARM_PN: "@arm"})
                 self.assertEqual((result["status"], result["blocking"]), (status, True))
                 self.assertEqual(result["requirements"], [
-                    {"pair": [BASE, ARM_PN], "refs": [BASE, "@arm"], "required_mm": minimum, "clearance_mm": 0.8,
-                     "status": status, "interface": "IF-002", "source": "interfaces.yaml#/interfaces/1"}])
+                    {"pair": [BASE, ARM_PN], "refs": [BASE, "@arm"], "required_mm": minimum, "margin_mm": 0.0,
+                     "clearance_mm": 0.8, "method": "exact", "status": status, "interface": "IF-002",
+                     "source": "interfaces.yaml#/interfaces/1"}])
+
+    def test_a_clearance_inside_its_margin_warns_and_never_fails(self) -> None:
+        geometry = gaps({(BASE, ARM_PN): 0.55})
+        for minimum, margin, status in ((0.5, 0.1, "warn"), (0.45, 0.1, "pass"), (0.55, 0.1, "warn"), (0.6, 0.1, "fail")):
+            with self.subTest(minimum=minimum, margin=margin):
+                result = check.pair_clearance(geometry, [self.requirement((BASE, ARM_PN), minimum, margin)])
+                (row,) = result["requirements"]
+                self.assertEqual((result["status"], row["status"], row.get("warning")),
+                                 (status, status, "margin" if status == "warn" else None))
+
+    def test_a_cleared_pair_passes_on_its_lower_bound_and_carries_no_distance(self) -> None:
+        geometry = {(BASE, ARM_PN): {"clearance_mm": None, "interference_mm3": None, "method": "mesh",
+                                     "lower_mm": 3.2, "upper_mm": 3.5}}
+        result = check.pair_clearance(geometry, [self.requirement((BASE, ARM_PN), 1.0, 0.1)])
+        (row,) = result["requirements"]
+        self.assertEqual((result["status"], row["clearance_mm"], row["method"], row["lower_mm"]), ("pass", None, "mesh", 3.2))
+        unproved = check.pair_clearance(geometry, [self.requirement((BASE, ARM_PN), 3.2, 0.1)])
+        self.assertEqual(unproved["status"], "fail")
+        with mock.patch.object(check, "load_pose", return_value=mock.Mock(INTERFERENCE_MM3=0.001)):
+            found = check.interference(geometry, None, set(), set())
+        self.assertEqual((found["status"], found["pairs"][0]["interferes"], found["min_clearance"]), ("pass", False, None))
 
     def test_a_pair_requirement_compares_the_unrounded_clearance(self) -> None:
         result = check.pair_clearance(gaps({(BASE, ARM_PN): 0.79996}), [self.requirement((BASE, ARM_PN), 0.8)])
@@ -1158,6 +1343,18 @@ class CheckRuleTests(unittest.TestCase):
         self.assertEqual([(row["status"], row.get("error")) for row in result["requirements"]],
                          [("fail", "Standard_Failure"), ("fail", "the version has no such occurrence pair")])
         self.assertEqual(check.pair_clearance(geometry, [])["status"], "pass")
+
+    def test_a_cleared_pair_that_could_be_an_occurrences_nearest_is_refined(self) -> None:
+        bound = lambda lower, upper: {"clearance_mm": None, "interference_mm3": None, "method": "mesh",  # noqa: E731
+                                      "lower_mm": lower, "upper_mm": upper}
+        exact = lambda pair, gap: gaps({pair: gap})[pair]  # noqa: E731
+        rows = {(BASE, ARM_PN): exact((BASE, ARM_PN), 0.0), (BASE, PIN): bound(4.0, 4.4), (ARM_PN, PIN): bound(4.5, None)}
+        # BASE and the arm touch; the pin's nearest is the base (at most 4.4), never the arm (at least 4.5)
+        self.assertEqual(check._nearest_candidates(rows), [(BASE, PIN)])
+        rows[(BASE, PIN)] = exact((BASE, PIN), 4.2)
+        self.assertEqual(check._nearest_candidates(rows), [])
+        rows[(BASE, ARM_PN)] = exact((BASE, ARM_PN), 5.0)  # now the arm's nearest may be the pin
+        self.assertEqual(check._nearest_candidates(rows), [(ARM_PN, PIN)])
 
     def test_a_clearance_requirement_record_resolves_through_the_pair_policy(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1549,6 +1746,46 @@ class ContainmentTests(unittest.TestCase):
                     row = report[container][order]
                     self.assertEqual((row["clearance_mm"], row["status"]), (0.0, "fail"))
                     self.assertAlmostEqual(row["interference_mm3"], 8.0, places=6)
+
+
+@unittest.skipUnless(shutil.which("uv"), "uv is required for the OCP environment")
+class StaticSuspectTests(unittest.TestCase):
+    """check's pair geometry checks every kernel reading against its own bounds, as the sweep does:
+    a degenerate 0.0 mm reading of two cubes 8.04 mm apart (the stand and clutch of the engine
+    project) is a suspect, never an interference (fixtures/suspect_probe.py)."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = subprocess.run(["uv", "run", "--quiet", "--script", str(FIXTURES / "suspect_probe.py"), tmp],
+                                  capture_output=True, text=True, check=False)
+        assert proc.returncode == 0, proc.stderr[-2000:]
+        cls.report = json.loads(proc.stdout)
+
+    def test_a_resolved_suspect_passes_on_its_bounds_and_is_reported(self) -> None:
+        found = self.report["exact_first"]
+        self.assertEqual((found["interference"], found["clearance"]), ("pass", "pass"))
+        self.assertEqual((found["row"]["method"], found["row"]["clearance_mm"]), ("mesh (exact suspect)", None))
+        self.assertLessEqual(found["row"]["lower_mm"], 8.04)
+        (suspect,) = found["suspects"]
+        self.assertEqual((suspect["distance_mm"], suspect["resolved"]), (0.0, True))
+        self.assertEqual([r["label"] for r in suspect["reevaluated"]], ["+0.01 mm", "-0.01 mm", "swapped"])
+        self.assertTrue(all(abs(r["distance_mm"] - 8.04) <= 0.01 for r in suspect["reevaluated"]))
+
+    def test_an_unresolved_or_exact_required_suspect_blocks(self) -> None:
+        for name in ("exact_every", "required_first"):
+            with self.subTest(name=name):
+                found = self.report[name]
+                self.assertEqual((found["interference"], found["clearance"], found["row"]["method"]),
+                                 ("fail", "fail", None))
+                self.assertIn("suspect reading 0.0 mm", found["row"]["error"])
+        self.assertFalse(self.report["exact_every"]["suspects"][0]["resolved"])
+
+    def test_fast_mode_clears_the_far_pair_without_a_reading(self) -> None:
+        found = self.report["fast"]
+        self.assertEqual((found["interference"], found["clearance"], found["kernel_evaluations"]), ("pass", "pass", 0))
+        self.assertEqual((found["row"]["clearance_mm"], found["suspects"]), (None, []))
+        self.assertGreater(found["row"]["lower_mm"], 8.0)
 
 
 if __name__ == "__main__":
