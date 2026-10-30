@@ -383,6 +383,8 @@ def crosscheck_freecad(ctx: Context, frames_path: Path, work: Path) -> tuple[dic
     if code == 2 or not (job / "crosscheck.json").is_file():
         raise pose.MotionError(f"the FreeCAD cross-check gave no result: {result.get('error') or result}")
     report = json.loads((job / "crosscheck.json").read_text(encoding="utf-8"))
+    if report.get("mode") == "smoke" or report.get("evidence") is False:
+        raise pose.MotionError("a FreeCAD smoke run is diagnostic only and cannot be used as a motion cross-check")
     if code == 1:
         raise Failed({"status": "fail", "error": "the FreeCAD cross-check disagrees with coupling.py",
                       "crosscheck": report, "work": str(work)})

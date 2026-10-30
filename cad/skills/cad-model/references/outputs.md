@@ -81,7 +81,8 @@ command checks every file of the newest version against its manifest first and r
 
 `run` stdout: `status`, `label`, `version_dir`, per-part `kernel`/`volume_mm3`/`solids`/`mass_g`,
 `manufacturing` per custom-made PN (`status`, `complete`, `path`, `process`, `state`),
-`timings_s` (`<kernel>_import_s`, `<kernel>_runner_wall_s`, `manufacturing_s`, `glb_s`, `total_s`).
+`warnings` (`[{pn, message}]`, including non-functional fillet edges skipped after all radius retries),
+and `timings_s` (`<kernel>_import_s`, `<kernel>_runner_wall_s`, `manufacturing_s`, `glb_s`, `total_s`).
 On exit 1: `findings`, one per failed part: `pn`, `check`, `type`, `message`, `where`, plus
 `runners` timings when the kernels ran. `check` is one of:
 

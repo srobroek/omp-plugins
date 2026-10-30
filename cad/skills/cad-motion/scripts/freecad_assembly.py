@@ -8,10 +8,9 @@ against the joint limits, or, on a motion plan's frames, against coupling.py's c
 Usage:
     uv run --script skill://cad-flow/scripts/run.py cad-motion/scripts/freecad_assembly.py --hw HW
         (--step ASSEMBLY.step | --parts-dir DIR | --version vN|latest)
-        [--attach REF=PARENT_REF ...] [--report-part REF ...] [--time-step 0.01]
-        [--freecad FREECADCMD] [--job-dir DIR] [--timeout 600]
+        [--freecad FREECADCMD] [--job-dir DIR] [--timeout 600] [--smoke]
     uv run --script skill://cad-flow/scripts/run.py cad-motion/scripts/freecad_assembly.py --hw HW --version vN
-        --frames .cad-work/UNIT/frames.json --job-dir .cad-work/UNIT/crosscheck [--start coupled|far-branch]
+        --frames .cad-work/UNIT/frames.json --job-dir .cad-work/UNIT/crosscheck [--start coupled|far-branch] [--smoke]
 
 Inputs and kinematics are pose.py's (same options, same occurrence chain). The job writes one STEP
 per part definition into the job directory, imports it once per occurrence into a FreeCAD Assembly,
@@ -44,6 +43,10 @@ fewer). `--start far-branch` seeds every slider-crank on its far branch (piston 
 rod turned over), a negative control that the comparison must fail. The job directory receives
 crosscheck.json and motion.FCStd (the document before simulation, as saved by freecadcmd).
 
+Smoke mode samples at most three evenly spaced positions (first, middle, and last of the full run).
+It is diagnostic only: output is labelled `smoke` with `evidence: false`, and is never published as
+a verification bundle.
+
 freecadcmd can exit 139 after finishing. The result counts only when the job printed this run's
 completion marker and wrote a fresh result file carrying the same run id; a non-zero exit after
 that is reported as a warning.
@@ -62,12 +65,15 @@ import importlib.util
 import json
 import math
 import shutil
+import os
+import signal
 import subprocess
 import sys
 import tempfile
 import time
 import traceback
 import uuid
+import threading
 from pathlib import Path
 from typing import Any
 sys.path.insert(0, str(Path(__file__).parents[2] / "cad-analysis" / "scripts"))
@@ -171,7 +177,7 @@ try:
 
     simulation = assembly.newObject("Assembly::SimulationGroup", "Simulations").newObject("App::FeaturePython", "Simulation")
     Sim.Simulation(simulation)
-    simulation.aTimeStart, simulation.bTimeEnd, simulation.cTimeStepOutput = 0.0, 1.0, SPEC["time_step"]
+    simulation.aTimeStart, simulation.bTimeEnd, simulation.cTimeStepOutput = 0.0, 1.0, SPEC.get("time_step", 0.01)
     for motion_spec in SPEC["motions"]:
         motion = assembly.newObject("App::FeaturePython", "Motion")
         Sim.Motion(motion, motion_spec["kind"], joints[motion_spec["joint"]], motion_spec["formula"])
@@ -261,7 +267,7 @@ def hinge_formula(ts: list[float], ys: list[float], scale: float = 1.0) -> str:
 
 
 def job_spec(chain: Any, part_paths: dict[str, Path], names: dict[str, str], run_id: str,
-             result: Path, time_step: float) -> dict[str, Any]:
+             result: Path, time_step: float, frame_count: int | None = None) -> dict[str, Any]:
     """The limit-mode job: one object per occurrence id, `part_paths` and `names` per PN."""
     # Parts start at the motion's time-0 pose (every joint at min): solving from
     # the zero pose straight to a start angle far from it can land FreeCAD on
@@ -278,7 +284,8 @@ def job_spec(chain: Any, part_paths: dict[str, Path], names: dict[str, str], run
             entry["limits"] = [j.min, j.max]
         joints.append(entry)
     return {
-        "run_id": run_id, "marker": f"CAD_MOTION_DONE {run_id}", "result": str(result), "time_step": time_step,
+        "time_step": (1.0 / (frame_count - 1) if frame_count is not None and frame_count > 1 else time_step),
+        "run_id": run_id, "marker": f"CAD_MOTION_DONE {run_id}", "result": str(result),
         "root": chain.root,
         "parts": [{"id": oid, "pn": chain.pn(oid), "name": names[chain.pn(oid)], "path": str(part_paths[chain.pn(oid)]),
                    "start_placement": _pair(start[oid])} for oid in chain.ids],
@@ -286,6 +293,17 @@ def job_spec(chain: Any, part_paths: dict[str, Path], names: dict[str, str], run
         "motions": [{"joint": _name(j.id), "kind": "Angular" if j.type == "revolute" else "Linear",
                      "formula": motion_formula(j), "label": f"drive {j.id}"} for j in chain.movable],
     }
+
+def smoke_frames(frames: list[dict[str, Any]], limit: int = 3) -> list[dict[str, Any]]:
+    """Evenly select at most ``limit`` frames, including the ends when there are multiple frames."""
+    if limit < 1:
+        raise ValueError("smoke frame limit must be positive")
+    if len(frames) <= limit:
+        return frames
+    if limit == 1:
+        return [frames[0]]
+    indices = sorted({round(index * (len(frames) - 1) / (limit - 1)) for index in range(limit)})
+    return [frames[index] for index in indices]
 
 
 # --------------------------------------------------------------------------- cross-check mode
@@ -346,8 +364,10 @@ def _piecewise_linear_in_time(chain: Any, jid: str) -> bool:
 
 def crosscheck_spec(chain: Any, part_paths: dict[str, Path], names: dict[str, str],
                     frames: list[dict[str, dict[str, float]]], run_id: str, result: Path, fcstd: Path,
-                    start: str) -> tuple[dict[str, Any], dict[str, str]]:
+                    start: str, smoke: bool = False) -> tuple[dict[str, Any], dict[str, str]]:
     """The cross-check job over the plan frames, and how each movable joint maps to FreeCAD."""
+    if smoke:
+        frames = smoke_frames(frames)
     n = len(frames)
     times = [k / (n - 1) for k in range(n)]
     laws = chain.couplings.laws
@@ -500,6 +520,8 @@ def compare(chain: Any, frames: list[dict[str, dict[str, float]]], solved: list[
 def run_crosscheck(args: argparse.Namespace, freecad: Path, version: str | None, started: float) -> int:
     _, chain, definitions = pose.load_inputs(args)
     frames = read_frames(args.frames, chain, version)
+    if args.smoke:
+        frames = smoke_frames(frames)
     job_dir = args.job_dir
     job_dir.mkdir(parents=True)
     pns = sorted({chain.pn(oid) for oid in chain.ids})
@@ -509,6 +531,8 @@ def run_crosscheck(args: argparse.Namespace, freecad: Path, version: str | None,
     run_id = uuid.uuid4().hex
     spec, mapping = crosscheck_spec(chain, paths, {pn: definitions[pn].name for pn in pns}, frames, run_id,
                                     job_dir / f"result-{run_id}.json", job_dir / "motion.FCStd", args.start)
+    if args.smoke:
+        spec["time_step"] = 1.0 / (len(frames) - 1)
     job_started = time.monotonic()
     result, warnings, exit_code = run_job(freecad, job_dir, spec, args.timeout)
     if result.get("status_sim") != 0:
@@ -516,14 +540,17 @@ def run_crosscheck(args: argparse.Namespace, freecad: Path, version: str | None,
                                f"{result.get('status_solve')}): no result")
     report = compare(chain, frames, result["frames"], mapping)
     report = {"status": report["status"], "version": version, "start": args.start,
+              "mode": "smoke" if args.smoke else "full", "evidence": not args.smoke,
               "freecad": {"binary": freecad.name, "version": ".".join(result["version"][:3]), "exit_code": exit_code,
                           "warnings": warnings, "status_solve": result.get("status_solve"),
                           "status_sim": result["status_sim"]},
               **{k: v for k, v in report.items() if k != "status"},
               "motions": [{"joint": m["label"], "kind": m["kind"], "formula_chars": len(m["formula"])}
                           for m in spec["motions"]]}
-    (job_dir / "crosscheck.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-    summary = {**report, "crosscheck": str(job_dir / "crosscheck.json"), "fcstd": str(job_dir / "motion.FCStd"),
+    if not args.smoke:
+        (job_dir / "crosscheck.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    summary = {**report, "crosscheck": str(job_dir / "crosscheck.json") if not args.smoke else None,
+               "fcstd": str(job_dir / "motion.FCStd"),
                "timings_s": {"freecad": round(time.monotonic() - job_started, 2),
                              "total": round(time.monotonic() - started, 2)}}
     print(json.dumps(summary, indent=2))
@@ -531,6 +558,39 @@ def run_crosscheck(args: argparse.Namespace, freecad: Path, version: str | None,
 
 
 # --------------------------------------------------------------------------- shared
+
+def _terminate_process(proc: subprocess.Popen[str], grace_seconds: float = 2.0) -> None:
+    """Bounded TERM→KILL of FreeCAD's private process group, followed by child reaping."""
+    if proc.poll() is not None:
+        proc.wait()
+        return
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    try:
+        proc.wait(timeout=grace_seconds)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        proc.wait()
+
+
+def _validated_result(result_path: Path, run_id: str) -> dict[str, Any] | None:
+    """Read only a complete JSON result carrying this run id and no job-level error."""
+    try:
+        result = json.loads(result_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(result, dict) or result.get("run_id") != run_id or "error" in result:
+        return None
+    if result.get("status_sim") != 0 or not isinstance(result.get("frames"), list) or not result["frames"]:
+        return None
+    if not all(isinstance(frame, dict) for frame in result["frames"]):
+        return None
+    return result
 
 
 def run_job(freecad: Path, job_dir: Path, spec: dict[str, Any], timeout: float) -> tuple[dict[str, Any], list[str], int]:
@@ -540,30 +600,30 @@ def run_job(freecad: Path, job_dir: Path, spec: dict[str, Any], timeout: float) 
     job_path = job_dir / "job.py"
     job_path.write_text(JOB.replace("__SPEC_PATH__", json.dumps(str(spec_path))), encoding="utf-8")
     result_path = Path(spec["result"])
-    started = time.time()
+    proc = subprocess.Popen([str(freecad), str(job_path)], cwd=job_dir, stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL, text=True, start_new_session=True)
+    deadline = time.monotonic() + timeout
+    result = None
     try:
-        proc = subprocess.run([str(freecad), str(job_path)], cwd=job_dir, capture_output=True, text=True,
-                              timeout=timeout, check=False)
-    except subprocess.TimeoutExpired as error:
-        raise pose.MotionError(f"freecadcmd did not finish within {timeout} s") from error
-    tail = "\n".join((proc.stdout + proc.stderr).splitlines()[-20:])
-    if spec["marker"] not in proc.stdout.splitlines():
-        raise pose.MotionError(f"freecadcmd exited {proc.returncode} without the completion marker:\n{tail}")
-    if not result_path.is_file() or result_path.stat().st_mtime < started:
-        raise pose.MotionError(f"freecadcmd printed the marker but {result_path} is missing or stale")
-    try:
-        result = json.loads(result_path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as error:
-        raise pose.MotionError(f"cannot parse {result_path}: {error}") from error
-    if result.get("run_id") != spec["run_id"]:
-        raise pose.MotionError(f"{result_path} belongs to another run")
-    if "error" in result:
-        raise pose.MotionError(f"the FreeCAD job failed:\n{result['error']}")
+        while time.monotonic() < deadline:
+            result = _validated_result(result_path, spec["run_id"])
+            if result is not None or proc.poll() is not None:
+                break
+            time.sleep(0.05)
+        if result is None:
+            if proc.poll() is None:
+                raise pose.MotionError(f"freecadcmd did not write a valid result for run {spec['run_id']} within {timeout:g} s")
+            raise pose.MotionError(f"freecadcmd exited {proc.returncode} without a valid result for run {spec['run_id']}")
+    except BaseException:
+        _terminate_process(proc)
+        raise
+    _terminate_process(proc)
+    if result is None:
+        raise pose.MotionError(f"{result_path} is missing, stale, invalid, or belongs to another run")
     warnings = []
     if proc.returncode != 0:
         warnings.append(f"freecadcmd exited {proc.returncode} after writing a complete result (known teardown crash)")
     return result, warnings, proc.returncode
-
 
 def check_frames(chain: Any, frames: list[dict[str, list[list[float]]]]) -> dict[str, Any]:
     """Measure every joint in every frame; report limits, residuals, and violations.
@@ -653,6 +713,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--frames", type=Path, help="motion.py frames file: cross-check the couplings on its frames")
     parser.add_argument("--start", choices=("coupled", "far-branch"), default="coupled",
                         help="cross-check start pose: plan frame 0, or every slider-crank on its far branch")
+    parser.add_argument("--smoke", action="store_true",
+                        help="run at most three diagnostic frames; result is labelled non-evidentiary")
     args = parser.parse_args(argv)
     started = time.monotonic()
     try:
@@ -660,7 +722,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.version:
             version, version_dir, record_hw = pose.LAYOUT.built_version(args.hw, args.version)
             args.version, args.version_dir, args.record_hw = version, version_dir, record_hw
-            if args.frames is None:
+            if args.frames is None and not args.smoke:
                 pose.LAYOUT.resolve(args.hw, "bundle.motion", V=version, S=args.case)
         if args.job_dir is not None:
             args.job_dir = pose.LAYOUT.scratch_path(args.hw, args.job_dir, "--job-dir")
@@ -685,7 +747,7 @@ def main(argv: list[str] | None = None) -> int:
             raise pose.MotionError("freecadcmd not found; pass --freecad or set FREECADCMD")
         if args.frames is not None:
             return run_crosscheck(args, freecad, version, started)
-        if version:
+        if version and not args.smoke:
             recipe = {"operation": "freecad_assembly", "case": args.case,
                       "options": {"time_step": args.time_step, "timeout": args.timeout,
                                   "report_part": list(args.report_part), "freecad": {"binary": freecad.name}},
@@ -717,8 +779,9 @@ def main(argv: list[str] | None = None) -> int:
         for pn in pns:
             pose.write_part_step(paths[pn], definitions[pn])
         run_id = uuid.uuid4().hex
+        smoke_count = min(3, max(2, round(1 / args.time_step) + 1)) if args.smoke else None
         spec = job_spec(chain, paths, {pn: definitions[pn].name for pn in pns}, run_id,
-                        job_dir / f"result-{run_id}.json", args.time_step)
+                        job_dir / f"result-{run_id}.json", args.time_step, smoke_count)
         job_started = time.monotonic()
         result, warnings, exit_code = run_job(freecad, job_dir, spec, args.timeout)
         frames = result["frames"]
@@ -728,6 +791,7 @@ def main(argv: list[str] | None = None) -> int:
         moved = any(frames[0][oid] != frames[-1][oid] for oid in chain.ids)
         failed = bool(checks["violations"] or checks["residuals"] or checks["range_findings"])
         summary = {"status": "fail" if failed else "pass",
+                   "mode": "smoke" if args.smoke else "full", "evidence": not args.smoke,
                    "freecad": {"binary": freecad.name, "version": ".".join(result["version"][:3]),
                                "exit_code": exit_code, "warnings": warnings},
                    "frames": len(frames), "placements_change": moved,
@@ -739,7 +803,7 @@ def main(argv: list[str] | None = None) -> int:
                    "residuals": checks["residuals"][:MAX_LISTED],
                    "timings_s": {"freecad": round(time.monotonic() - job_started, 2),
                                  "total": round(time.monotonic() - started, 2)}}
-        if version:
+        if version and not args.smoke:
             # the job's own inputs and FreeCAD's raw frames; the part STEPs are the version's definitions,
             # already bound by the recipe's input hashes, and the result file's run-id name is per run
             evidence = {"spec.json": job_dir / "spec.json", "job.py": job_dir / "job.py",

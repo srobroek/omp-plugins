@@ -44,6 +44,7 @@ import importlib.metadata
 import importlib.util
 import json
 import math
+import logging
 import platform
 import re
 import sys
@@ -232,6 +233,26 @@ def _manufacture_hook(module: Any, declared: str | None) -> Any:
 
 
 def build_part(kernel: str, request: Mapping[str, Any]) -> dict[str, Any]:
+    warnings: list[str] = []
+
+    class WarningHandler(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            if record.name == "cadmodel.fillets":
+                warnings.append(record.getMessage())
+
+    handler = WarningHandler()
+    logger = logging.getLogger("cadmodel.fillets")
+    logger.addHandler(handler)
+    try:
+        result = _build_part(kernel, request)
+    finally:
+        logger.removeHandler(handler)
+    if warnings:
+        result["warnings"] = warnings
+    return result
+
+
+def _build_part(kernel: str, request: Mapping[str, Any]) -> dict[str, Any]:
     pose = load_pose()
     started = time.perf_counter()
     module = _load_model(request["pn"], Path(request["model"]))
