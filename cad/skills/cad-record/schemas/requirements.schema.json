@@ -24,6 +24,25 @@
               "method": {"type": "string", "enum": ["I", "A", "D", "T"]},
               "criteria": {"type": "string", "minLength": 1}
             }
+          },
+          "visibility": {
+            "description": "Show-the-motion checks: from view, rendering only the window and target parts at the nominal pose, at least min_visible_fraction (default 0.5) of the targets' projected area is visible. Only transparency: transparent window parts are see-through",
+            "type": "array", "minItems": 1,
+            "items": {
+              "type": "object", "additionalProperties": false,
+              "required": ["view", "window", "targets"],
+              "properties": {
+                "view": {
+                  "description": "A cad-render view: iso, front, side, or a dir-X-Y-Z direction in assembly coordinates",
+                  "type": "string",
+                  "pattern": "^(?:iso|front|side|dir-[pm](?:0|[1-9][0-9]{0,5})(?:d[0-9]{0,5}[1-9])?-[pm](?:0|[1-9][0-9]{0,5})(?:d[0-9]{0,5}[1-9])?-[pm](?:0|[1-9][0-9]{0,5})(?:d[0-9]{0,5}[1-9])?)$",
+                  "not": {"description": "a direction needs a non-zero component", "pattern": "^dir-[pm]0-[pm]0-[pm]0$"}
+                },
+                "window": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "assembly.schema.json#/$defs/part_ref"}},
+                "targets": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "assembly.schema.json#/$defs/part_ref"}},
+                "min_visible_fraction": {"type": "number", "exclusiveMinimum": 0, "maximum": 1}
+              }
+            }
           }
         }
       }

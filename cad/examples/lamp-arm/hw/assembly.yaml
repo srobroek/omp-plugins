@@ -33,6 +33,7 @@ joints:
     min: -10
     max: 80
     nominal: 0
+    torque: none
   - id: J-002
     type: revolute
     parent: LMP-0002
@@ -42,6 +43,7 @@ joints:
     min: -120
     max: 0
     nominal: -30
+    torque: none
   - id: J-003
     type: revolute
     parent: LMP-0003
@@ -51,6 +53,7 @@ joints:
     min: -45
     max: 45
     nominal: 0
+    torque: none
   - id: J-004
     type: fixed
     parent: LMP-0002

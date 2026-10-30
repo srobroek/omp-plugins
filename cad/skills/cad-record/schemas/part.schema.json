@@ -20,6 +20,14 @@
       "description": "Frame of model.py's geometry: assembly_zero (default) is assembly coordinates at the zero joint pose, one identity-placed occurrence only; part_local is the definition's own origin and axes, placed by each occurrence",
       "type": "string", "enum": ["assembly_zero", "part_local"]
     },
+    "form_class": {
+      "description": "The part's form type for the cad-design form check; absent means solid, and only a solid part is judged block_like",
+      "type": "string", "enum": ["solid", "frame", "plate", "skeleton", "shell"]
+    },
+    "transparency": {
+      "description": "How much light the part passes; absent means opaque. Only a transparent part is see-through to the visibility check, and an FDM part cannot be transparent",
+      "type": "string", "enum": ["opaque", "translucent", "transparent"]
+    },
     "procurement": {"$ref": "drawing.schema.json#/$defs/procurement"},
     "drawing": {"$ref": "drawing.schema.json#/$defs/part_drawing"},
     "manufacture": {

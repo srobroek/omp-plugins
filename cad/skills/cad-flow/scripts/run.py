@@ -8,8 +8,9 @@
 Usage: uv run --script skill://cad-flow/scripts/run.py <skill>/scripts/<script.py> [args...]
 
 The target path is relative to cad/skills/. `cadmodel.scriptenv` reads the target's
-PEP 723 header and starts it with `--with-requirements`, which keys uv's cache by
-the dependency set and interpreter rather than the target file's path.
+PEP 723 header and starts it with `--with-requirements` (or individual `--with` dependencies for
+uv-reserved basenames such as setup.py), which keys uv's cache by the dependency set and
+interpreter rather than the target file's path.
 """
 
 from __future__ import annotations

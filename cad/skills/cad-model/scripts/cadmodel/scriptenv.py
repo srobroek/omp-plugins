@@ -6,7 +6,10 @@ packages. `uv run --no-project --with-requirements S python S` reads the same in
 but keys the environment by the resolved set and interpreter, so every copy of S loads one shared
 environment. `--with-requirements` ignores the header's `requires-python`, so the header's
 specifier is passed as `--python`. `--isolated` keeps an active or discovered virtual environment
-out of the interpreter's path, as `uv run --script` does.
+out of the interpreter's path, as `uv run --script` does. uv reserves the basenames `setup.py`,
+`pyproject.toml`, and `setup.cfg` as project configuration, even when passed as requirements files.
+For those scripts, the declared dependencies are instead passed individually via `--with`; both
+options use the same cached environment semantics, keyed by dependency set and interpreter.
 
 Standard library only: the orchestrator, the preflight, and the warm-up import it outside any kernel.
 """
@@ -17,6 +20,9 @@ import re
 import tomllib
 from pathlib import Path
 from typing import Any
+
+# uv reserves these basenames for project metadata even with --with-requirements.
+RESERVED_REQUIREMENTS_NAMES = frozenset({"setup.py", "pyproject.toml", "setup.cfg"})
 
 # PEP 723's reference block pattern: `# /// script`, `#`-prefixed TOML lines, `# ///`.
 BLOCK = re.compile(r"(?m)^# /// (?P<type>[a-zA-Z0-9-]+)$\s(?P<content>(^#(| .*)$\s)+)^# ///$")
@@ -61,9 +67,14 @@ def pinned(script: Path, distribution: str) -> str:
 def python_command(script: Path, *python_args: str, uv: str = "uv") -> list[str]:
     """argv running `python *python_args` in the environment shared by `script`'s dependency set."""
     command = [uv, "run", "--quiet", "--isolated", "--no-project"]
-    requires = metadata(script).get("requires-python")
+    header = metadata(script)
+    requires = header.get("requires-python")
     if requires is not None:
         command += ["--python", requires]
+    if script.name in RESERVED_REQUIREMENTS_NAMES:
+        for dependency in header.get("dependencies", []):
+            command += ["--with", dependency]
+        return [*command, "python", *python_args]
     return [*command, "--with-requirements", str(script), "python", *python_args]
 
 
