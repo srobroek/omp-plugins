@@ -85,7 +85,7 @@ INTERFACES = {"interfaces": [{
     "id": "IF-001", "from": "base", "to": "pin", "type": "mounting", "description": "Pin pressed into the base bore.",
     "limits": {
         "press_fit": {"fit": "5 H7/p6", "hole": {"PN": "TST-0001", "feature": "pivot_bore", "region": "upper_span"},
-                      "shaft": {"PN": "TST-0002", "feature": "press_band"}},
+                      "shaft": {"PN": "TST-0002", "feature": "press_band"}, "axial_retainer": {"type": "press_fit"}},
         "running_fit": {"fit": "5 H8/f7", "pair": ["TST-0001", "TST-0002"], "note": "kept as a part pair"},
         "heat_set": [{"pair": ["TST-0001", "TST-0002"], "hole_d": 4.0, "insert": "M3 x 5.7 brass insert",
                       "source": "https://example.com/inserts/m3"},
@@ -172,7 +172,8 @@ class DrawingRecordAdditions(unittest.TestCase):
         del self.docs["product.yaml"]["drawing"]
         for part in self.parts.values():
             del part["drawing"], part["procurement"]
-        self.docs["interfaces.yaml"]["interfaces"][0]["limits"] = {"press_fit": {"fit": "5 H7/p6", "pair": ["TST-0001", "TST-0002"]}}
+        self.docs["interfaces.yaml"]["interfaces"][0]["limits"] = {
+            "press_fit": {"fit": "5 H7/p6", "pair": ["TST-0001", "TST-0002"], "axial_retainer": {"type": "shoulder"}}}
         self.procurement_columns = False
         self.assert_valid()
 

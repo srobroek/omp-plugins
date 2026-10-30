@@ -77,7 +77,8 @@ def write_project(root: Path, regime: str = "iso", bom_pin_qty: int = 2) -> Path
                                                 "priority": "must", "verification": {"method": "I", "criteria": "Made"}}]},
         "interfaces.yaml": {"interfaces": [{"id": "IF-001", "from": "plate", "to": "pin", "type": "mounting",
                                             "description": "Pin pressed into the plate",
-                                            "limits": {"press_fit": {"fit": "6 H7/p6", "pair": [PLATE, "@pin-a"]}}}]},
+                                            "limits": {"press_fit": {"fit": "6 H7/p6", "pair": [PLATE, "@pin-a"],
+                                                                     "axial_retainer": {"type": "press_fit"}}}}]},
         "assembly.yaml": ASSEMBLY,
     }
     hw.mkdir(parents=True)

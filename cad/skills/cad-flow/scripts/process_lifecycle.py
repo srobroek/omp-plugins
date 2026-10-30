@@ -396,6 +396,10 @@ def _supervise(parent: int, command: list[str]) -> None:
         if os.getppid() != parent or (stopping and time.monotonic() - stopping[0] > GRACE_SECONDS):
             os.killpg(0, signal.SIGKILL)
     if code < 0:  # end the same way, so the parent reads the command's own status
+        import resource
+
+        with suppress(OSError, ValueError):  # the command's crash left its own core or report; add none
+            resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
         with suppress(OSError, ValueError):
             signal.signal(-code, signal.SIG_DFL)
         os.kill(os.getpid(), -code)

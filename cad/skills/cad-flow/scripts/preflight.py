@@ -582,10 +582,16 @@ def start_background(environ: Mapping[str, str] | None = None, harness: str | No
     if record and record.get("state") == "running" and _alive(record.get("pid")):
         return {"started": False, "pid": record["pid"], "record": str(path), "log": str(log)}
     path.parent.mkdir(parents=True, exist_ok=True)
-    command = [sys.executable, str(Path(__file__).resolve()), "--warm", *(["--harness", harness] if harness else [])]
+    # `uv run` starts this script in an ephemeral environment that uv deletes when the launcher
+    # exits, right after the child records itself. The child outlives it, so it runs on the base
+    # interpreter (this script is standard library only) and without the launcher's VIRTUAL_ENV:
+    # uv refuses to start while VIRTUAL_ENV names a directory it is still removing.
+    interpreter = getattr(sys, "_base_executable", None) or sys.executable
+    command = [interpreter, str(Path(__file__).resolve()), "--warm", *(["--harness", harness] if harness else [])]
+    child_env = {key: value for key, value in env.items() if key != "VIRTUAL_ENV"}
     with log.open("w", encoding="utf-8") as output:
         child = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.STDOUT,
-                                 start_new_session=True, env=dict(env))
+                                 start_new_session=True, env=child_env)
     deadline = time.monotonic() + STARTUP_TIMEOUT
     while time.monotonic() < deadline:
         record = _read_record(path)

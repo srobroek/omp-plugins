@@ -256,11 +256,14 @@ def part_feasibility_findings(part: Mapping[str, Any]) -> list[RuleFinding]:
             f"{part['PN']} is FDM but declares transparency: transparent; FDM prints translucent, not see-through. "
             "Record a decision: make the see-through element a purchased or machined part (cast acrylic, "
             "polycarbonate), or accept `transparency: translucent`"))]
-    if transparency is None and _transparency_claimed(part.get("material"), part.get("finish")):
-        return [RuleFinding(TRANSPARENT_FDM_CODE, "finish", (
-            f"{part['PN']} is FDM and its material or finish names a clear material, but FDM prints translucent, "
-            "not see-through. Record a decision, then declare `transparency: translucent` or make the "
-            "see-through element a purchased or machined part"))]
+    if transparency is not None:
+        return []
+    for field in ("material", "finish"):
+        if _transparency_claimed(part.get(field)):
+            return [RuleFinding(TRANSPARENT_FDM_CODE, field, (
+                f"{part['PN']} is FDM and its {field} names a clear material, but FDM prints translucent, not "
+                "see-through. Record a decision, then declare `transparency: translucent` or make the "
+                "see-through element a purchased or machined part"))]
     return []
 
 

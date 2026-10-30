@@ -7,9 +7,11 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -27,6 +29,7 @@ sys.path.insert(0, str(SCRIPT.parent))
 
 import fea_static
 from fea_static import CaseError, apply_required_safety_factor, error, load_case, result_exit_code, run_directory
+from ccx_failure import ccx_failure
 from fea_part_selection import select_occurrence, select_solid_index
 OCCURRENCE_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "build_occurrence_step.py"
 LAYOUT_PATH = SCRIPT.parents[2] / "cad-record" / "scripts" / "layout.py"
@@ -46,6 +49,63 @@ loads:
     force: [0, 0, -50]
 mesh_size: 5
 """
+
+# The 100 x 10 x 5 mm cantilever of StaticFEAContracts.make_cantilever_step, fixed at x=0 and loaded at x=100.
+CANTILEVER_TAIL = """material: {E: 69000, nu: 0.33, density: 2700, yield: 276}
+fixed_faces: {plane: {axis: x, value: 0, tolerance: 0.000001}}
+loads: [{selector: {plane: {axis: x, value: 100, tolerance: 0.000001}}, force: [0, 0, -50]}]
+mesh_size: 5
+"""
+
+
+def hanging_freecad(root: Path, child_pid: Path) -> Path:
+    """A FreeCAD stand-in that runs the real job script, starts a solver-like child, writes its pid to
+    `child_pid`, and hangs in the job's STEP import."""
+    freecad = root / "freecadcmd"
+    freecad.write_text(f"""#!{sys.executable}
+import runpy, subprocess, sys, time
+from unittest import mock
+child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"])
+open({str(child_pid)!r}, "w").write(str(child.pid))
+for name in ("Part", "Import", "ObjectsFem", "femmesh", "femmesh.gmshtools", "femtools", "femtools.ccxtools"):
+    sys.modules[name] = mock.MagicMock()
+app = mock.MagicMock()
+app.newDocument.side_effect = lambda name: time.sleep(120)
+sys.modules["FreeCAD"] = app
+runpy.run_path(sys.argv[1], run_name="__main__")
+""", encoding="utf-8")
+    freecad.chmod(0o755)
+    return freecad
+
+
+def hanging_case(step: Path, timeout_seconds: float) -> dict:
+    return {"_step": str(step), "material": {"E": 1, "nu": 0.3, "density": 1, "yield": 1},
+            "fixed_faces": {"indices": [1]}, "loads": [], "mesh_size": 1, "timeout_seconds": timeout_seconds}
+
+
+def wait_until(predicate, timeout: float = 10.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.05)
+    return predicate()
+
+
+def pid_runs(pid: int) -> bool:
+    """Whether process `pid` runs; a zombie waiting to be reaped has ended."""
+    state = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()
+    return bool(state) and not state.startswith("Z")
+
+
+def group_runs(pgid: int) -> bool:
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
 
 
 def load_pose():
@@ -397,23 +457,6 @@ mesh_size: 5
             self.assertEqual(reports[0]["mesh_input_hashes"]["geometry_sha256"], reports[1]["mesh_input_hashes"]["geometry_sha256"])
             self.assertEqual(reports[0]["mesh_input_hashes"]["geo_sha256"], reports[1]["mesh_input_hashes"]["geo_sha256"])
             self.assertLessEqual(abs(reports[0]["safety_factor_yield"] / reports[1]["safety_factor_yield"] - 1), 0.0025)
-    def test_freecad_timeout_maps_to_no_result(self) -> None:
-        from unittest.mock import patch
-        from fea_static import run_job
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            step = root / "part.step"
-            step.touch()
-            case = {
-                "_step": str(step), "material": {"E": 1, "nu": 0.3, "density": 1, "yield": 1},
-                "fixed_faces": {"indices": [1]}, "loads": [], "mesh_size": 1,
-            }
-            with patch("fea_static.find_freecad", return_value=Path("/fake/freecadcmd")), patch(
-                "fea_static.subprocess.run", side_effect=subprocess.TimeoutExpired("freecadcmd", 0.01)
-            ):
-                result, status = run_job(root / "case.yaml", case, timeout=0.01)
-            self.assertEqual(status, 2)
-            self.assertEqual(result["error"]["code"], "freecad_timeout")
 
     @unittest.skipUnless(FREECAD_PRESENT, "FreeCAD 1.1.4 freecadcmd is not installed (shared lookup)")
     def test_invalid_face_selector_is_structured_exit_two(self) -> None:
@@ -431,6 +474,169 @@ mesh_size: 5
             result = subprocess.run([sys.executable, str(SCRIPT), str(case)], capture_output=True, text=True)
             self.assertEqual(result.returncode, 2)
             self.assertEqual(json.loads(result.stdout)["error"]["code"], "invalid_case")
+
+    @unittest.skipUnless(FREECAD_PRESENT, "FreeCAD 1.1.4 freecadcmd is not installed (shared lookup)")
+    def test_ccx_crash_inside_spooles_is_a_diagnosed_no_result(self) -> None:
+        from fea_static import run_job
+        with tempfile.TemporaryDirectory(prefix="cad-fea-ccx-crash-") as directory:
+            root = Path(directory)
+            step = self.make_cantilever_step(root)
+            # A ccx that, like the phone-stand SPOOLES overflow, enters the factorisation and segfaults.
+            ccx = root / "ccx"
+            ccx.write_text(f"""#!{sys.executable}
+import os, signal, sys
+print("CalculiX Version 2.23", flush=True)
+if len(sys.argv) > 1:
+    open("spooles.out", "w").close()
+    os.kill(os.getpid(), signal.SIGSEGV)
+""", encoding="utf-8")
+            ccx.chmod(0o755)
+            case_path = root / "case.yaml"
+            case_path.write_text(f"step: {step}\n{CANTILEVER_TAIL}", encoding="utf-8")
+            result, status = run_job(case_path, load_case(case_path),
+                                     solver_versions={"calculix": {"path": str(ccx), "version": "2.23"}})
+            self.assertEqual(status, 2, result)
+            self.assertEqual(result["error"]["code"], "solver_crashed", result)
+            details = result["error"]["details"]
+            self.assertEqual((details["signal"], details["stage"]), ("SIGSEGV", "spooles_factorisation"))
+            self.assertGreater(details["node_count"], 0)
+            self.assertEqual(details["degrees_of_freedom"], 3 * details["node_count"])
+            self.assertIn("inside the SPOOLES equation solver", result["error"]["message"])
+
+    def test_case_timeout_names_the_phase_its_knob_and_stops_the_jobs_children(self) -> None:
+        from fea_static import run_job
+        with tempfile.TemporaryDirectory(prefix="cad-fea-timeout-") as directory:
+            root = Path(directory)
+            step = root / "part.step"
+            step.touch()
+            child_pid = root / "child.pid"
+            freecad = hanging_freecad(root, child_pid)
+            case = hanging_case(step, timeout_seconds=5)
+            with patch("fea_static.find_freecad", return_value=freecad):
+                result, status = run_job(root / "case.yaml", case,
+                                         solver_versions={"calculix": {"path": "/unused/ccx", "version": "2.23"}})
+            self.assertEqual(status, 2)
+            self.assertEqual(result["error"]["code"], "freecad_timeout")
+            self.assertEqual(result["error"]["details"], {"phase": "import"})
+            self.assertIn("timeout_seconds of 5 while importing the STEP; raise timeout_seconds in the case YAML",
+                          result["error"]["message"])
+            pid = int(child_pid.read_text(encoding="utf-8"))
+            self.assertTrue(wait_until(lambda: not pid_runs(pid)), "a child of the timed-out FreeCAD job is still running")
+
+    def test_killing_the_fea_process_outright_stops_the_job_and_frees_its_run_record(self) -> None:
+        lifecycle = fea_static.lifecycle
+        with tempfile.TemporaryDirectory(prefix="cad-fea-killed-") as directory:
+            root = Path(directory).resolve()
+            hw = root / "hw"
+            hw.mkdir()
+            step = root / "part.step"
+            step.touch()
+            child_pid = root / "child.pid"
+            freecad = hanging_freecad(root, child_pid)
+            parent_code = (f"import sys\nfrom pathlib import Path\nfrom unittest.mock import patch\n"
+                           f"sys.path.insert(0, {str(SCRIPT.parent)!r})\nimport fea_static\n"
+                           f"guard = fea_static.lifecycle.claim_run(Path({str(hw)!r}), 'fea')\n"
+                           f"with patch('fea_static.find_freecad', return_value=Path({str(freecad)!r})):\n"
+                           f"    fea_static.run_job(Path({str(root)!r}) / 'case.yaml', {hanging_case(step, 600)!r}, "
+                           "guard=guard, solver_versions={'calculix': {'path': '/unused/ccx', 'version': '2.23'}})\n")
+            parent = subprocess.Popen([sys.executable, "-c", parent_code], start_new_session=True,
+                                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self.addCleanup(parent.wait)
+            self.addCleanup(lambda: parent.poll() is None and os.killpg(parent.pid, signal.SIGKILL))
+            self.assertTrue(wait_until(child_pid.is_file, 60), "the FreeCAD stand-in did not start its child")
+            pid = int(child_pid.read_text(encoding="utf-8"))
+            self.addCleanup(lambda: pid_runs(pid) and os.kill(pid, signal.SIGKILL))
+            [record] = lifecycle.runs_dir(hw).glob("*.json")
+            [group] = json.loads(record.read_text(encoding="utf-8"))["groups"]
+            with self.assertRaises(lifecycle.RunRefused):  # one FEA run at a time
+                lifecycle.claim_run(hw, "fea")
+            os.killpg(parent.pid, signal.SIGKILL)  # the FEA process and its own group, with no chance to clean up
+            parent.wait()
+            self.assertTrue(wait_until(lambda: not pid_runs(pid)), "the FreeCAD job's child outlived the killed FEA run")
+            self.assertTrue(wait_until(lambda: not group_runs(group["pgid"])), "the FreeCAD job's group outlived it")
+            self.assertEqual(lifecycle.strays(hw), [])
+            lifecycle.claim_run(hw, "fea").release()
+
+    def test_a_running_fea_run_refuses_another_with_its_stop_command(self) -> None:
+        lifecycle = fea_static.lifecycle
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory).resolve()
+            (project / "hw").mkdir()
+            step = project / "beam.step"
+            step.touch()
+            case_path = project / "case.yaml"
+            case_path.write_text(f"step: {step}\n{CANTILEVER_TAIL}", encoding="utf-8")
+            holder = subprocess.Popen([sys.executable, "-c", f"import sys, time\nsys.path.insert(0, {str(SCRIPT.parent)!r})\n"
+                                       f"import fea_static\nfea_static.lifecycle.claim_run({str(project / 'hw')!r}, 'fea')\n"
+                                       "print('claimed', flush=True)\ntime.sleep(600)\n"],
+                                      stdout=subprocess.PIPE, text=True)
+            self.addCleanup(lambda: (holder.kill(), holder.wait(), holder.stdout.close()))
+            self.assertEqual(holder.stdout.readline().strip(), "claimed")
+            printed = __import__("io").StringIO()
+            with patch("fea_static.find_freecad", return_value=Path("/fake/freecadcmd")), patch("sys.stdout", printed):
+                status = fea_static.main([str(case_path), "--out", str(project / ".cad-work" / "fea" / "result.json")])
+            self.assertEqual(status, 2)
+            report = json.loads(printed.getvalue())
+            self.assertEqual(report["error"]["code"], "run_refused")
+            self.assertIn(f"kill -TERM {holder.pid}", report["error"]["message"])
+            self.assertEqual(len(list(lifecycle.runs_dir(project / "hw").glob("*.json"))), 1)
+
+    def test_timeout_seconds_must_be_a_positive_number(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "part.step").touch()
+            case = root / "case.yaml"
+            for value in ("0", "-5", "true", "soon"):
+                with self.subTest(value=value):
+                    case.write_text(f"step: part.step\ntimeout_seconds: {value}\n{CASE_TAIL}", encoding="utf-8")
+                    with self.assertRaisesRegex(CaseError, "timeout_seconds must be a positive finite number"):
+                        load_case(case)
+            case.write_text(f"step: part.step\ntimeout_seconds: 1800\n{CASE_TAIL}", encoding="utf-8")
+            self.assertEqual(load_case(case)["timeout_seconds"], 1800)
+
+
+class CcxFailureDiagnosis(unittest.TestCase):
+    """What a failed ccx run reports; the phone-stand SPOOLES crash had 374,134 nodes."""
+
+    def test_clean_exit_is_not_a_failure(self) -> None:
+        self.assertIsNone(ccx_failure(0, "", spooles_started=True, node_count=10))
+
+    def test_large_model_crash_in_spooles_names_the_front_overflow_and_the_remedy(self) -> None:
+        # SIGSEGV, SIGBUS (the same overflow with a larger stack), and SIGSEGV through a shell wrapper.
+        for returncode in (-signal.SIGSEGV, -signal.SIGBUS, 128 + signal.SIGSEGV):
+            with self.subTest(returncode=returncode):
+                failure = ccx_failure(returncode, "CalculiX Version 2.23\n", spooles_started=True, node_count=374_134)
+                self.assertEqual(failure["code"], "solver_crashed")
+                self.assertEqual(failure["details"]["degrees_of_freedom"], 1_122_402)
+                self.assertIn("more than 46,340 fronts", failure["message"])
+                self.assertIn("Increase mesh_size", failure["message"])
+
+    def test_small_model_crash_in_spooles_is_not_blamed_on_the_overflow(self) -> None:
+        failure = ccx_failure(-signal.SIGSEGV, "", spooles_started=True, node_count=2_000)
+        self.assertEqual(failure["code"], "solver_crashed")
+        self.assertIn("too few for SPOOLES's 46,340-front overflow", failure["message"])
+        self.assertNotIn("Increase mesh_size", failure["message"])
+
+    def test_crash_before_the_solver_is_not_blamed_on_spooles(self) -> None:
+        failure = ccx_failure(-signal.SIGSEGV, "", spooles_started=False, node_count=374_134)
+        self.assertEqual(failure["details"]["stage"], "before_equation_solver")
+        self.assertIn("before reaching the SPOOLES equation solver", failure["message"])
+        self.assertNotIn("46,340", failure["message"])
+
+    def test_nonpositive_jacobian_lists_the_rejected_elements(self) -> None:
+        stdout = "".join(f" *ERROR in e_c3d: nonpositive jacobian\n        determinant in element       {element}\n\n"
+                         for element in (37786, 37786, 38821))
+        failure = ccx_failure(201, " STEP            1\n\n" + stdout, spooles_started=False, node_count=75_147)
+        self.assertEqual(failure["code"], "solver_failed")
+        self.assertIn("2 element(s) have a nonpositive Jacobian (37786, 38821)", failure["message"])
+        self.assertIn("reduce mesh_size", failure["message"])
+
+    def test_other_ccx_errors_are_quoted(self) -> None:
+        failure = ccx_failure(201, " *ERROR in calinput: no material was assigned\n        to element 7\n",
+                              spooles_started=False, node_count=10)
+        self.assertEqual(failure["message"],
+                         "CalculiX ccx stopped with exit status 201: *ERROR in calinput: no material was assigned "
+                         "to element 7")
 
 
 class VersionedPublicationTests(unittest.TestCase):
@@ -542,10 +748,12 @@ class VersionedPublicationTests(unittest.TestCase):
             step = root / "beam.step"
             step.touch()
             case = {"_step": str(step), "material": {"E": 1, "nu": 0.3, "density": 1, "yield": 1},
-                    "fixed_faces": {"indices": [1]}, "loads": [], "mesh_size": 1}
+                    "fixed_faces": {"indices": [1]}, "loads": [], "mesh_size": 1, "timeout_seconds": 0.01}
             with patch("fea_static.find_freecad", return_value=Path("/fake/freecadcmd")), \
-                 patch("fea_static.subprocess.run", side_effect=subprocess.TimeoutExpired("freecadcmd", 0.01)) as run:
-                fea_static.run_job(root / "case.yaml", case, scratch_root=root, timeout=0.01)
+                 patch("fea_static.lifecycle.run",
+                       side_effect=subprocess.TimeoutExpired("freecadcmd", 0.01)) as run:
+                fea_static.run_job(root / "case.yaml", case, scratch_root=root,
+                                   solver_versions={"calculix": {"path": "/fake/ccx", "version": "2.23"}})
             self.assertEqual(Path(run.call_args.args[0][1]).name, "fea_job.py")
 
     def test_solver_versions_resolve_tools_beside_freecad_and_record_paths(self) -> None:
@@ -564,6 +772,18 @@ class VersionedPublicationTests(unittest.TestCase):
         self.assertEqual(versions["freecad"], {"path": str(freecad.resolve()), "version": "1.1.4"})
         self.assertEqual(versions["gmsh"], {"path": str(gmsh.resolve()), "version": "4.15.0"})
         self.assertEqual(versions["calculix"], {"path": str(ccx.resolve()), "version": "2.23"})
+
+    @unittest.skipUnless(FREECAD_PRESENT, "FreeCAD 1.1.4 freecadcmd is not installed (shared lookup)")
+    def test_relative_hw_publishes_a_solved_bundle(self) -> None:
+        step = StaticFEAContracts.make_cantilever_step(self, Path(self.temporary.name))
+        shutil.copyfile(step, self.case_dir / "cantilever.step")
+        self.case.write_text(f"step: cantilever.step\n{CANTILEVER_TAIL}", encoding="utf-8")
+        run = subprocess.run([sys.executable, str(SCRIPT), "hw/analysis/cases/cantilever/case.yaml",
+                              "--hw", "hw", "--version", "v1"],
+                             cwd=self.project, capture_output=True, text=True, timeout=600)
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        self.assertEqual(json.loads(run.stdout)["status"], "pass")
+        self.assertTrue((self.hw / "analysis" / "v1" / "cantilever" / "results.json").is_file())
 
 
 if __name__ == "__main__":

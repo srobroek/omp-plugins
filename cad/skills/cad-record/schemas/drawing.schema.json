@@ -341,12 +341,22 @@
         "pair": {"type": "array", "minItems": 2, "maxItems": 2, "uniqueItems": true, "items": {"$ref": "assembly.schema.json#/$defs/part_ref"}},
         "hole": {"$ref": "#/$defs/fit_endpoint"},
         "shaft": {"$ref": "#/$defs/fit_endpoint"},
-        "note": {"type": "string", "minLength": 1}
+        "note": {"type": "string", "minLength": 1},
+        "axial_retainer": {"$ref": "#/$defs/axial_retainer"}
       },
       "oneOf": [
         {"required": ["pair"], "not": {"anyOf": [{"required": ["hole"]}, {"required": ["shaft"]}]}},
         {"required": ["hole", "shaft"], "not": {"required": ["pair"]}}
       ]
+    },
+    "axial_retainer": {
+      "description": "What keeps a press_fit or locating_fit from walking along its axis; the record validator requires one from stage parts on. Hardware types (circlip, set_screw, nut, pin, cap) name their modelled occurrences in parts",
+      "type": "object", "additionalProperties": false, "required": ["type"],
+      "properties": {
+        "type": {"type": "string", "enum": ["shoulder", "circlip", "set_screw", "nut", "pin", "cap", "captured", "press_fit", "adhesive"]},
+        "parts": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "assembly.schema.json#/$defs/part_ref"}},
+        "decision": {"type": "string", "pattern": "^DR-[0-9]{3}$"}
+      }
     },
     "heat_set": {
       "description": "A heat-set insert installed in its host part's bore; the pair is [host, insert], each a PN or an @occurrence reference",

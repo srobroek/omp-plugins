@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.11,<3.15"
-# dependencies = ["cadquery-ocp-novtk==8.0.1.1.0", "pyyaml>=6.0", "trimesh==4.*", "numpy>=1.26"]
+# dependencies = ["cadquery-ocp-novtk==8.0.1.1.0", "pyyaml>=6.0", "trimesh==4.*", "numpy>=1.26", "python-fcl==0.7.0.11"]
 # ///
 """Build, check, and diff versions of a hardware design from its part model scripts.
 
@@ -8,8 +8,8 @@ Usage:
     uv run --script skill://cad-flow/scripts/run.py cad-model/scripts/cad_model.py run <hw-dir> --label vN [--kernel auto|cadquery|build123d]
                                      [--attach REF=PARENT_REF ...]
     uv run --script skill://cad-flow/scripts/run.py cad-model/scripts/cad_model.py check vN --hw hw [--out FILE]
-       [--pair REF:REF ...] [--allow-interference REF:REF ...] [--expect-solids PN=N ...] [--jobs 1|N|auto]
-       [--cache DIR | --no-cache]
+       [--pair REF:REF ... | --changed-only [--since-version vM]] [--exact] [--allow-interference REF:REF ...]
+       [--expect-solids PN=N ...] [--jobs 1|N|auto] [--cache DIR | --no-cache]
     uv run --script skill://cad-flow/scripts/run.py cad-model/scripts/cad_model.py diff vA vB [--hw HW] [--out FILE]
     uv run --script skill://cad-flow/scripts/run.py cad-model/scripts/cad_model.py latest <hw-dir> --label vN
 
@@ -36,7 +36,12 @@ run   executes every hw/parts/<PN>/model.py in its declared kernel's own uv envi
       and hw/versions/latest.json pointing at that version (paths relative to hw/). Labels
       increase: an existing label or one below the newest built version is refused. A part whose
       manufacturing output fails a blocking check fails the run: no version, latest unchanged.
-check runs the geometry checks on a built version; diff compares two built versions.
+check runs the geometry checks on a built version; diff compares two built versions. A check is a
+      run recorded in hw/.cad/runs (cad-flow process_lifecycle.py): it refuses to start while
+      another check runs or an earlier run left processes behind, and prints how to stop them.
+      Its pair workers die with it. --changed-only measures only the occurrence pairs whose
+      geometry, relative placement or declarations changed since --since-version (default: the
+      newest built version before vN); its report is partial (`scope.complete` false).
 latest points hw/versions/latest.json at the newest built version after `run` sealed it but could
       not write the pointer; it verifies the version against its manifest first and rebuilds nothing.
 
@@ -54,6 +59,22 @@ import traceback
 from pathlib import Path
 
 from cadmodel import build
+
+LIFECYCLE_SCRIPT = Path(__file__).resolve().parents[2] / "cad-flow" / "scripts" / "process_lifecycle.py"
+
+
+def load_lifecycle():
+    """cad-flow's process supervision: run records, stray refusal, private process groups."""
+    import importlib.util
+
+    name = "cad_flow_process_lifecycle"
+    if name not in sys.modules:
+        spec = importlib.util.spec_from_file_location(name, LIFECYCLE_SCRIPT)
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        spec.loader.exec_module(module)
+    return sys.modules[name]
 
 
 def _pair(text: str) -> tuple[str, str]:
@@ -91,8 +112,15 @@ def parser() -> argparse.ArgumentParser:
     check = sub.add_parser("check", help="geometry checks on a built version")
     check.add_argument("label")
     check.add_argument("--hw", type=Path, default=Path("hw"))
-    check.add_argument("--pair", action="append", type=_pair, metavar="REF:REF",
-                       help="check only these occurrence pairs for interference (default: all pairs)")
+    selection = check.add_mutually_exclusive_group()
+    selection.add_argument("--pair", action="append", type=_pair, metavar="REF:REF",
+                           help="check only these occurrence pairs for interference (default: all pairs)")
+    selection.add_argument("--changed-only", action="store_true",
+                           help="measure only the pairs a change since the baseline version can affect (partial report)")
+    check.add_argument("--since-version", metavar="vM",
+                       help="--changed-only baseline: a built version (default: the newest one before the checked version)")
+    check.add_argument("--exact", action="store_true",
+                       help="measure every pair; by default a far pair passes on its proven distance bounds")
     check.add_argument("--allow-interference", action="append", type=_pair, default=[], metavar="REF:REF",
                        help="undeclared intentional overlap: reported, not blocking (repeatable)")
     check.add_argument("--expect-solids", action="append", type=_expect, default=[], metavar="PN=N",
@@ -103,8 +131,7 @@ def parser() -> argparse.ArgumentParser:
                             "auto: the CPU count, at most 8)")
     caching = check.add_mutually_exclusive_group()
     caching.add_argument("--cache", type=Path, metavar="DIR",
-                         help="pair measurement cache shared with cad-motion sweep.py (default: "
-                              "$XDG_CACHE_HOME/cad-motion, else ~/.cache/cad-motion)")
+                         help="pair result cache shared with cad-motion sweep.py (default: hw/.cad)")
     caching.add_argument("--no-cache", action="store_true", help="measure every pair, reading and writing no cache")
     diff = sub.add_parser("diff", help="compare two built versions")
     diff.add_argument("a")
@@ -118,10 +145,14 @@ def parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = parser().parse_args(argv)
+    root = parser()
+    args = root.parse_args(argv)
+    if getattr(args, "since_version", None) and not args.changed_only:
+        root.error("--since-version needs --changed-only")
     from cadmodel.motion import load_pair_measure, load_pose
 
     pose = load_pose()
+    lifecycle = load_lifecycle()
     try:
         with pose.stdout_to_stderr():
             if args.command == "run":
@@ -129,16 +160,19 @@ def main(argv: list[str] | None = None) -> int:
             elif args.command == "check":
                 from cadmodel.check import check
 
-                cache_dir = None if args.no_cache else (args.cache or load_pair_measure().default_cache_dir())
-                code, result = check(args.hw, args.label, args.pair, args.allow_interference, dict(args.expect_solids),
-                                     cache_dir, args.jobs)
+                cache_dir = None if args.no_cache else (args.cache or load_pair_measure().default_cache_dir(args.hw.resolve()))
+                build.version_dir(args.hw, args.label)  # no run record in a folder that holds no such version
+                with lifecycle.claim_run(args.hw, "static"):
+                    code, result = check(args.hw, args.label, args.pair, args.allow_interference,
+                                         dict(args.expect_solids), cache_dir, args.jobs, exact=args.exact,
+                                         changed_only=args.changed_only, since=args.since_version)
             elif args.command == "diff":
                 from cadmodel.diff import diff
 
                 code, result = diff(args.hw, args.a, args.b)
             else:
                 code, result = build.reconcile_latest(args.hw, args.label)
-    except (build.UsageError, pose.MotionError, OSError) as error:
+    except (build.UsageError, pose.MotionError, lifecycle.LifecycleError, OSError) as error:
         print(f"cad_model {args.command}: {error}", file=sys.stderr)
         return 2
     except Exception:  # noqa: BLE001 - an unexpected failure is no result, never a check failure

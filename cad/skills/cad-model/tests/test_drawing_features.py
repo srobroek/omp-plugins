@@ -130,7 +130,8 @@ class FitEndpointsAndHeatSets(unittest.TestCase):
                     check.declared_heat_sets(Path(tmp))
 
     def interference(self, measured_mm3: float, heat_sets: list[dict], allowed: set = frozenset()) -> dict:
-        geometry = {("TST-0001", "TST-0002"): {"clearance_mm": -0.2 if measured_mm3 else 0.0, "interference_mm3": measured_mm3}}
+        geometry = {("TST-0001", "TST-0002"): {"clearance_mm": -0.2 if measured_mm3 else 0.0, "interference_mm3": measured_mm3,
+                                               "method": "exact"}}
         with mock.patch.object(check, "load_pose", return_value=mock.Mock(INTERFERENCE_MM3=0.001)):
             return check.interference(geometry, None, set(), set(allowed), (), heat_sets)
 
