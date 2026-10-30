@@ -310,9 +310,9 @@ def requirement_feasibility_findings(requirements: Mapping[str, Any], product: M
 
 @dataclass(frozen=True)
 class VisibilityBinding:
-    """One "show the motion" check: from `view`, rendering only `window` and `targets`, at least
-    `min_visible_fraction` of the targets' projected area must be visible. Only `transparency:
-    transparent` window parts are see-through."""
+    """One "show the motion" check: from `view`, rendering only `window` and `targets`, each
+    target's own visible share of its projected area must reach `min_visible_fraction`; the check
+    fails when any target falls short. Only `transparency: transparent` window parts are see-through."""
 
     requirement: str
     index: int

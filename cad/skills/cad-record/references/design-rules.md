@@ -58,6 +58,6 @@ A requirements.yaml entry's optional `visibility` lists show-the-motion checks, 
 - `window` and `targets` are disjoint, non-empty lists of part references (a PN placed once, or `@occurrence`).
 - `min_visible_fraction` is in (0, 1]; absent means 0.5.
 
-Rendering only the window and target parts, from `view` at the nominal pose, the visible share of the targets' projected area must reach `min_visible_fraction`. Only window parts declared `transparency: transparent` are see-through.
+Rendering only the window and target parts, from `view` at the nominal pose, each target's own visible share of its projected area must reach `min_visible_fraction`; the check fails when any target falls short. Only window parts declared `transparency: transparent` are see-through.
 
 Code `visibility.binding`: an error at every stage when a window or target part does not resolve to one occurrence, or one part is both. cad-render reads the bindings through `visibility_bindings(requirements)`, which returns `VisibilityBinding(requirement, index, view, window, targets, min_visible_fraction)` with the 0.5 default applied.
