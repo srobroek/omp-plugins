@@ -38,8 +38,9 @@ Checks (each failure is one `findings` entry):
                             axis is parallel to the joint axis and passes within
                             --joint-tol of the joint origin; made parts need a bore
                             (concave), purchased parts a shank (convex)
-    block_like              F2+, made parts: axis_planar_fraction >= 0.80, OBB fill
-                            >= 0.20 and OBB thickness > 0.10 of the second extent
+    block_like              F2+, made parts: (axis_planar_fraction >= 0.80 or
+                            blend_faces + freeform_faces == 0) and OBB fill >= 0.20
+                            and OBB thickness > 0.10 of the second extent
     fdm_exterior_radius     F2+, fdm parts: min_convex_radius < --fdm-min-radius
     cnc_internal_radius     F2+, cnc parts: min_concave_radius < --cnc-tool-radius
 
@@ -306,7 +307,8 @@ def check(args: argparse.Namespace, pose: Any) -> dict[str, Any]:
                                  "max": READBACK_REL, "kernel_volume_mm3": kernel_v, "step_volume_mm3": volume})
         if level < 2 or row["process"] == "purchased":
             continue
-        has_blocky_faces = row["axis_planar_fraction"] >= BLOCK_PLANAR_FRACTION
+        has_blocky_faces = (row["axis_planar_fraction"] >= BLOCK_PLANAR_FRACTION
+                            or row["blend_faces"] + row["freeform_faces"] == 0)
         if (has_blocky_faces and row["obb_fill_fraction"] >= BLOCK_MIN_FILL_FRACTION
                 and row["obb_thickness_fraction"] > BLOCK_MAX_THICKNESS_FRACTION):
             findings.append({"check": "block_like", "part": pn, "axis_planar_fraction": row["axis_planar_fraction"],

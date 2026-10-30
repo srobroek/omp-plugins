@@ -147,7 +147,7 @@ class BlockShapeTests(unittest.TestCase):
 
         self.assertEqual(code, 1)
         by_part = {row["part"]: row for row in report["findings"] if row["check"] == "block_like"}
-        self.assertEqual(sorted(by_part), ["TST-0301"])
+        self.assertEqual(sorted(by_part), ["TST-0301", "TST-0303"])
         box = report["parts"]["TST-0301"]
         frame = report["parts"]["TST-0302"]
         pin = report["parts"]["TST-0303"]
@@ -160,7 +160,7 @@ class BlockShapeTests(unittest.TestCase):
         self.assertEqual(frame["blend_faces"] + frame["freeform_faces"], 0)
         self.assertLess(pin["axis_planar_fraction"], 0.80)
         self.assertEqual(pin["blend_faces"] + pin["freeform_faces"], 0)
-
+        self.assertIn("TST-0303", by_part)
 
 @unittest.skipUnless(shutil.which("uv"), "uv is required to build the cad-motion block fixtures")
 class BlockDetectorTests(unittest.TestCase):
@@ -179,7 +179,7 @@ class BlockDetectorTests(unittest.TestCase):
         code, report = self.f2
         self.assertEqual(code, 1)
         flagged = sorted(f["part"] for f in report["findings"] if f["check"] == "block_like")
-        self.assertEqual(flagged, MADE_PARTS[:-1])
+        self.assertEqual(flagged, MADE_PARTS)
         self.assertEqual([f for f in report["findings"] if f["check"] != "block_like"], [])
 
     def test_f1_does_not_judge_form(self) -> None:
