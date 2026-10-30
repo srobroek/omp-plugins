@@ -174,7 +174,7 @@ class _Checker:
 
     def positioned(self, item: Recognized) -> str | None:
         for char in self.chars:
-            if char.operation in POSITIONS and self.on(char, item.faces):
+            if (char.operation in POSITIONS or char.details.get("axis_dimension")) and self.on(char, item.faces):
                 return char.id
         if self.frame is None:
             return None

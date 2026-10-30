@@ -53,6 +53,8 @@ datums. Instances with a missing or extra node keep one location each.
   exceptions to the drawing's general ones and print in the feature's callout. A `round` or `chamfer`
   that is an edge fillet or edge break may take `presentation: general_note`: its size prints once in
   the general note of undimensioned fillets and edge chamfers. A contour radius gets its own callout.
+  A feature's `tolerance_policy` other than the drawing's general one is that feature's own tolerance:
+  each of its sizes and locations prints the policy's limits (coverage kind `policy`).
 - `dimensions`: extra measured requests (`length`, `plane_separation`, `axis_distance`, `location`, ...)
   with an explicit `tolerance` (`deviation_mm` or a named policy); below 0.5 mm ISO 2768-1 has no general
   value. A `width` between two features is a callout counting every opposed pair of their planes at
@@ -64,6 +66,12 @@ datums. Instances with a missing or extra node keep one location each.
   plane's datum location, so a wall thickness is a chain dimension, never a redundant third one. A
   `location` on a plane feature replaces its datum-frame location, so a depth such as a counterbore
   floor's carries its own limits; the deviation applies to the printed distance from the datum.
+  A `distance` from a `plane_face` to a `bore` or `shaft` whose axes are parallel to that plane states
+  the hole centres' distance from it (ISO 129-1), drawn from the plane to the centre line. Centres at one
+  distance share the dimension (`quantity` counts them); when they lie at several, `instance: N` picks
+  the Nth distance, 1 the nearest, so four corner holes take a near and a far request per plane, each
+  with its own `tolerance`. It replaces those centres' datum-frame locations along that axis, and the
+  feature's centres are then located one by one, never by a grid or bolt-circle pattern.
   Two planes that are not parallel have no width of their own: a `thickness` or `width` with `at: <plane
   feature>` is stated at that reference plane (ISO 129-1), as the distance between the lines where the
   two planes meet it. Use it for a drafted wall (thickness at the rim or parting plane, with the draft

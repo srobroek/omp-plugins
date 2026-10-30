@@ -191,6 +191,7 @@
                                                  "thickness", "chamfer"]},
         "features": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/semantic_id"}},
         "at": {"$ref": "#/$defs/semantic_id", "description": "A plane feature a width, thickness or separation is stated at: between two planes that are not parallel (a drafted wall, inclined flanks), the distance between the lines where they meet this plane"},
+        "instance": {"type": "integer", "minimum": 1, "description": "A distance from a plane_face to a bore's or shaft's centres: which of their distances from that plane it states, 1 the nearest; centres at one distance share the dimension. Required when the centres lie at several distances"},
         "datum_frame": {"type": "array", "minItems": 1, "maxItems": 3, "uniqueItems": true, "items": {"$ref": "#/$defs/datum_label"}},
         "tolerance": {"$ref": "#/$defs/tolerance"},
         "presentation": {"type": "string", "enum": ["auto", "visible", "section", "detail"]},

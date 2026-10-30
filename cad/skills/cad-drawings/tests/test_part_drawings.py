@@ -16,13 +16,16 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 import completeness  # noqa: E402
+import drawing_document  # noqa: E402
 import freecad_runtime  # noqa: E402
+from drawing_document import SvgAnnotation  # noqa: E402
 from drawing_intent import Characteristic, Measured, Tolerance  # noqa: E402
 from feature_geometry import Binding  # noqa: E402
 from layout_check import Box, SheetRegions, check_layout  # noqa: E402
@@ -96,6 +99,35 @@ class RepeatedDimensions(unittest.TestCase):
             report = completeness.evaluate("TST-0001", {"drawing": {}}, [], Binding({}, {}, ()), measured,
                                            presentation, "0" * 64)
             self.assertEqual(sum(f["code"] == "dimension_conflict" for f in report.findings), expected, report.findings)
+
+
+class PrintedTolerances(unittest.TestCase):
+    """Coverage agrees with the sheet: an individual tolerance the rows count must be in its annotation's text."""
+
+    def evaluate(self, char: Characteristic, markup: str, regime: str = "iso") -> tuple[set[str], str]:
+        presentation = Presentation(placed={char.id: {"annotation": "dim-hole", "view": "front", "anchor": [0, 0]}})
+        text = completeness.SheetText(regime, drawing_document.printed_lines(
+            [SvgAnnotation("dim-hole", "dimension", markup)], []))
+        report = completeness.evaluate("TST-0001", {"drawing": {}}, [], Binding({}, {}, ()),
+                                       Measured(frame=None, characteristics=[char]), presentation, "0" * 64, text=text)
+        return {f["code"] for f in report.findings}, report.rows[0]["status"]
+
+    def test_a_counted_tolerance_missing_from_its_annotation_fails(self) -> None:
+        char = Characteristic("foot_x_near", "foot_recess", "distance", 7.0, (), axis="x",
+                              tolerance=Tolerance("explicit", Decimal("-0.2"), Decimal("0.2")))
+        self.assertEqual(self.evaluate(char, '<text x="0" y="0">7</text>'), ({"datum_invalid", "tolerance_not_printed"},
+                                                                           "fail"))
+        self.assertEqual(self.evaluate(char, '<text x="0" y="0">7 ±0.2</text>'), ({"datum_invalid"}, "pass"))
+        policy = replace(char, tolerance=Tolerance("policy", Decimal("-0.2"), Decimal("0.2"), source="foot_location"))
+        self.assertIn("tolerance_not_printed", self.evaluate(policy, '<text x="0" y="0">7</text>')[0])
+        general = replace(char, tolerance=Tolerance("general", Decimal("-0.2"), Decimal("0.2")))
+        self.assertEqual(self.evaluate(general, '<text x="0" y="0">7</text>'), ({"datum_invalid"}, "pass"))
+
+    def test_the_sheet_regime_formats_the_expected_tolerance(self) -> None:
+        fit = Characteristic("bore_fit", "bore", "diameter", 5.006, (),
+                             tolerance=Tolerance("fit", Decimal("0"), Decimal("0.012"), Decimal("5"), "H7"))
+        self.assertEqual(self.evaluate(fit, '<text x="0" y="0">⌀5.012/5.000 (5 H7)</text>', "asme")[1], "pass")
+        self.assertEqual(self.evaluate(fit, '<text x="0" y="0">⌀5.012/5.000 (5 H7)</text>', "iso")[1], "fail")
 
 
 class EdgeAndTextureIndications(unittest.TestCase):

@@ -12,6 +12,7 @@ import math
 import sys
 import unittest
 from dataclasses import replace
+from decimal import Decimal
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -20,8 +21,9 @@ import drawing  # noqa: E402
 import drawing_intent  # noqa: E402
 import part_views  # noqa: E402
 import sheet  # noqa: E402
-from drawing_intent import Characteristic, Datum, DatumFrame, Instance, IntentError  # noqa: E402
+from drawing_intent import Characteristic, Datum, DatumFrame, Instance, IntentError, Tolerance  # noqa: E402
 from feature_geometry import Binding, Edge, Face, ResolvedFeature  # noqa: E402
+from freecad_views import ViewGeometry  # noqa: E402
 from layout_check import Box  # noqa: E402
 
 X, Y, Z = (1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0)
@@ -196,6 +198,137 @@ class WidthRequest(unittest.TestCase):
         self.assertEqual((char.operation, char.quantity, char.axis), ("width", 4, None))
         self.assertAlmostEqual(char.value, 0.6)
         self.assertEqual(sheet._callout_text(char, "iso"), "4× width 0.6")
+
+
+def cylinder(index: int, centre, radius: float = 1.0) -> Face:
+    return Face(index, "cylinder", 1.0, (*centre, *centre), (), (), axis_point=tuple(centre), axis_dir=Z,
+                radius=radius, inward=True, axial=(0.0, 5.0), span_deg=360.0)
+
+
+class HoleCentreFromAPlane(unittest.TestCase):
+    """A distance request from a plane_face to a bore's centres: grouped by distance, toleranced, replacing
+    the frame locations it states, and drawn from that plane."""
+
+    def setUp(self) -> None:
+        # holes at x = 7 (two of them) and x = 87 from the plane x = 0
+        self.faces = [Face(0, "plane", 100.0, (0, -10, 0, 0, 10, 0), (), (), point=(0, 0, 0), normal=X),
+                      *(cylinder(i, centre) for i, centre in enumerate(((7, 0, 0), (7, 10, 0), (87, 0, 0)), 1))]
+        self.features = {"side": ResolvedFeature("side", "plane_face", (0,)),
+                         "holes": ResolvedFeature("holes", "bore", (1, 2, 3))}
+        self.binding = Binding(self.features, {0: "side", 1: "holes", 2: "holes", 3: "holes"}, ())
+
+    def measurer(self, *requests: dict, **drawing) -> drawing_intent.Measurer:
+        part = {"process": "fdm", "drawing": {"type": "detail", "dimensions": list(requests), **drawing}}
+        product = {"drawing": {"general_tolerance_policy": "fdm", "tolerance_policies": {
+            "fdm": {"kind": "limits", "linear_mm": 0.5, "applies_to": ["fdm"]},
+            "foot_location": {"kind": "limits", "linear_mm": 0.2, "applies_to": ["fdm"]}}}}
+        return drawing_intent.Measurer("TST-0001", part, product, [], self.binding, self.faces)
+
+    @staticmethod
+    def request(name: str, instance: int | None = None, **extra) -> dict:
+        found = {"id": name, "operation": "distance", "features": ["side", "holes"], **extra}
+        return found if instance is None else {**found, "instance": instance}
+
+    def test_centres_are_grouped_by_distance_and_the_instance_picks_the_group(self) -> None:
+        measurer = self.measurer(self.request("near", 1, tolerance={"deviation_mm": [-0.2, 0.2]}),
+                                 self.request("far", 2, tolerance={"deviation_mm": [-0.3, 0.3]}))
+        measurer._requests(FRAME)
+        self.assertEqual(measurer.result.findings, [])
+        near, far = measurer.result.characteristics
+        self.assertEqual([(c.feature, c.value, c.quantity, c.axis) for c in (near, far)],
+                         [("holes", 7.0, 2, "x"), ("holes", 87.0, 1, "x")])
+        self.assertEqual((near.tolerance.kind, near.tolerance.lower, near.tolerance.upper),
+                         ("explicit", Decimal("-0.2"), Decimal("0.2")))
+        self.assertEqual(sheet.tolerance_text(far.tolerance, far.value, "iso"), ("87", " ±0.3"))
+        self.assertEqual((near.details["datum_feature"], len(near.details["centres"])), ("side", 2))
+
+    def test_it_replaces_only_the_frame_locations_of_its_centres_along_its_axis(self) -> None:
+        measurer = self.measurer(self.request("near", 1, tolerance={"deviation_mm": [-0.2, 0.2]}))
+        measurer._axis_location(self.features["holes"], FRAME, drawing_intent.cylinder_instances(self.faces[1:]))
+        self.assertEqual(sorted(c.id for c in measurer.result.characteristics),
+                         ["holes.axis_location.0.x", "holes.axis_location.1.x", "holes.axis_location.1.y",
+                          "holes.axis_location.2.x"])
+        measurer._requests(FRAME)
+        self.assertEqual(sorted(c.id for c in measurer.result.characteristics),
+                         ["holes.axis_location.1.y", "holes.axis_location.2.x", "near"])
+
+    def test_a_grid_located_from_a_plane_states_each_centre_once_without_its_pattern(self) -> None:
+        grid = hex_grid(3.0, 7.0)
+        self.faces = [self.faces[0], *(cylinder(k, inst.axis_point) for k, inst in enumerate(grid, 1))]
+        self.features["holes"] = ResolvedFeature("holes", "bore", tuple(range(1, len(grid) + 1)))
+        instances = drawing_intent.cylinder_instances(self.faces[1:])
+        self.assertIsNotNone(drawing_intent._grid_pattern(instances, FRAME, ("x", "y")))
+        unrequested = self.measurer()
+        unrequested._axis_location(self.features["holes"], FRAME, instances)
+        self.assertEqual([c.operation for c in unrequested.result.characteristics].count("pattern"), 1)
+        measurer = self.measurer(self.request("first_column", 1, tolerance={"deviation_mm": [-0.1, 0.1]}))
+        measurer._axis_location(self.features["holes"], FRAME, instances)
+        measurer._requests(FRAME)
+        chars = measurer.result.characteristics
+        self.assertNotIn("pattern", [c.operation for c in chars])
+        located = [p for c in chars if c.id == "first_column" for p in c.details["centres"]]
+        located += [c.details["axis_point"] for c in chars if c.operation == "axis_location" and c.axis == "x"]
+        self.assertEqual(sorted(located), sorted(inst.axis_point for inst in instances))   # every x stated once
+
+    def test_a_feature_policy_is_an_individual_tolerance_and_the_sheet_policy_is_general(self) -> None:
+        measurer = self.measurer(self.request("near", 1), self.request("far", 2),
+                                 features={"holes": {"size": "general", "tolerance_policy": "foot_location"}})
+        measurer._requests(FRAME)
+        near, far = measurer.result.characteristics
+        self.assertEqual((near.tolerance.kind, near.tolerance.upper, near.tolerance.source),
+                         ("policy", Decimal("0.2"), "foot_location"))
+        self.assertEqual(sheet.tolerance_text(near.tolerance, near.value, "iso"), ("7", " ±0.2"))
+        general = self.measurer().general("side", "location", 7.0)
+        self.assertEqual((general.kind, sheet.tolerance_text(general, 7.0, "iso")), ("general", ("7", "")))
+
+    def test_an_unselected_or_misplaced_instance_is_refused(self) -> None:
+        measurer = self.measurer(self.request("unselected"), self.request("beyond", 3),
+                                 {"id": "stray", "operation": "thickness", "features": ["side"], "instance": 1})
+        measurer._requests(FRAME)
+        self.assertEqual(measurer.result.characteristics, [])
+        self.assertEqual([(f["code"], f["dimension"]) for f in measurer.result.findings],
+                         [("invalid_drawing_intent", "unselected"), ("invalid_drawing_intent", "beyond"),
+                          ("invalid_drawing_intent", "stray")])
+
+    def test_the_dimension_is_drawn_from_the_plane_with_its_tolerance(self) -> None:
+        corners = [(0, -5, 0), (0, 5, 0), (0, 5, 10), (0, -5, 10)]   # the plane x = 0, seen edge-on in the front view
+        outline = tuple(Edge(None, (corners[k], corners[(k + 1) % 4])) for k in range(4))
+        plane_face = Face(0, "plane", 100.0, (0, -5, 0, 0, 5, 10), outline, (), point=(0, 0, 5), normal=X)
+        hole_face = Face(1, "cylinder", 10.0, (6, 9, 0, 8, 11, 10), (), (),
+                         axis_point=(7, 10, 5), axis_dir=Z, radius=1.0, inward=True, axial=(0, 10), span_deg=360)
+        features = {"datum": ResolvedFeature("datum", "plane_face", (0,)), "hole": ResolvedFeature("hole", "bore", (1,))}
+        binding = Binding(features, {0: "datum", 1: "hole"}, ())
+        part = {"drawing": {"type": "detail", "coordinate_frame": {"origin": {"at": "A"}, "x": {"normal_to": "A"},
+                                                                        "y": {"toward": "hole"}},
+                             "datum_features": {"A": {"feature": "datum", "role": "plane"}},
+                             "features": {"datum": {"size": "general"}, "hole": {"size": "general"}},
+                             "dimensions": [{"id": "hole_location", "operation": "distance", "features": ["datum", "hole"],
+                                             "tolerance": {"deviation_mm": [-0.2, 0.2]}}]}}
+        frame = drawing_intent.resolve_frame(part["drawing"], binding.features, {0: plane_face, 1: hole_face})
+        measurer = drawing_intent.Measurer("TST-0001", part, {}, [], binding, [plane_face, hole_face])
+        measurer._requests(frame)
+        self.assertEqual(measurer.result.findings, [])
+        (char,) = measurer.result.characteristics
+        plan = part_views.ViewPlan("front", "part", "orthographic", Y, X)
+        geometry = ViewGeometry("front", "fixture", "part", (0.0, 0.0), 1.0, 0.0, Y, X,
+                                ("M 0 0 L 0 -10 M 6 0 L 6 -10 M 8 0 L 8 -10",), (), (),
+                                (0.0, -10.0, 8.0, 0.0))
+        view_data = sheet.ViewData(plan, geometry, ((1.0, 0.0, 0.0, 0.0), (0.0, 0.0, -1.0, 5.0)))
+        presentation = sheet.build_presentation([char], frame, binding.features, {0: plane_face, 1: hole_face},
+                                                {"front": view_data}, "iso", [], {})
+        (dimension,) = presentation.linears
+        self.assertEqual((dimension.text, dimension.horizontal), ("7 ±0.2", True))
+        self.assertEqual((dimension.origin[0], dimension.target[0]), (0.0, 7.0))
+
+
+class SocketCallout(unittest.TestCase):
+    def test_a_hexagonal_socket_names_its_shape_and_across_flats_size(self) -> None:
+        char = Characteristic("nut", "socket", "across_flats", 5.6, (1, 2),
+                              tolerance=Tolerance("policy", Decimal("-0.1"), Decimal("0.1")), details={"sides": 6})
+        self.assertEqual(sheet._callout_text(char, "iso"), "hexagonal socket across flats 5.6 ±0.1")
+        self.assertEqual(sheet._callout_text(char, "asme"), "HEXAGONAL SOCKET 5.6 ±0.1 A/F")
+        square = replace(char, details={"sides": 4}, tolerance=None)
+        self.assertEqual(sheet._callout_text(square, "iso"), "square socket across flats 5.6")
 
 
 def strip(index: int, ends: tuple, normal) -> Face:
