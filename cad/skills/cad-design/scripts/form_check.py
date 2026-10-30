@@ -18,8 +18,9 @@ Per part (stdout JSON `parts`):
     valid                  BRepCheck_Analyzer verdict on the STEP read-back
     solids, volume_mm3, area_mm2
     kernel_valid           BRepCheck verdict on the in-memory shape (build.json)
-    readback_rel_error     |STEP volume - in-memory volume| / in-memory volume (build.json)
     axis_planar_fraction   area share of planar faces normal to X, Y or Z
+    obb_fill_fraction      solid volume / oriented bounding-box volume
+    obb_thickness_fraction shortest OBB extent / second-shortest OBB extent
     blend_faces            convex cylinder and torus faces of radius <= 10 mm that turn
                            through <= 120 degrees (fillets, not lug ends or shafts)
     freeform_faces         B-spline, Bezier, revolved, extruded or offset faces
@@ -37,8 +38,9 @@ Checks (each failure is one `findings` entry):
                             axis is parallel to the joint axis and passes within
                             --joint-tol of the joint origin; made parts need a bore
                             (concave), purchased parts a shank (convex)
-    block_like              F2+, made parts: axis_planar_fraction >= 0.80, or no
-                            blend and no freeform face
+    block_like              F2+, made parts: (axis_planar_fraction >= 0.80 or
+                            blend_faces + freeform_faces == 0) and OBB fill >= 0.20
+                            and OBB thickness > 0.10 of the second extent
     fdm_exterior_radius     F2+, fdm parts: min_convex_radius < --fdm-min-radius
     cnc_internal_radius     F2+, cnc parts: min_concave_radius < --cnc-tool-radius
 
@@ -62,6 +64,8 @@ CAD_MODEL_SCRIPTS = Path(__file__).resolve().parents[2] / "cad-model" / "scripts
 KERNEL_FACTS = "build.json"
 FIDELITY = ("F0", "F1", "F2", "F3")
 BLOCK_PLANAR_FRACTION = 0.80
+BLOCK_MIN_FILL_FRACTION = 0.20
+BLOCK_MAX_THICKNESS_FRACTION = 0.10
 BLEND_MAX_RADIUS = 10.0
 BLEND_MAX_SPAN = math.radians(120.0)  # a fillet turns through its edge angle; a lug end turns 180 degrees
 AXIS_TOL = 1e-4  # sine of the allowed angle between a cylinder axis and a joint axis
@@ -160,8 +164,7 @@ def is_valid(shape: Any) -> bool:
 
 
 def measure(shape: Any) -> dict[str, Any]:
-    """Form metrics plus the cylinders the joint check needs."""
-    from cadmodel import holes
+    from cadmodel import holes, occ
     from OCP.GeomAbs import (
         GeomAbs_BezierSurface,
         GeomAbs_BSplineSurface,
@@ -180,6 +183,10 @@ def measure(shape: Any) -> dict[str, Any]:
     min_convex = min_concave = math.inf
     cylinders = []
     bores = holes.bore_walls(shape)  # a bore is drilled, not a corner a cutter leaves
+    obb_extents, _ = occ.oriented_bbox(shape)
+    obb_volume = math.prod(obb_extents)
+    shortest, second_shortest = sorted(obb_extents)[:2]
+    thickness_fraction = shortest / second_shortest if second_shortest else 0.0
     for face in faces_of(shape):
         area = face_area(face)
         total += area
@@ -220,6 +227,8 @@ def measure(shape: Any) -> dict[str, Any]:
         elif kind in freeform:
             freeform_count += 1
     return {
+        "_obb_volume_mm3": obb_volume,
+        "_obb_thickness_fraction": thickness_fraction,
         "area_mm2": round(total, 3),
         "axis_planar_fraction": round(axis_planar / total, 4) if total else 1.0,
         "blend_faces": blends,
@@ -276,12 +285,16 @@ def check(args: argparse.Namespace, pose: Any) -> dict[str, Any]:
     for pn, part in sorted(loaded.items()):
         metrics = measure(part.shape)
         cylinders[pn] = metrics.pop("_cylinders")
+        obb_volume = metrics.pop("_obb_volume_mm3")
+        thickness_fraction = metrics.pop("_obb_thickness_fraction")
         volume = shape_volume(part.shape)
         row = {"name": part.name, "process": process.get(pn), "valid": is_valid(part.shape),
-               "solids": count_solids(part.shape), "volume_mm3": round(volume, 3), **metrics}
-        parts[pn] = row
+               "solids": count_solids(part.shape), "volume_mm3": round(volume, 3),
+               "obb_fill_fraction": round(volume / obb_volume, 4) if obb_volume else 0.0,
+               "obb_thickness_fraction": round(thickness_fraction, 4), **metrics}
         if not row["valid"]:
             findings.append({"check": "brep_invalid", "part": pn, "source": "step"})
+        parts[pn] = row
         if pn in facts:
             kernel_v = facts[pn]["kernel_volume_mm3"]
             row["kernel_valid"] = facts[pn]["kernel_valid"]
@@ -294,9 +307,14 @@ def check(args: argparse.Namespace, pose: Any) -> dict[str, Any]:
                                  "max": READBACK_REL, "kernel_volume_mm3": kernel_v, "step_volume_mm3": volume})
         if level < 2 or row["process"] == "purchased":
             continue
-        if row["axis_planar_fraction"] >= BLOCK_PLANAR_FRACTION or row["blend_faces"] + row["freeform_faces"] == 0:
+        has_blocky_faces = (row["axis_planar_fraction"] >= BLOCK_PLANAR_FRACTION
+                            or row["blend_faces"] + row["freeform_faces"] == 0)
+        if (has_blocky_faces and row["obb_fill_fraction"] >= BLOCK_MIN_FILL_FRACTION
+                and row["obb_thickness_fraction"] > BLOCK_MAX_THICKNESS_FRACTION):
             findings.append({"check": "block_like", "part": pn, "axis_planar_fraction": row["axis_planar_fraction"],
-                             "blend_faces": row["blend_faces"], "freeform_faces": row["freeform_faces"]})
+                             "blend_faces": row["blend_faces"], "freeform_faces": row["freeform_faces"],
+                             "obb_fill_fraction": row["obb_fill_fraction"],
+                             "obb_thickness_fraction": row["obb_thickness_fraction"]})
         if row["process"] == "fdm" and row["min_convex_radius"] is not None and row["min_convex_radius"] < args.fdm_min_radius:
             findings.append({"check": "fdm_exterior_radius", "part": pn, "radius": row["min_convex_radius"],
                              "min": args.fdm_min_radius})
