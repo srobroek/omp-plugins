@@ -37,6 +37,7 @@ if LAYOUT is None:
     _LAYOUT_SPEC.loader.exec_module(LAYOUT)
 
 POSE_TOL = 1e-6  # cad-motion's sweep reports pose values rounded to 6 decimals
+DEFAULT_TIMEOUT_SECONDS = 600.0  # a case's timeout_seconds overrides it
 
 
 class CaseError(ValueError):
@@ -153,6 +154,11 @@ def load_case(path: Path) -> dict[str, Any]:
         or required_safety_factor <= 0
     ):
         raise CaseError("required_safety_factor must be a positive finite number")
+    timeout = raw.get("timeout_seconds")
+    if timeout is not None and (
+        not isinstance(timeout, (int, float)) or isinstance(timeout, bool) or not math.isfinite(timeout) or timeout <= 0
+    ):
+        raise CaseError("timeout_seconds must be a positive finite number")
     if "pose" in raw and not valid_pose(raw["pose"]):
         raise CaseError("pose must map joint IDs to finite numeric values")
     if raw.get("evidence") is not None:
@@ -224,9 +230,10 @@ def run_directory(case_path: Path, run_id: str, scratch_root: Path | None = None
     return parent / run_id
 
 
-def run_job(case_path: Path, case: dict[str, Any], timeout: float = 600.0, *, scratch_root: Path | None = None,
+def run_job(case_path: Path, case: dict[str, Any], *, scratch_root: Path | None = None,
             result_path: Path | None = None,
             solver_versions: dict[str, dict[str, str]] | None = None) -> tuple[dict[str, Any], int]:
+    timeout = case.get("timeout_seconds", DEFAULT_TIMEOUT_SECONDS)
     versions = solver_versions or {}
     freecad = find_freecad()
     if freecad is None:
@@ -419,13 +426,14 @@ except Exception as e:
         phase = _job_phase(phase_path)
         during = {
             "import": "while importing the STEP",
-            "mesh": f"while Gmsh meshed at mesh_size {case['mesh_size']} mm; Gmsh spends such time optimising "
-                    "distorted curved second-order elements, and a different mesh_size changes how many it repairs",
+            "mesh": f"while Gmsh meshed at mesh_size {case['mesh_size']} mm, optimising its curved "
+                    "second-order elements",
             "solve": "while CalculiX ccx was solving",
             "results": "while reading the CalculiX results",
         }
-        result = error(f"FreeCAD job exceeded timeout of {timeout} seconds {during.get(phase, 'before it started')}",
-                       code="freecad_timeout")
+        remedy = "raise timeout_seconds in the case YAML" + (" or change mesh_size" if phase == "mesh" else "")
+        result = error(f"FreeCAD job exceeded its timeout_seconds of {timeout:g} "
+                       f"{during.get(phase, 'before it started')}; {remedy}", code="freecad_timeout")
         result["error"]["details"] = {"phase": phase}
         result.update({"run_id": run_id, "run_directory": str(run_dir)})
         output_path.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
@@ -593,6 +601,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if bool(args.hw) != bool(args.version):
         parser.error("--hw and --version must be provided together")
+    if args.hw:
+        # The FreeCAD job runs in its own directory, so the paths derived from hw must be absolute.
+        args.hw = args.hw.resolve()
     if find_freecad() is None:
         print(json.dumps(error("freecadcmd not found; set FREECADCMD or add it to PATH", code="freecad_unavailable")))
         return 2

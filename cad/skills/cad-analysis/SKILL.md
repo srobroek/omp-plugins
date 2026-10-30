@@ -50,14 +50,18 @@ TRIGGER
   it is a check failure.
 - `solid_index`: optional 1-based index into all STEP solids, for selecting one solid when labels or
   product names are ambiguous. `part`, `occurrence` and `solid_index` are mutually exclusive.
+- `timeout_seconds`: optional positive limit for the whole FreeCAD job (STEP import, Gmsh meshing and
+  the ccx solve), default 600. Gmsh's high-order pass on a thin, curved part can need far longer.
 
 ## Reproducibility
 Completed results include `mesh_settings`: one Gmsh thread, random seed 1, zero 3D random
 perturbation, standard and Netgen mesh optimizers disabled, the fixed elastic-plus-optimization
 high-order pass, and the CalculiX SPOOLES matrix solver. `mesh_input_hashes` identify the normalized
-`.geo` input and BRep used. Two repeated lamp runs had identical source hashes and mesh counts
-(13,634 nodes; 7,423 elements); safety factor differed by 0.202%. This residual is downstream
-Gmsh/OCC numerical nondeterminism, not source input drift; comparable repeats may vary within 0.25%.
+`.geo` input and BRep used. Repeats with identical hashes still differ slightly: Gmsh's high-order
+optimiser groups its distorted elements into patches differently from run to run, moving some nodes.
+Without that pass the mesh repeats bit for bit, as does the ccx solve of one `.inp`. Safety factor
+differed by 0.20% on a lamp (13,634 nodes) and 0.39% on a clamp (200,087 nodes); treat differences
+under 0.5% between such repeats as this noise.
 ## Exit codes
 
 - `0`: analysis completed and any requested safety-factor threshold passed.
@@ -77,8 +81,9 @@ solve names its cause in `error.code`, with the evidence in `error.details`:
   `mesh_size`.
 - `solver_failed`: ccx stopped with `*ERROR` messages, quoted in the message and `details.errors`.
   A nonpositive Jacobian lists the distorted second-order elements; lower `mesh_size`.
-- `freecad_timeout`: `details.phase` is `import`, `mesh`, `solve` or `results`. The timeout stops
-  the whole job, Gmsh and ccx included.
+- `freecad_timeout`: `details.phase` is `import`, `mesh`, `solve` or `results`, and the message names
+  the knob: raise `timeout_seconds`, or for `mesh` change `mesh_size`. The timeout stops the whole
+  job, Gmsh and ccx included.
 
 ## Rules
 

@@ -50,6 +50,13 @@ loads:
 mesh_size: 5
 """
 
+# The 100 x 10 x 5 mm cantilever of StaticFEAContracts.make_cantilever_step, fixed at x=0 and loaded at x=100.
+CANTILEVER_TAIL = """material: {E: 69000, nu: 0.33, density: 2700, yield: 276}
+fixed_faces: {plane: {axis: x, value: 0, tolerance: 0.000001}}
+loads: [{selector: {plane: {axis: x, value: 100, tolerance: 0.000001}}, force: [0, 0, -50]}]
+mesh_size: 5
+"""
+
 
 def load_pose():
     """cad-motion's pose module: the writer of `<PN> <title> [@id]` component names."""
@@ -435,12 +442,7 @@ if len(sys.argv) > 1:
 """, encoding="utf-8")
             ccx.chmod(0o755)
             case_path = root / "case.yaml"
-            case_path.write_text(f"""step: {step}
-material: {{E: 69000, nu: 0.33, density: 2700, yield: 276}}
-fixed_faces: {{plane: {{axis: x, value: 0, tolerance: 0.000001}}}}
-loads: [{{selector: {{plane: {{axis: x, value: 100, tolerance: 0.000001}}}}, force: [0, 0, -50]}}]
-mesh_size: 5
-""", encoding="utf-8")
+            case_path.write_text(f"step: {step}\n{CANTILEVER_TAIL}", encoding="utf-8")
             result, status = run_job(case_path, load_case(case_path),
                                      solver_versions={"calculix": {"path": str(ccx), "version": "2.23"}})
             self.assertEqual(status, 2, result)
@@ -451,7 +453,7 @@ mesh_size: 5
             self.assertEqual(details["degrees_of_freedom"], 3 * details["node_count"])
             self.assertIn("inside the SPOOLES equation solver", result["error"]["message"])
 
-    def test_timeout_names_the_phase_and_stops_the_jobs_children(self) -> None:
+    def test_case_timeout_names_the_phase_its_knob_and_stops_the_jobs_children(self) -> None:
         from fea_static import run_job
         with tempfile.TemporaryDirectory(prefix="cad-fea-timeout-") as directory:
             root = Path(directory)
@@ -476,15 +478,16 @@ runpy.run_path(sys.argv[1], run_name="__main__")
             freecad.chmod(0o755)
             case = {
                 "_step": str(step), "material": {"E": 1, "nu": 0.3, "density": 1, "yield": 1},
-                "fixed_faces": {"indices": [1]}, "loads": [], "mesh_size": 1,
+                "fixed_faces": {"indices": [1]}, "loads": [], "mesh_size": 1, "timeout_seconds": 5,
             }
             with patch("fea_static.find_freecad", return_value=freecad):
-                result, status = run_job(root / "case.yaml", case, timeout=5,
+                result, status = run_job(root / "case.yaml", case,
                                          solver_versions={"calculix": {"path": "/unused/ccx", "version": "2.23"}})
             self.assertEqual(status, 2)
             self.assertEqual(result["error"]["code"], "freecad_timeout")
             self.assertEqual(result["error"]["details"], {"phase": "import"})
-            self.assertIn("while importing the STEP", result["error"]["message"])
+            self.assertIn("timeout_seconds of 5 while importing the STEP; raise timeout_seconds in the case YAML",
+                          result["error"]["message"])
             pid = int(child_pid.read_text(encoding="utf-8"))
             deadline = time.monotonic() + 5
             while time.monotonic() < deadline:
@@ -495,6 +498,19 @@ runpy.run_path(sys.argv[1], run_name="__main__")
                 time.sleep(0.05)
             else:
                 self.fail("a child of the timed-out FreeCAD job is still running")
+
+    def test_timeout_seconds_must_be_a_positive_number(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "part.step").touch()
+            case = root / "case.yaml"
+            for value in ("0", "-5", "true", "soon"):
+                with self.subTest(value=value):
+                    case.write_text(f"step: part.step\ntimeout_seconds: {value}\n{CASE_TAIL}", encoding="utf-8")
+                    with self.assertRaisesRegex(CaseError, "timeout_seconds must be a positive finite number"):
+                        load_case(case)
+            case.write_text(f"step: part.step\ntimeout_seconds: 1800\n{CASE_TAIL}", encoding="utf-8")
+            self.assertEqual(load_case(case)["timeout_seconds"], 1800)
 
 
 class CcxFailureDiagnosis(unittest.TestCase):
@@ -650,11 +666,11 @@ class VersionedPublicationTests(unittest.TestCase):
             step = root / "beam.step"
             step.touch()
             case = {"_step": str(step), "material": {"E": 1, "nu": 0.3, "density": 1, "yield": 1},
-                    "fixed_faces": {"indices": [1]}, "loads": [], "mesh_size": 1}
+                    "fixed_faces": {"indices": [1]}, "loads": [], "mesh_size": 1, "timeout_seconds": 0.01}
             with patch("fea_static.find_freecad", return_value=Path("/fake/freecadcmd")), \
                  patch("fea_static._run_process_group",
                        side_effect=subprocess.TimeoutExpired("freecadcmd", 0.01)) as run:
-                fea_static.run_job(root / "case.yaml", case, scratch_root=root, timeout=0.01,
+                fea_static.run_job(root / "case.yaml", case, scratch_root=root,
                                    solver_versions={"calculix": {"path": "/fake/ccx", "version": "2.23"}})
             self.assertEqual(Path(run.call_args.args[0][1]).name, "fea_job.py")
 
@@ -674,6 +690,18 @@ class VersionedPublicationTests(unittest.TestCase):
         self.assertEqual(versions["freecad"], {"path": str(freecad.resolve()), "version": "1.1.4"})
         self.assertEqual(versions["gmsh"], {"path": str(gmsh.resolve()), "version": "4.15.0"})
         self.assertEqual(versions["calculix"], {"path": str(ccx.resolve()), "version": "2.23"})
+
+    @unittest.skipUnless(FREECAD_PRESENT, "FreeCAD 1.1.4 freecadcmd is not installed (shared lookup)")
+    def test_relative_hw_publishes_a_solved_bundle(self) -> None:
+        step = StaticFEAContracts.make_cantilever_step(self, Path(self.temporary.name))
+        shutil.copyfile(step, self.case_dir / "cantilever.step")
+        self.case.write_text(f"step: cantilever.step\n{CANTILEVER_TAIL}", encoding="utf-8")
+        run = subprocess.run([sys.executable, str(SCRIPT), "hw/analysis/cases/cantilever/case.yaml",
+                              "--hw", "hw", "--version", "v1"],
+                             cwd=self.project, capture_output=True, text=True, timeout=600)
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        self.assertEqual(json.loads(run.stdout)["status"], "pass")
+        self.assertTrue((self.hw / "analysis" / "v1" / "cantilever" / "results.json").is_file())
 
 
 if __name__ == "__main__":
