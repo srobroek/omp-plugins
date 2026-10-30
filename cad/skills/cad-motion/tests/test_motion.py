@@ -1495,6 +1495,29 @@ class StepTests(unittest.TestCase):
         self.assertEqual(layout.verify(bundle), [])
         self.assertEqual(summary["status"], "pass")
 
+    def test_a_criterion_no_pose_meets_publishes_without_a_worst_pose_and_evidence_names_the_bundle(self) -> None:
+        """maximum_interference with nothing interfering is a clean pass with no worst pose, not a crash; a
+        found worst pose's evidence is the published bundle's worst.step.json, not the staging copy."""
+        hw, _ = self.sealed_planar_version()
+        common = ("--hw", str(hw), "--version", "v1", "--steps", "3", "--grid", "0")
+        proc, result = self.run_script("sweep.py", *common, "--case", "no-overlap",
+                                       "--worst-criterion", "maximum_interference")
+        self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+        self.assertEqual((result["status"], result["collision_pose_count"]), ("pass", 0))
+        worst = result["worst_case"]
+        self.assertEqual((worst["criterion"], worst["found"]), ("maximum_interference", False))
+        self.assertIn("no interference", worst["reason"])
+        bundle = hw / "motion" / "v1" / "no-overlap"
+        self.assertTrue((bundle / "result.json").is_file())
+        self.assertFalse((bundle / "worst.step").exists() or (bundle / "worst.step.json").exists())
+        proc, reach = self.run_script("sweep.py", *common, "--case", "reach")
+        self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+        published = hw / "motion" / "v1" / "reach"
+        self.assertEqual((reach["worst_case"]["found"], reach["worst_case"]["evidence"], reach["worst_case"]["step"]),
+                         (True, str(published / "worst.step.json"), str(published / "worst.step")))
+        evidence = json.loads((published / "worst.step.json").read_text(encoding="utf-8"))
+        self.assertEqual(evidence["step"]["path"], str(published / "worst.step"))
+
     def test_versioned_pose_publishes_and_reuses_bundle(self) -> None:
         hw, _ = self.sealed_planar_version()
         common = ("--hw", str(hw), "--version", "v1", "--case", "TST-0001", "--set", "J-001=30")

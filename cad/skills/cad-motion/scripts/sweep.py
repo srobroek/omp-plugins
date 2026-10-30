@@ -134,16 +134,19 @@ Worst case, by `--worst-criterion`; ties go to the earliest sample:
         clearance requirement, and `--min-clearance` on a checked pair that is
         not fitted; a larger undeclared overlap breaks a tie.
     maximum_interference: the largest undeclared overlap volume above
-        `--volume-tol`; none when nothing collides.
+        `--volume-tol`.
 These are geometric criteria; none of them is a stress load case by itself.
-The worst pose is written with pose.py's posed-STEP writer to `--worst-step`
-(one product per PN, one `<PN> <title> [@id]` component per occurrence) and
-its evidence to `<WORST.step>.json`: criterion and metric, sample, pair,
+`worst_case.found` says whether a pose qualified; when none does (nothing
+interferes, every pose collides, or no pair has a requirement) the sweep still
+passes or fails on its checks, and `worst_case.reason` says why there is no
+worst pose. The worst pose is written with pose.py's posed-STEP writer to
+`--worst-step`, or the versioned bundle's worst.step (one product per PN, one
+`<PN> <title> [@id]` component per occurrence), and its evidence beside it as
+`worst.step.json` (`worst_case.evidence`): criterion and metric, sample, pair,
 independent and complete pose, units, input provenance, the STEP's SHA-256,
 the occurrence -> PN and component-name map, and a replay command that sets
 the independent joints only. Both files are removed when the run starts, so
-an incomplete run, an error, or a sweep with no eligible pose (`worst_case`
-null) leaves none behind.
+an incomplete run, an error, or a sweep with no worst pose leaves none behind.
 
 Runtime is bounded: more than `--max-poses` poses is refused up front, and a
 sweep that passes `--time-limit` seconds stops measuring and reports
@@ -205,6 +208,11 @@ CRITERIA = {
                          "requirement, and the required {required} mm on a checked pair that is not fitted; "
                          "a larger undeclared overlap breaks a tie",
     "maximum_interference": "largest undeclared overlap volume above {volume_tol} mm^3",
+}
+NO_WORST = {  # why a complete sweep has no worst pose under each criterion: `worst_case.reason`, `found` false
+    "max_horizontal_reach": "no collision-free sample: every evaluated pose collides",
+    "minimum_clearance": "no measured pair has an applicable clearance requirement",
+    "maximum_interference": "no interference: no undeclared overlap above {volume_tol} mm^3 at any evaluated sample",
 }
 MAX_LISTED = 50
 EVIDENCE_SCHEMA = 1
@@ -1000,10 +1008,14 @@ def main(argv: list[str] | None = None) -> int:
                           "per_pose_ms": round((swept - loaded) / state.evaluated * 1000, 1) if state.evaluated else 0.0,
                           **counters},
         }
-        if complete and state.worst is not None:
+        stage = None
+        description = {"criterion": args.worst_criterion, "definition": CRITERIA[args.worst_criterion].format(
+            joint=path[0].id, effector=chain.ref(effector), required=args.min_clearance, volume_tol=args.volume_tol)}
+        if complete and state.worst is None:
+            result["worst_case"] = {**description, "found": False, "reason": NO_WORST[args.worst_criterion].format(
+                volume_tol=args.volume_tol)}
+        elif complete:
             sample = state.worst["sample"]
-            description = {"criterion": args.worst_criterion, "definition": CRITERIA[args.worst_criterion].format(
-                joint=path[0].id, effector=chain.ref(effector), required=args.min_clearance, volume_tol=args.volume_tol)}
             stage = pose.LAYOUT.staging(args.hw, "bundle.motion") if version else None
             worst_step = stage / "worst.step" if stage else args.worst_step
             try:
@@ -1013,17 +1025,14 @@ def main(argv: list[str] | None = None) -> int:
                 digest = sha256(worst_step)
                 evidence_path = (stage / "worst.step.json") if stage else evidence_path_for(worst_step)
                 write_evidence(args, chain, definitions, state.worst, description, digest, evidence_path, record_hw)
-                result["worst_case"] = {**description, **state.worst["metric"], "pair": state.worst["pair"],
+                result["worst_case"] = {**description, "found": True, **state.worst["metric"], "pair": state.worst["pair"],
                                          "sample": sample.index, "source": sample.source,
                                          "independent_pose": rounded(sample.settings), "pose": rounded(sample.values),
-                                         "step": str(worst_step), "step_sha256": digest,
-                                         "evidence": str(evidence_path), "command": pose_command(args, sample.settings)}
-                if version:
-                    result["worst_case"]["step"] = str(pose.LAYOUT.bundle_dir(args.hw, "motion", version, args.case)
-                                                         / "worst.step")
+                                         "step": str(args.worst_step), "step_sha256": digest,
+                                         "evidence": str(evidence_path_for(args.worst_step)),
+                                         "command": pose_command(args, sample.settings)}
             except Exception:
                 if stage is not None:
-                    import shutil
                     shutil.rmtree(stage, ignore_errors=True)
                 raise
         if version:
