@@ -23,6 +23,7 @@ TRIGGER
 1. Build first: `skill://cad-model` `run` writes `hw/versions/vN/` and `latest.json`.
 2. Render: `uv run --script skill://cad-flow/scripts/run.py cad-render/scripts/render.py hw [--version latest|vN] [--views ...] [--size WxH] [--subject S] [--replace] [--out-dir .cad-work/...]`
    -> immutable `hw/renders/<vN>/<subject>/` bundles with requested PNGs, `render.json`, and `manifest.json`.
+   `--views` accepts `iso front side exploded`, `closeup-<PN>` / `part-<PN>`, and custom `dir-<X>-<Y>-<Z>` directions in assembly coordinates (+Z up, front -Y). Encode each signed decimal using `p` or `m` and `d` for the decimal point; for example `dir-p1-m1d5-p0-closeup-LMP-0004`. Directions are normalized. `-closeup-<PN>` or `-part-<PN>` optionally frames a PN from that direction; `@occurrence` uses the same explicit, filename-safe reference accepted by `closeup-@occurrence`. Names are deterministic and safe as `{VIEW}.png` bundle file names. Camera up switches to +Z near vertical directions.
    The bundle manifest seals its files and binds the bundle to the version manifest. `render.json` holds
    quality, retry, material and input decisions. A same-recipe bundle is reused, including with `--replace`;
    use `--replace` only when a conflicting recipe should be retained and replaced. `--out-dir` is
@@ -56,7 +57,7 @@ infrastructure error (nothing written).
 | `BLANK` | unusable | subject under 0.5% of frame or nothing but backdrop; retry once on fixed views, use the close-up ladder before failing |
 | `CLIPPED` | unusable | a subject pixel touches the frame edge; reframe; close-ups continue through the camera/ghost/isolated ladder |
 | `OCCLUDED` | unusable close-up | less than 25% of isolated subject pixels remain visible; retry alternate camera angles, ghost context, then isolated fallback |
-| `NO_SHADOW` | warning | shadow below threshold; keep PNG and report warning |
+| `NO_SHADOW` | warning | when the camera frustum intersects the ground plane, the shadow is below threshold; tight close-ups that exclude the floor are not graded for a ground shadow |
 | `INVERTED_SHADOW` | warning | contact shadow is no darker than high-overhang shadow; keep PNG and report warning |
 
 Every attempt records its strategy, camera, findings, and metrics in the manifest. A requested view

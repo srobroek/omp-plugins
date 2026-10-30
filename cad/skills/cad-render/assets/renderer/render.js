@@ -123,14 +123,20 @@ function vertexSample(meshes) {
 }
 
 // Camera that fits every point inside the frame with STUDIO.margin, looking along -direction.
-function fitCamera(camera, points, direction, frameScale = 1) {
+function cameraBasis(direction, upReference) {
   const back = new THREE.Vector3(...direction).normalize();
   const forward = back.clone().negate();
-  const right = new THREE.Vector3().crossVectors(forward,
-    Math.abs(forward.y) > 0.98 ? new THREE.Vector3(0, 0, 1) : new THREE.Vector3(0, 1, 0)).normalize();
+  const upHint = new THREE.Vector3(...(upReference ?? (Math.abs(forward.y) > 0.98 ? [0, 0, 1] : [0, 1, 0])));
+  const right = new THREE.Vector3().crossVectors(forward, upHint).normalize();
   const up = new THREE.Vector3().crossVectors(right, forward).normalize();
+  return { back, forward, right, up };
+}
+
+function fitCamera(camera, points, direction, frameScale = 1, upReference) {
+  const { back, forward, right, up } = cameraBasis(direction, upReference);
   const tanV = Math.tan((camera.fov * Math.PI) / 360) * (1 - STUDIO.margin) * frameScale;
   const tanH = tanV * camera.aspect;
+
   const target = new THREE.Box3().setFromPoints(points).getCenter(new THREE.Vector3());
   let distance = 0;
   for (let pass = 0; pass < 4; pass += 1) {
@@ -683,6 +689,36 @@ async function boot() {
       root.updateMatrixWorld(true);
     }
   }
+  // Clip the renderer's square floor against the camera frustum, rather than testing its bounding
+  // sphere (which can overlap the view when the floor itself is entirely out of frame).
+  function floorIntersectsFrustum() {
+    camera.updateMatrixWorld(true);
+    camera.updateProjectionMatrix();
+    ground.updateMatrixWorld(true);
+    const frustum = new THREE.Frustum().setFromProjectionMatrix(
+      new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
+    let polygon = [
+      new THREE.Vector3(-0.5, -0.5, 0), new THREE.Vector3(0.5, -0.5, 0),
+      new THREE.Vector3(0.5, 0.5, 0), new THREE.Vector3(-0.5, 0.5, 0),
+    ].map((corner) => corner.applyMatrix4(ground.matrixWorld));
+    for (const plane of frustum.planes) {
+      if (!polygon.length) return false;
+      const clipped = [];
+      for (let index = 0; index < polygon.length; index += 1) {
+        const start = polygon[index];
+        const end = polygon[(index + 1) % polygon.length];
+        const startDistance = plane.distanceToPoint(start);
+        const endDistance = plane.distanceToPoint(end);
+        if (startDistance >= 0) clipped.push(start);
+        if ((startDistance < 0 && endDistance > 0) || (startDistance > 0 && endDistance < 0)) {
+          clipped.push(start.clone().lerp(end, startDistance / (startDistance - endDistance)));
+        }
+      }
+      polygon = clipped;
+    }
+    return polygon.length > 0;
+  }
+
   async function capture(name, options = {}, attempt = 0) {
     const view = scene.views.find((v) => v.name === name);
     if (!view) throw new Error(`unknown view ${name}`);
@@ -713,7 +749,9 @@ async function boot() {
     subjectMeshes.forEach((mesh) => sceneBox.expandByObject(mesh));
     const radius = stage(sceneBox, isolated ? name : Boolean(view.explode));
     const points = isolated ? isolatedFramingPoints(subjectMeshes) : framingPoints(subjectMeshes);
-    const fit = fitCamera(camera, points, options.direction ?? view.direction, options.frameScale ?? 1);
+    const fit = fitCamera(camera, points, options.direction ?? view.direction, options.frameScale ?? 1,
+      options.up ?? view.up);
+    const floorInFrame = floorIntersectsFrustum();
     const subjectRadius = new THREE.Box3().setFromPoints(vertexSample(subjectMeshes)).getSize(new THREE.Vector3()).length() / 2;
     const aoRadius = subjectRadius * STUDIO.aoRadius;
     gtao.updateGtaoMaterial({ radius: aoRadius, thickness: aoRadius, distanceExponent: 1, distanceFallOff: 1, scale: 1 });
@@ -757,6 +795,7 @@ async function boot() {
       },
       subject: [...subject],
       visible_subject_fraction: isolatedSubjectPixels ? visibleSubjectPixels / isolatedSubjectPixels : 0,
+      floor_in_frame: floorInFrame,
       explode: Boolean(view.explode),
       materials: applied,
       scene_radius_m: radius,
@@ -764,7 +803,6 @@ async function boot() {
       encode_ms: Math.round(encodeMs),
     };
   }
-
   // Motion frames (cad-motion motion.py through render.py --motion). A frame moves every occurrence
   // by a rigid delta from the version's built pose, in GLB metres: node world = delta x built world.
   // One camera serves a whole group of frames, fitted to the bounds the group sweeps, so the framing
