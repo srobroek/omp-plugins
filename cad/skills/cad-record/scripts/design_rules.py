@@ -25,7 +25,8 @@ DEFAULT_MIN_VISIBLE_FRACTION = 0.5
 
 TORQUE_CODE = "retention.torque_path"
 AXIAL_CODE = "retention.axial_retainer"
-TRANSPARENT_FDM_CODE = "feasibility.transparent_fdm"
+TRANSPARENT_FDM_CODE = "feasibility.transparent_fdm"  # structured: a part declares itself transparent
+TRANSPARENCY_CLAIM_CODE = "feasibility.transparency_claim"  # prose names something see-through
 VISIBILITY_CODE = "visibility.binding"
 
 # Retention types provided by a separate piece of hardware: it must be a modelled occurrence, because a
@@ -35,15 +36,22 @@ AXIAL_HARDWARE = frozenset({"circlip", "set_screw", "nut", "pin", "cap"})
 # "Press or slip" fits, in cad-record's fit vocabulary; a running fit is a motion fit and is exempt.
 RETAINED_FITS = ("press_fit", "locating_fit")
 
-# A transparency claim in prose. Bare "clear" is too common ("clear of", "clear silicone"), so it counts
-# only next to a material, or as an attribute of a cover-like part.
+# A transparency claim in prose. It only ever raises a warning that asks for a structured `transparency`.
+# Bare "clear" is too common ("clear of", "clear coat", "a clear window for the cable"), so it counts only
+# next to a material, as an attribute of a cover-like part, or as what such a part "is".
 _POLYMER = r"petg|pla|abs|asa|pc|polycarbonate|pmma|acrylic|resin|filament|plastic|polymer|material"
+_COVER = r"window|cover|lid|panel|case|housing|enclosure|dome|lens|bezel|shield"
 TRANSPARENT_TEXT = re.compile(
     rf"\b(?:transparent|see[- ]through|glass[- ]clear|optically[- ]clear|crystal[- ]clear)\b"
-    rf"|\bclear[- ](?:{_POLYMER}|window|cover|lid|panel|case|housing|enclosure)s?\b"
-    rf"|\b(?:{_POLYMER})\s*\(?\s*clear\b",
+    rf"|\bvisible\s+through\b"
+    rf"|\bglass[- ](?:{_COVER})s?\b"
+    rf"|\bclear[- ](?:{_POLYMER}|{_COVER})s?\b(?!\s+for\b)"
+    rf"|\b(?:{_POLYMER})\s*\(?\s*clear\b(?!\s+of\b)"
+    rf"|\b(?:{_COVER})s?\s+(?:is|are|be|stays?|remains?)\s+clear\b(?!\s+of\b)",
     re.IGNORECASE,
 )
+# A negation just before a match ("not transparent", "non-transparent", "never see-through") cancels it.
+_NEGATED = re.compile(r"(?:\b(?:not|never)\s+(?:[\w-]+\s+){0,2}|\bnon-?\s*)$", re.IGNORECASE)
 
 Resolve = Callable[[str], "str | None"]  # a part_ref -> its occurrence id, or None when it resolves to none
 
@@ -149,22 +157,15 @@ def _hardware_problem(retention: Mapping[str, Any], hardware: frozenset[str], re
     return None
 
 
-def _drive_revolutes(assembly: Mapping[str, Any], joints: list[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
-    """Revolute joints that move a drive train: coupled, driving a coupling or mechanism, or declared
-    `torque: transmitted`. A hand-positioned revolute is none of these."""
-    drivers = {joint["coupling"]["driver"] for joint in joints if "driver" in joint.get("coupling", {})}
-    drivers |= {mechanism["driver"] for mechanism in assembly.get("mechanisms", [])}
-    return [joint for joint in joints if joint["type"] == "revolute"
-            and ("coupling" in joint or joint["id"] in drivers or joint.get("torque") == "transmitted")]
-
-
 def torque_path_findings(assembly: Mapping[str, Any], resolve: Resolve) -> list[RuleFinding]:
-    """Every torque-carrying connection of a rotating drive train declares how it carries the torque.
+    """Every rotating joint says whether it carries drive torque, and every connection inside a drive
+    train says how.
 
-    A drive-train body is the child of a drive revolute (see `_drive_revolutes`) and its fixed-joint
-    descendants. Each fixed joint inside it declares `torque: transmitted` with a `torque_path`, or
-    `torque: none`; any joint declared `transmitted` needs its `torque_path`; hardware torque paths name
-    the modelled hardware.
+    Each revolute declares `torque`: `transmitted` when its child carries drive torque (a crank, camshaft,
+    gear or pulley shaft, coupled or not), or `none` for a hand-positioned or free-running joint. A drive
+    train is the child of a `transmitted` revolute and its fixed-joint descendants. Each fixed joint inside
+    it declares `torque`, and a fixed joint declared `transmitted` names its `torque_path`. A hardware torque
+    path names the modelled hardware.
     """
     joints = [joint for joint in assembly.get("joints", []) if isinstance(joint, Mapping)]
     fixed_by_parent: dict[str, list[Mapping[str, Any]]] = {}
@@ -172,8 +173,9 @@ def torque_path_findings(assembly: Mapping[str, Any], resolve: Resolve) -> list[
         parent = resolve(joint["parent"])
         if joint["type"] == "fixed" and parent is not None:
             fixed_by_parent.setdefault(parent, []).append(joint)
-    body_joints: dict[str, Mapping[str, Any]] = {}  # fixed joint id -> joint, inside a drive-train body
-    stack = [oid for oid in (resolve(joint["child"]) for joint in _drive_revolutes(assembly, joints)) if oid]
+    in_drive_train: set[str] = set()  # fixed joint ids inside a drive train
+    stack = [oid for oid in (resolve(joint["child"]) for joint in joints
+                             if joint["type"] == "revolute" and joint.get("torque") == "transmitted") if oid]
     seen: set[str] = set()
     while stack:
         oid = stack.pop()
@@ -181,7 +183,7 @@ def torque_path_findings(assembly: Mapping[str, Any], resolve: Resolve) -> list[
             continue
         seen.add(oid)
         for joint in fixed_by_parent.get(oid, []):
-            body_joints[joint["id"]] = joint
+            in_drive_train.add(joint["id"])
             child = resolve(joint["child"])
             if child is not None:
                 stack.append(child)
@@ -190,19 +192,25 @@ def torque_path_findings(assembly: Mapping[str, Any], resolve: Resolve) -> list[
     for joint in joints:
         where = f"joints/{joint['id']}"
         if "torque" not in joint:
-            if joint["id"] in body_joints:
+            if joint["type"] == "revolute":
                 findings.append(RuleFinding(TORQUE_CODE, where, (
-                    f"{joint['id']} fixes {joint['child']} inside a rotating drive train but declares no torque: "
-                    "set `torque: transmitted` with a `torque_path` (key, set_screw, d_flat, press_fit, spline, "
-                    "clamp, pin, adhesive), or `torque: none` when it carries no drive torque")))
+                    f"{joint['id']} turns {joint['child']} but declares no torque: set `torque: transmitted` when "
+                    "its child carries drive torque (a crank, camshaft, gear or pulley shaft), or `torque: none` "
+                    "for a hand-positioned or free-running joint")))
+            elif joint["id"] in in_drive_train:
+                findings.append(RuleFinding(TORQUE_CODE, where, (
+                    f"{joint['id']} fixes {joint['child']} inside a drive train but declares no torque: set "
+                    "`torque: transmitted` with a `torque_path` (key, set_screw, d_flat, press_fit, spline, clamp, "
+                    "pin, adhesive), or `torque: none` when it carries no drive torque")))
             continue
         if joint["torque"] != "transmitted":
             continue
         path = joint.get("torque_path")
         if path is None:
-            findings.append(RuleFinding(TORQUE_CODE, where, (
-                f"{joint['id']} transmits torque to {joint['child']} without a `torque_path`: declare the key, "
-                "set screw, D-flat, press fit, spline, clamp, pin or adhesive that carries it")))
+            if joint["type"] == "fixed":
+                findings.append(RuleFinding(TORQUE_CODE, where, (
+                    f"{joint['id']} transmits torque to {joint['child']} without a `torque_path`: declare the key, "
+                    "set screw, D-flat, press fit, spline, clamp, pin or adhesive that carries it")))
             continue
         problem = _hardware_problem(path, TORQUE_HARDWARE, resolve)
         if problem is not None:
@@ -241,13 +249,19 @@ def axial_retainer_findings(interfaces: Mapping[str, Any], resolve: Resolve) -> 
 # --- process feasibility ----------------------------------------------------------------------------
 
 
-def _transparency_claimed(*texts: Any) -> bool:
-    return any(isinstance(text, str) and TRANSPARENT_TEXT.search(text) for text in texts)
+def transparency_claimed(text: Any) -> bool:
+    """Whether prose names something see-through, such as "clear PETG", "the covers are clear" or "visible
+    through"; a negated mention ("not transparent", "non-transparent", "never see-through") does not count."""
+    if not isinstance(text, str):
+        return False
+    return any(not _NEGATED.search(text[max(0, match.start() - 40):match.start()])
+               for match in TRANSPARENT_TEXT.finditer(text))
 
 
 def part_feasibility_findings(part: Mapping[str, Any]) -> list[RuleFinding]:
     """An FDM part cannot be transparent: FDM prints translucent at best, as layer lines and infill scatter
-    light. Flags a declared `transparency: transparent`, or an undeclared one its material or finish names."""
+    light. A declared `transparency: transparent` is a `TRANSPARENT_FDM_CODE` contradiction; an undeclared
+    one that the material or finish prose names is a `TRANSPARENCY_CLAIM_CODE` request to declare it."""
     if part.get("process") != "fdm":
         return []
     transparency = part.get("transparency")
@@ -259,19 +273,19 @@ def part_feasibility_findings(part: Mapping[str, Any]) -> list[RuleFinding]:
     if transparency is not None:
         return []
     for field in ("material", "finish"):
-        if _transparency_claimed(part.get(field)):
-            return [RuleFinding(TRANSPARENT_FDM_CODE, field, (
-                f"{part['PN']} is FDM and its {field} names a clear material, but FDM prints translucent, not "
-                "see-through. Record a decision, then declare `transparency: translucent` or make the "
-                "see-through element a purchased or machined part"))]
+        if transparency_claimed(part.get(field)):
+            return [RuleFinding(TRANSPARENCY_CLAIM_CODE, field, (
+                f"{part['PN']} is FDM and its {field} reads as see-through, but FDM prints translucent. Declare "
+                "`transparency` (translucent, or opaque), or make the see-through element a purchased or "
+                "machined part declared `transparency: transparent`"))]
     return []
 
 
 def requirement_feasibility_findings(requirements: Mapping[str, Any], product: Mapping[str, Any],
                                      parts: Iterable[Mapping[str, Any]]) -> list[RuleFinding]:
-    """A requirement that asks for something see-through, in a product planned for FDM, needs a non-FDM
-    part declared `transparency: transparent`. It is evaluated from INTENT on, before any part exists,
-    from product.yaml `manufacturing.processes`."""
+    """A requirement whose prose asks for something see-through, in a product planned for FDM, while no
+    non-FDM part declares `transparency: transparent`: a `TRANSPARENCY_CLAIM_CODE` prompt, from INTENT on
+    (product.yaml `manufacturing.processes`), before any part exists."""
     parts = list(parts)
     processes = set((product.get("manufacturing") or {}).get("processes", []))
     processes |= {part.get("process") for part in parts}
@@ -282,11 +296,11 @@ def requirement_feasibility_findings(requirements: Mapping[str, Any], product: M
     findings = []
     for index, requirement in enumerate(requirements.get("requirements", [])):
         criteria = (requirement.get("verification") or {}).get("criteria")
-        if _transparency_claimed(requirement.get("text"), criteria):
-            findings.append(RuleFinding(TRANSPARENT_FDM_CODE, f"requirements/{index}", (
-                f"{requirement['id']} asks for a see-through element, but the product is planned for FDM, which "
-                "prints translucent, and no purchased or machined part declares `transparency: transparent`. "
-                "Ask the user, record the decision, then add that part or reword the requirement")))
+        if transparency_claimed(requirement.get("text")) or transparency_claimed(criteria):
+            findings.append(RuleFinding(TRANSPARENCY_CLAIM_CODE, f"requirements/{index}", (
+                f"{requirement['id']} reads as asking for a see-through element, but the product is planned for "
+                "FDM, which prints translucent, and no purchased or machined part declares `transparency: "
+                "transparent`. Ask the user, record the decision, then declare that part or reword the requirement")))
     return findings
 
 

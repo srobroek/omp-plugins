@@ -68,7 +68,7 @@
           "nominal": {"description": "The value of an independent joint; a coupled joint has none", "type": "number"},
           "coupling": {"$ref": "#/$defs/coupling"},
           "torque": {
-            "description": "Whether the child is driven through this revolute or fixed joint: transmitted needs a torque_path from stage parts on; none carries no drive torque. Every fixed joint inside a rotating drive train declares it from stage parts on",
+            "description": "Whether the child carries drive torque. From stage parts on, every revolute declares it (none for a hand-positioned or free-running joint), and so does every fixed joint inside the drive train a transmitted revolute starts; a fixed joint declared transmitted names its torque_path",
             "type": "string", "enum": ["transmitted", "none"]
           },
           "torque_path": {"$ref": "#/$defs/torque_path"}
@@ -81,7 +81,7 @@
     "vector": {"type": "array", "prefixItems": [{"type": "number"}, {"type": "number"}, {"type": "number"}], "minItems": 3, "maxItems": 3},
     "joint_id": {"type": "string", "pattern": "^J-[0-9]{3}$"},
     "torque_path": {
-      "description": "What carries the drive torque across a torque: transmitted joint. Hardware types (key, set_screw, pin) name their modelled occurrences in parts",
+      "description": "What carries the drive torque across a torque: transmitted joint; required on a fixed joint, optional on a revolute driven through an unmodelled shaft. Hardware types (key, set_screw, pin) name their modelled occurrences in parts",
       "type": "object", "additionalProperties": false, "required": ["type"],
       "properties": {
         "type": {"type": "string", "enum": ["key", "set_screw", "d_flat", "press_fit", "spline", "clamp", "pin", "adhesive"]},

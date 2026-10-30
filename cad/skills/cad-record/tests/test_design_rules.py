@@ -82,10 +82,6 @@ class LampRecord(unittest.TestCase):
         return {item["path"][len(str(self.hw)) + 1:]: item for item in self.findings()
                 if str(item.get("code", "")).startswith(prefix)}
 
-    def couple_elbow_to_base(self) -> None:
-        """Turn J-002 into a coupled joint driven by J-001, so both revolutes move one drive train."""
-        self.joint("J-002", nominal=None, coupling={"type": "linear", "driver": "J-001", "ratio": -1, "offset": -10})
-
 
 class Retention(LampRecord):
     def test_the_lamp_example_is_clean_at_parts(self) -> None:
@@ -127,25 +123,31 @@ class Retention(LampRecord):
         self.fit(1, "locating_fit", axial_retainer={"type": "shoulder"})
         self.assertEqual(self.coded("retention."), {}, "a feature retainer names no hardware")
 
-    def test_hand_positioned_revolutes_need_no_torque_declarations(self) -> None:
-        self.stage("parts")
-        self.assertEqual(self.coded("retention.torque_path"), {})
-
-    def test_every_fixed_joint_inside_a_drive_train_declares_torque(self) -> None:
-        self.couple_elbow_to_base()
+    def test_every_revolute_declares_torque_from_parts_on(self) -> None:
+        for joint in ("J-001", "J-003"):
+            self.joint(joint, torque=None)
         self.assertEqual(self.coded("retention."), {}, "not reported before stage parts")
         self.stage("parts")
         found = self.coded("retention.torque_path")
-        # J-001 drives J-002: the lower link (J-004, J-005 and their rings J-010, J-011) and the upper link
-        # (J-006, J-012). The base's J-007 does not rotate; the head's J-003 is hand-positioned (J-008, J-009).
-        self.assertEqual(sorted(found), [f"assembly.yaml#/joints/J-{n:03d}" for n in (4, 5, 6, 10, 11, 12)])
-        self.assertTrue(all(item["severity"] == "error" for item in found.values()))
-        self.assertIn("declares no torque", found["assembly.yaml#/joints/J-004"]["message"])
+        self.assertEqual(sorted(found), ["assembly.yaml#/joints/J-001", "assembly.yaml#/joints/J-003"])
+        self.assertIn("J-001 turns LMP-0002 but declares no torque", found["assembly.yaml#/joints/J-001"]["message"])
 
-    def test_a_transmitting_joint_names_its_torque_path(self) -> None:
-        self.couple_elbow_to_base()
+    def test_an_uncoupled_drive_shaft_flags_every_undeclared_fixed_joint_on_it(self) -> None:
+        # The engine's crankshaft: an independent revolute (no coupling, drives none) that carries the drive
+        # torque, with the web set, shaft and flywheel fixed to it.
         self.stage("parts")
-        for joint in ("J-005", "J-006", "J-010", "J-011", "J-012"):
+        self.joint("J-001", torque="transmitted")
+        found = self.coded("retention.torque_path")
+        # J-001's child, the lower link, holds J-004 and J-005 and their rings J-010 and J-011. J-002 (torque:
+        # none) starts no drive train, and the revolute itself needs no torque_path.
+        self.assertEqual(sorted(found), [f"assembly.yaml#/joints/J-{n:03d}" for n in (4, 5, 10, 11)])
+        self.assertTrue(all(item["severity"] == "error" for item in found.values()))
+        self.assertIn("inside a drive train but declares no torque", found["assembly.yaml#/joints/J-004"]["message"])
+
+    def test_a_transmitting_fixed_joint_names_its_torque_path(self) -> None:
+        self.stage("parts")
+        self.joint("J-001", torque="transmitted")
+        for joint in ("J-005", "J-010", "J-011"):
             self.joint(joint, torque="none")
         cases = (
             ({"torque": "transmitted"}, "assembly.yaml#/joints/J-004", "without a `torque_path`"),
@@ -167,7 +169,15 @@ class Retention(LampRecord):
                 self.joint("J-004", **fields)
                 self.assertEqual(self.coded("retention."), {})
 
-    def test_a_revolute_declared_transmitted_is_a_drive_train(self) -> None:
+    def test_torque_and_retainer_decisions_exist(self) -> None:
+        self.joint("J-004", torque="transmitted", torque_path={"type": "press_fit", "decision": "DR-099"})
+        self.fit(0, "press_fit", axial_retainer={"type": "press_fit", "decision": "DR-098"})
+        messages = [item["message"] for item in validate.blocking(self.findings())]
+        self.assertIn("J-004 torque_path/decision DR-099 does not exist at decisions/DR-099.md", messages)
+        self.assertIn("interfaces/0/limits/press_fit/axial_retainer/decision DR-098 does not exist at "
+                      "decisions/DR-098.md", messages)
+
+    def test_a_revolute_declared_transmitted_starts_a_drive_train(self) -> None:
         self.stage("parts")
         self.joint("J-003", torque="transmitted", torque_path={"type": "clamp"})
         self.assertEqual(sorted(self.coded("retention.torque_path")),
@@ -225,6 +235,7 @@ class Schemas(LampRecord):
             "unknown axial retainer": (lambda: self.fit(0, "press_fit", axial_retainer={"type": "glue"}),
                                        "interfaces/0/limits/press_fit"),
             "exploded visibility view": (requirement({"view": "exploded"}), "requirements/0/visibility/0/view"),
+            "all-zero view direction": (requirement({"view": "dir-p0-m0-p0"}), "requirements/0/visibility/0/view"),
             "zero visible fraction": (requirement({"min_visible_fraction": 0}),
                                       "requirements/0/visibility/0/min_visible_fraction"),
             "empty window": (requirement({"window": []}), "requirements/0/visibility/0/window"),
@@ -281,39 +292,59 @@ class ClearanceMargin(unittest.TestCase):
 
 
 class ProcessFeasibility(LampRecord):
-    def test_clear_fdm_material_warns_before_parts_and_fails_from_parts_on(self) -> None:
+    SEE_THROUGH = ("As printed, clear PETG; 0.2 mm layers", "Transparent PETG", "The cam covers are clear",
+                   "Pistons visible through the bore window", "Glass cover over the dial", "clear-material parts",
+                   "PETG (clear)")
+    NOT_SEE_THROUGH = ("Not transparent; black PETG", "Non-transparent smoke PETG", "never see-through",
+                       "Keep 3 mm clear of the hinge", "The cover is clear of the belt", "Clear coat over black PETG",
+                       "A clear window for the cable", "Bond the lens with clear silicone",
+                       "Glass-filled nylon")
+
+    def test_prose_that_reads_as_see_through_is_recognised(self) -> None:
+        for text in self.SEE_THROUGH:
+            with self.subTest(text):
+                self.assertTrue(rules.transparency_claimed(text))
+        for text in self.NOT_SEE_THROUGH:
+            with self.subTest(text):
+                self.assertFalse(rules.transparency_claimed(text))
+
+    def test_clear_fdm_prose_only_ever_warns(self) -> None:
         # The engine's rev A cam cover: "As printed, clear PETG" on an FDM part.
         self.part("LMP-0001", finish="As printed, clear PETG; 0.2 mm layers")
         location = "parts/LMP-0001/part.yaml#/finish"
-        self.assertEqual({path: item["severity"] for path, item in self.coded("feasibility.").items()},
-                         {location: "warning"})
-        self.stage("parts")
-        found = self.coded("feasibility.")
-        self.assertEqual({path: (item["code"], item["severity"]) for path, item in found.items()},
-                         {location: ("feasibility.transparent_fdm", "error")})
+        for stage in ("layout", "parts", "release"):
+            with self.subTest(stage):
+                self.stage(stage)
+                self.assertEqual({path: (item["code"], item["severity"])
+                                  for path, item in self.coded("feasibility.").items()},
+                                 {location: ("feasibility.transparency_claim", "warning")})
         self.part("LMP-0001", transparency="translucent")
-        self.assertEqual(self.coded("feasibility."), {}, "a declared translucent part resolves it")
+        self.assertEqual(self.coded("feasibility."), {}, "a declared transparency resolves it")
 
-    def test_a_transparent_fdm_part_is_a_contradiction(self) -> None:
-        self.stage("parts")
+    def test_a_transparent_fdm_part_warns_before_parts_and_fails_from_parts_on(self) -> None:
         self.part("LMP-0001", transparency="transparent")
-        self.assertEqual(list(self.coded("feasibility.transparent_fdm")), ["parts/LMP-0001/part.yaml#/transparency"])
-
-    def test_other_clear_words_and_other_processes_are_not_flagged(self) -> None:
+        location = "parts/LMP-0001/part.yaml#/transparency"
+        self.assertEqual({path: (item["code"], item["severity"]) for path, item in self.coded("feasibility.").items()},
+                         {location: ("feasibility.transparent_fdm", "warning")})
         self.stage("parts")
-        self.part("LMP-0001", finish="Bond the lens with clear silicone; keep 3 mm clear of the hinge")
+        self.assertEqual({path: (item["code"], item["severity"]) for path, item in self.coded("feasibility.").items()},
+                         {location: ("feasibility.transparent_fdm", "error")})
+
+    def test_non_fdm_parts_are_never_flagged(self) -> None:
+        self.stage("parts")
         self.part("LMP-0002", material="Clear acrylic (PMMA)", transparency="transparent")
         self.part("LMP-0008", finish="Clear PETG sleeve, as supplied")
         self.assertEqual(self.coded("feasibility."), {})
 
-    def test_a_see_through_requirement_needs_a_transparent_part_that_is_not_fdm(self) -> None:
+    def test_a_see_through_requirement_warns_until_a_non_fdm_part_is_transparent(self) -> None:
         self.edit("requirements.yaml", lambda document: document["requirements"][1].update(
             text="The head carries a transparent window over the bulb."))
-        self.assertEqual({path: item["severity"] for path, item in self.coded("feasibility.").items()},
-                         {"requirements.yaml#/requirements/1": "warning"})
+        self.stage("parts")
+        self.assertEqual({path: (item["code"], item["severity"]) for path, item in self.coded("feasibility.").items()},
+                         {"requirements.yaml#/requirements/1": ("feasibility.transparency_claim", "warning")})
         self.part("LMP-0004", transparency="transparent")
-        self.assertIn("parts/LMP-0004/part.yaml#/transparency", self.coded("feasibility."),
-                      "an FDM part cannot be that transparent part")
+        self.assertEqual(self.coded("feasibility.")["parts/LMP-0004/part.yaml#/transparency"]["severity"], "error",
+                         "an FDM part cannot be that transparent part")
         self.part("LMP-0004", transparency="translucent")
         self.part("LMP-0010", transparency="transparent")
         self.assertEqual(self.coded("feasibility."), {})
@@ -326,7 +357,7 @@ class ProcessFeasibility(LampRecord):
         flagged = rules.requirement_feasibility_findings(
             requirements, {"manufacturing": {"processes": ["fdm", "purchased"]}}, [])
         self.assertEqual([(item.code, item.location) for item in flagged],
-                         [("feasibility.transparent_fdm", "requirements/0")])
+                         [("feasibility.transparency_claim", "requirements/0")])
         self.assertEqual(rules.requirement_feasibility_findings(
             requirements, {"manufacturing": {"processes": ["cnc", "purchased"]}}, []), [])
         self.assertEqual(rules.requirement_feasibility_findings(requirements, {}, []), [],
