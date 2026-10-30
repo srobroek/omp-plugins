@@ -396,6 +396,69 @@ class ServerLive(unittest.TestCase):
         self.proc.send_signal(signal.SIGTERM)
         self.assertEqual(self.proc.wait(timeout=5), 0)
 
+class ServerVendor(unittest.TestCase):
+    def test_vendor_routes_serve_preseeded_pinned_module_without_network(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            temp = Path(tmp)
+            scene_dir = temp / "scenes"
+            scene_dir.mkdir()
+            url_path = "/vendor/test@1/module.js"
+            data = b"export const pinned = true;\n"
+            sri = "sha384-" + base64.b64encode(hashlib.sha384(data).digest()).decode()
+            viewer_dir = temp / "viewer"
+            viewer_dir.mkdir()
+            (viewer_dir / "index.html").write_text(
+                '<script type="importmap">' + json.dumps({"integrity": {url_path: sri}}) + "</script>",
+                encoding="utf-8",
+            )
+            cached = temp / "cache" / "test@1" / "module.js"
+            cached.parent.mkdir(parents=True)
+            cached.write_bytes(data)
+
+            original_viewer_dir = serve.VIEWER_DIR
+            serve.VIEWER_DIR = viewer_dir
+            ready: dict[str, object] = {}
+            shutdown = None
+            done = threading.Event()
+
+            def on_ready(info: dict[str, object]) -> None:
+                ready.update(info)
+
+            def on_shutdown(stop) -> None:
+                nonlocal shutdown
+                shutdown = stop
+
+            def run_server() -> None:
+                try:
+                    serve.run(["--scene-dir", str(scene_dir), "--project-root", str(temp), "--port", "0",
+                               "--idle-timeout", "0", "--cache-dir", str(temp / "cache")],
+                              ready_callback=on_ready, install_signals=False, shutdown_callback=on_shutdown)
+                finally:
+                    done.set()
+
+            thread = threading.Thread(target=run_server, daemon=True)
+            try:
+                thread.start()
+                self.assertTrue(wait_until(lambda: "url" in ready, 2), "server did not announce ready")
+                url = str(ready["url"])
+
+                def get(path: str) -> tuple[int, bytes]:
+                    try:
+                        with urllib.request.urlopen(url.rstrip("/") + path, timeout=5) as response:
+                            return response.status, response.read()
+                    except urllib.error.HTTPError as exc:
+                        with exc:
+                            return exc.code, exc.read()
+
+                self.assertEqual(get(url_path), (200, data))
+                self.assertEqual(get("/vendor/unpinned/module.js")[0], 404)
+            finally:
+                if shutdown is not None:
+                    shutdown(signal.SIGTERM, None)
+                self.assertTrue(done.wait(2), "server did not shut down")
+                thread.join(timeout=2)
+                serve.VIEWER_DIR = original_viewer_dir
+
 class ServerTimeout(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
