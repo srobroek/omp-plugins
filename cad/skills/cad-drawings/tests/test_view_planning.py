@@ -252,6 +252,24 @@ class HoleCentreFromAPlane(unittest.TestCase):
         self.assertEqual(sorted(c.id for c in measurer.result.characteristics),
                          ["holes.axis_location.1.y", "holes.axis_location.2.x", "near"])
 
+    def test_a_grid_located_from_a_plane_states_each_centre_once_without_its_pattern(self) -> None:
+        grid = hex_grid(3.0, 7.0)
+        self.faces = [self.faces[0], *(cylinder(k, inst.axis_point) for k, inst in enumerate(grid, 1))]
+        self.features["holes"] = ResolvedFeature("holes", "bore", tuple(range(1, len(grid) + 1)))
+        instances = drawing_intent.cylinder_instances(self.faces[1:])
+        self.assertIsNotNone(drawing_intent._grid_pattern(instances, FRAME, ("x", "y")))
+        unrequested = self.measurer()
+        unrequested._axis_location(self.features["holes"], FRAME, instances)
+        self.assertEqual([c.operation for c in unrequested.result.characteristics].count("pattern"), 1)
+        measurer = self.measurer(self.request("first_column", 1, tolerance={"deviation_mm": [-0.1, 0.1]}))
+        measurer._axis_location(self.features["holes"], FRAME, instances)
+        measurer._requests(FRAME)
+        chars = measurer.result.characteristics
+        self.assertNotIn("pattern", [c.operation for c in chars])
+        located = [p for c in chars if c.id == "first_column" for p in c.details["centres"]]
+        located += [c.details["axis_point"] for c in chars if c.operation == "axis_location" and c.axis == "x"]
+        self.assertEqual(sorted(located), sorted(inst.axis_point for inst in instances))   # every x stated once
+
     def test_a_feature_policy_is_an_individual_tolerance_and_the_sheet_policy_is_general(self) -> None:
         measurer = self.measurer(self.request("near", 1), self.request("far", 2),
                                  features={"holes": {"size": "general", "tolerance_policy": "foot_location"}})

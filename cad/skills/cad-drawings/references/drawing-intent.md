@@ -70,7 +70,8 @@ datums. Instances with a missing or extra node keep one location each.
   the hole centres' distance from it (ISO 129-1), drawn from the plane to the centre line. Centres at one
   distance share the dimension (`quantity` counts them); when they lie at several, `instance: N` picks
   the Nth distance, 1 the nearest, so four corner holes take a near and a far request per plane, each
-  with its own `tolerance`. It replaces those centres' datum-frame locations along that axis.
+  with its own `tolerance`. It replaces those centres' datum-frame locations along that axis, and the
+  feature's centres are then located one by one, never by a grid or bolt-circle pattern.
   Two planes that are not parallel have no width of their own: a `thickness` or `width` with `at: <plane
   feature>` is stated at that reference plane (ISO 129-1), as the distance between the lines where the
   two planes meet it. Use it for a drafted wall (thickness at the rim or parting plane, with the draft

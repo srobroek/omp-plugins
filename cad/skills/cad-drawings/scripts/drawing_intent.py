@@ -524,6 +524,12 @@ class Measurer:
         for tolerance in self.drawing.get("geometric_tolerances", []):
             if tolerance["characteristic"] == "position":
                 self.positioned.update(tolerance["features"])
+        # bores and shafts a distance from a plane locates: their centres are stated one by one, never as a pattern
+        self.plane_located: set[str] = set()
+        for request in self.drawing.get("dimensions", []):
+            pair = self._plane_to_centres(request, [binding.features.get(f) for f in request["features"]])
+            if pair is not None and not request.get("reference"):
+                self.plane_located.add(pair[1].id)
 
     # policy -------------------------------------------------------------------------------------
     def policy(self, feature: str | None) -> Policy | None:
@@ -674,7 +680,7 @@ class Measurer:
             return
         along = axes[0][0]
         across = [a for a in "xyz" if a != along]
-        if len(instances) > 1:
+        if len(instances) > 1 and feature.id not in self.plane_located:
             pattern = self._circular_pattern(instances, frame)
             if pattern is not None:
                 self.char(feature, "pattern", pattern["pcd"], feature.faces, quantity=len(instances),
@@ -1334,10 +1340,10 @@ class Measurer:
         raise IntentError("invalid_drawing_intent", f"operation {operation} on {len(features)} features is not measurable")
 
     @staticmethod
-    def _plane_to_centres(request: Mapping[str, Any], features: Sequence[ResolvedFeature]
+    def _plane_to_centres(request: Mapping[str, Any], features: Sequence[ResolvedFeature | None]
                           ) -> tuple[ResolvedFeature, ResolvedFeature] | None:
         """(plane, located feature) of a distance from a plane_face to bore or shaft centres; None otherwise."""
-        if request["operation"] != "distance" or len(features) != 2:
+        if request["operation"] != "distance" or len(features) != 2 or None in features:
             return None
         planes = [f for f in features if f.kind == "plane_face"]
         located = [f for f in features if f.kind in ("bore", "shaft")]
