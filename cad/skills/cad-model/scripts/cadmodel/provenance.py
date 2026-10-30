@@ -39,3 +39,17 @@ def sources(roots: Iterable[Path], skip_prefix: str | None = None) -> dict[str, 
         if path.suffix == ".py" and str(path) not in found and any(path.is_relative_to(base) for base in bases):
             found[str(path)] = hashlib.sha256(path.read_bytes()).hexdigest()
     return found
+
+
+def folder_inputs(folder: Path) -> dict[str, str]:
+    """sha256 of every file of a part folder its build can read, keyed by its POSIX path below the
+    folder: model.py and sources/**. part.yaml is left out (the runner gets its build fields in the
+    request), as are hidden names and __pycache__."""
+    folder = Path(folder)
+    inputs = {}
+    for path in sorted(folder.rglob("*")):
+        rel = path.relative_to(folder)
+        if (rel.as_posix() != "part.yaml" and path.is_file()
+                and not any(name.startswith(".") or name == "__pycache__" for name in rel.parts)):
+            inputs[rel.as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return inputs

@@ -203,8 +203,13 @@ class InitAndDeliver(ScratchCase):
         """hw/.cad/ holds caches and control files only: init never copies or hashes them, and a scratch
         build's own .cad/ is never delivered."""
         before = self.lead_caches()
-        scratch_hw = Path(self.init("part-base_sub", "PRT-0001")["scratch_hw"])
-        self.assertFalse((scratch_hw / ".cad").exists())
+        report = self.init("part-base_sub", "PRT-0001")
+        scratch_hw = Path(report["scratch_hw"])
+        seeded = {p.relative_to(scratch_hw).as_posix() for p in (scratch_hw / ".cad").rglob("*") if p.is_file()}
+        self.assertEqual(seeded, {f".cad/parts/{'a' * 64}", f".cad/builds/{'a' * 64}.json"})  # links; no caches
+        self.assertEqual(report["seeded_store_files"], 2)
+        for rel in seeded:
+            self.assertEqual((scratch_hw / rel).stat().st_ino, (self.hw / rel).stat().st_ino, rel)
         baseline = json.loads((scratch_hw.parent / "baseline.json").read_text(encoding="utf-8"))
         self.assertFalse([path for path in baseline["files"] if path.startswith(".cad/")])
         (scratch_hw / "parts" / "PRT-0001" / "model.py").write_text("def build(params):\n    return None\n",
@@ -219,25 +224,37 @@ class InitAndDeliver(ScratchCase):
 
     @unittest.skipUnless(shutil.which("uv"), "the scratch build runs cad-model in its uv environments")
     def test_a_real_scratch_build_then_deliver_carries_only_the_part(self) -> None:
-        """scratch build runs cad-model run and check, which write the scratch's part store, pair cache and
-        run records under .cad/; deliver still accepts the part and leaves the lead's .cad/ untouched."""
-        before = self.lead_caches()
-        scratch_hw = Path(self.init("part-base_sub", "PRT-0001")["scratch_hw"])
+        """The lead builds v1; init seeds the scratch store with links to its objects, so the scratch build
+        of the unchanged part reuses the lead's STEP. scratch build runs cad-model run and check, which
+        write the scratch's own store, pair cache and run records under .cad/; after a model edit and a
+        second scratch build, deliver carries only the part and leaves the lead's .cad/ and versions alone."""
         model = ('KERNEL = "cadquery"\nPARAMS = {"size": 12.0}\n\n\ndef build(params):\n    import cadquery as cq\n\n'
                  '    return cq.Workplane("XY").box(params["size"], params["size"], params["size"])\n')
-        (scratch_hw / "parts" / "PRT-0001" / "model.py").write_text(model, encoding="utf-8")
-        code, report = self.scratch("build", "--hw", "hw", "--unit", "part-base_sub", "--fidelity", "F0",
-                                    "--kernel", "cadquery", timeout=1800)
-        self.assertEqual(report["run"]["exit"], 0, report)
-        self.assertEqual(report["check"]["exit"], 0, report)
+        (self.hw / "parts" / "PRT-0001" / "model.py").write_text(model, encoding="utf-8")
+        cad_model = HERE.parents[1] / "cad-model" / "scripts" / "cad_model.py"
+        lead = subprocess.run(["uv", "run", "--quiet", "--script", str(cad_model), "run", "hw", "--label", "v1"],
+                              cwd=self.project, capture_output=True, text=True, timeout=1800)
+        self.assertEqual(lead.returncode, 0, lead.stderr[-3000:])
+        before, versions = self.lead_caches(), tree(self.hw / "versions")
+        scratch_hw = Path(self.init("part-base_sub", "PRT-0001")["scratch_hw"])
+        build_args = ("build", "--hw", "hw", "--unit", "part-base_sub", "--fidelity", "F0", "--kernel", "cadquery")
+        code, report = self.scratch(*build_args, timeout=1800)
+        self.assertEqual((report["run"]["exit"], report["check"]["exit"]), (0, 0), report)
+        lead_step = (self.hw / "versions" / "v1" / "parts" / "PRT-0001.step").stat()
+        scratch_step = (Path(report["parts_dir"]) / "PRT-0001.step").stat()
+        self.assertEqual((scratch_step.st_dev, scratch_step.st_ino), (lead_step.st_dev, lead_step.st_ino))
+        edited = model.replace('"size": 12.0', '"size": 14.0')
+        (scratch_hw / "parts" / "PRT-0001" / "model.py").write_text(edited, encoding="utf-8")
+        code, report = self.scratch(*build_args, timeout=1800)
+        self.assertEqual((report["run"]["exit"], report["check"]["exit"]), (0, 0), report)
         written = {p.relative_to(scratch_hw).as_posix() for p in (scratch_hw / ".cad").rglob("*") if p.is_file()}
         self.assertTrue({".cad/pairs-v2.sqlite", ".cad/parts/.gitignore", ".cad/builds/.gitignore"} <= written, written)
         code, report = self.scratch("deliver", "--hw", "hw", "--unit", "part-base_sub")
         self.assertEqual((code, report["status"]), (0, "delivered"), report)
         self.assertEqual(report["proposals"], [])
-        self.assertEqual((self.hw / "parts" / "PRT-0001" / "model.py").read_text(encoding="utf-8"), model)
+        self.assertEqual((self.hw / "parts" / "PRT-0001" / "model.py").read_text(encoding="utf-8"), edited)
         self.assertEqual({rel: d for rel, d in tree(self.hw).items() if rel.startswith(".cad/")}, before)
-        self.assertFalse((self.hw / "versions").exists())
+        self.assertEqual(tree(self.hw / "versions"), versions)
 
     def test_build_passes_each_attach_to_cad_model_run_and_reports_it(self) -> None:
         scratch_module = load_scratch()

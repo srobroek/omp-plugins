@@ -80,8 +80,7 @@ class Store:
         """Store the file at `path` and return its sha256. When the store already holds those bytes,
         `path` becomes a link to that object, so the bytes are kept once."""
         sha = file_sha(path)
-        if self.holds(sha):
-            self.place(sha, path)
+        if self.holds(sha) and self.place(sha, path):
             return sha
         target = self._path("cache.part_objects", sha)
         staged = self._directory(target) / f".{sha}.{os.getpid()}.tmp"
@@ -90,12 +89,18 @@ class Store:
         self._held[sha] = True
         return sha
 
-    def place(self, sha: str, target: Path) -> None:
-        """Make `target` the object `sha`: a hard link where possible, else a copy; never written in place."""
+    def place(self, sha: str, target: Path) -> bool:
+        """Make `target` the object `sha`: a hard link where possible, else a copy; never written in place.
+        False, with `target` untouched, when the object is gone (store gc removed it meanwhile)."""
         target.parent.mkdir(parents=True, exist_ok=True)
         staged = target.with_name(f".{target.name}.{os.getpid()}.link")
-        _link_or_copy(self._path("cache.part_objects", sha), staged)
+        try:
+            _link_or_copy(self._path("cache.part_objects", sha), staged)
+        except FileNotFoundError:
+            self._held[sha] = False
+            return False
         os.replace(staged, target)
+        return True
 
     def record(self, record_key: str) -> dict[str, Any] | None:
         """The record saved under `record_key`, or None when there is none, it is unreadable or of another

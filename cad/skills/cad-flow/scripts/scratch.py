@@ -16,7 +16,9 @@ The workspace is <project>/.cad-work/<UNIT>/, <project> being the directory that
 init    copies HW into <workspace>/hw/ without versions/, renders/, releases/, .git/, .cad/ (the
         part store, the pair cache, run records and the recheck stamp) and __pycache__/, then
         records the unit's PNs and the sha256 of every copied file in <workspace>/baseline.json.
-        An existing workspace is kept unless --reset replaces it.
+        It seeds the scratch part store with hard links to HW's stored objects and build records,
+        so the scratch build reuses every unchanged part. An existing workspace is kept unless
+        --reset replaces it.
 build   runs cad-model `run` on the scratch hw/ under the next scratch label, cad-model `check`
         on that version, and cad-design form_check at --fidelity. HW itself is never passed to
         any of them, so HW/versions/ is neither created nor changed. Form findings are split
@@ -125,6 +127,29 @@ def load_baseline(work: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def seed_store(hw: Path, scratch_hw: Path) -> int:
+    """Hard-link HW's part store (cad-record layout cache.part_objects, cache.part_records) into the
+    scratch copy and return how many files were linked. The store's writers only rename onto a name and
+    never write a file in place, so no scratch write reaches HW through a link; objects stay read-only.
+    Where no hard link can be made (another filesystem) seeding stops, and the scratch build builds the
+    rest itself; nothing is copied, because the store can be as large as every version together."""
+    lay, seeded = layout.load(), 0
+    for entry_id in ("cache.part_objects", "cache.part_records"):
+        folder = layout.locate(hw, str(PurePosixPath(lay.entry(entry_id).path).parent))
+        for path in sorted(folder.iterdir()) if folder.is_dir() else []:
+            match = lay.classify(layout.relative(hw, path))
+            if match is None or match.entry.id != entry_id or path.is_symlink() or not path.is_file():
+                continue
+            target = scratch_hw / path.relative_to(hw)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                os.link(path, target)
+            except OSError:
+                return seeded
+            seeded += 1
+    return seeded
+
+
 def init(hw: Path, unit: str, parts: list[str], reset: bool) -> tuple[int, dict[str, Any]]:
     bad = [pn for pn in parts if not PN.match(pn)]
     if not parts or bad:
@@ -140,13 +165,14 @@ def init(hw: Path, unit: str, parts: list[str], reset: bool) -> tuple[int, dict[
     if not gitignore.exists():
         gitignore.write_text("*\n", encoding="utf-8")
     shutil.copytree(hw, work / "hw", ignore=skips(hw))
+    seeded = seed_store(hw, work / "hw")
     for pn in sorted(set(parts)):
         if not (hw / "parts" / pn).exists():
             (work / "hw" / "parts" / pn).mkdir(parents=True, exist_ok=True)
     baseline = {"unit": unit, "hw": str(hw), "parts": sorted(set(parts)), "files": tree_hashes(work / "hw")}
     (work / "baseline.json").write_text(json.dumps(baseline, indent=2) + "\n", encoding="utf-8")
     return 0, {"status": "created", "unit": unit, "workspace": str(work), "scratch_hw": str(work / "hw"),
-               "parts": baseline["parts"], "files": len(baseline["files"])}
+               "parts": baseline["parts"], "files": len(baseline["files"]), "seeded_store_files": seeded}
 
 
 def run_tool(argv: list[str], log: Path) -> tuple[int, dict[str, Any] | None]:

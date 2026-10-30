@@ -330,13 +330,16 @@ def make(work: Path, hw: Path, label: str, plans: Mapping[str, Plan], products: 
         outputs_key = store.key({"format": OUTPUTS_FORMAT, "kind": "manufacturing", "entry": entry,
                                  "state": state_shas.get(pn) if different else None, "process": identity})
         cached = parts_store.record(outputs_key)
-        if cached is not None:
-            files = {name: cached["objects"][name] for name in (*written, SIDECAR) if name in cached["objects"]}
-            for name, sha in files.items():
-                parts_store.place(sha, target / name)
+        files = ({name: cached["objects"][name] for name in (*written, SIDECAR) if name in cached["objects"]}
+                 if cached is not None else {})
+        if cached is not None and all(parts_store.place(sha, target / name) for name, sha in files.items()):
             entry["placement"], row = cached["placement"], cached["row"]
             reused.add(pn)
         else:
+            if target.exists():  # a reuse that store gc cut short (an object went): export into an empty folder
+                for path in target.iterdir():
+                    path.unlink()
+                target.rmdir()
             try:
                 entry["placement"] = export(target, entry, (states[pn] if different else definitions[pn]).shape,
                                             volume)

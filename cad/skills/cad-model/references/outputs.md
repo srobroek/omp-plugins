@@ -96,7 +96,11 @@ warnings). A kernel whose parts are all reused does not start; the manifest's `t
 comes from `--tools` and has no `import_s`. A custom-made part's `manufacturing/<PN>/` files,
 placement and checks are reused the same way while its manifest facts, its state's geometry and the
 orchestrator's code and runtime are unchanged. The parts built in a run that then fails are kept
-for the next run.
+for the next run. A part is cached only when the runner executed the model bytes and folder files
+that keyed it and the folder did not change during the build; otherwise it is built but not cached
+(`cache.unsaved`), and when the change remains the run refuses to seal. An object that `store gc`
+removed during a run is a miss: the part is built again. `scratch.py init` seeds a scratch copy's
+store with hard links to these objects and records.
 
 Each output is stored once in the part store, `hw/.cad/parts/<sha256>`, named by the sha256 of its
 bytes; `hw/.cad/builds/<sha256>.json` maps the sha256 of a build's inputs to its objects and facts.

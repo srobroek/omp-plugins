@@ -260,16 +260,8 @@ def runtime_of(kernel: str) -> dict[str, Any]:
 
 
 def part_inputs(source: PartSource) -> dict[str, str]:
-    """sha256 of every file of the part's folder its build can read: model.py and sources/**. part.yaml
-    is left out (its build fields are request fields), as are hidden names and __pycache__."""
-    folder = source.model.parent
-    inputs = {}
-    for path in sorted(folder.rglob("*")):
-        rel = path.relative_to(folder)
-        if (rel.as_posix() != "part.yaml" and path.is_file()
-                and not any(name.startswith(".") or name == "__pycache__" for name in rel.parts)):
-            inputs[rel.as_posix()] = sha256(path)
-    return inputs
+    """sha256 of every file of the part's folder its build can read (`provenance.folder_inputs`)."""
+    return provenance.folder_inputs(source.model.parent)
 
 
 def build_key(request: Mapping[str, Any], kernel: str, runtime: Mapping[str, Any], inputs: Mapping[str, str]) -> str:
@@ -433,28 +425,37 @@ def run(hw: Path, label: str, kernel: str, attach: Iterable[str]) -> tuple[int, 
                                                 if states_of.get(p.pn) == "different" else None)}
                     for p in sources}
         runtimes = {k: runtime_of(k) for k in groups}
-        keys = {p.pn: build_key(requests[p.pn], k, runtimes[k], part_inputs(p))
+        inputs = {p.pn: part_inputs(p) for p in sources}
+        keys = {p.pn: build_key(requests[p.pn], k, runtimes[k], inputs[p.pn])
                 for k, members in groups.items() for p in members}
         seen: dict[Path, str | None] = {}
         reused = {pn: cached for pn, cached in ((pn, parts_store.record(key)) for pn, key in keys.items())
                   if cached is not None and reusable(cached, requests[pn], hw, seen)}
+        for pn, cached in list(reused.items()):  # an object store gc removed since record() is a miss: build it
+            step, state = Path(requests[pn]["step"]), requests[pn]["manufacture_step"]
+            if not (parts_store.place(cached["objects"]["step"], step)
+                    and (not state or parts_store.place(cached["objects"]["manufacture_step"], Path(state)))):
+                step.unlink(missing_ok=True)  # never leave the runner a read-only link to write through
+                del reused[pn]
         objects_of = {pn: cached["objects"] for pn, cached in reused.items()}
-        for pn, objects in objects_of.items():
-            parts_store.place(objects["step"], Path(requests[pn]["step"]))
-            if requests[pn]["manufacture_step"]:
-                parts_store.place(objects["manufacture_step"], Path(requests[pn]["manufacture_step"]))
         pending = {k: [requests[p.pn] for p in members if p.pn not in reused] for k, members in groups.items()}
         results = run_kernels({k: parts for k, parts in pending.items() if parts}) if any(pending.values()) else {}
         timings["kernels_s"] = round(time.perf_counter() - started, 3)
+        unsaved = []  # built from inputs that changed after they were keyed: never cached, so built again next run
         for kernel, result in results.items():  # kept even when another part fails, so a rerun builds only that one
             for pn, res in result["parts"].items():
-                if res["ok"]:
-                    objects_of[pn] = {"step": parts_store.intern(Path(requests[pn]["step"]))}
-                    if requests[pn]["manufacture_step"]:
-                        objects_of[pn]["manufacture_step"] = parts_store.intern(Path(requests[pn]["manufacture_step"]))
+                if not res["ok"]:
+                    continue
+                objects_of[pn] = {"step": parts_store.intern(Path(requests[pn]["step"]))}
+                if requests[pn]["manufacture_step"]:
+                    objects_of[pn]["manufacture_step"] = parts_store.intern(Path(requests[pn]["manufacture_step"]))
+                if (res.get("inputs") == inputs[pn] and res.get("inputs_stable") is True
+                        and part_inputs(by_pn[pn]) == inputs[pn]):
                     parts_store.save(keys[pn], {"kind": "part", "pn": pn, "kernel": kernel, "tools": result["tools"],
                                                 "sources": project_sources(result["sources"], hw), "result": res,
                                                 "objects": objects_of[pn]})
+                else:
+                    unsaved.append(pn)
         failed = [finding(pn, "build", res["error"]["message"], res["error"]["type"], res["error"]["where"])
                   for result in results.values() for pn, res in result["parts"].items() if not res["ok"]]
         if failed:
@@ -570,9 +571,9 @@ def run(hw: Path, label: str, kernel: str, attach: Iterable[str]) -> tuple[int, 
         manifest["record"] = {f"{record_dir}/{name}": sha
                               for name, sha in record.write_snapshot(work / record_dir, files).items()}
         manifest["manufacturing"] = made
-        if record.snapshot(hw, part_folders(hw)) != files or {p.pn: sha256(p.model) for p in sources} != model_sha:
-            raise UsageError("hw/ records or part models changed while the version was built; nothing was written, "
-                             "run again")
+        if record.snapshot(hw, part_folders(hw)) != files or {p.pn: part_inputs(p) for p in sources} != inputs:
+            raise UsageError("hw/ records, part models or part sources changed while the version was built; nothing "
+                             f"was written and {sorted(unsaved) or 'no part'} was not cached; run again")
         manifest["files"] = {p.relative_to(work).as_posix(): sha256(p) for p in sorted(work.rglob("*")) if p.is_file()}
         stray = [name for name in manifest["files"] if layout.classify(f"hw/versions/{label}/{name}") is None]
         if stray:
@@ -601,7 +602,8 @@ def run(hw: Path, label: str, kernel: str, attach: Iterable[str]) -> tuple[int, 
                                "build": None if pn not in made_paths else "reused" if pn in made_reused else "built"}
                           for pn, entry in made.items()},
         "cache": {"parts": {"built": len(parts) - len(reused), "reused": len(reused)},
-                  "manufacturing": {"built": len(made_paths - made_reused), "reused": len(made_reused)}},
+                  "manufacturing": {"built": len(made_paths - made_reused), "reused": len(made_reused)},
+                  **({"unsaved": sorted(unsaved)} if unsaved else {})},
         "warnings": warnings,
         "latest": str(versions / "latest.json"),
         "timings_s": {**timings, **{f"{k}_import_s": r["import_s"] for k, r in results.items()},

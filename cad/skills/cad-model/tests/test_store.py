@@ -76,6 +76,18 @@ class StoreTests(unittest.TestCase):
         self.assertFalse(os.path.samefile(target, obj))
         self.assertEqual((target.stat().st_mode & 0o777, obj.stat().st_mode & 0o777), (0o444, 0o444))
 
+    def test_a_missing_object_is_a_miss_for_place_and_is_stored_again_by_intern(self) -> None:
+        """store gc removed an object after a run read its record: place reports the miss and leaves the
+        target alone, so the part is built; interning the rebuilt bytes stores them again."""
+        digest = self.store.intern(self.output("TST-0001.step", b"geometry"))
+        (self.hw / ".cad" / "parts" / digest).unlink()
+        target = self.hw / "versions" / ".v2.partial-2" / "parts" / "TST-0001.step"
+        self.assertFalse(self.store.place(digest, target))
+        self.assertEqual(list(target.parent.iterdir()), [])
+        rebuilt = self.output("rebuilt.step", b"geometry")
+        self.assertEqual(self.store.intern(rebuilt), digest)
+        self.assertTrue(os.path.samefile(rebuilt, self.hw / ".cad" / "parts" / digest))
+
     @unittest.skipIf(hasattr(os, "geteuid") and os.geteuid() == 0, "root writes through read-only modes")
     def test_a_later_rebuild_cannot_change_an_earlier_versions_bytes(self) -> None:
         """v1's part is a read-only link to its object. A rebuild that wrote through the old path fails
