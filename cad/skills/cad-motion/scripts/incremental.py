@@ -137,6 +137,13 @@ def _margins(record: Path) -> Any:
         raise MotionError(str(error)) from error
 
 
+def built_chain(assembly: Any, built: Iterable[str], attach: Iterable[str] = ()) -> Any:
+    """The kinematic chain a version was built with, without geometry: `assembly` (pose.Assembly of
+    its record snapshot), the `built` PNs and the version's --attach options. Its nominal transforms
+    are the version's placements; its relative transforms are the sweep's."""
+    return pose.assembly_chain(assembly, dict.fromkeys(built), pose.attach_joints(attach, assembly))
+
+
 def version_state(hw: Path, label: str) -> VersionState:
     """The state of built version `label` of `hw`, from its verified manifest, its per-part STEP
     files and its record snapshot. MotionError when it is not built, fails its manifest or
@@ -160,7 +167,7 @@ def version_state(hw: Path, label: str) -> VersionState:
         raise MotionError(f"{path}: the nominal pose and the occurrences name different occurrences")
     geometry = {pn: pose.step_data_hash(step) for pn, step in parts.items()}
     assembly = pose.load_assembly(record, record)
-    chain = pose.assembly_chain(assembly, dict.fromkeys(parts), pose.attach_joints(attach, assembly))
+    chain = built_chain(assembly, parts, attach)
     policies = pair_policies(record, assembly, joint_pairs, _margins(record))
     return VersionState(label, geometry, occurrences, placements, policies, chain, sources)
 

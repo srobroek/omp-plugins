@@ -306,7 +306,6 @@ def seal(hw: Path, label: str, *, data: dict[str, str], stamp: str = "2026-10-30
 PARTS = {pn: "0.,0.,0." for pn in ("TST-0001", "TST-0002", "TST-0003", "TST-0004")}
 
 
-@unittest.skipUnless(hasattr(pose, "step_data_hash"), "needs pose.step_data_hash (sweep v2 unit A)")
 class VersionTests(unittest.TestCase):
     def setUp(self) -> None:
         folder = tempfile.TemporaryDirectory()
@@ -352,13 +351,13 @@ class VersionTests(unittest.TestCase):
         seal(self.hw, "v1", data=PARTS)
         seal(self.hw, "v2", data=PARTS)
         for baseline in ("v9", "v2"):
-            with self.subTest(baseline=baseline), self.assertRaises(pose.MotionError):
+            with self.subTest(baseline=baseline), self.assertRaises(incremental.MotionError):
                 incremental.compare_versions(self.hw, "v2", baseline)
         manifest = self.hw / "versions" / "v1" / "manifest.json"
         broken = json.loads(manifest.read_text())
         del broken["pose"]
         manifest.write_text(json.dumps(broken))
-        with self.assertRaisesRegex(pose.MotionError, "rebuild that version"):
+        with self.assertRaisesRegex(incremental.MotionError, "rebuild that version"):
             incremental.compare_versions(self.hw, "v2")
 
 

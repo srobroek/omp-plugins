@@ -188,9 +188,23 @@ declared direction with `placement.transform`.
 ## Check result (`check`)
 
 Top level: `status` pass|fail, `label`, `pose: nominal`, `baseline` (previous label or null),
-`blocking_failures`, `warnings`, `checks`, `timings_s` (`total_s`; `pair_evaluations`, the pairs
-measured, and `disk_hits`, the pairs read from the pair cache). Every check has `status`
-(pass|fail|warn) and `blocking`.
+`scope`, `blocking_failures`, `warnings`, `evaluation` (`mode` fast|exact, `mesh`, `band_mm`,
+`rule_sha256`), `checks`, `suspects`, `timings_s` (`total_s`; `kernel_evaluations`, `exact_hits`,
+the exact readings the pair cache held, `decision_hits`, `bucket_hits`, `cleared` by method, and
+`reevaluations` of suspects). Every check has `status` (pass|fail|warn, `skipped` for a check a
+partial scope cannot run) and `blocking`.
+
+`scope` says what the check covered. `{kind: all_pairs, complete: true}` is the default;
+`named_pairs` (`--pair`) is not complete. `--changed-only` gives
+`{kind: changed_pairs, complete: false, baseline, selected_pairs, unchanged_pairs, reasons,
+removed_pairs, changes}`, with `full_selection` when there is no baseline. It measures only the
+pairs cad-motion `incremental.py` selects against `--since-version` (default: the newest built
+version before the checked one): new pairs, pairs whose part geometry changed (the STEP DATA
+section, so a rebuild that only changes the header is no change), whose relative placement moved,
+or whose declarations (joints, fits, inserts, clearance requirement and margin) changed. A
+displacement of the whole product moves no pair. `interference` and `pair_clearance` cover the
+selected pairs only. `min_clearance` is null, and `connection` is `skipped`. A changed-only result
+is early evidence, never a complete assembly check: never stamp or release from it.
 
 | Check | Blocking | Fails when |
 |---|---|---|
@@ -200,27 +214,40 @@ measured, and `disk_hits`, the pairs read from the pair cache). Every check has 
 | `manufacturing` | yes | a custom-made PN of the record snapshot has no manufacturing entry, a manufacturing entry or folder belongs to no custom-made PN, or a part row fails (`parts.<PN>`, the rows above, judged again on the sealed files). `complete` is true when every part is complete; an incomplete part warns. A version built before manufacturing outputs warns, `blocking: false` |
 | `brep_validity` | yes | BRepCheck rejects the kernel's in-memory shape or the STEP read-back |
 | `solid_structure` | yes | a part has no solid, or its solid count differs from `--expect-solids` or else from the previous version; `--expect-solids` naming a PN outside the version fails (`unknown_parts`) |
-| `interference` | yes | two parts share more than 1e-3 mm^3 at the nominal pose, unless the pair is a declared interference fit or heat-set insert (below) or `--allow-interference` names an undeclared intentional overlap; a declared interference fit that measures no interference is reported in `declared_fit_findings` and fails; a pair whose measurement failed (`error`, `interference_mm3` null) fails even when allowed; `--pair` or `--allow-interference` naming a PN outside the version fails (`unknown_pairs`, `unknown_allowed`); joint-connected pairs are listed under `joint_pairs`, others under `pairs`; `min_clearance` names the closest pair |
-| `pair_clearance` | yes | a clearance requirement in `hw/interfaces.yaml` (`type: clearance`, `pair`, `min_clearance_mm`, resolved by cad-motion's `pair_policy.py`) measures below its `min_clearance_mm` at the nominal pose, compared unrounded; its pair's measurement failed (`error`); or the version has no such occurrence pair. A requirement binds its pair whatever joins it, so it also binds a joint-connected or fitted pair. Each `requirements` row has `pair` (occurrence ids), `refs`, `required_mm`, `clearance_mm`, `status` (pass/fail), `interface` and YAML `source`; with no requirement declared the check passes |
-| `connection` | yes | the two parts of a fixed joint or `--attach` are more than 0.01 mm apart (`fixed_joints`: `joint`, `pair`, `distance_mm`, `ok`); or a part is `disconnected` (nearest part > 2.0 mm away), or `floating` (0.01 to 2.0 mm) without a movable joint (revolute, prismatic) linking its rigid body to the nearest part's; `touching` is <= 0.01 mm. Fixed joints weld their parts into one rigid body, so a float to a part of the same body is never a joint clearance. Each `parts` row has `nearest`, `distance_mm`, `joint` (the movable joint between the two bodies, else null), `joint_connected` |
+| `interference` | yes | two parts share more than 1e-3 mm^3 at the nominal pose, unless the pair is a declared interference fit or heat-set insert (below) or `--allow-interference` names an undeclared intentional overlap; a declared interference fit that measures no interference is reported in `declared_fit_findings` and fails; a pair whose measurement failed or whose reading is an unresolved suspect (`method` null, `error`) fails even when allowed; `--pair` or `--allow-interference` naming a PN outside the version fails (`unknown_pairs`, `unknown_allowed`); joint-connected pairs are listed under `joint_pairs`, others under `pairs`. A measured row has `method: exact` with `clearance_mm` and `interference_mm3`; a far row has `method` box, mesh, `mesh (exact suspect)` or cache-bound, `lower_mm`, `upper_mm` (null: unbounded) and null distance and volume: its bounds prove it does not overlap; `min_clearance` names the closest pair |
+| `pair_clearance` | yes | a clearance requirement of the version's `interfaces.yaml` (`type: clearance`, `pair`, `min_clearance_mm`, resolved by cad-motion's `pair_policy.py`) measures below its `min_clearance_mm` at the nominal pose, compared unrounded; its pair's measurement failed (`error`); or the version has no such occurrence pair. A requirement binds its pair whatever joins it, so it also binds a joint-connected or fitted pair. A clearance at or above the requirement but below it plus `margin_mm` (cad-record's margin: the interface's `margin_mm`, else product.yaml `design.clearance_margin_mm`, default 0.1) is `status: warn`, `warning: margin`, never a failure; the check then warns. Each `requirements` row has `pair` (occurrence ids), `refs`, `required_mm`, `margin_mm`, `clearance_mm`, `method`, `status` (pass/warn/fail), `interface` and YAML `source`; a far pair passes on its `lower_mm`, which its measurement put above requirement plus margin; with no requirement declared the check passes |
+| `connection` | yes | the two parts of a fixed joint or `--attach` are more than 0.01 mm apart (`fixed_joints`: `joint`, `pair`, `distance_mm`, `ok`); or a part is `disconnected` (nearest part > 2.0 mm away), or `floating` (0.01 to 2.0 mm) without a movable joint (revolute, prismatic) linking its rigid body to the nearest part's; `touching` is <= 0.01 mm. Fixed joints weld their parts into one rigid body, so a float to a part of the same body is never a joint clearance. Each `parts` row has `nearest`, `distance_mm` (always measured: a far pair that could be a part's nearest is measured exactly), `joint` (the movable joint between the two bodies, else null), `joint_connected` |
 | `mesh_watertight` | yes | a part's GLB triangles, welded by position, are not a closed 2-manifold (trimesh); triangles whose corners weld to fewer than three vertices (BRepMesh emits one at a sphere pole on a face boundary) are dropped first and counted in `collapsed_triangles` |
 | `slivers_tolerances` | no (warn) | a face is smaller than 1e-3 mm^2, or a vertex/edge/face tolerance exceeds 0.01 mm |
 
 `--pair PN:PN` restricts `interference` to the named pairs; every pair still feeds `connection`.
 Clearance and shared volume come from cad-motion's pair measurer (`pair_measure.py`, around
-`pose.interference`), the one `sweep.py` uses at every pose. It places part b's definition by
-T_a^-1 T_b in part a's definition frame. The distance is the BRepExtrema minimum distance, 0 when
-one part lies inside a solid of the other, a solid of a compound part included. Within 1e-6 mm,
-the shared volume is the non-destructive Boolean common (fuzzy 1e-7 mm), measured with the adaptive
-volume rule. By default (`--jobs 1`), check measures in this process on OCCT's thread pool.
-`--jobs N` measures in N worker processes, largest pairs first; `auto` is the CPU count, at most 8.
-Measurements go through cad-motion's pair cache
-(`$XDG_CACHE_HOME/cad-motion/pairs.sqlite`, else `~/.cache/cad-motion`; `--cache DIR` moves it,
-`--no-cache` skips it). The cache is keyed by both parts' geometry and the exact placement. A check
-of v2 after v1 measures only the pairs whose part or placement changed, and a hit is the value a
-measurement gives.
+`pose.interference`), the one `sweep.py` uses, under the same rule. It measures the per-part STEP
+definitions, identified by their DATA sections. It places part b's definition in part a's frame as
+the sweep does at the nominal pose: through the joints from the pair's common ancestor, rebuilt from
+the version's record snapshot, which must place every occurrence where the manifest does. A version
+without a snapshot uses T_a^-1 T_b of the assembly STEP components. The distance is the BRepExtrema
+minimum distance, 0 when one part lies inside a solid of the other, a solid of a compound part
+included. Within 1e-6 mm, the shared volume is the non-destructive Boolean common (fuzzy 1e-7 mm),
+measured with the adaptive volume rule. Fast mode, the default, leaves a pair unmeasured when its box
+gap or mesh bound (python-fcl) clears 1e-6 mm, its clearance requirement plus margin and the 2 mm
+band. A declared interference fit and a fixed joint are always measured. `--exact` measures every
+pair. Each reading is checked against its own box and mesh bounds; a contradicted one (a degenerate
+BRepExtrema 0.0 mm) is a suspect, listed in `suspects`. It is re-evaluated with part b moved 0.01 mm
+both ways, with each independent joint 0.1 off nominal where that moves the pair, and swapped. A
+resolved suspect passes on its bounds (`mesh (exact suspect)`); an unresolved one, or one on an
+always-measured pair, fails its pair. By default (`--jobs 1`), check measures in this process on
+OCCT's thread pool. `--jobs N` measures in N worker processes that die with the check; `auto` is the
+CPU count, at most 8. Results go through cad-motion's pair cache, `hw/.cad/pairs-v2.sqlite`
+(`--cache DIR` moves it, `--no-cache` skips it), shared with the sweep. It is keyed by both parts'
+geometry, the exact placement and the rule. A check of v2 after v1 measures only the pairs whose
+part or placement changed, and a hit is the value a measurement gives.
 
-Declared fits and inserts come from `hw/interfaces.yaml`. `declared_pairs` lists each press fit with
+A check is a run recorded in `hw/.cad/runs/` (cad-flow `process_lifecycle.py`). It exits 2 without
+checking while another check runs, or while an earlier run of any kind left processes behind, and
+prints the `kill` commands that stop them.
+
+Declared fits and inserts come from the version's record snapshot `interfaces.yaml`. `declared_pairs` lists each press fit with
 its `fit`, `classification`, `interface` and YAML `source`. A fit that names feature endpoints
 instead of a `pair` also carries `endpoints`: `hole` and `shaft`, each with `PN`, `feature` and an
 optional `region`. `declared_heat_sets` lists each `limits.heat_set` entry with its sorted `pair`,

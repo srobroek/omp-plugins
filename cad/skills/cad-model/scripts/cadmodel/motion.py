@@ -1,4 +1,4 @@
-"""The cad-motion kinematics, pair policy and pair measurer, loaded from its sibling skill; cad-model never re-implements posing or measuring."""
+"""The cad-motion kinematics, pair policy, pair measurer, mesh bounds and incremental selection, loaded from its sibling skill; cad-model never re-implements posing or measuring."""
 
 from __future__ import annotations
 
@@ -33,6 +33,22 @@ def load_pair_policy() -> Any:
 
 
 def load_pair_measure() -> Any:
-    """The `pair_measure` module: PairMeasurer, Request, Failure, PairCache, default_cache_dir."""
+    """The `pair_measure` module: PairMeasurer, Request, the outcome records, RuleVersion, PairCache."""
     load_pose()  # pair_measure measures with this very pose module
     return _load("cad_motion_pair_measure", SCRIPTS / "pair_measure.py")
+
+
+def load_mesh_bound() -> Any:
+    """The `mesh_bound` module (MeshBounds); ImportError without numpy or python-fcl."""
+    load_pose()
+    try:
+        return _load("cad_motion_mesh_bound", SCRIPTS / "mesh_bound.py")
+    except ImportError:
+        sys.modules.pop("cad_motion_mesh_bound", None)
+        raise
+
+
+def load_incremental() -> Any:
+    """The `incremental` module: version states, changed-pair selection and smoke samples."""
+    load_pose()
+    return _load("cad_motion_incremental", SCRIPTS / "incremental.py")
