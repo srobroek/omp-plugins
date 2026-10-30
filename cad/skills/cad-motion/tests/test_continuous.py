@@ -24,6 +24,10 @@ import continuous_collision as fixture  # noqa: E402 - the kernel-free between-s
 
 
 def load(name: str, path: Path):
+    """One module per name: the scripts load their siblings under these names, so a second copy
+    would leave a module bound to the first."""
+    if name in sys.modules:
+        return sys.modules[name]
     spec = importlib.util.spec_from_file_location(name, path)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
@@ -392,6 +396,36 @@ class PathsAndRates(unittest.TestCase):
         self.assertEqual(block["guarantee"], "conditional_sampled_rate_and_mesh_envelope")
         self.assertIn("not proven maxima", block["limitation"])
 
+    SEAM = {"input_unit": "deg", "output_unit": "mm", "period_deg": 360, "interpolation": "linear",
+            "samples": [[0, 1.2], [0.05, 0], [359.95, 0], [360, 1.2]]}  # a 0.1-degree lift across the seam
+
+    def test_a_ramp_across_the_profile_seam_of_a_720_degree_path_keeps_its_cells(self) -> None:
+        """A cam profile whose lift wraps its 360-degree seam, on a crank path over 0..720: the
+        samples at 350.1 and 370.1 are clear, no fine cell edge (350.1 + k/4) and no bisection
+        midpoint falls in the lift. Without the seam's knots the interval reads proved; with
+        incremental.breakpoints' knots the rate sees the lift and the leaves at the seam stay unproved."""
+        incremental = load("cad_motion_incremental", SCRIPTS / "incremental.py")
+        data = {"profiles": {"seam": self.SEAM}, "joints": [
+            {"id": "J-001", "type": "revolute", "parent": "TST-0001", "child": "TST-0002", "axis": [0, 0, 1],
+             "origin": [0, 0, 0], "min": 0, "max": 720, "nominal": 0},
+            {"id": "J-002", "type": "prismatic", "parent": "TST-0001", "child": "TST-0003", "axis": [0, 0, 1],
+             "origin": [0, 0, 0], "min": 0, "max": 2,
+             "coupling": {"type": "periodic_table", "driver": "J-001", "profile": "seam", "phase_deg": 0.0}}]}
+        chain = pose.build_chain([pose.make_joint(raw) for raw in data["joints"]], (), None, pose.coupling.parse(data))
+        points = incremental.breakpoints(chain)["J-001"]
+        for knot in (359.95, 360.0, 360.05, 719.95):
+            self.assertTrue(any(abs(p - knot) <= 1e-9 for p in points), (knot, points))
+        lift = lambda oid, s: (0.0, -chain.complete(s)["J-002"], 0.0) if oid == "b" else None  # noqa: E731
+        world = BoxWorld({"a": ((0.0, 0.0, 0.0), (1.0, 1.0, 1.0)), "b": ((0.0, 1.5, 0.0), (1.0, 2.5, 1.0))}, lift)
+        path = continuous.SweepPath("sweep:J-001", "J-001", "deg", (350.1, 370.1), (0, 1))
+        pair = continuous.PairSpec(("a", "b"), ("A", "B"))
+        self.assertGreater(world.exact(pair.ids, {"J-001": 360.0})[1], pose.INTERFERENCE_MM3)
+        self.assertEqual(world.check([path], [pair]).status, "proved_collision_free")  # the stated limitation
+        report = world.check([path], [pair], breakpoints=points)
+        self.assertEqual((report.status, report.exit_code, report.between_sample_findings), ("unproved", 2, []))
+        seam = [row for row in report.collision_free_unproved_intervals if row.low < 360.0 < row.high]
+        self.assertEqual([(row.depth, row.reason) for row in seam], [(6, "not proved collision-free at depth 6")])
+
     def test_the_smaller_direction_bounds_the_rate(self) -> None:
         """A small cube turning about its own centre beside a long static bar: b's corners move
         little in a's frame, a's far corners sweep wide in b's; the smaller bounds the distance."""
@@ -418,6 +452,22 @@ class PathsAndRates(unittest.TestCase):
         self.assertEqual((unproved.low, unproved.high), (3.0, 7.0))
         self.assertIn("no finite motion rate", unproved.reason)
         self.assertEqual(world.requests, [])
+
+
+class LeafLabels(unittest.TestCase):
+    def test_an_interval_never_proved_ends_in_64_labelled_leaves_at_depth_6(self) -> None:
+        """Touching static boxes: every reading is 0 mm, so no leaf is ever proved and each sample
+        interval bisects to MAX_DEPTH, 64 leaves of 1/64 of it, each labelled with its depth."""
+        world = BoxWorld({"a": ((0.0, 0.0, 0.0), (1.0, 1.0, 1.0)), "b": ((1.0, 0.0, 0.0), (2.0, 1.0, 1.0))}, static)
+        path = continuous.SweepPath("sweep:J-001", "J-001", "deg", (0.0, 64.0), (0, 1))
+        report = world.check([path], [continuous.PairSpec(("a", "b"), ("A", "B"))])
+        self.assertEqual(continuous.MAX_DEPTH, 6)
+        self.assertEqual((report.status, report.original_intervals, report.leaf_intervals), ("unproved", 1, 64))
+        self.assertEqual(report.midpoints["exact"], 63)  # 1 + 2 + ... + 32
+        rows = [row.as_json() for row in report.collision_free_unproved_intervals]
+        self.assertEqual([row["interval"] for row in rows], [[float(k), float(k + 1)] for k in range(64)])
+        self.assertEqual({(row["depth"], row["reason"], row["lower_mm"]) for row in rows},
+                         {(6, "not proved collision-free at depth 6", 0.0)})
 
 
 class EndpointReadings(unittest.TestCase):
@@ -447,6 +497,9 @@ class EndpointReadings(unittest.TestCase):
                          ["no reading", "no reading"])
         report = self.check({0: Measured(4.0, 0.0), 1: Measured(4.0, 0.0)}, (0, 1, None))
         self.assertIn("no valid sample", report.collision_free_unproved_intervals[0].reason)
+        report = self.check({0: Cleared(0.5, 4.2, "mesh"), 1: Measured(4.0, 0.0)}, (0, 1))  # a mesh bound
+        self.assertEqual((report.status, report.proved_collision_free_leaf_intervals), ("proved_collision_free", 1))
+        self.assertEqual(report.smallest_proved_clearance_margin.margin_mm, 0.5)
 
     def test_a_suspect_never_qualifies(self) -> None:
         report = self.check({0: Measured(4.0, 0.0), 1: Suspect((3,), 4.0, 0.0, 3.9, 4.1)}, (0, 1))

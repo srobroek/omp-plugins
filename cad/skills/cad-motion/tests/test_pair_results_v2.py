@@ -520,6 +520,36 @@ class PairCacheTests(Case):
         self.assertEqual(measured, {round(1.2 + 0.001 * k, 6) for k in range(len(kernel.calls))})  # the oldest went
 
 
+class SpotCheckFloorTests(unittest.TestCase):
+    """spot_check.audit's strict floor, threshold + band - 2 x deflection: a mesh-cleared request
+    measured exactly at the floor fails the audit, one ulp above it passes."""
+
+    CLEARING, BAND, DEFLECTION = 1.0, 2.0, 0.25  # binary fractions: the floor is exactly 2.5
+
+    def audit(self, exact: float) -> dict:
+        spot = load("cad_motion_spot_check", SCRIPTS / "spot_check.py")
+        pair = ("a", "b")
+        sample = types.SimpleNamespace(index=0, values={}, settings={"J-001": 0.0})
+        chain = types.SimpleNamespace(relative_transforms=lambda values, pairs: {pair: diagonal(3.0)},
+                                      pn=lambda oid: oid.upper(), ref=lambda oid: oid)
+        plan = types.SimpleNamespace(samples=[types.SimpleNamespace(sample=sample)], measured=[pair],
+                                     clearing={pair: self.CLEARING})
+        session = types.SimpleNamespace(measure=lambda requests, deadline: [pm.Measured(exact, 0.0) for _ in requests])
+        mesh = types.SimpleNamespace(query=lambda a, b, placement: types.SimpleNamespace(mesh_mm=exact))
+        picks = [{"pair": 0, "sample": 0, "lower": 2.0, "upper": 3.0}]
+        return spot.audit(chain, plan, picks, session, mesh, self.BAND, self.DEFLECTION, math.inf)
+
+    def test_a_reading_exactly_at_the_strict_floor_fails_and_one_above_passes(self) -> None:
+        floor = self.CLEARING + self.BAND - 2 * self.DEFLECTION
+        self.assertGreater(floor, pose.OVERLAP_GATE_MM)
+        at = self.audit(floor)
+        self.assertEqual((at["checks"][0]["floor_mm"], at["checks"][0]["ok"]), (2.5, False))
+        self.assertEqual(len(at["failures"]), 1)
+        above = self.audit(math.nextafter(floor, math.inf))
+        self.assertEqual((above["checks"][0]["ok"], above["failures"]), (True, []))
+
+
+
 @unittest.skipUnless(shutil.which("uv"), "uv is required to build and read STEP through OCP")
 class RealGeometryTests(unittest.TestCase):
     """fixtures/measure_probe.py --session on the built fixtures: STEP DATA identity, a warm rerun
