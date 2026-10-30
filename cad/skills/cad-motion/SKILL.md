@@ -72,7 +72,7 @@ Verify coupled motion with `pose.py` and `sweep.py`.
    same either way. Workers die with the sweep, mid-measurement too. A sweep records its run under
    `hw/.cad/runs/` (cad-flow `process_lifecycle.py`) and refuses to start while another sweep, or a
    run that left processes behind, is recorded for the hw tree; stop it with the printed command.
-   Fast mode is the default; see [Fast sweeps](#fast-sweeps). `--exact` measures every request that
+   Fast mode is the default; see [Sweep checks](#sweep-checks). `--exact` measures every request that
    could set a pair's minimum.
    Measurements persist in the pair cache `hw/.cad/pairs-v2.sqlite` (`--cache DIR` moves it), the
    one cad-model `check` uses: a disposable, git-ignored file keyed by both parts' STEP DATA, their
@@ -97,8 +97,8 @@ Verify coupled motion with `pose.py` and `sweep.py`.
    Margins: a minimum at or above its requirement but below requirement + margin is a `margin` row
    in `warnings`, never a failure. The margin is the interface's `margin_mm`, else product.yaml
    `design.clearance_margin_mm` (default 0.1 mm); `--min-clearance` uses the default.
-   Between samples: see [Between-sample check](#between-sample-check). Subsystems and merging:
-   see [Subsystems](#subsystems).
+   Between samples, subsystems and merging: see [Sweep checks](#sweep-checks) and
+   [sweep internals](references/sweep.md).
    Early checks: `--smoke` samples each revolute every 60 degrees plus its TDC and dwell events
    (cad-motion `incremental.py`), without the between-sample check; `--changed-only` measures only
    the pairs whose geometry, placement, policy or motion changed since `--since-version` (default:
@@ -120,81 +120,23 @@ Exit codes for all scripts:
 - 1: a check failed. `sweep.py` reports joint-limit, collision, clearance and pair-requirement
   findings, between-sample findings, suspect measurements and spot-check failures, `pose.py`
   joint-limit findings, and `freecad_assembly.py` violations and residuals.
-- 2: a usage or infrastructure error, a sweep stopped by `--time-limit`, or a sweep whose
-  between-sample check left an interval unproved (`status: incomplete`, published with its evidence).
+- 2: a usage or infrastructure error, a sweep stopped by `--time-limit`, or, with
+  `--require-continuous`, an incomplete between-sample proof.
 
-## Fast sweeps
+## Sweep checks
 
-A sweep measures a pair-pose with pose.py's `interference`, the one rule; fast mode only decides
-which pair-poses need it (pair_measure.py, mesh_bound.py).
+Detail: [sweep internals](references/sweep.md).
 
-- Planning: the sweep poses each occurrence's mesh-vertex box once per sample and gives every
-  request the gap between its two boxes less sqrt(3) x both mesh deviations, a lower bound that no
-  BRep is posed for (`posed_boxes`, `planned_requests` in `timings_s`).
-- Repeats: a revolute angle and a slider-crank angle are reduced to (-180, 180] and snapped to
-  1e-9 degree before their sine and cosine, so a crank at q and q + 360 places its 360 degree train
-  with the very same bits, and a piston at -theta from TDC as at +theta. Each distinct key is
-  evaluated once: a constant relative pose and a periodic repeat need no special case. A reused
-  exact reading is the one a fresh measurement gives; a hit on the rounded relative transform alone
-  is only a bound, inflated by how far the body can move within the rounding (`cache-bound`).
-- Clearing: a request whose own lower bound exceeds 1e-6 mm and its pair's clearing threshold (the
-  greatest requirement plus its margin) by more than `--mesh-band` (default 2 mm) is not measured
-  (`cleared_box`, `cleared_mesh`). The bound is the corrected box gap, else the mesh bound: each
-  part tessellated once (0.02 mm linear, 0.2 rad angular deflection) into a python-fcl BVH, the BVH
-  distance minus each part's deviation, kept only where no vertex of one part can lie inside a
-  solid of the other. The meshes touching, nesting or coming within the band always measure exactly.
-  What is cleared depends on each request alone, so `--jobs` and a cold or warm cache report the
-  same JSON.
-- Reporting: every measured value is exact. A pair whose minimum may lie at a cleared request is a
-  bounded row: `method` "mesh", "box" or "cache-bound", `clearance_mm` the proved lower bound,
-  `bound_mm` [lower, upper] (upper null when only a box gap is known), rounded outward. Collisions,
-  findings, margin warnings, verdicts, the worst case whenever its margin is within the band, and
-  every `method: "exact"` row equal `--exact`'s; bounded rows bracket the exact minimum instead.
-- Suspects: every exact measurement is checked against its box and mesh bounds, in fast mode and
-  with `--exact` alike (BRepExtrema has read 0 mm for parts 8 mm apart). A suspect value answers
-  nothing: it is re-measured with every independent joint +-0.1 and with the two parts swapped, and
-  listed in `suspect_measurements` with its re-measurements. One they do not resolve fails the
-  sweep: a suspect never passes or fails silently.
-- Spot check, on by default in fast mode (`--no-spot-check` skips it): per pair with a
-  mesh-cleared request, the one of the smallest bound is measured exactly. It must lie inside its
-  bounds, above threshold + band - 2 x the deflection, without overlap, or the sweep fails
-  (`spot_check`). `spot_check.py --hw hw --version vN --result hw/motion/vN/<case>
-  [--all-mesh-poses] [--no-cache]` audits a published sweep the same way, with `--all-mesh-poses`
-  every unique mesh-cleared pose; `--no-cache` measures each one again.
-- Counters in `timings_s` (`kernel_evaluations`, `fcl_queries`, `exact_hits`, `bucket_hits`,
-  `committed_chunks`, per-phase seconds) let a cold, a warm and an `--exact` run diff; a warm
-  rerun evaluates nothing.
-- Without python-fcl (no wheel for the platform), the BRep box gap alone clears, nothing is
-  checked against a mesh, the between-sample check is off, and `broad_phase.mesh` says why.
-
-## Between-sample check
-
-On by default (`--no-continuous` skips it; `--smoke` never runs it). Along each one-dimensional path
-of the sweep (each independent joint across its range with the others at nominal, each grid edge),
-every pair's interval between consecutive samples is bounded from the samples' lower bounds and a
-sampled motion rate: the largest corner displacement of either part's mesh box, inflated by its
-deviation, in the other's frame on a `--continuous-grid-deg`/`--continuous-grid-mm` grid, times
-`--continuous-safety`. An interval not proved collision-free is bisected up to
-`--continuous-depth` times, its midpoints measured in bound mode and cached like samples.
-`continuous.status` is `proved_collision_free`, `finding` (a collision or clearance finding between
-samples, exit 1, replayable at its `pose`), or `unproved` (exit 2). Proved collision-free and proved
-to the clearance minimum are reported apart: a sliding near-constant gap can prove the first only,
-and then its exact sampled minimum stays the evidence. The guarantee is conditional
-(`rigorous: false`): the rate is sampled, not derived from joint-rate Jacobians, and coverage is the
-sweep's paths, not the whole joint space (`continuous.limitation`).
-
-## Subsystems
-
-The record's subassemblies own the pairs (cad-motion `subsystems.py`). Each moving occurrence must
-belong to exactly one; a moving/static pair belongs to the moving part's subassembly, a pair of two
-subassemblies' moving parts to `interface`, a static pair to `static`. `subsystems.owners` reports
-each owner's members, pair and finding counts, and its period per independent joint, detected from
-the transforms over a whole verified cycle (a 5.5:1 starter pinion on its crank is 720 degrees).
-`--subsystem NAME` (repeatable; `interface` and `static` too) measures only that owner's pairs over
-the same samples. Merge runs that together cover every owner:
-`uv run --script skill://cad-flow/scripts/run.py cad-motion/scripts/merge_sweeps.py --hw hw --version vN --case NAME --inputs hw/motion/vN/A hw/motion/vN/B ...`
-It refuses inputs of other options, partition, rule or code, a missing or doubly measured pair, or
-an unfinished run, and publishes the result the whole sweep gives (its worst pose posed again).
+- Fast mode clears a request whose proved lower bound is more than `--mesh-band` beyond its pair's
+  clearing threshold; every measured value is exact, and collisions, findings and `exact` rows equal
+  `--exact`'s. Suspect measurements are re-measured and never pass silently; the spot check measures
+  each pair's closest mesh-cleared request exactly, and `spot_check.py` audits a published sweep.
+- The between-sample check proves the paths between samples under a sampled rate.
+  `continuous.status` is `proved_collision_free`, `finding` (exit 1), or `incomplete`: a WARNING
+  that names the unproved pairs and keeps the sampled verdict, unless `--require-continuous` is set.
+  Resolve it with a finer `--steps` on the unproved pairs' `--subsystem`, or a DR accepting it.
+- Subassemblies own the pairs; `--subsystem` runs merge with `merge_sweeps.py` into the whole
+  sweep's result.
 
 ## Motion render
 
@@ -261,7 +203,7 @@ outside the limits are plan errors (exit 2; a coupled joint names its driver).
 
 ## Rules
 
-MUST Treat exit 1 as a check failure that blocks the stage gate; exit 2 is no pass: no result, or an unproved between-sample interval.
+MUST Treat exit 1 as a check failure that blocks the stage gate; exit 2 is no result. Report a `continuous` warning with its unproved pairs.
 MUST Report collision poses and the smallest clearances verbatim from the JSON.
 NOT Claim rigorous continuous collision freedom: the between-sample proof is conditional (`continuous.guarantee`).
 NOT Treat a `--smoke`, `--changed-only` or `--subsystem` run as the full sweep; `scope.complete` is false.

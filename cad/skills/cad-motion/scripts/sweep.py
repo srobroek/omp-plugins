@@ -1066,6 +1066,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="measure only the pairs this subassembly owns, or interface or static (repeatable)")
     parser.add_argument("--no-continuous", dest="continuous", action="store_false",
                         help="skip the between-sample check: the sampled poses only")
+    parser.add_argument("--require-continuous", action="store_true",
+                        help="fail an incomplete between-sample proof (exit 2) instead of warning")
     parser.add_argument("--continuous-grid-deg", type=float, default=continuous.GRID_DEG, metavar="DEG",
                         help=f"between-sample check: fine rate cells of a revolute path (default {continuous.GRID_DEG})")
     parser.add_argument("--continuous-grid-mm", type=float, default=continuous.GRID_MM, metavar="MM",
@@ -1129,7 +1131,8 @@ def recipe_options(args: argparse.Namespace, baseline: str | None = None) -> dic
             "volume_tol": args.volume_tol, "max_poses": args.max_poses, "exact": args.exact,
             "mesh_band": None if args.exact else args.mesh_band, "spot_check": spot_checking(args),
             "continuous": continuous_settings(args), "smoke": args.smoke,
-            "changed_only": {"baseline": baseline} if args.changed_only else None}
+            "changed_only": {"baseline": baseline} if args.changed_only else None,
+            "require_continuous": args.require_continuous}
 
 
 def option_argv(options: Mapping[str, Any], attach: Sequence[str]) -> list[str]:
@@ -1151,6 +1154,8 @@ def option_argv(options: Mapping[str, Any], attach: Sequence[str]) -> list[str]:
     else:
         argv += ["--continuous-grid-deg", repr(settings["grid_deg"]), "--continuous-grid-mm", repr(settings["grid_mm"]),
                  "--continuous-safety", repr(settings["safety"]), "--continuous-depth", str(settings["depth"])]
+    if options["require_continuous"]:
+        argv += ["--require-continuous"]
     if options["smoke"]:
         argv += ["--smoke"]
     if options["changed_only"] is not None:
@@ -1359,7 +1364,7 @@ def subsystem_report(run: Run, periods: dict[str, dict[str, Any]], state: SweepS
     owner_of = {tuple(chain.ref(oid) for oid in pair): owner for pair, owner in run.partition.pair_owner.items()}
 
     def count(rows: Sequence[Mapping[str, Any]], owner: str) -> int:
-        return sum(1 for row in rows if owner_of.get(tuple(row["pair"])) == owner)
+        return sum(1 for row in rows if owner_of.get(tuple(row.get("pair", ()))) == owner)
 
     colliding = {tuple(item["pair"]) for collision in state.collisions for item in collision["pairs"]}
     failing = [row for row in requirement_rows if row["status"] == "fail"]
@@ -1453,12 +1458,15 @@ def report(run: Run, plan: Plan, statistics: Mapping[str, Any], *, broad_phase: 
     requirements = {pair: item for pair, item in run.requirements.items() if pair in measured_pairs}
     requirement_rows = pair_clearance_report(chain, requirements, state.pair_clearance, state.bounds)
     warnings = margin_warnings(chain, plan, state)
-    between = between if between is not None else continuous.disabled().as_json()
+    between = dict(between if between is not None else continuous.disabled().as_json())
+    if between["status"] == "unproved":
+        between["status"] = "incomplete"
+        warnings.append(continuous_warning(between))
     failures = audit["failures"] if audit is not None else []
     failed = bool(state.collisions or findings or state.limits or any(row["status"] == "fail" for row in requirement_rows)
                   or any(not row["resolved"] for row in suspects) or failures or between["status"] == "finding")
     status = ("incomplete" if not complete else "fail" if failed
-              else "incomplete" if between["status"] == "unproved" else "pass")
+              else "incomplete" if between["status"] == "incomplete" and args.require_continuous else "pass")
     refs = [[chain.ref(a), chain.ref(b)] for a, b in checked]
     result: dict[str, Any] = {
         "status": status, "scope": scope_of(run, complete),
@@ -1479,11 +1487,27 @@ def report(run: Run, plan: Plan, statistics: Mapping[str, Any], *, broad_phase: 
                            "max": [round(v, 3) for v in state.envelope_max], "units": "mm"},
         "worst_case": None, "broad_phase": dict(broad_phase), "suspect_measurements": suspects,
         "spot_check": None if audit is None else spot_check.summary(audit),
-        "continuous": dict(between),
+        "continuous": between,
         "subsystems": subsystem_report(run, periods, state, findings, requirement_rows, warnings, between),
         "timings_s": timings,
     }
     return result, state
+
+
+def continuous_warning(block: Mapping[str, Any]) -> dict[str, Any]:
+    """The `continuous` WARNING of an incomplete between-sample proof: what is unproved, and how to
+    resolve it. It fails the sweep only with --require-continuous."""
+    unproved = block["collision_free_unproved_intervals"]
+    pairs = list(dict.fromkeys(tuple(row["pair"]) for row in unproved))
+    paths = list(dict.fromkeys(row["path"] for row in unproved))
+    return {"check": "continuous", "severity": "warning", "unproved_intervals": len(unproved),
+            "unproved_pairs": [list(pair) for pair in pairs[:MAX_LISTED]], "unproved_pair_count": len(pairs),
+            "paths": paths[:MAX_LISTED],
+            "message": f"{len(unproved)} interval(s) between samples on {len(pairs)} pair(s) are not proved "
+                       "collision-free; the sampled poses are",
+            "resolve": "sweep the unproved pairs' subsystem (--subsystem) with a finer --steps, or a deeper "
+                       "--continuous-depth, until continuous.status is proved_collision_free; or accept the "
+                       "remaining intervals in a decision record. --require-continuous fails an incomplete proof."}
 
 
 def exit_code(status: str) -> int:

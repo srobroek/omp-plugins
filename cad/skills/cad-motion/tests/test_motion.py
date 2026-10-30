@@ -1303,10 +1303,120 @@ class StepTests(unittest.TestCase):
         hw = self.v6_hw(misphased)
         (hw / "interfaces.yaml").write_text(yaml.safe_dump(v6_record.interfaces(), sort_keys=False), encoding="utf-8")
         proc, result = self.run_script("sweep.py", "--hw", str(hw), "--parts-dir", str(self.v6), "--steps", "145",
-                                       "--no-continuous",
                                        "--grid", "0", "--worst-criterion", criterion,
                                        "--worst-step", str(hw / "worst.step"), *options)
         return hw, proc, result
+
+    def sealed_v6_version(self) -> Path:
+        """A verified v1 of the V6 record split into two subassemblies: the bottom end (block, crank,
+        pistons, rods) and the valvetrain (cams, valves), so valve / piston pairs are `interface`."""
+        import yaml
+
+        data = v6_record.record()
+        ids = [item["id"] for item in data["occurrences"]]
+        data["subassemblies"] = [
+            {"id": "bottom", "title": "Bottom end", "parts": ["VSX-0001", "VSX-0101"],
+             "occurrences": [f"@{oid}" for oid in ids if oid.startswith(("piston", "rod"))]},
+            {"id": "valvetrain", "title": "Valvetrain",
+             "occurrences": [f"@{oid}" for oid in ids if oid.startswith(("cam", "valve"))]}]
+        hw = Path(tempfile.mkdtemp(dir=self.root)) / "hw"
+        version = hw / "versions" / "v1"
+        shutil.copytree(self.v6, version / "parts")
+        record = version / "record"
+        (record / "parts").mkdir(parents=True)
+        (record / "product.yaml").write_text("id: v6-test\n", encoding="utf-8")
+        (record / "assembly.yaml").write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+        (record / "interfaces.yaml").write_text(yaml.safe_dump(v6_record.interfaces(), sort_keys=False), encoding="utf-8")
+        for pn, (title, frame) in v6_record.PARTS.items():
+            (record / "parts" / pn).mkdir()
+            (record / "parts" / pn / "part.yaml").write_text(f"PN: {pn}\ntitle: {title}\nmodel_frame: {frame}\n",
+                                                             encoding="utf-8")
+        files = {path.relative_to(version).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+                 for path in sorted(version.rglob("*")) if path.is_file()}
+        (version / "manifest.json").write_text(json.dumps({"label": "v1", "files": files}), encoding="utf-8")
+        (hw / "versions" / "latest.json").write_text(json.dumps({"label": "v1"}), encoding="utf-8")
+        return hw
+
+    @staticmethod
+    def semantic(result: dict) -> dict:
+        """A result without what differs by run but not by meaning: timings, scope, paths, cache counts."""
+        kept = {k: v for k, v in result.items() if k not in ("timings_s", "scope", "bundle", "reused")}
+        kept["worst_case"] = {k: v for k, v in result["worst_case"].items()
+                              if k not in ("step", "step_sha256", "evidence", "command")}
+        kept["continuous"] = {k: v for k, v in result["continuous"].items() if k != "midpoints"}
+        return kept
+
+    def test_subsystem_sweeps_merge_into_exactly_the_whole_sweep_and_audit_clean(self) -> None:
+        hw = self.sealed_v6_version()
+        common = ("--hw", str(hw), "--version", "v1", "--steps", "37", "--grid", "0",
+                  "--worst-criterion", "minimum_clearance")
+        proc, whole = self.run_script("sweep.py", *common, "--case", "whole")
+        self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+        owners = [row["name"] for row in whole["subsystems"]["owners"]]
+        self.assertEqual(owners, ["bottom", "valvetrain", "interface"])
+        bundles = []
+        for owner in owners:
+            proc, part = self.run_script("sweep.py", *common, "--case", f"part-{owner}", "--subsystem", owner)
+            self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+            self.assertEqual((part["scope"]["kind"], part["scope"]["complete"]), ("subsystems", False))
+            bundles.append(str(hw / "motion" / "v1" / f"part-{owner}"))
+        merge = ("--hw", str(hw), "--version", "v1")
+        for inputs, why in ((bundles[:-1], "in no input"), ([*bundles, bundles[0]], "in both")):
+            refused, _ = self.run_script("merge_sweeps.py", *merge, "--case", "refused", "--inputs", *inputs)
+            self.assertEqual(refused.returncode, 2)
+            self.assertIn(why, refused.stderr)
+        self.assertFalse((hw / "motion" / "v1" / "refused").exists())
+        proc, merged = self.run_script("merge_sweeps.py", *merge, "--case", "merged", "--inputs", *bundles)
+        self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+        self.assertEqual(self.semantic(merged), self.semantic(whole))
+        self.assertEqual(len(merged["scope"]["merged_from"]), 3)
+        self.assertTrue((hw / "motion" / "v1" / "merged" / "worst.step").is_file())  # posed again, not copied
+        audit = ("spot_check.py", "--hw", str(hw), "--version", "v1", "--result", str(hw / "motion" / "v1" / "whole"))
+        proc, per_pair = self.run_script(*audit)
+        self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+        self.assertEqual((per_pair["status"], per_pair["checked"]), ("pass", whole["spot_check"]["checked"]))
+        proc, every = self.run_script(*audit, "--all-mesh-poses", "--no-cache")
+        self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+        self.assertEqual((every["status"], every["failures"]), ("pass", []))
+        self.assertGreaterEqual(every["checked"], per_pair["checked"])
+        self.assertGreater(every["checked"], 0)
+
+    def test_a_killed_sweep_resumes_from_its_committed_chunks_and_equals_an_uninterrupted_one(self) -> None:
+        hw = self.v6_hw(None)
+        import yaml
+        (hw / "interfaces.yaml").write_text(yaml.safe_dump(v6_record.interfaces(), sort_keys=False), encoding="utf-8")
+        cache = Path(tempfile.mkdtemp(dir=self.root))
+        scratch = hw.parent / ".cad-work" / "resume" / uuid.uuid4().hex
+        scratch.mkdir(parents=True)
+        options = ("--hw", str(hw), "--parts-dir", str(self.v6), "--steps", "145", "--grid", "0", "--exact",
+                   "--worst-criterion", "minimum_clearance")
+        child = subprocess.Popen(["uv", "run", "--quiet", "--script", str(SCRIPTS / "sweep.py"), *options,
+                                  "--cache", str(cache), "--worst-step", str(scratch / "killed.step")],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        self.addCleanup(child.wait)
+        database, committed, waited = cache / "pairs-v2.sqlite", 0, time.monotonic() + 600
+        while not committed and child.poll() is None and time.monotonic() < waited:
+            time.sleep(0.05)
+            try:
+                with contextlib.closing(sqlite3.connect(f"file:{database}?mode=ro", uri=True)) as db:
+                    committed = db.execute("SELECT COUNT(*) FROM measurements").fetchone()[0]
+            except sqlite3.Error:
+                committed = 0
+        self.assertIsNone(child.poll(), "the sweep ended before a committed chunk was seen")
+        os.killpg(child.pid, signal.SIGKILL)
+        child.wait()
+        with contextlib.closing(sqlite3.connect(f"file:{database}?mode=ro", uri=True)) as db:
+            committed = db.execute("SELECT COUNT(*) FROM measurements").fetchone()[0]
+        resumed_out, fresh_out = Path(tempfile.mkdtemp(dir=self.root)), Path(tempfile.mkdtemp(dir=self.root))
+        proc, resumed = self.run_script("sweep.py", *options, "--cache", str(cache),
+                                        "--worst-step", str(resumed_out / "worst.step"))
+        self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+        proc, fresh = self.run_script("sweep.py", *options, "--no-cache", "--worst-step", str(fresh_out / "worst.step"))
+        self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+        self.assertGreater(committed, 0)
+        self.assertGreaterEqual(resumed["timings_s"]["exact_hits"], committed)  # no committed reading measured again
+        self.assertLess(resumed["timings_s"]["kernel_evaluations"], fresh["timings_s"]["kernel_evaluations"])
+        self.assert_same_sweeps([(fresh_out, fresh), (resumed_out, resumed)])
 
     def test_worker_processes_report_exactly_what_one_process_does(self) -> None:
         """The tie-sensitive minimum_clearance worst case of the V6 sweep, in one process and in three
@@ -1412,6 +1522,10 @@ class StepTests(unittest.TestCase):
         hw, proc, result = self.v6_sweep(None, "minimum_clearance")
         self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
         self.assertEqual((result["status"], result["collisions"], result["limit_findings"]), ("pass", [], []))
+        between = result["continuous"]  # continuous on by default: a proof gap warns, never fails
+        self.assertIn(between["status"], ("proved_collision_free", "incomplete"))
+        self.assertEqual(between["status"] == "incomplete",
+                         any(row["check"] == "continuous" for row in result["warnings"]))
         rows = {tuple(sorted(row["pair"])): row for row in result["min_clearance"]}
         for cylinder, _, _, phase in v6_record.CYLINDERS:
             row = rows[(f"@piston-{cylinder}", f"@valve-{cylinder}")]
