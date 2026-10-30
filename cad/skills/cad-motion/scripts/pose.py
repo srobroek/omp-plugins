@@ -166,9 +166,10 @@ class Rigid:
 
     @staticmethod
     def rotation(axis: Vec, degrees: float, origin: Vec) -> Rigid:
-        """Right-hand rotation about the unit `axis` through `origin`."""
+        """Right-hand rotation about the unit `axis` through `origin`; angles a whole number of turns
+        apart give the very same bits (coupling.canonical_degrees)."""
         x, y, z = axis
-        theta = math.radians(degrees)
+        theta = math.radians(coupling.canonical_degrees(degrees))
         c, s = math.cos(theta), math.sin(theta)
         k = 1.0 - c
         rot = (

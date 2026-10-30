@@ -17,10 +17,12 @@ import os
 from pathlib import Path
 import re
 import shutil
+import signal
 import sqlite3
 import subprocess
 import sys
 import tempfile
+import time
 import uuid
 import unittest
 from unittest import mock
@@ -191,6 +193,33 @@ class ClearanceTests(unittest.TestCase):
                                                "pose": {"J-001": 0.0}}}
         rows, findings = sweep.clearance_report(measured, 0.5, {("TST-0001", "TST-0003")})
         self.assertEqual(([row["clearance_mm"] for row in rows], findings), ([0.0], []))
+
+    @staticmethod
+    def bound(lower: float, upper: float, by: str = "mesh") -> dict:
+        sample = sweep.Sample(7, "sweep:J-001", {"J-001": 35.0}, {"J-001": 35.0})
+        return {"pair": ["@a", "@b"], "lower": lower, "upper": upper, "by": by, "sample": sample}
+
+    def test_a_minimum_that_may_lie_at_a_cleared_request_is_reported_by_bounds_that_bracket_it(self) -> None:
+        """The exact minimum 2.6 is not below the cleared request's lower bound 2.51234: the row is
+        that bound's, [lower, the smaller of its upper and the exact minimum], rounded outward."""
+        exact = {("a", "b"): {"pair": ["@a", "@b"], "clearance_mm": 2.6, "pose": {"J-001": 0.0},
+                              "independent_pose": {"J-001": 0.0}}}
+        rows, findings = sweep.clearance_report(exact, 0.5, set(), {("a", "b"): self.bound(2.51234, 2.7)})
+        self.assertEqual((rows, findings), ([{"pair": ["@a", "@b"], "clearance_mm": 2.5123, "pose": {"J-001": 35.0},
+                                              "independent_pose": {"J-001": 35.0}, "method": "mesh",
+                                              "bound_mm": [2.5123, 2.6]}], []))
+
+    def test_an_exact_minimum_below_every_cleared_bound_stands(self) -> None:
+        exact = {("a", "b"): {"pair": ["@a", "@b"], "clearance_mm": 0.4, "pose": {"J-001": 0.0},
+                              "independent_pose": {"J-001": 0.0}}}
+        rows, findings = sweep.clearance_report(exact, 0.5, set(), {("a", "b"): self.bound(2.5, 2.7)})
+        self.assertEqual([(row["method"], row["clearance_mm"]) for row in rows], [("exact", 0.4)])
+        self.assertEqual([f["pair"] for f in findings], [["@a", "@b"]])
+
+    def test_a_pair_cleared_at_every_sample_on_its_box_gap_has_no_upper_bound(self) -> None:
+        rows, findings = sweep.clearance_report({}, 0.5, set(), {("a", "b"): self.bound(3.0, math.inf, "box")})
+        self.assertEqual([(row["method"], row["bound_mm"]) for row in rows], [("box", [3.0, None])])
+        self.assertEqual(findings, [])
 
 
 class ConsoleRedirectTests(unittest.TestCase):
@@ -429,19 +458,30 @@ class BroadPhaseTests(unittest.TestCase):
     """pair_measure's broad phase on stand-in unit cubes slid along x, whose box gap is their
     distance, so every bound is tight; needs no OCP."""
 
+    @classmethod
+    def run_requests(cls, offsets: list[float], thresholds: tuple[float, ...] = (), prune: bool = True,
+                     **fast) -> tuple[list, int]:
+        outcomes, calls, _ = cls.run_measurer(offsets, thresholds, prune, **fast)
+        return outcomes, calls
+
     @staticmethod
-    def run_requests(offsets: list[float], thresholds: tuple[float, ...] = (), prune: bool = True) -> tuple[list, int]:
-        cube = ([0.0, 0.0, 0.0], [1.0, 1.0, 1.0])
+    def run_measurer(offsets: list[float], thresholds: tuple[float, ...] = (), prune: bool = True,
+                     band: float | None = None, mesh=None, box: float = 0.0, kernel=None) -> tuple[list, int, object]:
+        """(outcomes, kernel calls, the measurer) of b at each x offset; `box` enlarges each stand-in
+        box that far beyond its cube, `mesh` stands in for mesh_bound.MeshBounds, `kernel` (x ->
+        distance) for the cubes' distance."""
+        cube = ([-box, -box, -box], [1.0 + box, 1.0 + box, 1.0 + box])
         measure = sweep.pair_measure
         with mock.patch.object(measure, "box_corners", side_effect=lambda shape, tolerance=False: cube):
-            measurer = measure.PairMeasurer({"A": "a", "B": "b"})
+            measurer = measure.PairMeasurer({"A": "a", "B": "b"}, band=band, mesh=mesh)
         rigid = sweep.pose.Rigid
         requests = [measure.Request("A", "B", rigid(rigid.identity().rot, (x, 0.0, 0.0)), thresholds=thresholds,
                                     group="pair") for x in offsets]
-        with mock.patch.object(measure.pose, "placed", side_effect=lambda shape, at: at.trans[0] if shape == "b" else shape), \
+        distance = kernel or (lambda x: max(0.0, abs(x) - 1.0))
+        with mock.patch.object(measure.pose, "placed", side_effect=lambda shape, at: at.trans[0]), \
                 mock.patch.object(measure.pose, "interference",
-                                  side_effect=lambda a, x, box_gap=0.0, threads=False: (max(0.0, abs(x) - 1.0), 0.0)) as kernel:
-            return measurer.measure(requests, prune=prune), kernel.call_count
+                                  side_effect=lambda a, x, box_gap=0.0, threads=False: (distance(x), 0.0)) as calls:
+            return measurer.measure(requests, prune=prune), calls.call_count, measurer
 
     def assert_sound(self, offsets: list[float], thresholds: tuple[float, ...] = ()) -> list:
         """Pruned and unpruned agree on every measured request; each pruned one is farther than the
@@ -480,6 +520,97 @@ class BroadPhaseTests(unittest.TestCase):
         above = math.nextafter(3.0, math.inf)
         outcomes, calls = self.run_requests([3.0, 3.0, above, 3.0], prune=False)
         self.assertEqual((outcomes, calls), ([(2.0, 0.0), (2.0, 0.0), (above - 1.0, 0.0), (2.0, 0.0)], 2))
+
+    class Mesh:
+        """mesh_bound.MeshBounds' stand-in: the cubes' distance -+ 0.05 mm, deflection 0.02 mm."""
+
+        linear, angular = 0.02, 0.2
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def interval(self, a: str, b: str, placement) -> tuple[float, float]:
+            self.calls += 1
+            distance = max(0.0, abs(placement.trans[0]) - 1.0)
+            return distance - 0.05, distance + 0.05
+
+        @staticmethod
+        def spread(a: str, b: str) -> float:
+            return 0.05
+
+    def test_fast_mode_clears_requests_proved_beyond_their_thresholds_plus_the_band(self) -> None:
+        """Band 2 over a 1 mm threshold: distances 5 and 4 are cleared on their box gaps, 3 is within
+        the band by the slack, so it and 2 are pruned on the measured minimum 1.5."""
+        outcomes, calls, measurer = self.run_measurer([6.0, 4.0, 3.0, 5.0, 2.5], thresholds=(1.0,), band=2.0)
+        cleared, pruned = sweep.pair_measure.Cleared, sweep.pair_measure.Pruned
+        self.assertEqual(outcomes, [cleared(5.0, math.inf, "box"), pruned(4), pruned(4), cleared(4.0, math.inf, "box"),
+                                    (1.5, 0.0)])
+        self.assertEqual((calls, measurer.cleared, measurer.suspects), (1, {"box": 2, "mesh": 0}, []))
+
+    def test_a_mesh_bound_clears_where_the_box_gap_does_not(self) -> None:
+        """Boxes 1 mm larger than their cubes: at distance 5 the box gap, 3, clears; at distance 3 the
+        gap, 1, does not, the mesh bound, 2.95, does; neither is measured."""
+        mesh = self.Mesh()
+        outcomes, calls, measurer = self.run_measurer([6.0, 4.0], band=1.0, mesh=mesh, box=1.0)
+        cleared = sweep.pair_measure.Cleared
+        self.assertEqual(outcomes, [cleared(3.0, math.inf, "box"), cleared(2.95, 3.05, "mesh")])
+        self.assertEqual((calls, mesh.calls, measurer.cleared), (0, 1, {"box": 1, "mesh": 1}))
+
+    def test_fast_mode_clears_the_same_requests_with_the_same_bounds_in_any_order(self) -> None:
+        offsets = [6.0, 4.0, 3.0, 5.0, 2.5, 3.5, 4.0]
+        forward, _, _ = self.run_measurer(offsets, thresholds=(1.0,), band=1.0, mesh=self.Mesh(), box=1.0)
+        backward, _, _ = self.run_measurer(offsets[::-1], thresholds=(1.0,), band=1.0, mesh=self.Mesh(), box=1.0)
+        cleared = sweep.pair_measure.Cleared
+        for one, other in zip(forward, backward[::-1]):
+            self.assertEqual(isinstance(one, cleared), isinstance(other, cleared))
+            if isinstance(one, cleared) or (isinstance(one, tuple) and isinstance(other, tuple)):
+                self.assertEqual(one, other)  # a measured request may be pruned in the other order
+        self.assertEqual(sum(isinstance(outcome, cleared) for outcome in forward), 5)  # all but distances 2 and 1.5
+
+    def test_a_mesh_bound_inside_the_band_does_not_prune(self) -> None:
+        """Band 1, boxes 1 mm larger: the request at distance 0.8 has the mesh bound 0.75, above the
+        measured minimum 0.5 but inside the band, so it is measured, not pruned."""
+        outcomes, calls, _ = self.run_measurer([1.5, 1.8], band=1.0, mesh=self.Mesh(), box=1.0)
+        self.assertEqual((outcomes, calls), ([(0.5, 0.0), (0.8, 0.0)], 2))
+
+    def degenerate(self, kernel, band: float | None = 1.0, thresholds: tuple[float, ...] = (2.5,)):
+        """One request at distance 3 (box gap 3, mesh interval [2.95, 3.05]) whose kernel `kernel`
+        reads at x = 4."""
+        mesh = self.Mesh()
+        outcomes, calls, measurer = self.run_measurer([4.0], thresholds=thresholds, band=band, mesh=mesh, kernel=kernel)
+        (suspect,) = measurer.suspects
+        self.assertEqual((suspect.requests, suspect.distance, suspect.lower, suspect.upper), ((0,), 0.0, 3.0, 3.05))
+        self.assertEqual([label for label, _, _ in sorted(suspect.reevaluated)], ["+0.01 mm", "-0.01 mm", "swapped"])
+        self.assertEqual((calls, measurer.measured, measurer.reevaluations, mesh.calls), (4, 1, 3, 3))
+        return outcomes, suspect
+
+    def test_a_degenerate_zero_is_a_suspect_resolved_by_its_reevaluations_and_feeds_no_result(self) -> None:
+        """Exact mode, threshold 0.5: the kernel reads 0 at x = 4 only; the re-measurements 0.01 mm
+        either way and with the parts swapped agree with their mesh intervals, and the bound 3 clears
+        the threshold plus the 2 mm band, so the request reads as the mesh bounds, not 0."""
+        outcomes, suspect = self.degenerate(lambda x: 0.0 if x == 4.0 else max(0.0, abs(x) - 1.0), None, (0.5,))
+        self.assertEqual(outcomes, [sweep.pair_measure.Cleared(3.0, 3.05, "mesh (exact suspect)")])
+        self.assertTrue(suspect.resolved)
+        for label, (distance, volume), bounds in suspect.reevaluated:
+            if label != "swapped":
+                self.assertTrue(bounds[0] <= distance <= bounds[1], label)
+
+    def test_a_suspect_whose_bounds_lie_within_the_band_stays_unresolved(self) -> None:
+        """Fast mode, threshold 2.5, band 1: the re-measurements agree, but the bound 3 does not clear
+        3.5, as clearing would require, so the suspect fails."""
+        outcomes, suspect = self.degenerate(lambda x: 0.0 if x == 4.0 else max(0.0, abs(x) - 1.0))
+        self.assertEqual((outcomes, suspect.resolved), ([sweep.pair_measure.Cleared(3.0, 3.05, "suspect")], False))
+
+    def test_a_suspect_its_reevaluations_do_not_resolve_stays_unresolved(self) -> None:
+        outcomes, suspect = self.degenerate(lambda x: 0.0, None, (0.5,))
+        self.assertEqual((outcomes, suspect.resolved), ([sweep.pair_measure.Cleared(3.0, 3.05, "suspect")], False))
+
+    def test_exact_mode_checks_every_measurement_against_the_mesh(self) -> None:
+        """No threshold and no contact: the one measurement still gets its interval, and agrees with it."""
+        mesh = self.Mesh()
+        outcomes, calls, measurer = self.run_measurer([6.0, 4.0], mesh=mesh)
+        self.assertEqual((outcomes, calls, mesh.calls, measurer.cleared, measurer.suspects),
+                         ([sweep.pair_measure.Pruned(1), (3.0, 0.0)], 1, 1, {"box": 0, "mesh": 0}, []))
 
     def test_a_stopped_sweep_reduces_only_samples_whose_pruned_requests_are_proved_inside_them(self) -> None:
         """One pair, one request per sample: sample 1 is pruned on sample 3's distance."""
@@ -592,6 +723,49 @@ class JobsArgumentTests(unittest.TestCase):
             with self.subTest(text=text), self.assertRaises(sweep.argparse.ArgumentTypeError):
                 measure.jobs_argument(text)
 
+
+class WorkerLifetimeTests(unittest.TestCase):
+    """pair_measure.die_with: a worker armed with its measuring process's id ends when that process
+    is killed, mid-sleep as mid-measurement; needs no OCP."""
+
+    WORKER = ("import importlib.util, sys, time\n"
+              "spec = importlib.util.spec_from_file_location('cad_motion_pair_measure', sys.argv[1])\n"
+              "module = importlib.util.module_from_spec(spec)\n"
+              "sys.modules[spec.name] = module\n"
+              "spec.loader.exec_module(module)\n"
+              "module.die_with(int(sys.argv[2]))\n"
+              "print('armed', flush=True)\n"
+              "time.sleep(120)\n")
+    PARENT = ("import os, subprocess, sys, time\n"
+              "worker = subprocess.Popen([sys.executable, '-c', sys.argv[1], sys.argv[2], str(os.getpid())],\n"
+              "                          stdout=subprocess.PIPE, text=True)\n"
+              "assert worker.stdout.readline().strip() == 'armed'\n"
+              "print(worker.pid, flush=True)\n"
+              "time.sleep(120)\n")
+
+    @staticmethod
+    def alive(pid: int) -> bool:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        return True
+
+    @unittest.skipUnless(sys.platform.startswith("linux") or hasattr(__import__("select"), "kqueue"),
+                         "die_with arms nothing without PR_SET_PDEATHSIG or kqueue")
+    def test_a_worker_dies_with_its_killed_measuring_process(self) -> None:
+        parent = subprocess.Popen([sys.executable, "-c", self.PARENT, self.WORKER, str(SCRIPTS / "pair_measure.py")],
+                                  stdout=subprocess.PIPE, text=True)
+        worker = int(parent.stdout.readline())
+        self.addCleanup(lambda: self.alive(worker) and os.kill(worker, signal.SIGKILL))
+        self.assertTrue(self.alive(worker))
+        parent.kill()
+        parent.wait()
+        parent.stdout.close()
+        deadline = time.monotonic() + 10.0
+        while self.alive(worker) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertFalse(self.alive(worker))
 
 
 @unittest.skipUnless(shutil.which("uv"), "uv is required to build and read STEP through OCP")
@@ -1022,6 +1196,44 @@ class StepTests(unittest.TestCase):
         self.assertEqual(report["buried"]["result"][0], 0.0)
         self.assertAlmostEqual(report["buried"]["result"][1], 8.0, places=6)
 
+    def test_the_mesh_bounds_hold_and_fast_mode_clears_only_pairs_proved_beyond_the_band(self) -> None:
+        """fixtures/mesh_probe.py: every sampled face point lies within its mesh's deviation; every
+        measured distance lies in its mesh interval; a pin in a block's void keeps a bound, a buried or
+        touching one does not; fast mode measures what the exact run does bitwise and every cleared
+        pair-pose, measured exactly, lies in its bounds, unoverlapped, beyond its threshold plus the
+        band; a pair just outside the band reports bounds that bracket its exact minimum."""
+        proc = subprocess.run(["uv", "run", "--quiet", "--script", str(HERE / "fixtures" / "mesh_probe.py"),
+                               str(self.root / "fx")], capture_output=True, text=True, check=False, timeout=1800)
+        self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+        report = json.loads(proc.stdout)
+        deviation, intervals, fast = report["deviation"], report["intervals"], report["fast"]
+        self.assertEqual((deviation["violations"], intervals["violations"], fast["mismatches"], fast["violations"]),
+                         ([], [], [], []))
+        self.assertGreater(deviation["samples"], 5000, deviation)
+        self.assertLess(deviation["max_ratio"], 1.0, deviation)  # within the linear deflection, half the deviation
+        self.assertGreater(intervals["informative"], intervals["compared"] // 2, intervals)
+        self.assertGreater(fast["cleared_mesh"], 100, fast)
+        self.assertLess(fast["max_abs_mesh_minus_exact_mm"], 0.04, fast)
+        cases = report["containment"]
+        void = cases["void"]
+        self.assertEqual((void["distance"], void["volume"]), (2.0, 0.0))
+        self.assertGreater(void["lower"], 1.9)
+        self.assertLessEqual(void["lower"], void["distance"])
+        for name in ("embedded", "touching", "nest/solid", "nest/compound"):
+            with self.subTest(case=name):
+                self.assertEqual((cases[name]["lower"], cases[name]["distance"]), (0.0, 0.0))
+                self.assertGreaterEqual(cases[name]["upper"], 0.0)
+        self.assertAlmostEqual(cases["embedded"]["volume"], 2 * math.pi * 3, places=3)  # the whole r 1 x 6 pin
+        bracket = report["bracket"]
+        self.assertTrue(bracket["all_mesh"] and bracket["brackets"], bracket)
+        self.assertLess(bracket["box_gap_minimum"], bracket["band"])  # the box gap alone clears none of it
+        self.assertLess(bracket["outside_by"], 0.1, bracket)
+        freeform = report["freeform"]
+        self.assertEqual(freeform["violations"], [])
+        self.assertGreater(freeform["faces"].get("BSplineSurface", 0), 0, freeform)
+        self.assertGreater(freeform["samples"], 1000, freeform)
+        self.assertLess(freeform["max_ratio"], 2.0, freeform)  # mesh_bound.DEVIATION_FACTOR x the deflection
+
     def twins(self, assembly: str) -> Path:
         """A record over the twins fixture: TST-0201 assembly_zero, TST-0202 part_local."""
         hw = Path(tempfile.mkdtemp(dir=self.root))
@@ -1229,6 +1441,25 @@ class StepTests(unittest.TestCase):
         (hw / "versions" / "latest.json").write_text(json.dumps({"label": "v1"}), encoding="utf-8")
         return hw, version
 
+    def test_a_sweep_refuses_to_start_while_a_recorded_sweep_group_still_runs(self) -> None:
+        hw, _ = self.sealed_planar_version()
+        holder = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], start_new_session=True)
+        self.addCleanup(holder.wait)
+        self.addCleanup(holder.kill)
+        lock = hw / "motion" / "v1" / ".sweep-locked.json"
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        lock.write_text(json.dumps({"pgid": holder.pid, "pid": holder.pid}), encoding="utf-8")
+        proc, _ = self.run_script("sweep.py", "--hw", str(hw), "--version", "v1", "--case", "locked", "--steps", "3",
+                                  "--grid", "0")
+        self.assertEqual(proc.returncode, 2, proc.stderr[-2000:])
+        self.assertIn(f"kill -TERM -- -{holder.pid}", proc.stderr)
+        holder.kill()
+        holder.wait()
+        proc, _ = self.run_script("sweep.py", "--hw", str(hw), "--version", "v1", "--case", "locked", "--steps", "3",
+                                  "--grid", "0")
+        self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+        self.assertFalse(lock.exists())  # a finished sweep removes its record
+
     def test_versioned_sweep_reuses_and_replaces_without_changing_old_bundle(self) -> None:
         hw, version = self.sealed_planar_version()
         common = ("--hw", str(hw), "--version", "v1", "--case", "sweep-test", "--steps", "3", "--grid", "0")
@@ -1349,13 +1580,13 @@ class StepTests(unittest.TestCase):
 
     def test_a_cold_and_a_warm_pair_cache_report_exactly_what_no_cache_does(self) -> None:
         """The cold run fills the cache and the warm one measures nothing; all three report the same
-        JSON, evidence and worst-case STEP."""
+        JSON, evidence and worst-case STEP. Exact mode: fast mode clears every pair of this fixture."""
         hw, cache = self.hw(90), Path(tempfile.mkdtemp(dir=self.root))
         runs = []
         for option in (["--no-cache"], ["--cache", str(cache)], ["--cache", str(cache)]):
             out = Path(tempfile.mkdtemp(dir=self.root))
             proc, result = self.run_script("sweep.py", "--hw", str(hw), "--parts-dir", str(self.planar), "--steps", "5",
-                                           "--grid", "3", "--worst-criterion", "minimum_clearance",
+                                           "--grid", "3", "--worst-criterion", "minimum_clearance", "--exact",
                                            "--worst-step", str(out / "worst.step"), *option)
             self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
             runs.append((out, result))
@@ -1465,6 +1696,54 @@ class StepTests(unittest.TestCase):
             self.assertEqual((row["status"], row["required_mm"], row["clearance_mm"], row["samples_below"]),
                              ("pass", 1.0, 1.0, 0), cylinder)
             self.assertEqual(row["independent_pose"], {"J-001": -phase % 360}, cylinder)
+
+    def test_fast_and_exact_v6_sweeps_agree_on_every_verdict_and_every_exact_row(self) -> None:
+        """The V6 sweep with --exact, then in fast mode with a 0.5 mm band from a cold and a warm pair
+        cache (with --spot-check): the same collisions, findings, worst case and requirement rows;
+        every exact row of the fast run is the exact run's; every bounded row, mesh-bounded ones
+        among them, brackets the exact minimum; the spot check passes; the warm run measures nothing
+        and reports what the cold one does."""
+        cache = Path(tempfile.mkdtemp(dir=self.root))
+        _, proc, exact = self.v6_sweep(None, "minimum_clearance", "--exact")
+        self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+        runs = []
+        for _ in range(2):
+            hw, proc, result = self.v6_sweep(None, "minimum_clearance", "--mesh-band", "0.5", "--cache", str(cache))
+            self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+            runs.append((hw, result))
+        self.assert_same_sweeps(runs)
+        cold, warm = runs[0][1], runs[1][1]
+        self.assertEqual((warm["timings_s"]["pair_evaluations"], warm["timings_s"]["disk_hits"]),  # the spot check's too
+                         (0, cold["timings_s"]["pair_evaluations"] + cold["spot_check"]["checked"]))
+        self.assertLess(cold["timings_s"]["pair_evaluations"], exact["timings_s"]["pair_evaluations"] // 10)
+        self.assertGreater(cold["timings_s"]["cleared_mesh"], 0)
+        self.assertEqual((exact["broad_phase"]["mode"], cold["broad_phase"]["mode"], cold["broad_phase"]["band_mm"]),
+                         ("exact", "fast", 0.5))
+        for key in ("status", "collisions", "limit_findings", "clearance_findings", "suspect_measurements",
+                    "pair_clearance"):  # every requirement's minimum lies within the band
+            self.assertEqual(cold[key], exact[key], key)
+        worst = lambda result: {k: v for k, v in result["worst_case"].items()  # noqa: E731
+                                if k not in ("step", "step_sha256", "evidence", "command")}
+        self.assertEqual(worst(cold), worst(exact))
+        rows = {tuple(row["pair"]): row for row in exact["min_clearance"]}
+        self.assertEqual({row["method"] for row in exact["min_clearance"]}, {"exact"})
+        methods = {"exact": 0, "box": 0, "mesh": 0}
+        for row in cold["min_clearance"]:
+            methods[row["method"]] += 1
+            want = rows[tuple(row["pair"])]
+            if row["method"] == "exact":
+                self.assertEqual(row, want)
+            else:
+                low, high = row["bound_mm"]
+                self.assertLessEqual(low, want["clearance_mm"] + 1e-4, row)
+                self.assertTrue(high is None or want["clearance_mm"] <= high + 1e-4, row)
+                self.assertGreater(low, 0.5, row)  # beyond --min-clearance 0 by more than the band
+        self.assertGreater(methods["exact"], 0)
+        self.assertGreater(methods["box"] + methods["mesh"], methods["exact"])
+        spot = cold["spot_check"]
+        self.assertEqual(spot["failures"], [])
+        self.assertGreater(spot["checked"], 0)
+        self.assertLess(spot["max_abs_mesh_minus_exact_mm"], 0.04)
 
     def test_pose_refuses_a_dependent_joint(self) -> None:
         out = self.root / "v6-dependent.step"

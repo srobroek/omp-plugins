@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.11,<3.15"
-# dependencies = ["cadquery-ocp-novtk==8.0.1.1.0", "pyyaml>=6.0"]
+# dependencies = ["cadquery-ocp-novtk==8.0.1.1.0", "pyyaml>=6.0", "numpy>=1.26", "python-fcl==0.7.0.11"]
 # ///
 """Kinematic sweep: interference, clearance, reach envelope, and worst-case pose.
 
@@ -11,6 +11,7 @@ Usage:
         [--steps 19] [--grid 3] [--end-effector REF] [--include-pair REF:REF ...]
         [--min-clearance 0] [--pair-clearance REF:REF=MM ...] [--volume-tol 0.001]
         [--max-poses 5000] [--time-limit 600] [--jobs 1|N|auto] [--cache DIR | --no-cache]
+        [--exact | --mesh-band 2 [--no-spot-check]]
         [--worst-criterion max_horizontal_reach|minimum_clearance|maximum_interference]
 
 Inputs and kinematics are pose.py's (same options, same occurrence chain): the
@@ -45,12 +46,57 @@ lowest common ancestor only, and a measurement is reused within the run on the
 two definitions and the exact bits of that placement: a joint sweep measures
 only the pairs that joint moves, two same-PN pairs in the same relative
 placement share one measurement, and every value is the one an unshared
-measurement gives. A request is not measured at all when an
+measurement gives. A revolute angle and a slider-crank's crank angle are reduced
+exactly to (-180, 180] before their sine and cosine, so a crank at q and
+q + 360 places a 360 degree periodic train with the very same bits, and a
+piston at -theta from its TDC as at +theta: those repeats are measured once.
+A request is not measured at all when an
 exact lower bound on its distance (the gap between the placed bounding boxes,
 or a measured distance at a nearby sample minus how far b's box moves between
 the two) exceeds the pair's smallest distance so far, 1e-6 mm and each
 threshold of the pair: no reported value or verdict can depend on it (`pruned`
 in `timings_s`).
+
+Fast mode, the default (`--exact` turns it off): a request is not measured
+either when its own lower bound exceeds 1e-6 mm and every threshold of its pair
+by more than `--mesh-band` mm (default 2): the box gap, or where that does not
+suffice the mesh bound of mesh_bound.py (each part tessellated once at 0.02 mm
+linear, 0.2 rad angular deflection; a python-fcl BVH distance minus a
+deflection-derived deviation per part, kept only where no vertex of one part
+can lie inside a solid of the other). Such a request is `cleared`: it has no
+overlap and is more than the band clear of every threshold. Every measured
+value stays exact; a pair whose minimum may lie at a cleared request is
+reported by its bounds, `method` "mesh" or "box" with `clearance_mm` the proved
+lower bound and `bound_mm` [lower, upper] (upper null when only the box gap is
+known), where an exact pair reads `method` "exact". So collisions, findings,
+every `exact` row, the worst case whenever its margin is within the band, and
+every verdict are identical to `--exact`'s; a bounded row is not, by design.
+Every measurement that may decide a result is checked against the mesh: in fast
+mode each one, with `--exact` one below a threshold or in contact without
+overlap. Its distance is suspect below the box gap, or more than max(10 x the
+deflection, the mesh spread) from the mesh distance (below it only where the
+mesh proves a lower bound); BRepExtrema has returned 0 for parts 8 mm apart. A
+suspect value answers nothing: it is re-measured with every independent joint
+moved +-0.1 and with the two parts swapped, and listed in
+`suspect_measurements`. If each re-measurement lies in its mesh interval and
+the bounds clear the pair's thresholds, that pose reads as its bounds, `method`
+"mesh (exact suspect)"; otherwise the sweep fails: a suspect never passes or
+fails silently. Without python-fcl the box gap alone clears and nothing is
+checked (`broad_phase.mesh` says why). After the sweep, unless
+`--no-spot-check`, each pair with a mesh-cleared request has its closest one
+measured exactly (`spot_check`: each check, and the largest |mesh estimate -
+exact|); one outside its bounds, or with
+overlap, fails the sweep. The counters in `timings_s` (`cleared_box`,
+`cleared_mesh`, `mesh_bounds`, `mesh_s`, `reevaluations`) let a fast and an
+exact run diff.
+
+Workers die with the sweep, inside a measurement too (pair_measure.die_with).
+Stop a sweep by its process group, so no worker outlives it: Ctrl-C in its
+terminal, or `kill -TERM -- -PGID` with PGID from `ps -o pgid= -p PID`. A
+sweep records its process group beside its output (hw/motion/vN/.sweep-CASE.json,
+or WORST.step.sweep.json) and refuses to start while any sweep recorded in the
+hw tree (every version and case, and .cad-work) still runs, printing the command
+that stops it.
 
 Checks: a collision is an overlap volume above `--volume-tol` mm^3 (default
 pose.py's INTERFERENCE_MM3, 1e-3) on a pair whose overlap hw/interfaces.yaml
@@ -114,18 +160,20 @@ the same bits (`disk_hits` in `timings_s`). `--no-cache` reads and writes none.
 stdout: JSON summary with timings; pairs and parts are reported as references
 (`@id`, or the PN of a singleton). stderr: diagnostics.
 Exit 0 = no collision, clearance, pair-requirement or joint-limit finding,
-1 = a collision, clearance, pair-requirement or joint-limit finding, 2 = usage
-or infrastructure error, or an incomplete sweep.
+suspect measurement or spot-check failure, 1 = any of those, 2 = usage or
+infrastructure error, or an incomplete sweep.
 """
 
 from __future__ import annotations
 
 import argparse
+import atexit
 import hashlib
 import importlib.util
 import itertools
 import json
 import math
+import os
 import shutil
 import sys
 import time
@@ -160,6 +208,73 @@ CRITERIA = {
 }
 MAX_LISTED = 50
 EVIDENCE_SCHEMA = 1
+DEFAULT_BAND_MM = 2.0  # fast mode: how far beyond its thresholds a request's proved bound must lie
+REEVALUATE_STEP = 0.1  # deg or mm: how far a suspect's re-evaluations move every independent joint
+
+
+def claim_sweep(path: Path, hw: Path) -> None:
+    """Record this sweep's process group at `path`, removed at exit; refuse while the group of any
+    sweep recorded in `hw` (every version and case) or its .cad-work still runs, as a stopped
+    sweep's stray workers would keep it."""
+    recorded_paths = {path, *hw.glob("motion/*/.sweep-*.json"), *(hw.parent / ".cad-work").glob("**/*.sweep.json")}
+    for recorded_path in sorted(recorded_paths):
+        if not recorded_path.is_file():
+            continue
+        try:
+            recorded = json.loads(recorded_path.read_text(encoding="utf-8"))
+            group, pid = int(recorded["pgid"]), int(recorded["pid"])
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+        if group_alive(group, pid):
+            raise pose.MotionError(f"a sweep recorded in {recorded_path} still runs in process group {group}; stop it "
+                                   f"with `kill -TERM -- -{group}`, or delete {recorded_path} if that group runs no sweep")
+    if not hasattr(os, "getpgrp"):
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    record = {"pgid": os.getpgrp(), "pid": os.getpid()}
+    path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+
+    def release() -> None:
+        try:
+            if json.loads(path.read_text(encoding="utf-8")) == record:
+                path.unlink()
+        except (OSError, ValueError):
+            pass
+
+    atexit.register(release)
+
+
+def group_alive(group: int, pid: int) -> bool:
+    """Whether process group `group` still runs; for this process's own group, whether `pid` does."""
+    if not hasattr(os, "killpg"):
+        return False
+    try:
+        if group == os.getpgrp():
+            if pid == os.getpid():
+                return False
+            os.kill(pid, 0)
+        else:
+            os.killpg(group, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def mesh_bounds(shapes: dict[str, Any]) -> tuple[Any, str]:
+    """(mesh_bound.MeshBounds over `shapes`, a description), or (None, why not) without numpy or
+    python-fcl: then the box gap alone clears."""
+    name = "cad_motion_mesh_bound"
+    try:
+        module = sys.modules.get(name) or _load(name, Path(__file__).with_name("mesh_bound.py"))
+    except ImportError as error:
+        sys.modules.pop(name, None)
+        print(f"sweep: mesh bounds unavailable, the box gap alone clears: {error}", file=sys.stderr)
+        return None, f"unavailable: {error}"
+    return module.MeshBounds(shapes), (
+        f"{module.version()}; deflection {module.LINEAR_DEFLECTION_MM} mm linear, {module.ANGULAR_DEFLECTION_RAD} rad "
+        f"angular; deviation {module.DEVIATION_FACTOR:g} x linear + the part's largest tolerance")
 
 
 def linspace(low: float, high: float, count: int) -> list[float]:
@@ -250,6 +365,9 @@ class SweepState:
     limits: list[dict[str, Any]] = field(default_factory=list)  # samples a derived value puts outside a limit
     clearance: dict[tuple[str, str], dict[str, Any]] = field(default_factory=dict)
     pair_clearance: dict[tuple[str, str], dict[str, Any]] = field(default_factory=dict)  # per requirement pair
+    # per measured pair with a cleared request (fast mode): the smallest cleared lower bound with its
+    # sample and what proved it, and the smallest cleared upper bound
+    bounds: dict[tuple[str, str], dict[str, Any]] = field(default_factory=dict)
     envelope_min: list[float] = field(default_factory=lambda: [math.inf] * 3)
     envelope_max: list[float] = field(default_factory=lambda: [-math.inf] * 3)
     worst: dict[str, Any] | None = None  # sample, rank (lower is worse), metric, pair
@@ -366,6 +484,14 @@ def reduce(chain: Any, geometry: Geometry, plan: Plan, outcomes: list[Any], eval
         overlap: tuple[float, list[str] | None] = (0.0, None)  # largest undeclared volume above volume_tol
         for (a, b), outcome in zip(plan.measured, outcomes[planned.start:planned.start + width]):
             distance, volume = pair_measure.reading(outcome)
+            refs = [chain.ref(a), chain.ref(b)]
+            if isinstance(outcome, pair_measure.Cleared):
+                bound = state.bounds.setdefault((a, b), {"pair": refs, "lower": math.inf, "upper": math.inf})
+                bound["upper"] = min(bound["upper"], outcome.upper)
+                if outcome.lower < bound["lower"]:
+                    bound.update(lower=outcome.lower, by=outcome.by, sample=sample)
+                if outcome.by == "mesh" and outcome.lower < bound.get("mesh", {"lower": math.inf})["lower"]:
+                    bound["mesh"] = {"ids": (a, b), "sample": sample, "lower": outcome.lower, "upper": outcome.upper}
             requirement = requirements.get((a, b))
             if requirement is not None:
                 seen = state.pair_clearance.setdefault((a, b), {"clearance_mm": math.inf, "overlap_mm3": 0.0,
@@ -373,11 +499,10 @@ def reduce(chain: Any, geometry: Geometry, plan: Plan, outcomes: list[Any], eval
                 seen["samples_below"] += distance < requirement["required_mm"]
                 if (distance, -volume) < (seen["clearance_mm"], -seen["overlap_mm3"]):
                     seen.update(clearance_mm=distance, overlap_mm3=volume, sample=sample)
-            refs = [chain.ref(a), chain.ref(b)]
             undeclared = 0.0
             if (a, b) in plan.checked:
                 best = state.clearance.get((a, b))
-                if best is None or distance < best["clearance_mm"]:
+                if math.isfinite(distance) and (best is None or distance < best["clearance_mm"]):
                     state.clearance[(a, b)] = {"pair": refs, "clearance_mm": distance, "pose": rounded(sample.values),
                                                "independent_pose": rounded(sample.settings)}
                 if tuple(sorted((a, b))) not in allowed and volume > volume_tol:
@@ -422,40 +547,169 @@ def reduce(chain: Any, geometry: Geometry, plan: Plan, outcomes: list[Any], eval
 def sweep(chain: Any, geometry: Geometry, measurer: Any, samples: list[Sample], pairs: list[tuple[str, str]],
           allowed: set[tuple[str, str]], fitted: set[tuple[str, str]],
           requirements: dict[tuple[str, str], dict[str, Any]], effector: str, reference: tuple[float, float, float],
-          volume_tol: float, criterion: str, required: float, deadline: float) -> SweepState:
+          volume_tol: float, criterion: str, required: float, deadline: float) -> tuple[SweepState, Plan]:
     """Plan every sample's requests, measure them with `measurer` (pair_measure.PairMeasurer) until
-    `deadline`, and reduce the samples measured in full. `fitted` pairs are declared as a fit or
-    insert, which `required` (--min-clearance) does not bind."""
+    `deadline`, and reduce the samples measured in full: (the reduction, the plan). `fitted` pairs
+    are declared as a fit or insert, which `required` (--min-clearance) does not bind."""
     planned = plan(chain, samples, pairs, fitted, requirements, required)
-    outcomes = measurer.measure(planned.requests, deadline, stop_on_failure=True, prune=True)
-    return reduce(chain, geometry, planned, outcomes, measured_prefix(chain, planned, outcomes), allowed,
-                  requirements, effector, reference, volume_tol, criterion)
+    outcomes = measurer.measure(planned.requests, deadline, stop_on_failure=True, prune=True,
+                                neighbours=neighbours(chain, planned))
+    state = reduce(chain, geometry, planned, outcomes, measured_prefix(chain, planned, outcomes), allowed,
+                   requirements, effector, reference, volume_tol, criterion)
+    return state, planned
+
+
+def request_places(plan: Plan) -> dict[int, tuple[Sample, tuple[str, str]]]:
+    """Request index -> (its sample, its occurrence pair)."""
+    return {planned.start + k: (planned.sample, pair) for planned in plan.samples if planned.transforms is not None
+            for k, pair in enumerate(plan.measured)}
+
+
+def neighbours(chain: Any, plan: Plan) -> Any:
+    """pair_measure's re-evaluation placements of a suspect request: its pair at its sample with
+    every independent joint moved +-REEVALUATE_STEP (deg or mm), couplings derived."""
+    places = request_places(plan)
+
+    def shifted(index: int) -> list[tuple[str, Any]]:
+        sample, pair = places[index]
+        moved = []
+        for step in (REEVALUATE_STEP, -REEVALUATE_STEP):
+            values = chain.complete({jid: value + step for jid, value in sample.settings.items()})
+            moved.append((f"independent {step:+g}", chain.relative_transforms(values, [pair])[pair]))
+        return moved
+
+    return shifted
+
+
+def suspect_report(chain: Any, plan: Plan, suspects: list[Any]) -> list[dict[str, Any]]:
+    """Each measurement its own bounds contradict (pair_measure.Suspect): the kernel's value, which
+    answers nothing, the bounds, the requests it was for, its re-evaluations, and whether they
+    resolved it (its requests then read as `mesh (exact suspect)` bounds); an unresolved one fails."""
+    places = request_places(plan)
+    rows = []
+    for suspect in sorted(suspects, key=lambda suspect: suspect.requests[0]):
+        sample, (a, b) = places[suspect.requests[0]]
+        reevaluated = []
+        for label, outcome, interval in suspect.reevaluated:
+            row = {"at": label, **({"error": outcome.message} if isinstance(outcome, pair_measure.Failure)
+                                   else {"distance_mm": outcome[0], "overlap_mm3": outcome[1]})}
+            if interval is not None:
+                row["bound_mm"] = [interval[0], None if math.isinf(interval[1]) else interval[1]]
+            reevaluated.append(row)
+        rows.append({
+            "pair": [chain.ref(a), chain.ref(b)], "sample": sample.index, "independent_pose": rounded(sample.settings),
+            "distance_mm": suspect.distance, "overlap_mm3": suspect.volume,
+            "bound_mm": [suspect.lower, None if math.isinf(suspect.upper) else suspect.upper],
+            "requests": [{"pair": [chain.ref(places[i][1][0]), chain.ref(places[i][1][1])], "sample": places[i][0].index}
+                         for i in suspect.requests],
+            "reevaluated": sorted(reevaluated, key=lambda row: row["at"]), "resolved": bool(suspect.resolved),
+        })
+    return rows
+
+
+def spot_check(chain: Any, state: SweepState, measurer: Any, deadline: float) -> dict[str, Any]:
+    """Measure, for every pair with a mesh-cleared request, the one of the smallest mesh lower bound
+    exactly: it must lie within that request's own bounds, without overlap."""
+    picked = [bound["mesh"] for bound in state.bounds.values() if "mesh" in bound]
+    requests = []
+    for check in picked:
+        (a, b), sample = check["ids"], check["sample"]
+        requests.append(pair_measure.Request(chain.pn(a), chain.pn(b),
+                                             chain.relative_transforms(sample.values, [(a, b)])[(a, b)]))
+    outcomes = measurer.measure(requests, deadline)
+    checks, failures = [], []
+    for cleared, request, outcome in zip(picked, requests, outcomes):
+        lower, upper = cleared["lower"], cleared["upper"]
+        check = {"pair": [chain.ref(cleared["ids"][0]), chain.ref(cleared["ids"][1])],
+                 "sample": cleared["sample"].index, "independent_pose": rounded(cleared["sample"].settings),
+                 "bound_mm": [lower, upper], "mesh_mm": measurer.mesh.distance(request.a, request.b, request.placement)}
+        if not isinstance(outcome, tuple):
+            check.update(ok=False, error="not measured" if outcome is None else outcome.message)
+        else:
+            slack = pair_measure.SLACK_MM
+            check.update(exact_mm=outcome[0], overlap_mm3=outcome[1],
+                         ok=lower - slack <= outcome[0] <= upper + slack and outcome[1] == 0.0)
+        checks.append(check)
+        if not check["ok"]:
+            failures.append(check)
+    deviations = sorted((check for check in checks if "exact_mm" in check),
+                        key=lambda check: -abs(check["mesh_mm"] - check["exact_mm"]))
+    return {"checked": len(checks), "failures": failures,
+            "max_abs_mesh_minus_exact_mm": abs(deviations[0]["mesh_mm"] - deviations[0]["exact_mm"]) if deviations else None,
+            "largest_deviations": deviations[:10]}
+
+
+def bounded_minimum(exact: float | None, bound: dict[str, Any] | None) -> tuple[float, float] | None:
+    """Fast mode: (lower, upper) bounds on a pair's minimum distance when it may lie at a cleared
+    request, whose smallest lower bound is not above the exact minimum of the measured ones; None
+    when the exact minimum, smaller than every cleared request's distance, stands."""
+    if bound is None or (exact is not None and exact < bound["lower"]):
+        return None
+    return bound["lower"], min(bound["upper"], math.inf if exact is None else exact)
+
+
+def floor4(value: float) -> float:
+    """`value` rounded down to 4 decimals; within 1e-10 mm of a 4-decimal value, that value (2.6 * 1e4
+    reads 26000.000000000004)."""
+    return math.floor(round(value * 1e4, 6)) / 1e4
+
+
+def ceil4(value: float) -> float | None:
+    """`value` rounded up to 4 decimals as `floor4` rounds down; None for inf."""
+    return None if math.isinf(value) else math.ceil(round(value * 1e4, 6)) / 1e4
+
+
+def bound_fields(bound: dict[str, Any], span: tuple[float, float]) -> dict[str, Any]:
+    """A bounded row's own fields: what proved its lower bound, and both bounds outward rounded."""
+    return {"method": bound["by"], "bound_mm": [floor4(span[0]), ceil4(span[1])]}
 
 
 def clearance_report(clearance: dict[tuple[str, str], dict[str, Any]], required: float,
-                     fitted: set[tuple[str, str]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+                     fitted: set[tuple[str, str]], bounds: dict[tuple[str, str], dict[str, Any]] | None = None,
+                     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """(per-pair minimum clearance smallest first, findings for the pairs below `required` mm).
 
-    A fitted pair (sorted occurrence ids in `fitted`) is listed but never a finding. The comparison
-    uses the measured distance; only the output rounds it to 4 decimals.
+    A pair's row is its exact minimum (`method` "exact"), or, in fast mode where that minimum may lie
+    at a cleared request (`bounds`, SweepState.bounds of the checked pairs), its bounded minimum:
+    `clearance_mm` its proved lower bound, `bound_mm` [lower, upper] rounded outward, `method` what
+    proved the lower bound. A bounded pair is more than the band clear of `required`, so never a
+    finding; nor is a fitted pair (sorted occurrence ids in `fitted`), though it is listed. The
+    comparison uses the measured distance; only the output rounds it to 4 decimals.
     """
-    ordered = sorted(clearance.items(), key=lambda item: item[1]["clearance_mm"])
-    rows = [{**item, "clearance_mm": round(item["clearance_mm"], 4)} for _, item in ordered]
+    bounds = bounds or {}
+    entries = []  # (sort key, pair, row, exact minimum or None)
+    for pair in [*clearance, *(pair for pair in bounds if pair not in clearance)]:
+        exact = clearance.get(pair)
+        span = bounded_minimum(exact["clearance_mm"] if exact else None, bounds.get(pair))
+        if span is None:
+            entries.append((exact["clearance_mm"], pair,
+                            {**exact, "clearance_mm": round(exact["clearance_mm"], 4), "method": "exact"},
+                            exact["clearance_mm"]))
+            continue
+        bound = bounds[pair]
+        entries.append((span[0], pair, {"pair": bound["pair"], "clearance_mm": floor4(span[0]),
+                                        "pose": rounded(bound["sample"].values),
+                                        "independent_pose": rounded(bound["sample"].settings),
+                                        **bound_fields(bound, span)}, None))
+    entries.sort(key=lambda entry: entry[0])
     findings = [{"check": "min_clearance", "pair": row["pair"], "clearance_mm": row["clearance_mm"],
                  "required_mm": required, "pose": row["pose"]}
-                for (pair, item), row in zip(ordered, rows)
-                if item["clearance_mm"] < required and tuple(sorted(pair)) not in fitted]
-    return rows, findings
+                for _, pair, row, exact in entries
+                if exact is not None and exact < required and tuple(sorted(pair)) not in fitted]
+    return [row for _, _, row, _ in entries], findings
 
 
 def pair_clearance_report(chain: Any, requirements: dict[tuple[str, str], dict[str, Any]],
-                          observed: dict[tuple[str, str], dict[str, Any]]) -> list[dict[str, Any]]:
+                          observed: dict[tuple[str, str], dict[str, Any]],
+                          bounds: dict[tuple[str, str], dict[str, Any]] | None = None) -> list[dict[str, Any]]:
     """One row per requirement, smallest margin first: pair, required_mm, the smallest measured
-    clearance_mm with its overlap, sample and pose, samples_below, status, and its source.
+    clearance_mm with its overlap, sample and pose, samples_below, status, `method` and its source;
+    in fast mode a bounded minimum as clearance_report gives it (`bounds`, SweepState.bounds).
 
     The verdict uses the measured distances; only the output rounds them to 4 decimals. A
     requirement no sample measured (every one a joint_limit finding) fails.
     """
+    bounds = bounds or {}
     rows = []
     for (a, b), requirement in requirements.items():
         seen = observed.get((a, b))
@@ -463,13 +717,23 @@ def pair_clearance_report(chain: Any, requirements: dict[tuple[str, str], dict[s
                                "status": "fail", "clearance_mm": None, "overlap_mm3": None, "samples_below": 0,
                                "sample": None, "independent_pose": None, "pose": None}
         margin = -math.inf
-        if seen is not None:
+        exact = seen["clearance_mm"] if seen is not None and seen["sample"] is not None else None
+        span = bounded_minimum(exact, bounds.get((a, b)))
+        if span is not None:
+            bound, below = bounds[(a, b)], seen["samples_below"] if seen is not None else 0
+            sample = bound["sample"]
+            margin = span[0] - requirement["required_mm"]
+            row.update(status="fail" if below else "pass", clearance_mm=floor4(span[0]), overlap_mm3=0.0,
+                       samples_below=below, sample={"index": sample.index, "source": sample.source},
+                       independent_pose=rounded(sample.settings), pose=rounded(sample.values),
+                       **bound_fields(bound, span))
+        elif exact is not None:
             sample = seen["sample"]
-            margin = seen["clearance_mm"] - requirement["required_mm"]
-            row.update(status="fail" if seen["samples_below"] else "pass", clearance_mm=round(seen["clearance_mm"], 4),
+            margin = exact - requirement["required_mm"]
+            row.update(status="fail" if seen["samples_below"] else "pass", clearance_mm=round(exact, 4),
                        overlap_mm3=round(seen["overlap_mm3"], 4), samples_below=seen["samples_below"],
                        sample={"index": sample.index, "source": sample.source},
-                       independent_pose=rounded(sample.settings), pose=rounded(sample.values))
+                       independent_pose=rounded(sample.settings), pose=rounded(sample.values), method="exact")
         row.update({key: requirement[key] for key in ("interface", "source", "overrides") if key in requirement})
         rows.append((margin, row))
     return [row for _, row in sorted(rows, key=lambda item: item[0])]
@@ -612,10 +876,21 @@ def main(argv: list[str] | None = None) -> int:
                          help="pair measurement cache directory (default: $XDG_CACHE_HOME/cad-motion, else "
                               "~/.cache/cad-motion)")
     caching.add_argument("--no-cache", action="store_true", help="measure every pair, reading and writing no cache")
+    filtering = parser.add_mutually_exclusive_group()
+    filtering.add_argument("--exact", action="store_true",
+                           help="measure every request that could set a pair's minimum: no band, no mesh bounds")
+    filtering.add_argument("--mesh-band", type=float, default=DEFAULT_BAND_MM, metavar="MM",
+                           help=f"fast mode: leave unmeasured a request whose proved lower bound is more than MM "
+                                f"beyond 1e-6 mm and its pair's thresholds (default {DEFAULT_BAND_MM})")
+    parser.add_argument("--no-spot-check", action="store_true",
+                        help="fast mode: skip measuring each pair's closest mesh-cleared request exactly after the sweep")
     parser.add_argument("--worst-step", type=Path, help="STEP path for scratch; versioned sweeps publish to hw/motion")
     args = parser.parse_args(argv)
     if args.steps < 2 or args.grid == 1 or args.grid < 0:
         print("sweep: --steps must be >= 2, and --grid 0 or >= 2", file=sys.stderr)
+        return 2
+    if not args.mesh_band > 0:
+        print("sweep: --mesh-band must be > 0", file=sys.stderr)
         return 2
     started = time.monotonic()
     try:
@@ -630,7 +905,9 @@ def main(argv: list[str] | None = None) -> int:
                                   "end_effector": args.end_effector, "include_pair": list(args.include_pair),
                                   "min_clearance": args.min_clearance, "pair_clearance": list(args.pair_clearance),
                                   "volume_tol": args.volume_tol, "max_poses": args.max_poses,
-                                  "time_limit": args.time_limit, "jobs": args.jobs, "no_cache": args.no_cache},
+                                  "time_limit": args.time_limit, "jobs": args.jobs, "no_cache": args.no_cache,
+                                  "exact": args.exact, "mesh_band": None if args.exact else args.mesh_band,
+                                  "spot_check": not (args.exact or args.no_spot_check)},
                       "attach": list(args.attach),
                       "inputs_sha256": pose.input_sha256(version_dir)}
             reused = pose.LAYOUT.reusable(args.hw, "bundle.motion", {"V": version, "S": args.case}, recipe,
@@ -646,6 +923,9 @@ def main(argv: list[str] | None = None) -> int:
             args.worst_step = pose.LAYOUT.scratch_path(args.hw, args.worst_step, "--worst-step")
             if args.worst_step.exists() or evidence_path_for(args.worst_step).exists():
                 raise pose.MotionError(f"--worst-step or its evidence already exists; refusing to overwrite: {args.worst_step}")
+        lock = (pose.LAYOUT.bundle_dir(args.hw, "motion", version, args.case).parent / f".sweep-{args.case}.json"
+                if version else args.worst_step.with_name(args.worst_step.name + ".sweep.json"))
+        claim_sweep(lock, args.hw)
         assembly, chain, definitions = pose.load_inputs(args)
         if not chain.independent:
             raise pose.MotionError("the chain has no independent movable joint to sweep")
@@ -662,21 +942,40 @@ def main(argv: list[str] | None = None) -> int:
         used = {pn: definitions[pn] for pn in {chain.pn(oid) for oid in chain.ids}}
         geometry = Geometry(chain, used)
         cache = None if args.no_cache else pair_measure.PairCache(args.cache or pair_measure.default_cache_dir())
-        measurer = pair_measure.PairMeasurer({pn: part.shape for pn, part in used.items()}, jobs=args.jobs, cache=cache)
+        shapes = {pn: part.shape for pn, part in used.items()}
+        mesh, description = mesh_bounds(shapes)
+        broad_phase = ({"mode": "exact", "mesh": description} if args.exact
+                       else {"mode": "fast", "band_mm": args.mesh_band, "mesh": description})
+        measurer = pair_measure.PairMeasurer(shapes, jobs=args.jobs, cache=cache,
+                                             band=None if args.exact else args.mesh_band, mesh=mesh)
         loaded = time.monotonic()
         samples = generate_poses(chain, args.steps, args.grid)
+        checked = None
         try:
-            state = sweep(chain, geometry, measurer, samples, pairs, allowed, fitted, requirements, effector,
-                          path[0].origin, args.volume_tol, args.worst_criterion, args.min_clearance,
-                          loaded + args.time_limit)
+            state, planned = sweep(chain, geometry, measurer, samples, pairs, allowed, fitted, requirements, effector,
+                                   path[0].origin, args.volume_tol, args.worst_criterion, args.min_clearance,
+                                   loaded + args.time_limit)
+            swept = time.monotonic()
+            complete = state.evaluated == len(samples)
+            counters = {"pair_requests": measurer.requested, "pair_evaluations": measurer.measured,
+                        "cache_hits": measurer.reused, "disk_hits": measurer.disk_hits, "pruned": measurer.pruned,
+                        "cleared_box": measurer.cleared["box"], "cleared_mesh": measurer.cleared["mesh"],
+                        "reevaluations": measurer.reevaluations,
+                        "mesh_bounds": measurer.mesh_bounds, "mesh_s": round(measurer.mesh_seconds, 2),
+                        "parent_s": round(measurer.parent_seconds, 2)}
+            suspects = suspect_report(chain, planned, measurer.suspects)
+            if not (args.exact or args.no_spot_check) and mesh is not None and complete:
+                checked = spot_check(chain, state, measurer, swept + args.time_limit)
         finally:
             if cache is not None:
                 cache.close()
-        swept = time.monotonic()
-        complete = state.evaluated == len(samples)
-        clearance, findings = clearance_report(state.clearance, args.min_clearance, fitted)
-        requirement_rows = pair_clearance_report(chain, requirements, state.pair_clearance)
-        failed = bool(state.collisions or findings or state.limits or any(row["status"] == "fail" for row in requirement_rows))
+        checking = time.monotonic()
+        checked_pairs = set(pairs)
+        clearance, findings = clearance_report(state.clearance, args.min_clearance, fitted,
+                                               {pair: bound for pair, bound in state.bounds.items() if pair in checked_pairs})
+        requirement_rows = pair_clearance_report(chain, requirements, state.pair_clearance, state.bounds)
+        failed = bool(state.collisions or findings or state.limits or any(row["status"] == "fail" for row in requirement_rows)
+                      or any(not row["resolved"] for row in suspects) or (checked is not None and checked["failures"]))
         status = "incomplete" if not complete else ("fail" if failed else "pass")
         refs = [[chain.ref(a), chain.ref(b)] for a, b in pairs]
         result: dict[str, Any] = {
@@ -695,12 +994,11 @@ def main(argv: list[str] | None = None) -> int:
             "min_clearance": clearance, "clearance_findings": findings, "pair_clearance": requirement_rows,
             "reach_envelope": {"part": chain.ref(effector), "min": [round(v, 3) for v in state.envelope_min],
                                "max": [round(v, 3) for v in state.envelope_max], "units": "mm"},
-            "worst_case": None,
+            "worst_case": None, "broad_phase": broad_phase, "suspect_measurements": suspects, "spot_check": checked,
             "timings_s": {"load": round(loaded - started, 2), "sweep": round(swept - loaded, 2),
-                          "export": 0.0, "total": round(time.monotonic() - started, 2),
+                          "spot_check": round(checking - swept, 2), "export": 0.0, "total": round(time.monotonic() - started, 2),
                           "per_pose_ms": round((swept - loaded) / state.evaluated * 1000, 1) if state.evaluated else 0.0,
-                          "pair_requests": measurer.requested, "pair_evaluations": measurer.measured,
-                          "cache_hits": measurer.reused, "disk_hits": measurer.disk_hits, "pruned": measurer.pruned},
+                          **counters},
         }
         if complete and state.worst is not None:
             sample = state.worst["sample"]
@@ -743,7 +1041,7 @@ def main(argv: list[str] | None = None) -> int:
                 shutil.rmtree(stage, ignore_errors=True)
                 raise
         else:
-            result["timings_s"]["export"] = round(time.monotonic() - swept, 2)
+            result["timings_s"]["export"] = round(time.monotonic() - checking, 2)
             result["timings_s"]["total"] = round(time.monotonic() - started, 2)
         print(json.dumps(result, indent=2))
         if not complete:

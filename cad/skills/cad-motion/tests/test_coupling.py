@@ -14,10 +14,12 @@ import copy
 import importlib.util
 import io
 import math
+import struct
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 SCRIPTS = HERE.parent / "scripts"
@@ -300,6 +302,65 @@ class CoupledChain(unittest.TestCase):
         values = self.chain.complete({"J-001": 180.0})  # cylinder 1 at BDC: -2r, give or take one ulp
         self.assertAlmostEqual(values["J-011"], -v6_record.STROKE, places=12)
         self.assertEqual(self.chain.limit_findings(values), [])
+
+    def crank_train(self) -> list[tuple[str, str]]:
+        """The occurrence pairs the crank alone moves: block, crankshaft, pistons and rods."""
+        ids = [oid for oid in self.chain.ids if not oid.startswith(("cam-", "valve-"))]
+        return [(a, b) for index, a in enumerate(ids) for b in ids[index + 1:]]
+
+    def relative(self, q: float, pairs: list[tuple[str, str]]) -> dict:
+        return self.chain.relative_transforms(self.chain.complete({"J-001": q}), pairs)
+
+    @staticmethod
+    def bits(rigid) -> bytes:
+        return struct.pack("<12d", *rigid.rot[0], *rigid.rot[1], *rigid.rot[2], *rigid.trans)
+
+    def test_a_crank_turn_later_the_crank_train_is_placed_with_the_very_same_bits(self) -> None:
+        """coupling.canonical_degrees: 360 degrees on, every pair the crank alone moves repeats its
+        placement bitwise, the half-speed cams do not, and a piston at -theta from its TDC sits with
+        the bits it has at +theta."""
+        pairs = self.crank_train()
+        self.assertEqual(len(pairs), 91)  # 14 occurrences
+        for q in range(0, 360, 5):
+            now, later = self.relative(float(q), pairs), self.relative(float(q + 360), pairs)
+            self.assertEqual([self.bits(now[p]) for p in pairs], [self.bits(later[p]) for p in pairs], q)
+        cam = ("VSX-0001", "cam-right")
+        self.assertNotEqual(self.bits(self.relative(40.0, [cam])[cam]), self.bits(self.relative(400.0, [cam])[cam]))
+        piston = ("VSX-0001", "piston-1")  # cylinder 1's TDC is at crank 0
+        for q in (5.0, 85.0, 175.0):
+            self.assertEqual(self.bits(self.relative(q, [piston])[piston]),
+                             self.bits(self.relative(360.0 - q, [piston])[piston]), q)
+
+    def test_the_second_crank_turn_of_the_crank_train_measures_nothing(self) -> None:
+        """pair_measure's exact key finds every repeat: measuring the crank train over 720 degrees
+        takes the kernel calls 360 do."""
+        measure = sweep.pair_measure
+        box = ([0.0, 0.0, 0.0], [1.0, 1.0, 1.0])
+        pairs = self.crank_train()
+
+        def calls(stop: int) -> int:
+            with mock.patch.object(measure, "box_corners", side_effect=lambda shape, tolerance=False: box):
+                measurer = measure.PairMeasurer({self.chain.pn(oid): None for oid in self.chain.ids})
+            requests = [measure.Request(self.chain.pn(a), self.chain.pn(b), placement)
+                        for q in range(0, stop, 5) for (a, b), placement in self.relative(float(q), pairs).items()]
+            with mock.patch.object(measure.pose, "placed", side_effect=lambda shape, at: shape), \
+                    mock.patch.object(measure.pose, "interference", return_value=(1.0, 0.0)) as kernel:
+                measurer.measure(requests)
+            self.assertEqual(measurer.reused + kernel.call_count, len(requests))
+            return kernel.call_count
+
+        self.assertEqual(calls(720), calls(360))
+
+    def test_a_tenth_degree_grid_repeats_every_crank_turn_bitwise(self) -> None:
+        """sweep.linspace's 0.1 degree grid over 720 degrees: every sample and the one 360 degrees on
+        reduce to the same angle, and place the crank train with the same bits."""
+        values = sweep.linspace(0.0, 720.0, 7201)
+        self.assertEqual(sum(coupling.canonical_degrees(values[k]) == coupling.canonical_degrees(values[k + 3600])
+                             for k in range(3601)), 3601)
+        pairs = self.crank_train()
+        for k in range(0, 3601, 97):
+            now, later = self.relative(values[k], pairs), self.relative(values[k + 3600], pairs)
+            self.assertEqual([self.bits(now[p]) for p in pairs], [self.bits(later[p]) for p in pairs], values[k])
 
     def test_a_chain_without_the_record_couplings_is_refused(self) -> None:
         data = v6_record.record()
