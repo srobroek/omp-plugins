@@ -9,12 +9,14 @@ checkout's lamp example (seven CadQuery parts) in a scratch workspace, so a cold
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -160,6 +162,42 @@ class InitAndDeliver(ScratchCase):
         self.assertEqual((code, report["status"]), (1, "conflict"), report)
         self.assertEqual(report["changed_since_init"], [str(self.hw.resolve() / "parts" / "PRT-0001")])
         self.assertEqual(tree(self.hw), before)
+
+    def test_build_then_deliver_ignores_generated_version_output(self) -> None:
+        spec = importlib.util.spec_from_file_location("cad_flow_scratch", SCRATCH)
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        scratch_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(scratch_module)
+
+        unit = "part-base_sub"
+        code, initialized = scratch_module.init(self.hw, unit, ["PRT-0001"], reset=False)
+        self.assertEqual(code, 0, initialized)
+        scratch_hw = Path(initialized["scratch_hw"])
+        model = scratch_hw / "parts" / "PRT-0001" / "model.py"
+        model.write_text("def build(params):\n    return None\n", encoding="utf-8")
+
+        def run_tool(argv: list[str], _log: Path) -> tuple[int, dict]:
+            if argv[1] == "run":
+                versions = Path(argv[2]) / "versions"
+                label = argv[argv.index("--label") + 1]
+                (versions / label).mkdir(parents=True)
+                (versions / label / "manifest.json").write_text("{}\n", encoding="utf-8")
+                (versions / "latest.json").write_text('{"version":"v1"}\n', encoding="utf-8")
+                return 0, {"findings": []}
+            if argv[1] == "check":
+                return 0, {"blocking_failures": [], "warnings": []}
+            return 0, {"findings": []}
+
+        with mock.patch.object(scratch_module, "run_tool", side_effect=run_tool):
+            build_code, build_report = scratch_module.build(self.hw, unit, "cadquery", "F2")
+        self.assertEqual((build_code, build_report["status"]), (0, "pass"), build_report)
+        self.assertTrue((scratch_hw / "versions" / "latest.json").is_file())
+
+        deliver_code, deliver_report = scratch_module.deliver(self.hw, unit)
+        self.assertEqual((deliver_code, deliver_report["status"]), (0, "delivered"), deliver_report)
+        self.assertIn(str(self.hw / "parts" / "PRT-0001" / "model.py"), deliver_report["delivered"])
+        self.assertTrue((self.hw / "parts" / "PRT-0001" / "model.py").is_file())
 
 
 class LampExample(ScratchCase):

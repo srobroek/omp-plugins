@@ -21,7 +21,8 @@ build   runs cad-model `run` on the scratch hw/ under the next scratch label, ca
         into the unit's own PNs and the rest; only the unit's own block it.
 deliver copies each unit PN's scratch hw/parts/<PN>/ over HW/parts/<PN>/ and lists every other
         scratch file that differs from the baseline as a proposal for the lead. When any
-        HW/parts/<PN>/ changed since init it writes nothing and exits 1.
+        HW/parts/<PN>/ changed since init it writes nothing and exits 1. Generated
+        versions/, renders/, and releases/ output is ignored during delivery.
 
 stdout: one JSON document; every path in it is absolute. build writes each tool's diagnostics to
 <workspace>/<tool>-<label>.log and names the log in the JSON, so its output stays small.
@@ -208,6 +209,9 @@ def delivery_tree(root: Path) -> tuple[dict[str, str], set[str]]:
             path = directory / name
             if path.is_symlink():
                 raise UsageError(f"scratch contains a symlink at {path.relative_to(root)}")
+            if directory == root and name in NOT_COPIED:
+                dirnames.remove(name)
+                continue
             directories.add(path.relative_to(root).as_posix())
         for name in filenames:
             path = directory / name
