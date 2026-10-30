@@ -26,6 +26,20 @@ PN placed once; a bare PN placed several times is ambiguous and refused.
 Each frame is graded from its pixels and subject mask. BLANK, CLIPPED, and close-up OCCLUDED (less than 25% of the subject's isolated visible pixels remain visible) make a view unusable; NO_SHADOW and INVERTED_SHADOW are cosmetic warnings, with NO_SHADOW considered only when the camera frustum intersects the ground plane.
 A custom view uses `dir-pX-mY-Z`, with signed decimal components encoded as p/m and d for the decimal point; its direction is normalized, and `-closeup-REF` or `-part-REF` optionally names a subject.
 
+Requirement visibility: every `visibility` binding of the current HW/requirements.yaml (read through
+cad-record design_rules.py) is checked on the selected version at its built (nominal) pose. From the
+binding's view, framed on its window and target parts with every other part hidden, each target's
+visible fraction is the share of its own silhouette where it is the nearest surface; a part whose
+part.yaml declares `transparency: transparent` is see-through, opaque and translucent ones occlude. A
+target below the binding's min_visible_fraction fails the check. render.json `visibility` holds the
+pixel counts and fractions; `inputs.requirements_yaml_sha256` records the file.
+
+Reuse across versions: every view records the inputs its pixels depend on (`render_inputs`). A part view
+depends on its subject's GLB mesh data and world placement and its PN's material; every other view on the
+whole GLB and scene, so it re-renders when any occurrence changes. A view whose inputs match a usable
+image in a prior version's verified bundle of the same subject is copied from it, not rendered; its
+record keeps the prior quality and adds `reused` (version, bundle, rendered_in, sha256).
+
 Motion frames (`--motion`, written by cad-motion motion.py render): every spec frame moves each
 occurrence by a rigid delta from the version's built pose; cad-render derives no kinematics. One
 camera per group of frames, fitted to the bounds the group sweeps, so the framing holds while the
@@ -34,7 +48,7 @@ frames/frame-NNNN.png, contact-sheet.png and motion-render.json (cameras, and th
 world placements against the spec's expected ones within 1e-9) into --out-dir; motion.py publishes
 them. Exit 1 = a parity failure.
 
-stdout: one JSON summary. Exit 0 = every view is usable (pass or warn, including cache hits), 1 = an unusable view remains after its retry ladder (renders and manifest are still written), 2 = usage or infrastructure error (nothing written).
+stdout: one JSON summary. Exit 0 = every view is usable (pass or warn, including cache hits) and every visibility check passes, 1 = an unusable view remains after its retry ladder or a visibility check fails (renders and manifest are still written), 2 = usage or infrastructure error (nothing written).
 """
 
 from __future__ import annotations
@@ -50,6 +64,7 @@ import os
 import json
 import math
 import re
+import struct
 import sys
 import threading
 import time
@@ -72,6 +87,7 @@ RENDERER_DIR = SKILL / "assets" / "renderer"
 MATERIALS_PY = HERE.parent / "materials.py"
 VERSIONS_PY = HERE.parent / "versions.py"  # occurrence normalization only; paths belong to cad-record.
 LAYOUT_PY = SKILL.parent / "cad-record" / "scripts" / "layout.py"
+DESIGN_RULES_PY = SKILL.parent / "cad-record" / "scripts" / "design_rules.py"
 CONCEPT_SERVE = SKILL.parent / "cad-concept" / "scripts" / "serve.py"
 # The page chrome tokens (status line) are cad-concept's; renderer/tokens.css holds the scene's.
 CONCEPT_TOKENS = SKILL.parent / "cad-concept" / "assets" / "viewer" / "tokens.css"
@@ -94,18 +110,18 @@ STATIC = {"/concept-tokens.css": CONCEPT_TOKENS}  # served beside assets/rendere
 SOURCE_FILES = ("glb", "part_map", "manifest", "metrics")  # version files the scene reads: cache key, inputs
 
 
-def _load_layout() -> Any:
-    name = "cad_record_layout"
+def _load_record_module(name: str, path: Path) -> Any:
+    """A cad-record script, loaded by path once per process and registered in sys.modules before it runs."""
     if name not in sys.modules:
-        spec = importlib.util.spec_from_file_location(name, LAYOUT_PY)
+        spec = importlib.util.spec_from_file_location(name, path)
         if spec is None or spec.loader is None:
-            raise InfraError(f"cannot load {LAYOUT_PY}")
+            raise InfraError(f"cannot load {path}")
         sys.modules[name] = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(sys.modules[name])
     return sys.modules[name]
 
 
-layout = _load_layout()
+layout = _load_record_module("cad_record_layout", LAYOUT_PY)
 LAYOUT_VIEW_NAME = re.compile(layout.load().tokens["VIEW"]["pattern"])
 # Front and side keep a low elevation so the ground plane, and the shadow on it, stays in view.
 DIRECTIONS = {
@@ -607,17 +623,23 @@ def view_subject(name: str, occurrences: dict[str, str]) -> str:
             raise InfraError(f"{name}: custom direction view does not name a subject")
     else:
         kind, ref = name.split("-", 1)
+    return occurrence_of(ref, occurrences, name, f"{kind}-")
+
+
+def occurrence_of(ref: str, occurrences: dict[str, str], where: str, spelling: str = "") -> str:
+    """The occurrence id `ref` names in `occurrences` (id -> PN): `@id`, or a PN placed exactly once. An
+    ambiguous PN lists its occurrences as `{spelling}@id`."""
     if ref.startswith("@"):
         if occurrences.get(ref[1:], ref[1:]) != ref[1:]:
             return ref[1:]
-        raise InfraError(f"{name}: no occurrence {ref} in this version")
+        raise InfraError(f"{where}: no occurrence {ref} in this version")
     found = [oid for oid, pn in occurrences.items() if pn == ref]
     if len(found) == 1:
         return found[0]
     if not found:
-        raise InfraError(f"{name}: no part or occurrence {ref} in this version")
-    raise InfraError(f"{name}: {ref} is placed {len(found)} times; name one: "
-                     + ", ".join(f"{kind}-@{oid}" for oid in found))
+        raise InfraError(f"{where}: no part or occurrence {ref} in this version")
+    raise InfraError(f"{where}: {ref} is placed {len(found)} times; name one: "
+                     + ", ".join(f"{spelling}@{oid}" for oid in found))
 
 
 def parse_views(tokens: list[str], occurrences: dict[str, str]) -> list[str]:
@@ -643,13 +665,15 @@ def parse_views(tokens: list[str], occurrences: dict[str, str]) -> list[str]:
 
 
 def build_scene(hw: Path, version: Version, views: list[str], size: tuple[int, int],
-                table: material_rules.MaterialTable) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+                table: material_rules.MaterialTable,
+                requirements: Path | None = None) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     """Returns (scene payload for the page, materials per PN, cache key).
 
     Scene parts are occurrences, keyed by occurrence id; materials are per PN. The key's source
     hash covers every version file the scene reads (GLB, part map, manifest pose, joints and
     ground, metrics bboxes) and assembly.yaml, whose joints shape a version 1 explode; part.yaml
-    enters through the resolved materials."""
+    enters through the resolved materials. With `requirements` (the current hw/requirements.yaml),
+    the key also holds the visibility checks its bindings resolve to in this version."""
     occurrences = {oid: version.occurrences[oid] for oid in sorted(version.occurrences)}
     pns = sorted({o.pn for o in occurrences.values()})
     records = part_records(version.record, pns)
@@ -672,6 +696,7 @@ def build_scene(hw: Path, version: Version, views: list[str], size: tuple[int, i
                               {oid: version.metrics["parts"][o.pn]["bbox_mm"] for oid, o in occurrences.items()},
                               DIRECTIONS["exploded"])
     by_pn = {oid: o.pn for oid, o in occurrences.items()}
+    checks, requirements_sha = visibility_checks(requirements, by_pn, records) if requirements else ([], None)
     view_specs = []
     for name in views:
         subject_kind = view_kind(name)
@@ -699,10 +724,12 @@ def build_scene(hw: Path, version: Version, views: list[str], size: tuple[int, i
         "image": f"{size[0]}x{size[1]}",
         "views": {name: list(view_direction(name)) for name in views},
         "parity": parity_policy.cache_key(),
+        "visibility": checks,
     }
     extra = {"explode_offsets_mm": {oid: [round(c, 3) for c in offsets[oid]] for oid in occurrences if oid in offsets},
              "assembly_yaml_sha256": assembly_sha,
-             "assembly_yaml_matches_version": assembly_sha == version.manifest.get("assembly_yaml_sha256")}
+             "assembly_yaml_matches_version": assembly_sha == version.manifest.get("assembly_yaml_sha256"),
+             "glb_sha256": sources["glb"], "visibility": checks, "requirements_yaml_sha256": requirements_sha}
     return scene, materials, {"key": key, **extra}
 
 def cache_hit(out_dir: Path, key: dict[str, Any], views: list[str]) -> dict[str, Any] | None:
@@ -726,6 +753,242 @@ def cache_hit(out_dir: Path, key: dict[str, Any], views: list[str]) -> dict[str,
     return metadata
 
 
+# --------------------------------------------------------------------------- reuse across versions
+
+
+_COMPONENT_BYTES = {5120: 1, 5121: 1, 5122: 2, 5123: 2, 5125: 4, 5126: 4}  # glTF accessor componentType
+_TYPE_WIDTH = {"SCALAR": 1, "VEC2": 2, "VEC3": 3, "VEC4": 4, "MAT2": 4, "MAT3": 9, "MAT4": 16}
+
+
+def _glb_chunks(path: Path) -> tuple[dict[str, Any], bytes]:
+    """The JSON document and the binary chunk of a GLB file."""
+    data = path.read_bytes()
+    try:
+        magic, _version, _length = struct.unpack_from("<4sII", data, 0)
+        json_length, json_type = struct.unpack_from("<I4s", data, 12)
+        if magic != b"glTF" or json_type != b"JSON":
+            raise ValueError("not a binary glTF file")
+        document = json.loads(data[20:20 + json_length])
+        binary, offset = b"", 20 + json_length
+        if offset + 8 <= len(data):
+            bin_length, bin_type = struct.unpack_from("<I4s", data, offset)
+            if bin_type == b"BIN\x00":
+                binary = data[offset + 8:offset + 8 + bin_length]
+    except (struct.error, ValueError) as exc:
+        raise InfraError(f"{path}: {exc}") from exc
+    return document, binary
+
+
+def _local_matrix(node: dict[str, Any]) -> list[list[float]]:
+    """A glTF node's local transform as 4x4 rows: its column-major `matrix`, or T * R * S."""
+    if "matrix" in node:
+        m = node["matrix"]
+        return [[float(m[c * 4 + r]) for c in range(4)] for r in range(4)]
+    t = node.get("translation", (0.0, 0.0, 0.0))
+    x, y, z, w = node.get("rotation", (0.0, 0.0, 0.0, 1.0))
+    s = node.get("scale", (1.0, 1.0, 1.0))
+    r = ((1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)),
+         (2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)),
+         (2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)))
+    return [[r[i][0] * s[0], r[i][1] * s[1], r[i][2] * s[2], float(t[i])] for i in range(3)] + [[0.0, 0.0, 0.0, 1.0]]
+
+
+def mesh_digests(glb: Path, occurrences: dict[str, tuple[int, ...]]) -> dict[str, str | None]:
+    """Per occurrence (id -> its GLB node indices), sha256 of what it draws: every mesh node below its
+    nodes, as the page collects them, with the node's world matrix and each primitive's mode, vertex
+    attributes and indices. Materials are left out: the page draws every PN in its own material.
+    None when a primitive has morph targets or an accessor is sparse, compressed or outside the GLB's
+    binary chunk, so its views are always rendered."""
+    gltf, binary = _glb_chunks(glb)
+    nodes, accessors, views = gltf.get("nodes", []), gltf.get("accessors", []), gltf.get("bufferViews", [])
+    parent = {child: index for index, node in enumerate(nodes) for child in node.get("children", [])}
+    world: dict[int, list[list[float]]] = {}
+
+    def world_of(index: int) -> list[list[float]]:
+        if index not in world:
+            local = _local_matrix(nodes[index])
+            above = world_of(parent[index]) if index in parent else None
+            world[index] = local if above is None else [
+                [sum(above[i][k] * local[k][j] for k in range(4)) for j in range(4)] for i in range(4)]
+        return world[index]
+
+    def accessor(index: int) -> bytes | None:
+        spec = accessors[index]
+        if "sparse" in spec or "bufferView" not in spec:
+            return None
+        view = views[spec["bufferView"]]
+        if view.get("buffer", 0) != 0 or "uri" in gltf["buffers"][0]:
+            return None
+        element = _COMPONENT_BYTES[spec["componentType"]] * _TYPE_WIDTH[spec["type"]]
+        stride = view.get("byteStride") or element
+        start, count = view.get("byteOffset", 0) + spec.get("byteOffset", 0), spec["count"]
+        data = (binary[start:start + element * count] if stride == element else
+                b"".join(binary[start + i * stride:start + i * stride + element] for i in range(count)))
+        if len(data) != element * count:
+            return None
+        return canonical([spec["componentType"], spec["type"], spec.get("normalized", False), count]) + data
+
+    def digest(roots: tuple[int, ...]) -> str | None:
+        h = hashlib.sha256()
+        for root in roots:
+            stack = [root]
+            while stack:
+                index = stack.pop()
+                node = nodes[index]
+                stack.extend(reversed(node.get("children", [])))
+                if "mesh" not in node:
+                    continue
+                h.update(struct.pack("<16d", *(value for row in world_of(index) for value in row)))
+                for primitive in gltf["meshes"][node["mesh"]]["primitives"]:
+                    if primitive.get("targets"):
+                        return None
+                    names = sorted(primitive["attributes"])
+                    h.update(canonical([primitive.get("mode", 4), names, "indices" in primitive]))
+                    used = [primitive["attributes"][name] for name in names]
+                    for data in map(accessor, used + ([primitive["indices"]] if "indices" in primitive else [])):
+                        if data is None:
+                            return None
+                        h.update(struct.pack("<Q", len(data)) + data)
+        return h.hexdigest()
+
+    try:
+        return {oid: digest(tuple(indices)) for oid, indices in occurrences.items()}
+    except (KeyError, IndexError, TypeError, ValueError) as exc:
+        raise InfraError(f"{glb}: malformed glTF ({exc!r})") from exc
+
+
+def view_inputs(version: Version, scene: dict[str, Any], keyed: dict[str, Any],
+                materials: dict[str, Any]) -> dict[str, dict[str, Any] | None]:
+    """Per view, every input its pixels depend on; `reusable_views` reuses a prior version's image of a
+    view only on an exact match, and None never matches.
+
+    A part view shows its subject alone, rested on the floor, framed and lit on itself: it depends on
+    the subject's mesh data and world placement in the GLB and on its PN's material. The part STEP
+    alone would not do: cad-model tessellates the assembly with a deflection relative to the
+    assembly's size. Any other view shows the assembly, so it depends on the whole GLB and on every
+    scene part, material and explode offset: it re-renders when any occurrence changes. Every view
+    also depends on its own spec, the image size, the renderer and the parity policy."""
+    key = keyed["key"]
+    common = {"image": key["image"], "renderer_sha256": key["renderer_sha256"], "parity": key["parity"]}
+    assembly_sha = sha256(canonical({"glb": keyed["glb_sha256"], "parts": scene["parts"], "explode": scene["explode"]}))
+    subjects = sorted({spec["subject"][0] for spec in scene["views"] if spec["isolated"]})
+    meshes = (mesh_digests(version.files["glb"], {oid: version.occurrences[oid].node_indices for oid in subjects})
+              if subjects else {})
+    inputs: dict[str, dict[str, Any] | None] = {}
+    for spec in scene["views"]:
+        if not spec["isolated"]:
+            inputs[spec["name"]] = {"scope": "assembly", "view": spec, **common, "assembly_sha256": assembly_sha}
+            continue
+        oid = spec["subject"][0]
+        pn = version.occurrences[oid].pn
+        inputs[spec["name"]] = None if meshes[oid] is None else {
+            "scope": "part", "view": spec, **common,
+            "subject": {"pn": pn, "mesh_sha256": meshes[oid], "material": [materials[pn]["rule"], materials[pn]["pbr"]]}}
+    return inputs
+
+
+def reusable_views(hw: Path, version: Version, subject: str,
+                   inputs: dict[str, dict[str, Any] | None]) -> dict[str, dict[str, Any]]:
+    """The views a prior version's `subject` bundle already rendered from identical inputs, newest prior
+    version first: view -> {"record": its render.json view record, now with `reused` provenance, "png":
+    its bytes}. Only a usable (pass or warn) image of a bundle that verifies, whose PNG still matches
+    its recorded hash, is reused."""
+    labels = layout.versions(hw)
+    priors = labels[:labels.index(version.label)] if version.label in labels else []
+    found: dict[str, dict[str, Any]] = {}
+    for label in reversed(priors):
+        wanted = [name for name, entry in inputs.items() if entry is not None and name not in found]
+        if not wanted:
+            break
+        try:
+            bundle = layout.bundle_dir(hw, "renders", label, subject)
+        except layout.LayoutError as exc:
+            raise InfraError(str(exc)) from exc
+        try:
+            metadata = json.loads((bundle / "render.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        records = metadata.get("views") if isinstance(metadata, dict) else None
+        matches = [name for name in wanted if isinstance(records, dict) and isinstance(records.get(name), dict)
+                   and records[name].get("render_inputs") == inputs[name]
+                   and (records[name].get("quality") or {}).get("status") in {"pass", "warn"}]
+        if not matches or layout.verify(bundle):
+            continue
+        for name in matches:
+            record, path = records[name], bundle / f"{name}.png"
+            png = path.read_bytes() if path.is_file() else b""
+            if sha256(png) != record.get("sha256"):
+                continue
+            rendered_in = (record.get("reused") or {}).get("rendered_in", label)
+            found[name] = {"png": png, "record": {**record, "reused": {
+                "version": label, "bundle": layout.relative(hw, bundle), "rendered_in": rendered_in,
+                "sha256": record["sha256"]}}}
+    return found
+
+
+# --------------------------------------------------------------------------- requirement visibility
+
+
+VISIBILITY_VIEWS = {"iso", "front", "side"}  # and dir-X-Y-Z; exploded, close-up and part views move or hide parts
+
+
+def visibility_checks(path: Path, occurrences: dict[str, str],
+                      records: dict[str, dict[str, Any]]) -> tuple[list[dict[str, Any]], str | None]:
+    """The visibility bindings of the current requirements file `path`, resolved against this version's
+    occurrences (id -> PN) and part records, and the file's sha256; ([], None) without the file.
+
+    A check carries its camera direction and up in the GLB frame, its window and target occurrences,
+    and `see_through`: the drawn occurrences whose part.yaml declares `transparency: transparent`.
+    Opaque and translucent parts occlude."""
+    if not path.is_file():
+        return [], None
+    raw = path.read_bytes()
+    rules = _load_record_module("cad_record_design_rules", DESIGN_RULES_PY)
+    try:
+        bindings = rules.visibility_bindings(record_yaml(path))
+    except (AttributeError, KeyError, TypeError, ValueError) as exc:
+        raise InfraError(f"{path}: malformed visibility binding ({exc!r}); run cad-record validate.py") from exc
+    checks = []
+    for binding in bindings:
+        where = f"{binding.requirement} visibility {binding.index}"
+        kind = None
+        if binding.view.startswith("dir-"):
+            parse_direction_view(binding.view)  # refuses a malformed token
+            kind = view_kind(binding.view)  # "direction", or a close-up or part view, which move or hide parts
+        if binding.view not in VISIBILITY_VIEWS and kind != "direction":
+            raise InfraError(f"{where}: view {binding.view!r} is not iso, front, side or dir-X-Y-Z")
+        window = list(dict.fromkeys(occurrence_of(ref, occurrences, where) for ref in binding.window))
+        targets = list(dict.fromkeys(occurrence_of(ref, occurrences, where) for ref in binding.targets))
+        direction = view_direction(binding.view)
+        checks.append({"requirement": binding.requirement, "index": binding.index, "view": binding.view,
+                       "direction": to_glb(direction), "up": list(camera_up_reference(direction)),
+                       "window": window, "targets": targets,
+                       "see_through": [oid for oid in dict.fromkeys([*window, *targets])
+                                       if records[occurrences[oid]].get("transparency") == "transparent"],
+                       "min_visible_fraction": binding.min_visible_fraction})
+    return checks, sha256(raw)
+
+
+def grade_visibility(checks: list[dict[str, Any]], measured: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], bool]:
+    """Per check, each target's visible fraction: the pixels where it is the nearest drawn surface over
+    the pixels of its silhouette drawn alone. A target fails below the binding's
+    min_visible_fraction, and a check fails when any of its targets fails."""
+    reports, passed = [], True
+    for check, result in zip(checks, measured, strict=True):
+        targets = []
+        for target in result["targets"]:
+            silhouette, visible = target["silhouette_px"], target["visible_px"]
+            fraction = visible / silhouette if silhouette else 0.0
+            targets.append({"occurrence": target["occurrence"], "silhouette_px": silhouette, "visible_px": visible,
+                            "visible_fraction": round(fraction, 4),
+                            "status": "pass" if fraction >= check["min_visible_fraction"] else "fail"})
+        status = "fail" if any(target["status"] == "fail" for target in targets) else "pass"
+        passed = passed and status == "pass"
+        reports.append({"requirement": check["requirement"], "index": check["index"], "view": check["view"],
+                        "window": check["window"], "see_through": check["see_through"],
+                        "min_visible_fraction": check["min_visible_fraction"], "status": status,
+                        "targets": targets, "camera": camera_record(result["camera"])})
+    return reports, passed
 
 
 # --------------------------------------------------------------------------- server
@@ -884,7 +1147,8 @@ async def _open_capture_page(browser_context: Any, url: str, errors: list[str]) 
     return page, await page.evaluate("window.cadRender.ready")
 
 
-async def _capture_page_views(page: Any, names: list[str]) -> tuple[dict[str, Any], dict[str, float]]:
+async def _capture_page_views(page: Any, names: list[str], checks: list[dict[str, Any]]
+                              ) -> tuple[dict[str, Any], dict[str, float], list[dict[str, Any]]]:
     results: dict[str, Any] = {}
     timings: dict[str, float] = {}
     for name in names:
@@ -893,10 +1157,20 @@ async def _capture_page_views(page: Any, names: list[str]) -> tuple[dict[str, An
         result["_quality"] = quality
         results[name] = result
         timings[name] = round(time.monotonic() - t0, 3)
-    return results, timings
+    measured = []
+    t0 = time.monotonic()
+    for check in checks:
+        measured.append(await page.evaluate("(check) => window.cadRender.measureVisibility(check)", check))
+    if checks:
+        timings["visibility_s"] = round(time.monotonic() - t0, 3)
+    return results, timings, measured
 
 
-def capture_views(url: str, views: list[str], size: tuple[int, int], jobs: int = DEFAULT_JOBS) -> tuple[dict[str, Any], dict[str, Any], dict[str, float]]:
+def capture_views(url: str, views: list[str], size: tuple[int, int], jobs: int = DEFAULT_JOBS,
+                  checks: list[dict[str, Any]] | None = None
+                  ) -> tuple[dict[str, Any], dict[str, Any], dict[str, float], list[dict[str, Any]]]:
+    """(page info, capture per view, timings, the pixel counts per visibility check). The first page
+    measures the checks after its views."""
     import asyncio
     from playwright.async_api import Error as PlaywrightError
     from playwright.async_api import async_playwright
@@ -905,12 +1179,13 @@ def capture_views(url: str, views: list[str], size: tuple[int, int], jobs: int =
         raise InfraError(f"--jobs must be between 1 and {MAX_JOBS}")
     results: dict[str, Any] = {}
     timings: dict[str, float] = {}
+    measured: list[dict[str, Any]] = []
     errors: list[str] = []
     info: dict[str, Any] = {}
     started = time.monotonic()
 
     async def capture() -> None:
-        nonlocal info
+        nonlocal info, measured
 
         async def collect(awaitables: list[Any]) -> list[Any]:
             tasks = [asyncio.create_task(awaitable) for awaitable in awaitables]
@@ -928,17 +1203,20 @@ def capture_views(url: str, views: list[str], size: tuple[int, int], jobs: int =
                 viewport={"width": size[0], "height": size[1]}, device_scale_factor=1)
             try:
                 timings["browser_start_s"] = round(time.monotonic() - started, 3)
-                worker_count = min(jobs, len(views))
+                worker_count = max(1, min(jobs, len(views)))
                 chunks = [views[index::worker_count] for index in range(worker_count)]
                 load_started = time.monotonic()
                 pages = await collect([_open_capture_page(browser_context, url, errors) for _ in chunks])
                 timings["load_s"] = round(time.monotonic() - load_started, 3)
-                worker_results = await collect([_capture_page_views(page, chunk)
-                                                for (page, _), chunk in zip(pages, chunks)])
+                worker_results = await collect([_capture_page_views(page, chunk, (checks or []) if index == 0 else [])
+                                                for index, ((page, _), chunk) in enumerate(zip(pages, chunks))])
                 info = pages[0][1]
                 info["chromium"] = browser.version
+                measured = worker_results[0][2]
+                if checks:
+                    timings["visibility_s"] = worker_results[0][1]["visibility_s"]
                 for name in views:
-                    for group_results, group_timings in worker_results:
+                    for group_results, group_timings, _ in worker_results:
                         if name in group_results:
                             results[name] = group_results[name]
                             timings[name] = group_timings[name]
@@ -954,7 +1232,7 @@ def capture_views(url: str, views: list[str], size: tuple[int, int], jobs: int =
         raise InfraError(f"renderer page reported errors: {errors}")
     if info.get("unmapped_meshes"):
         raise InfraError(f"GLB meshes owned by no part-map PN: {info['unmapped_meshes']}")
-    return info, results, timings
+    return info, results, timings, measured
 
 
 def grade(results: dict[str, Any]) -> tuple[dict[str, Any], dict[str, bytes], bool]:
@@ -1224,7 +1502,8 @@ def run(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         table = material_rules.MaterialTable.load()
     except material_rules.MaterialsError as exc:
         raise InfraError(str(exc)) from exc
-    scene, materials, keyed = build_scene(hw, version, views, size, table)
+    scene, materials, keyed = build_scene(hw, version, views, size, table, hw / "requirements.yaml")
+    checks = keyed["visibility"]
     recipe = {"views": views, "size": [*size], "renderer": {"name": "cad-render", "version": renderer_sha256()},
               "inputs": {"version_manifest_sha256": sha256(version.files["manifest"].read_bytes()),
                          "cache_key": keyed["key"], "parity_policy": keyed["key"]["parity"]}}
@@ -1242,26 +1521,37 @@ def run(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
             return 0, {"status": metadata["status"], "cache": "hit", "version": version.label,
                        "out_dir": str(existing), "pngs": {v: str(existing / f"{v}.png") for v in views},
                        "wall_s": round(time.monotonic() - wall, 3)}
+    inputs = view_inputs(version, scene, keyed, materials)
+    reused = reusable_views(hw, version, args.subject, inputs)
+    rendered = [view for view in views if view not in reused]
     server = make_server(scene, version.files["glb"], args.cache_dir or default_cache_dir())
     thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.1}, daemon=True)
     thread.start()
     port = server.server_address[1]
     try:
-        info, results, timings = capture_views(f"http://127.0.0.1:{port}/", views, size, args.jobs)
+        info, results, timings, measured = capture_views(f"http://127.0.0.1:{port}/", rendered, size, args.jobs, checks)
     finally:
         server.shutdown()
         server.server_close()
 
-    view_records, pngs, passed = grade(results)
-    for name, record in view_records.items():
+    captured, pngs, passed = grade(results)
+    for name, record in captured.items():
+        record["render_inputs"] = inputs[name]
         record["wall_s"] = timings[name]
+    for name, entry in reused.items():
+        captured[name] = {**entry["record"], "wall_s": 0.0}
+        pngs[name] = entry["png"]
+    view_records = {name: captured[name] for name in views}
+    visibility, visible = grade_visibility(checks, measured)
+    passed = passed and visible
     for pn, record in materials.items():
-        record["applied"] = results[views[0]]["materials"][pn]
+        record["applied"] = info["materials"][pn]
     metadata = {
         "version": version.label,
         "status": "fail" if not passed else ("warn" if any(r["quality"]["warnings"] for r in view_records.values()) else "pass"),
         "views": view_records, "materials": materials,
         "retry": {name: record["retry"] for name, record in view_records.items()},
+        "visibility": visibility,
         "renderer": {"name": "cad-render three.js PBR", "three": THREE_VERSION, "three_revision": info["three"],
                      "playwright": importlib.metadata.version("playwright"), "chromium": info["chromium"],
                      "webgl": "SwiftShader (ANGLE)", "studio": info["studio"]},
@@ -1269,7 +1559,8 @@ def run(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         "inputs": {**{name: str(version.files[name].relative_to(hw)) for name in SOURCE_FILES},
                    "version_manifest_sha256": recipe["inputs"]["version_manifest_sha256"],
                    "assembly_yaml_sha256": keyed["assembly_yaml_sha256"],
-                   "assembly_yaml_matches_version": keyed["assembly_yaml_matches_version"]},
+                   "assembly_yaml_matches_version": keyed["assembly_yaml_matches_version"],
+                   "requirements_yaml_sha256": keyed["requirements_yaml_sha256"]},
         "explode_offsets_mm": keyed["explode_offsets_mm"],
         "wall_s": {**{k: v for k, v in timings.items() if k.endswith("_s")},
                    "total_s": round(time.monotonic() - wall, 3)}}
@@ -1298,6 +1589,10 @@ def run(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
                "failures": {v: r["quality"]["failures"] for v, r in view_records.items() if r["quality"]["failures"]},
                "warnings": {v: r["quality"]["warnings"] for v, r in view_records.items() if r["quality"]["warnings"]},
                "strategies": {v: r["retry"]["strategy"] for v, r in view_records.items()},
+               "reused": {v: r["reused"]["version"] for v, r in view_records.items() if "reused" in r},
+               "visibility": {f"{r['requirement']}/{r['index']}": {
+                   "status": r["status"], "visible_fraction": {t["occurrence"]: t["visible_fraction"] for t in r["targets"]}}
+                   for r in visibility},
                "wall_s": metadata["wall_s"], "view_wall_s": timings}
     return (0 if passed else 1), summary
 
