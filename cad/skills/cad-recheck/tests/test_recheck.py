@@ -6,6 +6,7 @@ from __future__ import annotations
 import os
 import json
 import hashlib
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -23,6 +24,9 @@ class RecheckHookTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name) / "project"
         self.root.mkdir()
+        # The tests' global git config, so a test can set a global core.hooksPath as Git Defender does.
+        self.global_config = Path(self.temporary.name) / "global.gitconfig"
+        self.global_config.write_text("", encoding="utf-8")
         self.git("-c", "init.templateDir=", "init", "-q")
         self.git("config", "user.name", "CAD Recheck Test")
         self.git("config", "user.email", "cad-recheck@example.invalid")
@@ -41,26 +45,25 @@ class RecheckHookTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
-    def git(self, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+    def git_env(self) -> dict[str, str]:
         env = os.environ.copy()
         env["GIT_CONFIG_NOSYSTEM"] = "1"
-        env["GIT_CONFIG_GLOBAL"] = os.devnull
+        env["GIT_CONFIG_GLOBAL"] = str(self.global_config)
+        return env
+
+    def git(self, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
-            ["git", *args], cwd=self.root, text=True, capture_output=True, check=check, env=env
+            ["git", *args], cwd=self.root, text=True, capture_output=True, check=check, env=self.git_env()
         )
 
-    @staticmethod
-    def run_python(script: Path, *args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
-        env = os.environ.copy()
-        env["GIT_CONFIG_NOSYSTEM"] = "1"
-        env["GIT_CONFIG_GLOBAL"] = os.devnull
+    def run_python(self, script: Path, *args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             [sys.executable, str(script), *args],
             cwd=cwd,
             text=True,
             capture_output=True,
             check=False,
-            env=env,
+            env=self.git_env(),
         )
 
     def add_part(self) -> Path:
@@ -146,6 +149,33 @@ class RecheckHookTests(unittest.TestCase):
         result = self.install_hook("--force")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.git("config", "--get", "core.hooksPath").stdout.strip(), ".githooks")
+
+    def test_a_global_hooks_path_is_refused_even_with_force_and_names_the_verify_command(self) -> None:
+        managed = Path(self.temporary.name) / "managed-hooks"
+        managed.mkdir()
+        (managed / "pre-commit").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        (managed / "pre-commit").chmod(0o755)
+        self.git("config", "--local", "--unset", "core.hooksPath")
+        shutil.rmtree(self.root / ".githooks")
+        self.git("config", "--global", "core.hooksPath", str(managed))
+        global_before = self.global_config.read_bytes()
+        for args in ((), ("--force",)):
+            with self.subTest(args=args):
+                result = self.install_hook(*args)
+                self.assertEqual(result.returncode, 3, result.stderr)
+                self.assertIn(f"{managed.resolve()} (global scope)", result.stderr)
+                self.assertIn("--force does not override this", result.stderr)
+                self.assertIn(f"uv run --script {STAMP} --verify", result.stderr)
+                self.assertEqual(self.git("config", "--local", "--get", "core.hooksPath", check=False).stdout, "")
+                self.assertFalse((self.root / ".githooks").exists())
+                self.assertEqual(self.global_config.read_bytes(), global_before)
+
+        # The named alternative is the hook's own check: pass below the threshold, fail at it unstamped.
+        self.assertEqual(self.run_python(STAMP, "--verify", cwd=self.root).returncode, 0)
+        self.stage_product("release")
+        refused = self.run_python(STAMP, "--verify", cwd=self.root)
+        self.assertEqual(refused.returncode, 2)
+        self.assertIn("no staged hw/.cad/recheck.json", refused.stderr)
 
     def test_existing_git_hook_is_refused_without_force(self) -> None:
         hooks_path = self.git("rev-parse", "--git-path", "hooks").stdout.strip()

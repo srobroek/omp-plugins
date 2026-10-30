@@ -24,8 +24,8 @@ time; runner context is not persisted as a design parameter.
   nominal values times the rest placement) for `assembly.step`; `parts/<PN>.step` keeps the frame.
 - Drawing feature locators carry the same `frame` as the part's `model_frame`.
 - The STEP product name is `"<PN> <title>"`, title from `part.yaml`; the script never names it.
-- Import only the declared kernel, OCP, the standard library, `cadmodel.safe`, and the kernel's
-  warehouse: `bd_warehouse` 0.4.0 is in the build123d environment. `cq_warehouse` is not on PyPI
+- Import only the declared kernel, OCP, the standard library, `cadmodel.safe`, the optional `cadmodel.fillets`, and the
+  kernel's warehouse: `bd_warehouse` 0.4.0 is in the build123d environment. `cq_warehouse` is not on PyPI
   and is not in the CadQuery environment.
 - `print` output and OCCT console messages are runner console output; the runner returns its result
   in a file the orchestrator names, so console output never corrupts it.
