@@ -30,9 +30,9 @@ what is cleared, and every value a reduction takes from it, is the same in any m
 Every request is classified before anything else answers it, a measurement from the cache or from
 another request's included, so a cold and a warm cache agree too. Every measured value is still
 the exact one; a cleared request reads as (inf, 0) and carries its (lower, upper) bounds for a
-reduction that reports them. Each measurement is also checked against its own bounds: outside
-them by more than SLACK_MM, the kernel or a bound is wrong, so it is a `Suspect`, still answering
-its requests, re-measured at b moved REEVALUATE_MM both ways; the caller must report it.
+reduction that reports them. Every measurement is also checked against its bounds (see Suspect):
+one its box gap or mesh contradicts answers nothing; it is re-measured, then read as its mesh
+bounds or left a failing "suspect", and the caller must report it.
 
 With a `PairCache`, measurements persist across runs and tools in SQLite, keyed by content: the
 two definitions' BRep bytes, the placement's bits and a salt naming the measuring code, kernel and
@@ -429,7 +429,8 @@ class _Run:
             return isinstance(outcome, tuple) and low - SLACK_MM <= outcome[0] <= high + SLACK_MM
 
         consistent = all(agrees(outcome, bounds) for _, outcome, bounds in suspect.reevaluated)
-        decided = all(suspect.lower - SLACK_MM > max((pose.OVERLAP_GATE_MM, *self.requests[index].thresholds))
+        margin = self.band if self.band is not None else EXACT_RESOLVE_BAND_MM  # as clearing requires
+        decided = all(suspect.lower - SLACK_MM > max((pose.OVERLAP_GATE_MM, *self.requests[index].thresholds)) + margin
                       for index in self.own[unit])
         suspect.resolved = consistent and decided
         by = "mesh (exact suspect)" if suspect.resolved else "suspect"
@@ -524,7 +525,7 @@ class _Run:
     def task(self, unit: int) -> Task:
         """The unit's task (see _run_task): a pending unit's mesh interval first, its measurement
         skipped where the interval clears every request or proves each prunable, and always for a
-        cache hit; in exact mode with a mesh, the interval after a measurement that may decide."""
+        cache hit; in exact mode with a mesh, the interval after every measurement."""
         request = self.requests[self.unit_request[unit]]
         if self.band is not None and self.pending(unit):
             limit = math.inf
@@ -533,7 +534,7 @@ class _Run:
                                             *self.requests[index].thresholds) for index in self.own[unit])
             mode: tuple = ("fast", max(self.cap(index) for index in self.grouped(unit)), limit, unit not in self.stored)
         elif self.band is None and self.meshing:
-            mode = ("decide", max((t for index in self.own[unit] for t in self.requests[index].thresholds), default=0.0))
+            mode = ("both",)
         else:
             mode = ("plain",)
         return request.a, request.b, (request.placement.rot, request.placement.trans), self.gap(unit), mode
@@ -618,22 +619,21 @@ def _measure(shapes: Mapping[str, Any], a: str, b: str, placement: Any, box_gap:
         return str(error) or type(error).__name__
 
 
+# An exact-mode suspect reads as its mesh bounds only where they clear its thresholds by this much,
+# fast mode's default band.
+EXACT_RESOLVE_BAND_MM = 2.0
+
+
 def _interval(mesh: Any, a: str, b: str, placement: Any) -> tuple[tuple[float, float, float], float]:
     started = time.perf_counter()
     lower, upper = mesh.interval(a, b, placement)
     return (lower, upper, mesh.spread(a, b)), time.perf_counter() - started
 
 
-def _decides(result: tuple[float, float], threshold: float) -> bool:
-    """Whether a measurement may decide a result: below a threshold, or in contact without overlap."""
-    return result[0] < threshold or (result[0] <= pose.OVERLAP_GATE_MM and result[1] <= pose.INTERFERENCE_MM3)
-
-
 def _run_task(shapes: Mapping[str, Any], mesh: Any, task: Task, threads: bool = False) -> Result:
-    """One task. Mode ("plain",) measures; ("decide", threshold) measures, then computes the mesh
-    interval where the measurement may decide (`_decides`); ("both",) does both; ("fast", cap,
-    limit, measure) computes the interval first and skips the measurement where its lower bound
-    exceeds the cap or the prune limit by SLACK_MM, or where `measure` is false."""
+    """One task. Mode ("plain",) measures; ("both",) measures and computes the mesh interval;
+    ("fast", cap, limit, measure) computes the interval first and skips the measurement where its
+    lower bound exceeds the cap or the prune limit by SLACK_MM, or where `measure` is false."""
     a, b, rows, box_gap, mode = task
     placement = pose.Rigid(*rows)
     interval, seconds = None, 0.0
@@ -642,8 +642,6 @@ def _run_task(shapes: Mapping[str, Any], mesh: Any, task: Task, threads: bool = 
         if mode[0] == "fast" and (not mode[3] or interval[0] - SLACK_MM > min(mode[1], mode[2])):
             return None, interval, seconds
     result = _measure(shapes, a, b, placement, box_gap, threads)
-    if mesh is not None and mode[0] == "decide" and isinstance(result, tuple) and _decides(result, mode[1]):
-        interval, seconds = _interval(mesh, a, b, placement)
     return result, interval, seconds
 
 

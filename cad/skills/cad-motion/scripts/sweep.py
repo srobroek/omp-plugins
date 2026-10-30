@@ -94,8 +94,9 @@ Workers die with the sweep, inside a measurement too (pair_measure.die_with).
 Stop a sweep by its process group, so no worker outlives it: Ctrl-C in its
 terminal, or `kill -TERM -- -PGID` with PGID from `ps -o pgid= -p PID`. A
 sweep records its process group beside its output (hw/motion/vN/.sweep-CASE.json,
-or WORST.step.sweep.json) and refuses to start while a recorded group still
-runs, printing the command that stops it.
+or WORST.step.sweep.json) and refuses to start while any sweep recorded in the
+hw tree (every version and case, and .cad-work) still runs, printing the command
+that stops it.
 
 Checks: a collision is an overlap volume above `--volume-tol` mm^3 (default
 pose.py's INTERFERENCE_MM3, 1e-3) on a pair whose overlap hw/interfaces.yaml
@@ -211,18 +212,22 @@ DEFAULT_BAND_MM = 2.0  # fast mode: how far beyond its thresholds a request's pr
 REEVALUATE_STEP = 0.1  # deg or mm: how far a suspect's re-evaluations move every independent joint
 
 
-def claim_sweep(path: Path) -> None:
-    """Record this sweep's process group at `path`, removed at exit; refuse while the group of a
-    recorded sweep still runs, as a stopped sweep's stray workers would keep it."""
-    if path.is_file():
+def claim_sweep(path: Path, hw: Path) -> None:
+    """Record this sweep's process group at `path`, removed at exit; refuse while the group of any
+    sweep recorded in `hw` (every version and case) or its .cad-work still runs, as a stopped
+    sweep's stray workers would keep it."""
+    recorded_paths = {path, *hw.glob("motion/*/.sweep-*.json"), *(hw.parent / ".cad-work").glob("**/*.sweep.json")}
+    for recorded_path in sorted(recorded_paths):
+        if not recorded_path.is_file():
+            continue
         try:
-            recorded = json.loads(path.read_text(encoding="utf-8"))
+            recorded = json.loads(recorded_path.read_text(encoding="utf-8"))
             group, pid = int(recorded["pgid"]), int(recorded["pid"])
         except (OSError, ValueError, KeyError, TypeError):
-            group = pid = None
-        if group is not None and group_alive(group, pid):
-            raise pose.MotionError(f"a sweep recorded in {path} still runs in process group {group}; stop it with "
-                                   f"`kill -TERM -- -{group}`, or delete {path} if that group runs no sweep")
+            continue
+        if group_alive(group, pid):
+            raise pose.MotionError(f"a sweep recorded in {recorded_path} still runs in process group {group}; stop it "
+                                   f"with `kill -TERM -- -{group}`, or delete {recorded_path} if that group runs no sweep")
     if not hasattr(os, "getpgrp"):
         return
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -920,7 +925,7 @@ def main(argv: list[str] | None = None) -> int:
                 raise pose.MotionError(f"--worst-step or its evidence already exists; refusing to overwrite: {args.worst_step}")
         lock = (pose.LAYOUT.bundle_dir(args.hw, "motion", version, args.case).parent / f".sweep-{args.case}.json"
                 if version else args.worst_step.with_name(args.worst_step.name + ".sweep.json"))
-        claim_sweep(lock)
+        claim_sweep(lock, args.hw)
         assembly, chain, definitions = pose.load_inputs(args)
         if not chain.independent:
             raise pose.MotionError("the chain has no independent movable joint to sweep")

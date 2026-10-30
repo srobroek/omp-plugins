@@ -573,11 +573,11 @@ class BroadPhaseTests(unittest.TestCase):
         outcomes, calls, _ = self.run_measurer([1.5, 1.8], band=1.0, mesh=self.Mesh(), box=1.0)
         self.assertEqual((outcomes, calls), ([(0.5, 0.0), (0.8, 0.0)], 2))
 
-    def degenerate(self, kernel, band: float | None = 1.0):
-        """One request at distance 3 (box gap 3, mesh interval [2.95, 3.05]), threshold 2.5, whose
-        kernel `kernel` reads at x = 4."""
+    def degenerate(self, kernel, band: float | None = 1.0, thresholds: tuple[float, ...] = (2.5,)):
+        """One request at distance 3 (box gap 3, mesh interval [2.95, 3.05]) whose kernel `kernel`
+        reads at x = 4."""
         mesh = self.Mesh()
-        outcomes, calls, measurer = self.run_measurer([4.0], thresholds=(2.5,), band=band, mesh=mesh, kernel=kernel)
+        outcomes, calls, measurer = self.run_measurer([4.0], thresholds=thresholds, band=band, mesh=mesh, kernel=kernel)
         (suspect,) = measurer.suspects
         self.assertEqual((suspect.requests, suspect.distance, suspect.lower, suspect.upper), ((0,), 0.0, 3.0, 3.05))
         self.assertEqual([label for label, _, _ in sorted(suspect.reevaluated)], ["+0.01 mm", "-0.01 mm", "swapped"])
@@ -585,27 +585,32 @@ class BroadPhaseTests(unittest.TestCase):
         return outcomes, suspect
 
     def test_a_degenerate_zero_is_a_suspect_resolved_by_its_reevaluations_and_feeds_no_result(self) -> None:
-        """The kernel reads 0 at x = 4 only: the re-measurements 0.01 mm either way and with the parts
-        swapped agree with their mesh intervals, so the request reads as the mesh bounds, not 0."""
-        for band in (1.0, None):  # fast mode, and exact mode, where a reading below a threshold is checked
-            with self.subTest(band=band):
-                outcomes, suspect = self.degenerate(lambda x: 0.0 if x == 4.0 else max(0.0, abs(x) - 1.0), band)
-                self.assertEqual(outcomes, [sweep.pair_measure.Cleared(3.0, 3.05, "mesh (exact suspect)")])
-                self.assertTrue(suspect.resolved)
-                for label, (distance, volume), bounds in suspect.reevaluated:
-                    if label != "swapped":
-                        self.assertTrue(bounds[0] <= distance <= bounds[1], label)
+        """Exact mode, threshold 0.5: the kernel reads 0 at x = 4 only; the re-measurements 0.01 mm
+        either way and with the parts swapped agree with their mesh intervals, and the bound 3 clears
+        the threshold plus the 2 mm band, so the request reads as the mesh bounds, not 0."""
+        outcomes, suspect = self.degenerate(lambda x: 0.0 if x == 4.0 else max(0.0, abs(x) - 1.0), None, (0.5,))
+        self.assertEqual(outcomes, [sweep.pair_measure.Cleared(3.0, 3.05, "mesh (exact suspect)")])
+        self.assertTrue(suspect.resolved)
+        for label, (distance, volume), bounds in suspect.reevaluated:
+            if label != "swapped":
+                self.assertTrue(bounds[0] <= distance <= bounds[1], label)
 
-    def test_a_suspect_its_reevaluations_do_not_resolve_stays_unresolved(self) -> None:
-        outcomes, suspect = self.degenerate(lambda x: 0.0)
+    def test_a_suspect_whose_bounds_lie_within_the_band_stays_unresolved(self) -> None:
+        """Fast mode, threshold 2.5, band 1: the re-measurements agree, but the bound 3 does not clear
+        3.5, as clearing would require, so the suspect fails."""
+        outcomes, suspect = self.degenerate(lambda x: 0.0 if x == 4.0 else max(0.0, abs(x) - 1.0))
         self.assertEqual((outcomes, suspect.resolved), ([sweep.pair_measure.Cleared(3.0, 3.05, "suspect")], False))
 
-    def test_exact_mode_asks_the_mesh_only_where_a_value_decides(self) -> None:
-        """No threshold and no contact: neither measured distance can decide, so no interval is computed."""
+    def test_a_suspect_its_reevaluations_do_not_resolve_stays_unresolved(self) -> None:
+        outcomes, suspect = self.degenerate(lambda x: 0.0, None, (0.5,))
+        self.assertEqual((outcomes, suspect.resolved), ([sweep.pair_measure.Cleared(3.0, 3.05, "suspect")], False))
+
+    def test_exact_mode_checks_every_measurement_against_the_mesh(self) -> None:
+        """No threshold and no contact: the one measurement still gets its interval, and agrees with it."""
         mesh = self.Mesh()
         outcomes, calls, measurer = self.run_measurer([6.0, 4.0], mesh=mesh)
         self.assertEqual((outcomes, calls, mesh.calls, measurer.cleared, measurer.suspects),
-                         ([sweep.pair_measure.Pruned(1), (3.0, 0.0)], 1, 0, {"box": 0, "mesh": 0}, []))
+                         ([sweep.pair_measure.Pruned(1), (3.0, 0.0)], 1, 1, {"box": 0, "mesh": 0}, []))
 
     def test_a_stopped_sweep_reduces_only_samples_whose_pruned_requests_are_proved_inside_them(self) -> None:
         """One pair, one request per sample: sample 1 is pruned on sample 3's distance."""
