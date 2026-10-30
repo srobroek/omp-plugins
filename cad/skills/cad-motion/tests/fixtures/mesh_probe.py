@@ -9,15 +9,15 @@
   mesh is at most the mesh's `deviation` (`violations`); `max_ratio` is the largest distance over
   the linear deflection.
 - `intervals`: each ordered pair of each set at the definition placement and at seeded random
-  placements: pose.interference's distance lies in mesh_bound's (lower, upper) (`violations`);
-  `informative` counts the lower bounds above 0.
+  placements: pose.interference's distance lies in MeshBounds.query's [lower, upper]
+  (`violations`); `informative` counts the lower bounds above 0.
 - `containment`: a pin inside a block's void (the bound holds and is above 0: the void is outside
-  the material), a pin buried in a block's material and the nest sets' buried cube (the bound is 0
-  and the distance 0), and two boxes face to face (touching meshes: the bound is 0).
-- `fast`: each ordered pair of the path sets swept along a seeded path, its median distance as a
-  threshold, measured exactly and in fast mode (band BAND_MM, mesh bounds): every request fast
-  mode measured equals the exact run's bitwise (`mismatches`), and every cleared one lies within
-  its bounds, without overlap, more than its threshold plus the band away (`violations`): the spot
+  the material), a pin buried in a block's material and the nest sets' buried cube (the bound is 0,
+  the shapes nested, the distance 0), and two boxes face to face (touching meshes: the bound is 0).
+- `fast`: each ordered pair of the path sets swept along a seeded path, its median distance as its
+  minimum, measured exactly and in fast mode (band BAND_MM, mesh bounds): every request fast mode
+  measured equals the exact run's bitwise (`mismatches`), and every cleared one lies within its
+  bounds, without overlap, more than its minimum plus the band away (`violations`): the spot
   check of every mesh-cleared pair-pose; `max_abs_mesh_minus_exact_mm` over the mesh-cleared ones.
 - `bracket`: a cube moving away from a cylinder along its box's diagonal, the band set so its
   closest pose is just outside it: every request is cleared by the mesh (the box gap is looser),
@@ -89,7 +89,7 @@ def path(rng: random.Random, reach: float) -> list:
 
 
 def reach_of(shape) -> float:
-    low, high = pair_measure.box_corners(shape)
+    low, high = pose.box_corners(shape)
     return max(h - lo for lo, h in zip(low, high))
 
 
@@ -135,7 +135,7 @@ def deviation(report: dict, name: str, shapes: dict) -> None:
     rng = random.Random(f"deviation {name}")
     bounds = mesh_bound.MeshBounds(shapes)
     for key in sorted(shapes):
-        mesh = bounds.mesh(key)
+        mesh = bounds._runtime(key)  # the definition's BVH and deviation
         report["definitions"] += 1
         for point in face_samples(shapes[key], rng):
             distance = point_distance(mesh, point)
@@ -152,7 +152,8 @@ def intervals(report: dict, name: str, shapes: dict) -> None:
     for a in sorted(shapes):
         for b in sorted(shapes):
             for placement in placements(rng, reach_of(shapes[a])):
-                lower, upper = bounds.interval(a, b, placement)
+                found = bounds.query(a, b, placement)
+                lower, upper = found.lower_mm, found.upper_mm
                 distance = pose.interference(shapes[a], pose.placed(shapes[b], placement))[0]
                 report["compared"] += 1
                 report["informative"] += lower > 0.0
@@ -162,9 +163,10 @@ def intervals(report: dict, name: str, shapes: dict) -> None:
 
 
 def case(shapes: dict, placement) -> dict:
-    lower, upper = mesh_bound.MeshBounds(shapes).interval("a", "b", placement)
+    found = mesh_bound.MeshBounds(shapes).query("a", "b", placement)
     distance, volume = pose.interference(shapes["a"], pose.placed(shapes["b"], placement))
-    return {"lower": lower, "upper": upper, "distance": distance, "volume": volume}
+    return {"lower": found.lower_mm, "upper": found.upper_mm, "distance": distance, "volume": volume,
+            "touching": found.touching, "nested": found.nested, "containment_possible": found.containment_possible}
 
 
 def freeform_shapes(block) -> dict:
@@ -246,55 +248,67 @@ def containment(made: dict, root: Path) -> dict:
     return out
 
 
+def measurer(shapes: dict, mesh=None, band: float = pair_measure.MESH_BAND_MM):
+    parts = {key: pose.Part(key, key, shape) for key, shape in shapes.items()}
+    return pair_measure.PairMeasurer(shapes, geometry_ids=pose.geometry_ids(parts),
+                                     rule=pair_measure.RuleVersion.current(mesh, band), mesh=mesh)
+
+
+def measure(measuring, requests: list, prune: bool = False) -> list:
+    with measuring.session() as session:
+        return session.measure(requests, prune=prune)
+
+
 def fast(report: dict, name: str, shapes: dict) -> None:
     rng = random.Random(f"fast {name}")
     requests = []
     for a in sorted(shapes):
         for b in sorted(shapes):
-            requests += [pair_measure.Request(a, b, placement, group=(a, b)) for placement in path(rng, reach_of(shapes[a]))]
-    first = pair_measure.PairMeasurer(shapes).measure(requests)
-    median = {group: statistics.median(o[0] for r, o in zip(requests, first) if r.group == group)
+            requests += [pair_measure.Request(a, b, placement, group=(a, b), mode="exact")
+                         for placement in path(rng, reach_of(shapes[a]))]
+    first = measure(measurer(shapes), requests)
+    median = {group: statistics.median(o.distance_mm for r, o in zip(requests, first) if r.group == group)
               for group in {r.group for r in requests}}
-    requests = [pair_measure.Request(r.a, r.b, r.placement, thresholds=(median[r.group],) if median[r.group] > 0 else (),
-                                     group=r.group) for r in requests]
+    requests = [pair_measure.Request(r.a, r.b, r.placement, group=r.group, minimum_mm=max(0.0, median[r.group]))
+                for r in requests]
     mesh = mesh_bound.MeshBounds(shapes)
-    got = pair_measure.PairMeasurer(shapes, band=BAND_MM, mesh=mesh).measure(requests, prune=True)
+    got = measure(measurer(shapes, mesh, BAND_MM), requests, prune=True)
     for index, (request, outcome, want) in enumerate(zip(requests, got, first)):
         report["requests"] += 1
         where = {"set": name, "index": index, "pair": [request.a, request.b]}
         if isinstance(outcome, pair_measure.Cleared):
-            report[f"cleared_{outcome.by}"] += 1
-            cap = max((pose.OVERLAP_GATE_MM, *request.thresholds)) + BAND_MM
+            report[f"cleared_{outcome.method}"] = report.get(f"cleared_{outcome.method}", 0) + 1
+            cap = max(pose.OVERLAP_GATE_MM, request.minimum_mm) + BAND_MM
             slack = pair_measure.SLACK_MM
-            if not (outcome.lower - slack <= want[0] <= outcome.upper + slack and want[0] > cap and want[1] == 0.0):
-                report["violations"].append({**where, "cleared": repr(outcome), "exact": want, "cap": cap})
-            if outcome.by == "mesh":
-                gap = abs(mesh.distance(request.a, request.b, request.placement) - want[0])
+            if not (outcome.lower_mm - slack <= want.distance_mm <= outcome.upper_mm + slack and want.distance_mm > cap
+                    and want.overlap_mm3 == 0.0):
+                report["violations"].append({**where, "cleared": repr(outcome), "exact": repr(want), "cap": cap})
+            if outcome.method == "mesh":
+                gap = abs(outcome.mesh_mm - want.distance_mm)
                 report["max_abs_mesh_minus_exact_mm"] = max(report["max_abs_mesh_minus_exact_mm"], gap)
-        elif isinstance(outcome, tuple) and [v.hex() for v in outcome] != [v.hex() for v in want]:
-            report["mismatches"].append({**where, "fast": outcome, "exact": want})
+        elif isinstance(outcome, pair_measure.Measured) and \
+                [outcome.distance_mm.hex(), outcome.overlap_mm3.hex()] != [want.distance_mm.hex(), want.overlap_mm3.hex()]:
+            report["mismatches"].append({**where, "fast": repr(outcome), "exact": repr(want)})
 
 
 def bracket(made: dict) -> dict:
     """The unit cube's near corner on the column's box diagonal, 2.167 to 3 mm off its surface."""
     shapes = {"column": made["column"], "unit": made["unit"]}
-    requests = []
-    for k in range(6):
-        offset = 3.3 + 0.12 * k  # the corner at (offset, offset): sqrt(2) * offset - 2.5 from the surface
-        requests.append(pair_measure.Request("column", "unit", pose.Rigid(pose.Rigid.identity().rot, (offset, offset, 4.0)),
-                                             group="diagonal"))
-    exact = [pair_measure.PairMeasurer(shapes).measure([r])[0] for r in requests]
+    placements_ = [pose.Rigid(pose.Rigid.identity().rot, (3.3 + 0.12 * k, 3.3 + 0.12 * k, 4.0)) for k in range(6)]
+    # the corner at (offset, offset): sqrt(2) * offset - 2.5 from the surface
+    exact = measure(measurer(shapes), [pair_measure.Request("column", "unit", p, mode="exact") for p in placements_])
     mesh = mesh_bound.MeshBounds(shapes)
-    lowest = min(mesh.interval(r.a, r.b, r.placement)[0] for r in requests)
+    lowest = min(mesh.query("column", "unit", p).lower_mm for p in placements_)
     band = lowest - pose.OVERLAP_GATE_MM - 1e-4  # the closest pose just outside the band
-    measurer = pair_measure.PairMeasurer(shapes, band=band, mesh=mesh)
-    got = measurer.measure(requests, prune=True)
-    gaps = [measurer.box_gap(r) for r in requests]
-    lower = min(o.lower for o in got if isinstance(o, pair_measure.Cleared))
-    upper = min(o.upper for o in got if isinstance(o, pair_measure.Cleared))
-    minimum = min(o[0] for o in exact)
+    fast_measurer = measurer(shapes, mesh, band)
+    got = measure(fast_measurer, [pair_measure.Request("column", "unit", p, group="diagonal") for p in placements_],
+                  prune=True)
+    gaps = [fast_measurer.box_gap("column", "unit", p) for p in placements_]
+    lower = min(o.lower_mm for o in got if isinstance(o, pair_measure.Cleared))
+    upper = min(o.upper_mm for o in got if isinstance(o, pair_measure.Cleared))
+    minimum = min(o.distance_mm for o in exact)
     return {"band": band, "exact_minimum": minimum, "lower": lower, "upper": upper, "box_gap_minimum": min(gaps),
-            "all_mesh": all(isinstance(o, pair_measure.Cleared) and o.by == "mesh" for o in got),
+            "all_mesh": all(isinstance(o, pair_measure.Cleared) and o.method == "mesh" for o in got),
             "brackets": lower <= minimum <= upper, "outside_by": minimum - band - pose.OVERLAP_GATE_MM}
 
 
