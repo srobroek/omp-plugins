@@ -70,6 +70,28 @@ def assert_close(case: unittest.TestCase, actual, expected, places: int = 9) -> 
         case.assertAlmostEqual(a, e, places=places)
 
 
+def process_runs(pid: int) -> bool:
+    """Whether process `pid` runs; a zombie waiting to be reaped has ended."""
+    state = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()
+    return bool(state) and not state.startswith("Z")
+
+
+def descendants(pid: int) -> dict[int, str]:
+    """Every live descendant of process `pid`: pid -> command line."""
+    table = subprocess.run(["ps", "-A", "-o", "pid=,ppid=,command="], capture_output=True, text=True).stdout
+    children: dict[int, list[tuple[int, str]]] = {}
+    for line in table.splitlines():
+        fields = line.split(None, 2)
+        if len(fields) >= 2:
+            children.setdefault(int(fields[1]), []).append((int(fields[0]), fields[2] if len(fields) > 2 else ""))
+    found, todo = {}, [pid]
+    while todo:
+        for child, command in children.get(todo.pop(), []):
+            found[child] = command
+            todo.append(child)
+    return found
+
+
 def rigid(rows: list[list[float]]):
     """A pose.Rigid from 3x4 [rot | trans] rows."""
     return pose.Rigid(tuple(tuple(row[:3]) for row in rows), tuple(row[3] for row in rows))
@@ -1307,9 +1329,10 @@ class StepTests(unittest.TestCase):
                                        "--worst-step", str(hw / "worst.step"), *options)
         return hw, proc, result
 
-    def sealed_v6_version(self) -> Path:
+    def sealed_v6_version(self, single: bool = False) -> Path:
         """A verified v1 of the V6 record split into two subassemblies: the bottom end (block, crank,
-        pistons, rods) and the valvetrain (cams, valves), so valve / piston pairs are `interface`."""
+        pistons, rods) and the valvetrain (cams, valves), so valve / piston pairs are `interface`.
+        `single`: one subassembly holds every moving occurrence, so it owns every pair."""
         import yaml
 
         data = v6_record.record()
@@ -1319,6 +1342,10 @@ class StepTests(unittest.TestCase):
              "occurrences": [f"@{oid}" for oid in ids if oid.startswith(("piston", "rod"))]},
             {"id": "valvetrain", "title": "Valvetrain",
              "occurrences": [f"@{oid}" for oid in ids if oid.startswith(("cam", "valve"))]}]
+        if single:
+            data["subassemblies"] = [{"id": "engine", "title": "Engine", "parts": ["VSX-0001", "VSX-0101"],
+                                      "occurrences": [f"@{oid}" for oid in ids
+                                                      if oid.startswith(("piston", "rod", "cam", "valve"))]}]
         hw = Path(tempfile.mkdtemp(dir=self.root)) / "hw"
         version = hw / "versions" / "v1"
         shutil.copytree(self.v6, version / "parts")
@@ -1381,6 +1408,21 @@ class StepTests(unittest.TestCase):
         self.assertGreaterEqual(every["checked"], per_pair["checked"])
         self.assertGreater(every["checked"], 0)
 
+    def test_one_subsystem_sweep_that_owns_every_pair_merges_into_the_whole_sweep(self) -> None:
+        hw = self.sealed_v6_version(single=True)
+        common = ("--hw", str(hw), "--version", "v1", "--steps", "37", "--grid", "0",
+                  "--worst-criterion", "minimum_clearance")
+        proc, whole = self.run_script("sweep.py", *common, "--case", "whole")
+        self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+        self.assertEqual([row["name"] for row in whole["subsystems"]["owners"]], ["engine"])
+        proc, _ = self.run_script("sweep.py", *common, "--case", "part-engine", "--subsystem", "engine")
+        self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+        proc, merged = self.run_script("merge_sweeps.py", "--hw", str(hw), "--version", "v1", "--case", "merged",
+                                       "--inputs", str(hw / "motion" / "v1" / "part-engine"))
+        self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+        self.assertEqual(self.semantic(merged), self.semantic(whole))
+        self.assertEqual(len(merged["scope"]["merged_from"]), 1)
+
     def test_a_killed_sweep_resumes_from_its_committed_chunks_and_equals_an_uninterrupted_one(self) -> None:
         hw = self.v6_hw(None)
         import yaml
@@ -1417,6 +1459,33 @@ class StepTests(unittest.TestCase):
         self.assertGreaterEqual(resumed["timings_s"]["exact_hits"], committed)  # no committed reading measured again
         self.assertLess(resumed["timings_s"]["kernel_evaluations"], fresh["timings_s"]["kernel_evaluations"])
         self.assert_same_sweeps([(fresh_out, fresh), (resumed_out, resumed)])
+
+    def test_killing_a_sweep_outright_leaves_no_worker_running(self) -> None:
+        """SIGKILL the sweep process while its workers measure (spawn on macOS, forkserver on Linux)."""
+        hw = self.v6_hw(None)
+        scratch = hw.parent / ".cad-work" / "killed" / uuid.uuid4().hex
+        scratch.mkdir(parents=True)
+        child = subprocess.Popen(["uv", "run", "--quiet", "--script", str(SCRIPTS / "sweep.py"), "--hw", str(hw),
+                                  "--parts-dir", str(self.v6), "--steps", "721", "--grid", "0", "--exact", "--no-cache",
+                                  "--jobs", "2", "--worst-step", str(scratch / "killed.step")],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        self.addCleanup(child.wait)
+        self.addCleanup(lambda: child.poll() is None and os.killpg(child.pid, signal.SIGKILL))
+        deadline, family = time.monotonic() + 600, {}
+        while time.monotonic() < deadline and child.poll() is None:
+            family = descendants(child.pid)
+            if sum("multiprocessing" in command for command in family.values()) >= 2:
+                break
+            time.sleep(0.05)
+        else:
+            self.fail(f"no worker processes appeared before the sweep ended: {family}")
+        parent = next(pid for pid, command in family.items() if "sweep.py" in command and "multiprocessing" not in command)
+        os.kill(parent, signal.SIGKILL)  # the sweep itself: nothing of it can clean up
+        for pid, command in family.items():
+            deadline = time.monotonic() + 15
+            while process_runs(pid) and time.monotonic() < deadline:
+                time.sleep(0.05)
+            self.assertFalse(process_runs(pid), f"{command} outlived the killed sweep")
 
     def test_worker_processes_report_exactly_what_one_process_does(self) -> None:
         """The tie-sensitive minimum_clearance worst case of the V6 sweep, in one process and in three

@@ -67,6 +67,9 @@ deviation, in the other's frame on a `--continuous-grid-deg`/`--continuous-grid-
 - `incomplete`: some interval is not proved, and a `continuous` row in `warnings` names the pairs
   and paths. The sampled verdict stands and the exit code does not change, unless
   `--require-continuous` is set (then `status: incomplete`, exit 2).
+- `disabled`: no proof ran, because of `--no-continuous` or `--smoke`, or because the mesh bounds
+  are unavailable (`continuous.reason`). `--require-continuous` refuses the first two (exit 2) and
+  treats the third as `incomplete`.
 
 Resolve an incomplete proof by sweeping the unproved pairs' subsystem (`--subsystem`) with a finer
 `--steps` or a deeper `--continuous-depth`, until it reads `proved_collision_free`, or accept the
@@ -79,13 +82,15 @@ Jacobians, and coverage is the sweep's paths, not the whole joint space (`contin
 
 ## Subsystems
 
-The record's subassemblies own the pairs (`subsystems.py`). Each moving occurrence must belong to
-exactly one; a moving/static pair belongs to the moving part's subassembly, a pair of two
-subassemblies' moving parts to `interface`, a static pair to `static`. `subsystems.owners` reports
-each owner's members, pair and finding counts, and its period per independent joint, detected from
-the transforms over a whole verified cycle (a 5.5:1 starter pinion on its crank is 720 degrees).
+The record's subassemblies own the pairs (`subsystems.py`). Subassembly ids are unique, and each
+moving occurrence must belong to exactly one; a moving/static pair belongs to the moving part's
+subassembly, a pair of two subassemblies' moving parts to `interface`, a static pair to `static`.
+`subsystems.owners` reports each owner's members, pair and finding counts, and its period per
+independent joint, detected from the transforms over a whole verified cycle (a 5.5:1 starter
+pinion on its crank is 720 degrees).
 `--subsystem NAME` (repeatable; `interface` and `static` too) measures only that owner's pairs over
-the same samples. Merge runs that together cover every owner:
+the same samples. Merge runs that together cover every owner (one run, when a single owner owns
+every pair):
 
 `uv run --script skill://cad-flow/scripts/run.py cad-motion/scripts/merge_sweeps.py --hw hw --version vN --case NAME --inputs hw/motion/vN/A hw/motion/vN/B ...`
 

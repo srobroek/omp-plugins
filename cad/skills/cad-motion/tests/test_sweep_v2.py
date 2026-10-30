@@ -186,7 +186,7 @@ class PartitionTests(unittest.TestCase):
             split.select(["bottom", "nope"])
         self.assertIn("no such subsystem", caught.exception.problems[0])
 
-    def test_a_moving_body_in_no_or_two_subassemblies_and_a_reserved_name_are_refused(self) -> None:
+    def test_a_moving_body_in_no_or_two_subassemblies_a_reserved_name_and_a_repeated_id_are_refused(self) -> None:
         import copy
         two = copy.deepcopy(ENGINE)
         two["subassemblies"][1]["parts"].append("TST-0002")  # a legacy PN listed in both
@@ -194,8 +194,10 @@ class PartitionTests(unittest.TestCase):
         none["joints"].append(revolute("J-007", "@valve-1", "TST-0008", -5, 5, nominal=0))  # attached, listed nowhere
         reserved = copy.deepcopy(ENGINE)
         reserved["subassemblies"][1]["id"] = "interface"
+        repeated = copy.deepcopy(ENGINE)
+        repeated["subassemblies"][1]["id"] = "bottom"  # two subassemblies, one owner name: never merged
         for data, expected in ((two, "TST-0002 belongs to 2 subassemblies"), (none, "TST-0008 belongs to no"),
-                               (reserved, "'interface' uses a reserved")):
+                               (reserved, "'interface' uses a reserved"), (repeated, "'bottom' is used 2 times")):
             with self.subTest(expected), self.assertRaises(subsystems.SubsystemError) as caught:
                 self.split(data)
             self.assertTrue(any(expected in problem for problem in caught.exception.problems), caught.exception.problems)
@@ -339,8 +341,9 @@ class BetweenSampleCliTests(unittest.TestCase):
     def tearDownClass(cls) -> None:
         cls.tmp.cleanup()
 
-    def sweep(self, *options: str):
+    def sweep(self, *options: str, env: dict[str, str] | None = None):
         import json
+        import os
         import subprocess
         import tempfile
 
@@ -349,7 +352,8 @@ class BetweenSampleCliTests(unittest.TestCase):
         proc = subprocess.run(["uv", "run", "--quiet", "--script", str(SCRIPTS / "sweep.py"), "--hw", str(self.hw),
                                "--parts-dir", str(self.parts), "--steps", "2", "--grid", "0", "--no-cache",
                                "--worst-step", str(out / "worst.step"), *options],
-                              capture_output=True, text=True, check=False, timeout=900)
+                              capture_output=True, text=True, check=False, timeout=900,
+                              env={**os.environ, **(env or {})})
         return proc, json.loads(proc.stdout) if proc.stdout.strip() else {}
 
     def make_work(self) -> Path:
@@ -387,6 +391,25 @@ class BetweenSampleCliTests(unittest.TestCase):
         refused, _ = self.sweep("--continuous-depth", "7")
         self.assertEqual(refused.returncode, 2)
         self.assertIn("--continuous-depth", refused.stderr)
+
+    def test_require_continuous_fails_a_sweep_whose_proof_did_not_run(self) -> None:
+        import tempfile
+
+        for options in (("--no-continuous",), ("--smoke",)):
+            with self.subTest(options=options):
+                refused, result = self.sweep(*options, "--require-continuous")
+                self.assertEqual((refused.returncode, result), (2, {}))
+                self.assertIn("--require-continuous", refused.stderr)
+        hidden = Path(tempfile.mkdtemp(dir=self.make_work()))
+        (hidden / "fcl.py").write_text("raise ImportError('python-fcl hidden by the test')\n", encoding="utf-8")
+        unbounded = {"PYTHONPATH": str(hidden)}  # mesh_bound imports fcl: no mesh bounds, no between-sample proof
+        warned, result = self.sweep(env=unbounded)
+        self.assertEqual(warned.returncode, 0, warned.stderr[-2000:])
+        self.assertEqual((result["status"], result["continuous"]["status"]), ("pass", "disabled"))
+        self.assertIn("mesh bounds unavailable", result["continuous"]["reason"])
+        required, result = self.sweep("--require-continuous", env=unbounded)
+        self.assertEqual(required.returncode, 2, required.stderr[-2000:])
+        self.assertEqual((result["status"], result["continuous"]["status"]), ("incomplete", "disabled"))
 
 
 if __name__ == "__main__":

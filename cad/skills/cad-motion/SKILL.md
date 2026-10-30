@@ -121,7 +121,7 @@ Exit codes for all scripts:
   findings, between-sample findings, suspect measurements and spot-check failures, `pose.py`
   joint-limit findings, and `freecad_assembly.py` violations and residuals.
 - 2: a usage or infrastructure error, a sweep stopped by `--time-limit`, or, with
-  `--require-continuous`, an incomplete between-sample proof.
+  `--require-continuous`, an incomplete between-sample proof or one that could not run.
 
 ## Sweep checks
 

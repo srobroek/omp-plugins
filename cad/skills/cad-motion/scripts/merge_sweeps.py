@@ -9,7 +9,8 @@ Usage:
         --case NAME --inputs BUNDLE [BUNDLE ...] [--replace]
 
 Each input is a published sweep bundle of `--version` run with `--subsystem` (sweep.py), together
-covering every owner of the partition: every subassembly, `interface` and `static`. The merge refuses,
+covering every owner of the partition: every subassembly, `interface` and `static`. One input is
+enough when its owners own every pair. The merge refuses,
 before it writes anything, inputs that were swept on other inputs, options, partition, rule or code
 (evidence/partition.json), that did not finish their samples, that leave a pair out or measure one
 twice, or whose samples differ. It then reduces their untruncated statistics (evidence/) with the
@@ -85,8 +86,6 @@ def read_input(bundle: Path) -> Input:
 
 def check_inputs(inputs: list[Input], version_dir: Path) -> None:
     """Refuse inputs that cannot form exactly one whole sweep: MergeError names the first problem."""
-    if len(inputs) < 2:
-        raise MergeError("a merge needs at least two subsystem sweeps")
     first = inputs[0].provenance
     for item in inputs:
         provenance = item.provenance

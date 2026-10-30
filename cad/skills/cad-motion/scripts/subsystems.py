@@ -105,6 +105,9 @@ def partition(chain: Any, groups: Sequence[Any], all_pairs: Sequence[tuple[str, 
     `groups` (assembly_data.Group: id, members). SubsystemError lists every problem."""
     problems = [f"subassembly {group.id!r} uses a reserved subsystem name" for group in groups
                 if group.id in RESERVED]
+    ids = [group.id for group in groups]
+    problems += [f"subassembly id {name!r} is used {ids.count(name)} times; give each subassembly its own id"
+                 for name in dict.fromkeys(ids) if ids.count(name) > 1]
     moving = moving_occurrences(chain)
     membership: dict[str, list[str]] = {oid: [] for oid in moving}
     for group in groups:

@@ -1069,7 +1069,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-continuous", dest="continuous", action="store_false",
                         help="skip the between-sample check: the sampled poses only")
     parser.add_argument("--require-continuous", action="store_true",
-                        help="fail an incomplete between-sample proof (exit 2) instead of warning")
+                        help="fail (exit 2) a between-sample proof that is incomplete or could not run (no mesh "
+                             "bounds) instead of warning; refused with --no-continuous or --smoke")
     parser.add_argument("--continuous-grid-deg", type=float, default=continuous.GRID_DEG, metavar="DEG",
                         help=f"between-sample check: fine rate cells of a revolute path (default {continuous.GRID_DEG})")
     parser.add_argument("--continuous-grid-mm", type=float, default=continuous.GRID_MM, metavar="MM",
@@ -1106,6 +1107,8 @@ def usage_problem(args: argparse.Namespace) -> str | None:
         return "--continuous-safety must be a finite number >= 1"
     if not 0 <= args.continuous_depth <= continuous.MAX_DEPTH:
         return f"--continuous-depth must be 0..{continuous.MAX_DEPTH}"
+    if args.require_continuous and continuous_settings(args) is None:
+        return "--require-continuous needs the between-sample check, which --no-continuous and --smoke turn off"
     if args.changed_only and not args.version:
         return "--changed-only compares built versions; it needs --version"
     if args.since_version and not args.changed_only:
@@ -1467,8 +1470,9 @@ def report(run: Run, plan: Plan, statistics: Mapping[str, Any], *, broad_phase: 
     failures = audit["failures"] if audit is not None else []
     failed = bool(state.collisions or findings or state.limits or any(row["status"] == "fail" for row in requirement_rows)
                   or any(not row["resolved"] for row in suspects) or failures or between["status"] == "finding")
+    unproved = between["status"] in ("incomplete", "disabled")  # disabled: no proof ran (mesh bounds unavailable)
     status = ("incomplete" if not complete else "fail" if failed
-              else "incomplete" if between["status"] == "incomplete" and args.require_continuous else "pass")
+              else "incomplete" if unproved and args.require_continuous else "pass")
     refs = [[chain.ref(a), chain.ref(b)] for a, b in checked]
     result: dict[str, Any] = {
         "status": status, "scope": scope_of(run, complete),
