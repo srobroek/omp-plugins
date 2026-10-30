@@ -23,7 +23,10 @@ ASK which live variant passes the VARIANT gate; record nothing as chosen until t
 
 1. Read `hw/product.yaml` and `hw/requirements.yaml`, then LOAD `references/scene-format.md`.
 2. DRAFT 2-4 variants in `hw/concept/<product-id>.scene.json`, each a different answer to
-   the main trade-off, with that trade-off in `params` and one-line `summary`.
+   the main trade-off, with that trade-off in `params` and one-line `summary`. Put the process
+   and material each variant assumes in `params` (e.g. `window_material: "cast acrylic"`), from
+   `hw/product.yaml` `manufacturing.processes`. A variant that needs what its process cannot
+   make, such as a see-through part printed in FDM, names that conflict in its `summary`.
 3. Run `uv run --script scripts/concept.py check <scene>` after every edit. -> exit 0, `"ok": true`.
 4. Start the preview once as the harness's background job or service:
    `uv run --script scripts/serve.py --scene-dir hw/concept`. Read the first stdout JSON line
@@ -35,7 +38,9 @@ ASK which live variant passes the VARIANT gate; record nothing as chosen until t
 6. Apply each request as one operation from the table, then re-run step 3.
 7. On "commit batch": run step 3 and save one screenshot per live variant. No other checks
    run before LAYOUT freeze. Hand the batch to `skill://cad-flow` for COMMIT.
-8. "More detail?" -> back to step 5. Otherwise ASK the VARIANT gate, set `chosen`, and run
+8. "More detail?" -> back to step 5. Otherwise ASK the VARIANT gate, naming each variant's
+   process or material conflict, set `chosen`, and run
+   `uv run --script scripts/concept.py handoff <scene> --out <new path under .cad-work/>`
    -> exit 0 means the manifest passed the bundled handoff JSON schema.
 9. MUST stop the concept server when the user is done: after the VARIANT gate passes or the
    session ends. Stop it through the harness job or service handle. If none exists, start it with

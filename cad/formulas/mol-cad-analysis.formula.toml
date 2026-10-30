@@ -1,7 +1,7 @@
 # mol-cad-analysis: one L4 analysis case run by a cad-analyst worker on an integrated version, read-only on hw/.
-# Bond one per case onto an analysis fan-out step, all independent cases in one batch:
+# Bond one per case onto an analysis fan-out step, all independent cases in one batch; the joint sweep and FEA at its worst pose bond onto the stage's full-check step.
 # Before relying on legacy files, run `validate.py PROJECT --migration-plan`; it is read-only. Use cad-record's layout API and version snapshot contract for all inputs and outputs.
-# A static FEA case at a sweep pose reads the exact motion bundle evidence; bond it once the sweep molecule closes.
+# A static FEA case at a sweep pose reads the exact motion bundle evidence; bond it onto the full-check step once the sweep molecule closes.
 # A motion case returns a scratch plan; the lead accepts it into hw/motion/cases/<case>/ and publishes the render.
 formula = "mol-cad-analysis"
 description = "Run L4 {{kind}} case {{case}} on {{product}} version {{version}} and propose verification rows"
@@ -35,7 +35,7 @@ id = "run-case"
 title = "ANALYSE {{kind}} case {{case}} on {{version}}"
 type = "task"
 labels = ["cad", "phase:analysis"]
-description = "Unit analysis-{{case}}. Run the {{kind}} case in the lead's brief against version {{version}}, reading its `record/` snapshot. Publish results through the producer's immutable bundle default and cad-record layout API; explicit outputs must be new paths under `.cad-work/`. Do not write into a built version or hand-pick managed paths. See `cad-record/references/layout.md` and the producer skill for CLI options. An FEA case at a sweep pose uses that bundle's `worst.step` and `worst.step.json`; it waits for the sweep molecule. A motion case writes `.cad-work/analysis-{{case}}/plan.yaml`, renders only with `--out-dir` under that directory, and returns the plan and coverage report for the lead to publish. Check inputs and warnings, report the exit verdict and propose verification rows."
+description = "Unit analysis-{{case}}. Run the {{kind}} case in the lead's brief against version {{version}}, reading its `record/` snapshot. Publish results through the producer's immutable bundle default and cad-record layout API; explicit outputs must be new paths under `.cad-work/`. Do not write into a built version or hand-pick managed paths. See `cad-record/references/layout.md` and the producer skill for CLI options. Run a long case (a sweep, a FreeCAD assembly run, FEA) as a smoke run first (`sweep.py --smoke`, a FreeCAD run on its first few frames), then in the background; wait for its result file, not its process, and stop it by its process group. An FEA case at a sweep pose uses that bundle's `worst.step` and `worst.step.json`; it waits for the sweep molecule. A motion case writes `.cad-work/analysis-{{case}}/plan.yaml`, renders only with `--out-dir` under that directory, and returns the plan and coverage report for the lead to publish. Check inputs and warnings, report the exit verdict and propose verification rows."
 
 [steps.metadata]
 skill_hints = "cad-motion, cad-analysis, cad-fits"
