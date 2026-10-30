@@ -66,16 +66,16 @@ note; a part whose interfaces change drops back to F1 until the new interface is
 
 ## Self-check: block-like parts
 
-`scripts/form_check.py` flags `block_like` from F2 when the part has either strongly
-axis-planar faces or no recognized blends/freeform faces, and also passes both volume
-and thickness tests:
+`scripts/form_check.py` flags `block_like` from F2 when the part has strongly
+axis-planar faces and also passes both volume and thickness tests:
 
-1. At least 20% of the oriented bounding-box volume is occupied by solid material.
-2. The shortest OBB extent exceeds 10% of the second-shortest extent.
+1. At least 80% of face area is planar and normal to a principal axis.
+2. At least 20% of the oriented bounding-box volume is occupied by solid material.
+3. The shortest OBB extent exceeds 10% of the second-shortest extent.
 
 These measures catch solid placeholder blocks without rejecting open frames or thin
-sheet-like parts merely for lacking cosmetic blends. Blends or freeform faces do not
-exempt a dense, block-shaped solid.
+sheet-like parts. Parts without recognized blends or freeform faces are not exempt
+from the axis-planar requirement.
 
 Before the gate, also answer each of these by looking at a render, not at the code:
 

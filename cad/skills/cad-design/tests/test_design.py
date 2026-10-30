@@ -136,6 +136,9 @@ class BlockShapeTests(unittest.TestCase):
                 '    outer = cq.Workplane().box(100, 100, 20)\n'
                 '    inner = cq.Workplane().box(90, 90, 22)\n'
                 '    return outer.cut(inner)\n', encoding="utf-8")
+            (models / "TST-0303.py").write_text(
+                'import cadquery as cq\nKERNEL = "cadquery"\nPARAMS = {}\n\n'
+                'def build(params):\n    return cq.Workplane().cylinder(100, 10)\n', encoding="utf-8")
             out = Path(tmp) / "out"
             code, built = run_json([sys.executable, str(SCRIPTS / "build_reference.py"), "--kernel", "cadquery",
                                     "--models", str(models), "--out", str(out)])
@@ -147,6 +150,7 @@ class BlockShapeTests(unittest.TestCase):
         self.assertEqual(sorted(by_part), ["TST-0301"])
         box = report["parts"]["TST-0301"]
         frame = report["parts"]["TST-0302"]
+        pin = report["parts"]["TST-0303"]
         self.assertGreaterEqual(box["axis_planar_fraction"], 0.80)
         self.assertGreaterEqual(box["obb_fill_fraction"], 0.20)
         self.assertEqual(box["blend_faces"] + box["freeform_faces"], 0)
@@ -154,6 +158,8 @@ class BlockShapeTests(unittest.TestCase):
         self.assertLess(frame["obb_fill_fraction"], 0.20)
         self.assertGreaterEqual(frame["obb_thickness_fraction"], 0.10)
         self.assertEqual(frame["blend_faces"] + frame["freeform_faces"], 0)
+        self.assertLess(pin["axis_planar_fraction"], 0.80)
+        self.assertEqual(pin["blend_faces"] + pin["freeform_faces"], 0)
 
 
 @unittest.skipUnless(shutil.which("uv"), "uv is required to build the cad-motion block fixtures")
@@ -173,7 +179,7 @@ class BlockDetectorTests(unittest.TestCase):
         code, report = self.f2
         self.assertEqual(code, 1)
         flagged = sorted(f["part"] for f in report["findings"] if f["check"] == "block_like")
-        self.assertEqual(flagged, MADE_PARTS)
+        self.assertEqual(flagged, MADE_PARTS[:-1])
         self.assertEqual([f for f in report["findings"] if f["check"] != "block_like"], [])
 
     def test_f1_does_not_judge_form(self) -> None:
