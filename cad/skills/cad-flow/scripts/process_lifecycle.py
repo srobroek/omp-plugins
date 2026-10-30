@@ -18,13 +18,13 @@ all: the kernel never hands out an id that is still in use as a process group id
 survivors keep it reserved. Under an exclusive lock on the runs directory, the claim reads every
 record of `hw` and of its .cad-work scratch copies, plus the legacy sweep locks
 (hw/motion/*/.sweep-*.json, .cad-work/**/*.sweep.json). It refuses (`RunRefused`) while
-  - a run of the same kind still runs;
+  - a run with the same identity (kind and scope: a version, a case) still runs;
   - a run that ended left a recorded process group running (orphaned workers);
   - a record cannot be verified: a legacy lock (it has no identity) whose group still runs, a
     record from another host, or an unreadable record.
 It signals none of them; the refusal lists the commands that stop them. It deletes records of
-runs that ended and left nothing running. A running run of another kind is allowed and listed
-in `RunGuard.concurrent`.
+runs that ended and left nothing running. A running run of another identity is allowed and
+listed in `RunGuard.concurrent`, so different checks and FEA cases run side by side.
 
 Private process groups. `spawn` starts a command in a new session under a small supervisor
 (this file's `supervise` mode). The supervisor leads the group, runs the command as its child
@@ -98,6 +98,7 @@ class Stray:
     state: str            # running | orphaned | unverifiable
     reason: str
     run_id: str | None = None
+    scope: str = ""                     # with `kind`, the run's identity
     pid: int | None = None              # the run's own process, while it runs
     groups: tuple[int, ...] = ()        # its process groups that still run
 
@@ -114,7 +115,7 @@ class Stray:
         return f"{self.path}: {self.reason}; delete it once no process of that run is left"
 
     def to_json(self) -> dict[str, Any]:
-        return {"record": str(self.path), "kind": self.kind, "state": self.state, "run_id": self.run_id,
+        return {"record": str(self.path), "kind": self.kind, "scope": self.scope, "state": self.state, "run_id": self.run_id,
                 "pid": self.pid, "groups": list(self.groups), "reason": self.reason, "stop": self.stop_commands()}
 
 
@@ -441,6 +442,7 @@ def _record_stray(path: Path) -> Stray | None:
     try:
         record = json.loads(path.read_text(encoding="utf-8"))
         kind, run_id, host = str(record["kind"]), str(record["run_id"]), str(record["host"])
+        scope = str(record.get("scope", ""))
         pid, recorded = int(record["pid"]), str(record["identity"])
         owned = [(int(group["pgid"]), str(group["identity"])) for group in record["groups"]]
         if record.get("pgid") is not None:
@@ -459,10 +461,11 @@ def _record_stray(path: Path) -> Stray | None:
         groups = tuple(pgid for pgid, leader in owned if _recorded_group_runs(pgid, leader))
     except Unsupported as error:
         return Stray(path, kind, "unverifiable", f"a {kind} run whose processes cannot be checked: {error}", run_id)
+    what = f"a {kind} run of {scope}" if scope else f"a {kind} run"
     if running:
-        return Stray(path, kind, "running", f"a {kind} run still runs as process {pid}", run_id, pid, groups)
+        return Stray(path, kind, "running", f"{what} still runs as process {pid}", run_id, scope, pid, groups)
     if groups:
-        return Stray(path, kind, "orphaned", f"a {kind} run ended and left process groups running", run_id, None, groups)
+        return Stray(path, kind, "orphaned", f"{what} ended and left process groups running", run_id, scope, None, groups)
     return None
 
 
@@ -484,7 +487,7 @@ def _legacy_strays(hw: Path) -> list[Stray]:
         if _legacy_runs(group, pid):
             found.append(Stray(path, "sweep", "unverifiable",
                                f"a sweep lock without a start identity names process group {group}, which still runs",
-                               None, None, (group,)))
+                               groups=(group,)))
     return found
 
 
@@ -571,10 +574,11 @@ class RunGuard:
         self.release()
 
 
-def claim_run(hw: Path, kind: str, run_id: str | None = None) -> RunGuard:
-    """Record this process as a `kind` run of `hw`, or raise RunRefused (see the module
-    docstring). The record holds this process's group only when this process leads it, so its
-    stop command never reaches an invoking shell that shares the group."""
+def claim_run(hw: Path, kind: str, run_id: str | None = None, *, scope: str = "") -> RunGuard:
+    """Record this process as a `kind` run of `hw` for `scope` (what it works on: a version, a
+    case; "" for the whole hw), or raise RunRefused (see the module docstring). The record holds
+    this process's group only when this process leads it, so its stop command never reaches an
+    invoking shell that shares the group."""
     if kind not in KINDS:
         raise ValueError(f"unknown run kind {kind!r}; expected one of {sorted(KINDS)}")
     run_id = run_id or uuid.uuid4().hex
@@ -591,12 +595,12 @@ def claim_run(hw: Path, kind: str, run_id: str | None = None) -> RunGuard:
     pid, pgid = os.getpid(), os.getpgrp()
     with _exclusive(runs / ".lock"):
         found = _inventory(hw, prune=True)
-        refused = [stray for stray in found if stray.state != "running" or stray.kind == kind]
+        refused = [stray for stray in found if stray.state != "running" or (stray.kind, stray.scope) == (kind, scope)]
         if refused:
             raise RunRefused(refused)
         if path.exists():
             raise LifecycleError(f"{path} already exists: a run id names one run")
-        record = {"schema": SCHEMA, "kind": kind, "run_id": run_id, "host": socket.gethostname(), "pid": pid,
+        record = {"schema": SCHEMA, "kind": kind, "scope": scope, "run_id": run_id, "host": socket.gethostname(), "pid": pid,
                   "identity": identity(pid), "pgid": pgid if pgid == pid else None, "argv": list(sys.argv),
                   "started": datetime.now(timezone.utc).isoformat(timespec="seconds"), "groups": []}
         _write_json(path, record)

@@ -647,7 +647,8 @@ def main(argv: list[str] | None = None) -> int:
                 result["reused"] = True
                 status = result_exit_code(result)
             else:
-                with lifecycle.claim_run(args.hw, "fea") as guard:  # refuses while an FEA run or its strays run
+                # one run per case and version: refused while this very case or a stray run runs
+                with lifecycle.claim_run(args.hw, "fea", scope=f"{version}/{case_id}") as guard:
                     stage = LAYOUT.staging(args.hw, "bundle.analysis")
                     output = stage / "results.json"
                     job_scratch = Path(args.hw).parent / ".cad-work"
@@ -688,8 +689,8 @@ def main(argv: list[str] | None = None) -> int:
             scratch_root = output.parent if output is not None else None
             if output is not None:
                 output.parent.mkdir(parents=True, exist_ok=True)
-            # A scratch run is recorded in its project's hw/ when there is one; it is supervised either way.
-            with (lifecycle.claim_run(project_hw, "fea") if project_hw is not None and project_hw.is_dir()
+            # A scratch run is recorded in its project's hw/, one per case file; it is supervised either way.
+            with (lifecycle.claim_run(project_hw, "fea", scope=str(case_path)) if project_hw is not None and project_hw.is_dir()
                   else contextlib.nullcontext()) as guard:
                 result, status = run_job(case_path, case, scratch_root=scratch_root, result_path=output, guard=guard)
     except lifecycle.LifecycleError as exc:

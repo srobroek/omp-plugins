@@ -557,28 +557,40 @@ if len(sys.argv) > 1:
             self.assertEqual(lifecycle.strays(hw), [])
             lifecycle.claim_run(hw, "fea").release()
 
-    def test_a_running_fea_run_refuses_another_with_its_stop_command(self) -> None:
+    def test_two_fea_cases_run_at_once_and_the_same_case_twice_is_refused(self) -> None:
         lifecycle = fea_static.lifecycle
         with tempfile.TemporaryDirectory() as directory:
             project = Path(directory).resolve()
             (project / "hw").mkdir()
             step = project / "beam.step"
             step.touch()
-            case_path = project / "case.yaml"
-            case_path.write_text(f"step: {step}\n{CANTILEVER_TAIL}", encoding="utf-8")
+            cases = {}
+            for name in ("bending", "torsion"):
+                cases[name] = project / name / "case.yaml"
+                cases[name].parent.mkdir()
+                cases[name].write_text(f"step: {step}\n{CANTILEVER_TAIL}", encoding="utf-8")
+            # a running FEA run of the bending case, recorded as fea_static.py records a scratch case
             holder = subprocess.Popen([sys.executable, "-c", f"import sys, time\nsys.path.insert(0, {str(SCRIPT.parent)!r})\n"
-                                       f"import fea_static\nfea_static.lifecycle.claim_run({str(project / 'hw')!r}, 'fea')\n"
-                                       "print('claimed', flush=True)\ntime.sleep(600)\n"],
+                                       f"import fea_static\nfea_static.lifecycle.claim_run({str(project / 'hw')!r}, 'fea', "
+                                       f"scope={str(cases['bending'])!r})\nprint('claimed', flush=True)\ntime.sleep(600)\n"],
                                       stdout=subprocess.PIPE, text=True)
             self.addCleanup(lambda: (holder.kill(), holder.wait(), holder.stdout.close()))
             self.assertEqual(holder.stdout.readline().strip(), "claimed")
-            printed = __import__("io").StringIO()
-            with patch("fea_static.find_freecad", return_value=Path("/fake/freecadcmd")), patch("sys.stdout", printed):
-                status = fea_static.main([str(case_path), "--out", str(project / ".cad-work" / "fea" / "result.json")])
-            self.assertEqual(status, 2)
-            report = json.loads(printed.getvalue())
-            self.assertEqual(report["error"]["code"], "run_refused")
-            self.assertIn(f"kill -TERM {holder.pid}", report["error"]["message"])
+
+            def run(name: str) -> tuple:
+                printed = __import__("io").StringIO()
+                with patch("fea_static.find_freecad", return_value=Path("/fake/freecadcmd")), patch("sys.stdout", printed), \
+                     patch("fea_static.run_job", return_value=({"status": "pass", "run_directory": None}, 0)) as job:
+                    status = fea_static.main([str(cases[name]), "--out", str(project / ".cad-work" / name / "result.json")])
+                return status, json.loads(printed.getvalue()), job
+
+            status, report, job = run("torsion")  # another case runs beside it, recorded while it runs
+            self.assertEqual((status, report["status"], job.call_count), (0, "pass", 1), report)
+            self.assertIsNotNone(job.call_args.kwargs["guard"])
+            status, report, job = run("bending")  # the same case again is refused before it starts
+            self.assertEqual((status, report["error"]["code"], job.call_count), (2, "run_refused", 0))
+            self.assertIn(f"still runs as process {holder.pid}; stop it with `kill -TERM {holder.pid}`",
+                          report["error"]["message"])
             self.assertEqual(len(list(lifecycle.runs_dir(project / "hw").glob("*.json"))), 1)
 
     def test_timeout_seconds_must_be_a_positive_number(self) -> None:
