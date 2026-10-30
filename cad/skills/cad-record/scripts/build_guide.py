@@ -3,9 +3,15 @@
 # requires-python = ">=3.11,<3.15"
 # dependencies = ["defusedxml>=0.7.1", "pyyaml>=6.0"]
 # ///
-"""Generate a structured GitBuilding guide from a hardware record and built version.
+"""Generate a structured GitBuilding guide, an OKH manifest and a DIN SPEC 3105-1 checklist from a
+hardware record and built version.
 
-Usage: build_guide.py HW --version vN --out DIR
+Usage: build_guide.py HW --version vN --out DIR [--rev REV] [--replace]
+
+--rev prepares the documents for release REV of vN before release.py seals it (release.py refuses a
+generated okh.toml that describes another release). Each document starts with a marker that holds the
+sha256 of the rest; in hw/docs/ build_guide.py overwrites only an unchanged generated document, and a
+file without the marker or edited since needs --replace.
 """
 
 from __future__ import annotations
@@ -19,6 +25,8 @@ import os
 import re
 import sys
 from collections import defaultdict
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Mapping, Sequence
@@ -44,6 +52,9 @@ else:
 import assembly_data  # noqa: E402
 import assembly_check  # noqa: E402
 import assembly_sheet  # noqa: E402
+import generated_docs  # noqa: E402
+
+EVIDENCE_PATH = re.compile(r"hw/[^\s,;()\"'<>]+")  # a cited path in an evidence cell, as release.py reads it
 
 
 class GuideError(ValueError):
@@ -76,10 +87,15 @@ def read_csv(path: Path, *, optional: bool = False) -> list[dict[str, str]]:
         raise GuideError(f"cannot read {path}: {exc}") from exc
 
 
+def cell(value: Any) -> str:
+    """`value` inside one Markdown table cell: pipes escaped, line breaks as spaces."""
+    return str(value).replace("|", "\\|").replace("\n", " ")
+
+
 def text(value: Any) -> str:
     if value is None or not str(value).strip():
         return "not recorded"
-    return str(value).strip().replace("|", "\\|").replace("\n", " ")
+    return cell(str(value).strip())
 
 
 def table(headers: Sequence[str], rows: Sequence[Sequence[Any]]) -> str:
@@ -88,8 +104,12 @@ def table(headers: Sequence[str], rows: Sequence[Sequence[Any]]) -> str:
     return "\n".join(lines)
 
 
+def relative_path(source: Path, out: Path) -> str:
+    return Path(os.path.relpath(source, out)).as_posix()
+
+
 def relative_link(source: Path, out: Path) -> str:
-    return quote(Path(os.path.relpath(source, out)).as_posix(), safe="/.-_:@")
+    return quote(relative_path(source, out), safe="/.-_:@")
 
 
 def markdown_link(label: str, source: Path, out: Path) -> str:
@@ -121,29 +141,67 @@ def item_geometry(assembly: Mapping[str, Any], frames: Mapping[str, str]) -> Sim
     return SimpleNamespace(occurrences=tuple(occurrences), groups=groups, joints=joints)
 
 
-def release_manifest(hw: Path, product_id: str, version: str) -> Path | None:
-    """The newest release of `version`: a version 2 manifest names it in frozen.version, a version 1
-    manifest lists its files in place. None when no release holds that version."""
-    releases = hw / "releases"
-    if not releases.is_dir():
+@dataclass(frozen=True)
+class ReleaseRef:
+    """The release the documents describe: sealed (its manifest exists) or prepared with --rev."""
+
+    rev: str
+    date: str  # YYYY-MM-DD: the sealed manifest's released_at, or the UTC date a prepared release is made
+    manifest: Path
+    sealed: bool
+
+    def label(self) -> str:
+        return f"hw/releases/{self.rev}/manifest.json"
+
+
+def _read_manifest(path: Path) -> dict[str, Any] | None:
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
         return None
+    return manifest if isinstance(manifest, dict) else None
+
+
+def _holds(manifest: Mapping[str, Any], product_id: str, version: str) -> bool:
+    """A version 2 manifest names the version in frozen.version, a version 1 manifest lists its files in place."""
+    if manifest.get("product_id") != product_id:
+        return False
+    if "schema_version" in manifest:
+        frozen = manifest.get("frozen")
+        return isinstance(frozen, Mapping) and frozen.get("version") == version
+    return any(re.search(rf"(?:^|/)versions/{re.escape(version)}(?:/|$)", item)
+               for item in manifest.get("files", []) if isinstance(item, str))
+
+
+def release_reference(hw: Path, product_id: str, version: str, rev: str | None) -> ReleaseRef | None:
+    """Release `rev` of `version`, sealed or prepared; without `rev`, the newest sealed release of
+    `version`, or None when no release holds it."""
+    if rev is not None:
+        path = LAYOUT.locate(hw, LAYOUT.load().path("release.package", {"REV": rev})) / "manifest.json"
+        if not path.exists():
+            return ReleaseRef(rev, datetime.now(timezone.utc).strftime("%Y-%m-%d"), path, sealed=False)
+        manifest = _read_manifest(path)
+        if manifest is None or not _holds(manifest, product_id, version):
+            raise GuideError(f"hw/releases/{rev}/manifest.json does not release {version} of {product_id or 'this product'}")
+        return ReleaseRef(rev, str(manifest.get("released_at", ""))[:10], path, sealed=True)
     candidates = []
-    for path in releases.glob("*/manifest.json"):
-        try:
-            manifest = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        if not isinstance(manifest, dict) or manifest.get("product_id") != product_id:
-            continue
-        if "schema_version" in manifest:
-            frozen = manifest.get("frozen")
-            holds_version = isinstance(frozen, Mapping) and frozen.get("version") == version
-        else:
-            holds_version = any(re.search(rf"(?:^|/)versions/{re.escape(version)}(?:/|$)", item)
-                                for item in manifest.get("files", []) if isinstance(item, str))
-        if holds_version:
+    for path in (hw / "releases").glob("*/manifest.json"):
+        manifest = _read_manifest(path)
+        if manifest is not None and _holds(manifest, product_id, version):
             candidates.append((str(manifest.get("released_at", "")), str(path), path))
-    return max(candidates, default=(None, None, None))[2]
+    if not candidates:
+        return None
+    released_at, _, path = max(candidates)
+    return ReleaseRef(path.parent.name, released_at[:10], path, sealed=True)
+
+
+def release_cell(release: ReleaseRef | None, version: str, hw: Path, out: Path) -> str:
+    """The release manifest a Markdown document cites: a link once sealed."""
+    if release is None:
+        return f"MISSING: no hw/releases/<REV>/manifest.json approves {version}"
+    if release.sealed:
+        return record_link(release.label(), release.manifest, hw, out)
+    return f"{release.label()} (release.py seals it with these documents)"
 
 
 def built_manufacturing(layout: Any, hw: Path, version: str, pn: str, process: str, out: Path) -> str | None:
@@ -218,20 +276,23 @@ def record_link(label: str, source: Path, hw: Path, out: Path) -> str:
 
 
 def evidence_links(evidence: str, hw: Path, out: Path) -> str:
-    """Link existing project-relative evidence files; keep other recorded text unchanged."""
+    """The evidence text with each cited hw/ path that exists, a file or a bundle directory, as a link
+    and each other cited path marked MISSING. Unescaped Markdown: the caller escapes the table cell."""
+    evidence = evidence or ""
     pieces: list[str] = []
     cursor = 0
-    for match in re.finditer(r"hw/[^\s,;()\"'<>]+", evidence or ""):
-        pieces.append(text((evidence or "")[cursor:match.start()]))
-        relative = match.group(0).rstrip(".").rstrip("/")
+    for match in EVIDENCE_PATH.finditer(evidence):
+        cited = match.group(0).rstrip(".")  # a full stop ends the sentence, not the path
         try:
-            source = LAYOUT.locate(hw, relative)
+            source = LAYOUT.locate(hw, cited.rstrip("/"))
         except LAYOUT.LayoutError:
             source = None
-        pieces.append(markdown_link(match.group(0), source, out) if source is not None and source.is_file()
-                      else f"MISSING: {match.group(0)}")
+        pieces.append(evidence[cursor:match.start()])
+        pieces.append(markdown_link(cited, source, out) if source is not None and source.exists()
+                      else f"MISSING: {cited}")
+        pieces.append(match.group(0)[len(cited):])
         cursor = match.end()
-    pieces.append(text((evidence or "")[cursor:]))
+    pieces.append(evidence[cursor:])
     return "".join(pieces).strip() or "not recorded"
 
 
@@ -239,52 +300,61 @@ def toml_string(value: Any) -> str:
     return json.dumps(str(value), ensure_ascii=False)[1:-1]
 
 
+def licenses(product: Mapping[str, Any]) -> dict[str, str | None]:
+    """product.yaml license.hardware and license.documentation, None where not recorded."""
+    data = product.get("license") if isinstance(product.get("license"), Mapping) else {}
+    return {key: value.strip() if isinstance(value := data.get(key), str) and value.strip() else None
+            for key in ("hardware", "documentation")}
+
+
+def license_text(product: Mapping[str, Any], key: str) -> str:
+    return licenses(product)[key] or f"HUMAN-OWNED / MISSING: product.license.{key}"
+
+
+def okh_path(label: str, source: Path, out: Path, *, directory: bool = False) -> str:
+    """A path from the okh.toml in `out` to `source`, or MISSING when it does not exist."""
+    if directory:
+        return relative_path(source, out) + "/" if source.is_dir() else f"MISSING: {label}"
+    return relative_path(source, out) if source.is_file() else f"MISSING: {label}"
+
+
 def okh_document(hw: Path, out: Path, product: Mapping[str, Any], version: str,
-                 release: Path | None, processes: Sequence[str]) -> str:
+                 release: ReleaseRef | None, processes: Sequence[str]) -> str:
     template = (SKILL / "assets" / "docs-templates" / "okh.toml").read_text(encoding="utf-8")
-    license_data = product.get("license") if isinstance(product.get("license"), Mapping) else {}
-    hardware_license = license_data.get("hardware")
-    documentation_license = license_data.get("documentation")
-    released_at = ""
-    if release is not None:
-        try:
-            released_at = str(json.loads(release.read_text(encoding="utf-8")).get("released_at") or "")
-        except (OSError, json.JSONDecodeError):
-            released_at = ""
+    recorded = licenses(product)
+    manufacturing = LAYOUT.version_dir(hw, version) / "manufacturing"
     values = {
-        "name": toml_string(product.get("id") or "not recorded"),
-        "version": toml_string(version),
-        "license": toml_string(documentation_license or
-                                "HUMAN-OWNED: set product.license.documentation (SPDX identifier)"),
-        "hardware_license": toml_string(hardware_license or
-                                         "HUMAN-OWNED: set product.license.hardware (SPDX identifier)"),
-        "release_date": toml_string(released_at or "not released"),
-        "bom_source": toml_string(record_link("hw/bom.csv", hw / "bom.csv", hw, out)),
-        "parts_to_make": toml_string("index.md#parts-to-make"),
-        "parts_to_buy": toml_string("index.md#parts-to-buy"),
-        "manufacturing_files": f"../versions/{version}/manufacturing/",
+        "name": product.get("id") or "not recorded",
+        "version": version,
+        "license": recorded["documentation"] or "HUMAN-OWNED: set product.license.documentation (SPDX expression)",
+        "hardware_license": recorded["hardware"] or "HUMAN-OWNED: set product.license.hardware (SPDX expression)",
+        "release": release.rev if release else "not released",
+        "release_date": release.date if release else "not released",
+        "bom_source": okh_path("hw/bom.csv", hw / "bom.csv", out),
+        "parts_to_make": "index.md#parts-to-make",
+        "parts_to_buy": "index.md#parts-to-buy",
+        "manufacturing_files": okh_path(f"hw/versions/{version}/manufacturing/", manufacturing, out, directory=True),
         "manufacturing_processes": ", ".join(map(str, processes)) or "MISSING: product.manufacturing.processes",
-        "readme": toml_string("index.md"),
-        "assembly_steps": toml_string("index.md#assembly-steps"),
-        "tools_and_consumables": toml_string("index.md#tools-and-consumables"),
-        "validation_method": toml_string(record_link("hw/verification.csv", hw / "verification.csv", hw, out)),
-        "validation_description": toml_string("See index.md#checks-before-use for verification status and evidence."),
+        "assembly_steps": "index.md#assembly-steps",
+        "tools_and_consumables": "index.md#tools-and-consumables",
+        "validation_method": okh_path("hw/verification.csv", hw / "verification.csv", out),
+        "validation_description": "See index.md#checks-before-use for verification status and evidence.",
     }
     for key, value in values.items():
-        template = template.replace("{{" + key + "}}", value)
-    missing = []
-    if not hardware_license:
-        missing.append("product.license.hardware")
-    if not documentation_license:
-        missing.append("product.license.documentation")
-    release_value = (record_link(f"hw/releases/{release.parent.name}/manifest.json", release, hw, out)
-                     if release else f"MISSING: no hw/releases/<REV>/manifest.json approves {version}")
+        template = template.replace("{{" + key + "}}", toml_string(value))
+    missing = [f"product.license.{key}" for key in ("hardware", "documentation") if not recorded[key]]
+    if release is None:
+        manifest = f"MISSING: no hw/releases/<REV>/manifest.json approves {version}"
+    else:
+        manifest = relative_path(release.manifest, out) + ("" if release.sealed else
+                                                           " (release.py seals it with these documents)")
     return template + "\n# Planned product processes: " + ", ".join(processes or ["MISSING: product.manufacturing.processes"]) + "\n" + \
-           "# Record-derived release manifest: " + release_value + "\n" + \
+           "# Record-derived release manifest: " + manifest + "\n" + \
            "# HUMAN-OWNED: licensor, author, design_owner, repository URL, software, tools, readiness level.\n" + \
-           ("# HUMAN-OWNED / MISSING: " + ", ".join(missing) + "; select approved SPDX identifiers.\n" if missing else "")
+           ("# HUMAN-OWNED / MISSING: " + ", ".join(missing) + "; record approved SPDX expressions.\n" if missing else "")
 
-def din_document(hw: Path, out: Path, version: str, release: Path | None, processes: Sequence[str],
+
+def din_document(hw: Path, out: Path, version: str, release: ReleaseRef | None, processes: Sequence[str],
                  verification: Sequence[Mapping[str, str]], decisions: Sequence[Path],
                  requirements: Mapping[str, Any], product: Mapping[str, Any]) -> str:
     template = (SKILL / "assets" / "docs-templates" / "din-spec-3105-1-checklist.md").read_text(encoding="utf-8")
@@ -297,8 +367,7 @@ def din_document(hw: Path, out: Path, version: str, release: Path | None, proces
     )
     requirements_ids = ", ".join(str(item.get("id")) for item in requirements.get("requirements", [])
                                   if isinstance(item, Mapping)) or "MISSING: hw/requirements.yaml requirements"
-    release_link = (markdown_link(f"hw/releases/{release.parent.name}/manifest.json", release, out)
-                    if release else f"MISSING: no hw/releases/<REV>/manifest.json approves {version}")
+    release_link = release_cell(release, version, hw, out)
     records = {
         "purpose_evidence": f"{record_link('product.yaml', hw / 'product.yaml', hw, out)}; "
                             f"{record_link('requirements.yaml', hw / 'requirements.yaml', hw, out)} ({requirements_ids})",
@@ -309,13 +378,11 @@ def din_document(hw: Path, out: Path, version: str, release: Path | None, proces
         "manufacturing_evidence": f"processes: {', '.join(processes) if processes else 'MISSING: product.manufacturing.processes'}; "
                                   f"{record_link('bom.csv', hw / 'bom.csv', hw, out)}",
         "decision_evidence": decision_links,
-        "verification_evidence": verification_evidence,
+        "verification_evidence": cell(verification_evidence),
         "release_evidence": release_link,
         "guide_evidence": "index.md",
-        "license_evidence": (f"HUMAN-OWNED / MISSING: product.license.documentation and product.license.hardware"
-                             if not isinstance(product.get("license"), Mapping) else
-                             f"documentation: {product['license'].get('documentation')}; hardware: "
-                             f"{product['license'].get('hardware')}"),
+        "license_evidence": f"documentation: {license_text(product, 'documentation')}; "
+                            f"hardware: {license_text(product, 'hardware')}",
         "change_evidence": f"{record_link('bom.csv', hw / 'bom.csv', hw, out)}; {release_link}; {decision_links}",
     }
     for key, value in records.items():
@@ -323,7 +390,8 @@ def din_document(hw: Path, out: Path, version: str, release: Path | None, proces
     return template.replace("{{requirements_evidence}}", requirements_ids)
 
 
-def make_guide(hw: Path, version: str, out: Path) -> tuple[str, dict[str, str]]:
+def make_guide(hw: Path, version: str, out: Path, rev: str | None = None) -> dict[str, str]:
+    """The generated documents by file name, before their marker line; `rev` prepares them for that release."""
     hw = hw.resolve()
     version_dir = LAYOUT.version_dir(hw, version)
     version_manifest = version_dir / "manifest.json"
@@ -372,10 +440,8 @@ def make_guide(hw: Path, version: str, out: Path) -> tuple[str, dict[str, str]]:
         revisions = {row.get("rev", "").strip() for row in bom_rows if row.get("rev", "").strip()}
         revision = next(iter(revisions)) if len(revisions) == 1 else None
     overview = [("Product", product_id), ("Revision", revision), ("Version", version)]
-    manifest_path = release_manifest(hw, str(product_id or ""), version)
-    overview.append(("Release manifest", record_link(
-        f"hw/releases/{manifest_path.parent.name}/manifest.json", manifest_path, hw, out) if manifest_path else
-        f"MISSING: no hw/releases/<REV>/manifest.json approves {version}"))
+    release = release_reference(hw, str(product_id or ""), version, rev)
+    overview.append(("Release manifest", release_cell(release, version, hw, out)))
 
     make_rows: list[tuple[Any, ...]] = []
     buy_rows: list[tuple[Any, ...]] = []
@@ -455,10 +521,8 @@ def make_guide(hw: Path, version: str, out: Path) -> tuple[str, dict[str, str]]:
         "## Manufacturing processes\n\n" + (", ".join(map(text, processes)) if processes else
                                                  "MISSING: product.yaml manufacturing.processes"),
         "## Reuse terms\n\n" + table(("Field", "Value"), [
-            ("Hardware license", product.get("license", {}).get("hardware") or
-             "HUMAN-OWNED / MISSING: product.license.hardware"),
-            ("Documentation license", product.get("license", {}).get("documentation") or
-             "HUMAN-OWNED / MISSING: product.license.documentation"),
+            ("Hardware license", license_text(product, "hardware")),
+            ("Documentation license", license_text(product, "documentation")),
             ("Licensor", "HUMAN-OWNED / MISSING: product.licensor"),
             ("Author", "HUMAN-OWNED / MISSING: product.author"),
             ("Design owner", "HUMAN-OWNED / MISSING: product.design_owner"),
@@ -468,16 +532,16 @@ def make_guide(hw: Path, version: str, out: Path) -> tuple[str, dict[str, str]]:
         sections[3] = "## Tools and consumables\n\n" + table(
             ("Step", "Items", "Tool or consumable"),
             [("MISSING: assembly.yaml drawing.operations[].tools / consumables", None, None)])
-    generated = {
-        "okh.toml": okh_document(hw, out, product, version, manifest_path, processes),
-        "din-spec-3105-1-checklist.md": din_document(
-            hw, out, version, manifest_path, processes, verification, decision_paths, requirements, product),
-    }
     bom_path = hw / "bom.csv"
     guide = (f"# {text(product_id)} build guide\n\n"
              f"<parts src=\"{html.escape(relative_link(bom_path, out), quote=True)}\" />\n\n"
              + "\n\n".join(sections) + "\n")
-    return guide, generated
+    return {
+        "index.md": guide,
+        "okh.toml": okh_document(hw, out, product, version, release, processes),
+        "din-spec-3105-1-checklist.md": din_document(
+            hw, out, version, release, processes, verification, decision_paths, requirements, product),
+    }
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -486,6 +550,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--version", required=True, help="built version label, such as v3")
     parser.add_argument("--out", required=True, type=Path,
                         help="project hw/docs/ record directory or a new .cad-work/ scratch directory")
+    parser.add_argument("--rev", help="prepare the documents for release REV of --version before release.py seals it")
+    parser.add_argument("--replace", action="store_true",
+                        help="overwrite hw/docs/ files that build_guide.py did not generate or that were edited since")
     args = parser.parse_args(argv)
     if not re.fullmatch(r"v[1-9][0-9]*", args.version):
         parser.error("--version must be vN")
@@ -497,12 +564,20 @@ def main(argv: list[str] | None = None) -> int:
     scratch_output = out != scratch and scratch in out.parents
     if not (canonical_docs or scratch_output) or (out.exists() and any(out.iterdir()) and not canonical_docs):
         parser.error("--out must be hw/docs/ or a new directory under .cad-work/ beside hw/")
+    names = ("index.md", "okh.toml", "din-spec-3105-1-checklist.md")
+    owned = {name: generated_docs.state(out / name) for name in names}
+    kept = [f"hw/docs/{name} " + ("was edited after build_guide.py generated it" if state == "edited"
+                                  else "was not generated by build_guide.py")
+            for name, state in owned.items() if state in ("edited", "foreign")]
+    if kept and not args.replace:
+        print(f"build_guide.py: refusing to overwrite {'; '.join(kept)}; nothing was written. Rerun with "
+              "--replace to overwrite them.", file=sys.stderr)
+        return 2
     try:
-        content, generated = make_guide(args.hw, args.version, out)
+        documents = make_guide(args.hw, args.version, out, args.rev)
         out.mkdir(parents=True, exist_ok=True)
-        (out / "index.md").write_text(content, encoding="utf-8")
-        for name, document in generated.items():
-            (out / name).write_text(document, encoding="utf-8")
+        for name, body in documents.items():
+            (out / name).write_text(generated_docs.stamp(name, body), encoding="utf-8")
     except (GuideError, OSError, ValueError, KeyError) as exc:
         print(f"build_guide.py: {exc}", file=sys.stderr)
         return 2

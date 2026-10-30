@@ -12,11 +12,11 @@
     "regime": {"type": "string", "enum": ["iso", "asme"]},
     "general_tolerance": {"oneOf": [{"type": "number", "exclusiveMinimum": 0}, {"type": "string", "minLength": 1}]},
     "license": {
-      "description": "Explicit SPDX license identifiers approved for the product's hardware and documentation; omitted means not recorded",
+      "description": "Explicit SPDX license expressions approved for the product's hardware and documentation, such as CERN-OHL-S-2.0 or (MIT OR Apache-2.0); omitted means not recorded. validate.py checks the expression's shape (identifiers, LicenseRef-, +, WITH, AND, OR, parentheses) but bundles no SPDX license list, so an unlisted identifier such as CERN-OHL-S passes",
       "type": "object", "additionalProperties": false, "minProperties": 1,
       "properties": {
-        "hardware": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9.+-]*$"},
-        "documentation": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9.+-]*$"}
+        "hardware": {"type": "string", "minLength": 1},
+        "documentation": {"type": "string", "minLength": 1}
       }
     },
     "flow": {
