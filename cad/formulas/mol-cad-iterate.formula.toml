@@ -92,7 +92,7 @@ title = "DETAIL full check and drawings for the reopened parts"
 type = "task"
 needs = ["detail-provisional-gate"]
 labels = ["cad", "phase:detail", "full-check"]
-description = "Run the full check on the provisionally approved vN as long jobs, as skill://cad-flow describes: `cad-model check vN --hw hw` over every pair and, once a joint moves, `sweep.py --hw hw --version vN` with its between-sample check. Wait for each result file. While they run, use cad-drawings to draft, review and publish the version-bound drawings, following its documented output options and the cad-record layout API, and prepare the DETAIL gate packet. Close this step with the result files once both pass. A failure voids the provisional approval and reopens the stage: `bd reopen <reopen-integrate-step> <detail-provisional-gate-step> --reason 'VOID: vN <check> failed: <result file>'`. Build the fixed version in reopen-integrate, draw it again, and leave this step open until a full check on it passes."
+description = "Run the full check on the provisionally approved vN as long jobs, as skill://cad-flow describes: `cad-model check vN --hw hw` over every pair and, once a joint moves, `sweep.py --hw hw --version vN` with its between-sample check. Wait for each result file. While they run, use cad-drawings to draft, review and publish the version-bound drawings, following its documented output options and the cad-record layout API, and prepare the DETAIL gate packet, listing the sweep's unproved between-sample intervals; a between-sample finding fails the check. Close this step with the result files once both pass. A failure, or a correction the user names at the DETAIL gate, voids the provisional approval and reopens the stage and every later step built on vN, also after this step closed, as skill://cad-flow Gate control describes: `bd reopen <reopen-integrate-step> <detail-provisional-gate-step> <detail-full-check-step> <later closed steps> --reason 'VOID: vN <cause>: <result file>'`. Build the fixed version in reopen-integrate, draw it again, and leave this step open until a full check on it passes."
 
 [steps.metadata]
 skill_hints = "cad-model, cad-motion, cad-drawings, cad-flow"
@@ -103,7 +103,7 @@ title = "DETAIL gate for the reopened parts"
 type = "task"
 needs = ["detail-full-check"]
 labels = ["cad", "phase:gate"]
-description = "Opens only after detail-full-check passed. Present the reopened parts' renders, fast and full check and F3 form results, and drawings, each file as an absolute path on its own line, plus the viewer URL when it runs. Ask the user to approve the change or name corrections; a named correction voids the provisional approval and reopens the stage as detail-full-check describes. Only bd gate resolve after explicit approval closes this human gate."
+description = "Opens only after detail-full-check passed. Present the reopened parts' renders, fast and full check and F3 form results, and drawings, each file as an absolute path on its own line, plus the viewer URL when it runs. When the sweep left unproved between-sample intervals, the user accepts them with a DR or asks for a finer run, as skill://cad-flow Gate control describes. Ask the user to approve the change or name corrections; a named correction voids the provisional approval and reopens the stage as detail-full-check describes. Only bd gate resolve after explicit approval closes this human gate."
 
 [steps.gate]
 type = "human"
@@ -146,7 +146,7 @@ title = "ANALYSIS full check for {{affected_parts}}: joint sweep, then FEA at it
 type = "task"
 needs = ["analysis-provisional-gate"]
 labels = ["cad", "phase:analysis", "full-check"]
-description = "When a moving part is in the impact set, bond the joint sweep case onto this step: `bd mol bond mol-cad-analysis <this-step> --type parallel --ref analysis-sweep-<vN> --var product={{product}} --var scope={{scope}} --var case=sweep --var kind=sweep --var version=vN`; it runs a smoke sweep, then the full sweep with its between-sample check. Once it closes, bond each static FEA case at its worst pose the same way (`--ref analysis-<case>-<vN> --var kind=fea`) and dispatch them as the next batch, as skill://cad-flow Delegation describes. While they run, prepare the DESIGN freeze gate packet. Write their verification results, and close this step once every child closed and passed. A failed case voids the provisional approval and reopens the stage: `bd reopen <analysis-integrate-step> <analysis-provisional-gate-step> --reason 'VOID: vN <case> failed: <result file>'`. Route the fix through a new reopen batch, and leave this step open until the cases pass on the fixed version."
+description = "When a moving part is in the impact set, bond the joint sweep case onto this step: `bd mol bond mol-cad-analysis <this-step> --type parallel --ref analysis-sweep-<vN> --var product={{product}} --var scope={{scope}} --var case=sweep --var kind=sweep --var version=vN`; it runs a smoke sweep, then the full sweep with its between-sample check. Once it closes, bond each static FEA case at its worst pose the same way (`--ref analysis-<case>-<vN> --var kind=fea`) and dispatch them as the next batch, as skill://cad-flow Delegation describes. While they run, prepare the DESIGN freeze gate packet, listing the sweep's unproved between-sample intervals; a between-sample finding fails the case. Write their verification results, and close this step once every child closed and passed. A failed case, or a change the user names at the DESIGN freeze gate, voids the provisional approval and reopens the stage, also after this step closed, as skill://cad-flow Gate control describes: `bd reopen <analysis-integrate-step> <analysis-provisional-gate-step> <analysis-full-check-step> --reason 'VOID: vN <cause>: <result file>'`. Route the fix through a new reopen batch, bond the reruns with the fixed version in their refs, and leave this step open until the cases pass on the fixed version."
 
 [steps.metadata]
 skill_hints = "cad-flow, cad-motion, cad-analysis"
@@ -157,7 +157,7 @@ title = "DESIGN freeze gate for affected parts"
 type = "task"
 needs = ["analysis-full-check", "detail-gate"]
 labels = ["cad", "phase:gate"]
-description = "Opens only after analysis-full-check passed and the DETAIL gate was approved. Present the changed intent, reopened part list, updated L3-L4 evidence, and preserved evidence for untouched parts. Obtain explicit approval to re-freeze only the affected set. Do not re-open or re-approve unaffected parts; only bd gate resolve closes this human gate."
+description = "Opens only after analysis-full-check passed and the DETAIL gate was approved. Present the changed intent, reopened part list, updated L3-L4 evidence, and preserved evidence for untouched parts. When the sweep left unproved between-sample intervals, the user accepts them with a DR or asks for a finer run, as skill://cad-flow Gate control describes. Obtain explicit approval to re-freeze only the affected set. Do not re-open or re-approve unaffected parts; only bd gate resolve closes this human gate."
 
 [steps.gate]
 type = "human"

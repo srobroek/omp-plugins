@@ -34,6 +34,20 @@ def ready(steps: dict[str, dict], closed: set[str]) -> set[str]:
     return {step_id for step_id, step in steps.items() if step_id not in closed and set(step.get("needs", [])) <= closed}
 
 
+def descendants(steps: dict[str, dict], step_id: str) -> set[str]:
+    """Every step that needs `step_id`, directly or through another step."""
+    return {other for other in steps if step_id in ancestors(steps, other)}
+
+
+def void(steps: dict[str, dict], closed: set[str], provisional: str) -> set[str]:
+    """`closed` after the VOID that skill://cad-flow Gate control documents: reopen the stage's integrate step, its
+    provisional gate and everything after it, except fan-out steps (whose deliveries stay integrated)."""
+    (integrate,) = steps[provisional]["needs"]
+    fanouts = {i for i, s in steps.items() if "fanout" in s.get("labels", [])}
+    return closed - (({integrate, provisional} | descendants(steps, provisional)) - fanouts)
+
+
+
 # Per root, each built stage in order: (provisional gate, the next stage's first step, the next integration step).
 STAGES: dict[str, list[tuple[str, str | None, str | None]]] = {
     "cad-product": [
@@ -106,8 +120,63 @@ class StageGates(unittest.TestCase):
                     target = next_integrate or full
                     closed = ancestors(steps, target)
                     self.assertIn(target, ready(steps, closed))
-                    voided = closed - {integrate, gate}
+                    voided = void(steps, closed, gate)
                     self.assertEqual(ready(steps, voided) & {integrate, gate, full, target}, {integrate})
+
+    def assert_human_gate_waits_for_a_new_full_check(self, steps: dict[str, dict], voided: set[str], gate: str) -> None:
+        """After a VOID the fixed version passes the fast checks; the human gate still waits for a new full check."""
+        integrate, full, human = self.stage(steps, gate)
+        self.assertNotIn(human, ready(steps, voided))
+        fixed = voided | {integrate, gate}
+        self.assertIn(full, ready(steps, fixed))
+        reviews = {i for i, s in steps.items() if "review" in s.get("labels", [])} & set(steps[human]["needs"])
+        self.assertNotIn(human, ready(steps, fixed | reviews), "the human gate opened without a new full check")
+        self.assertIn(human, ready(steps, fixed | reviews | {full}))
+
+    def test_a_change_named_at_the_human_gate_after_the_full_check_closed_reopens_the_full_check(self) -> None:
+        for name, stages in STAGES.items():
+            steps = formula_steps(name)
+            for gate, _, _ in stages:
+                with self.subTest(formula=name, gate=gate):
+                    human = self.stage(steps, gate)[2]
+                    closed = ancestors(steps, human)  # the full check passed; the user names a change at the gate
+                    self.assertIn(human, ready(steps, closed))
+                    self.assert_human_gate_waits_for_a_new_full_check(steps, void(steps, closed, gate), gate)
+
+    def test_a_late_major_review_reopens_the_full_check_and_both_reviews(self) -> None:
+        for name in ("cad-product", "cad-part"):
+            steps = formula_steps(name)
+            with self.subTest(formula=name):
+                integrate, full, human = self.stage(steps, "parts-provisional-gate")
+                reviews = {"parts-mech-review", "parts-dfm-review"}
+                self.assertLessEqual(reviews, set(steps[human]["needs"]))
+                closed = ancestors(steps, human)  # full check closed, then a review returned MAJOR
+                voided = void(steps, closed, "parts-provisional-gate")
+                self.assertFalse(reviews & voided, "a MAJOR review must run again on the fixed version")
+                self.assert_human_gate_waits_for_a_new_full_check(steps, voided, "parts-provisional-gate")
+                fixed = voided | {integrate, "parts-provisional-gate", full}
+                self.assertNotIn(human, ready(steps, fixed), "the human gate opened before the reviews ran again")
+
+    def test_a_void_reopens_a_later_stage_already_integrated_on_the_voided_version(self) -> None:
+        for name, stages in STAGES.items():
+            steps = formula_steps(name)
+            for (gate, _, _), (next_gate, _, _) in zip(stages, stages[1:]):
+                with self.subTest(formula=name, gate=gate):
+                    integrate, full, human = self.stage(steps, gate)
+                    next_integrate, next_full, next_human = self.stage(steps, next_gate)
+                    # The later stage integrated and fully checked vN; this stage's full check passed and its gate is open.
+                    closed = ancestors(steps, next_full) | {next_full} | ancestors(steps, human)
+                    voided = void(steps, closed, gate)
+                    self.assertFalse({next_integrate, next_gate, next_full} & voided, "a later stage survived the VOID")
+                    self.assertFalse(ready(steps, voided) & {next_integrate, next_gate, next_full, human, next_human})
+                    self.assert_human_gate_waits_for_a_new_full_check(steps, voided, gate)
+                    rebuilt = voided | {integrate, gate}
+                    self.assertIn(next_integrate, ready(steps, rebuilt), "the later stage rebuilds on the fixed version")
+                    rebuilt |= {next_integrate, next_gate}
+                    self.assertIn(next_full, ready(steps, rebuilt))
+                    approved = rebuilt | ancestors(steps, human) | {human} | (set(steps[next_human]["needs"]) - {next_full})
+                    self.assertNotIn(next_human, ready(steps, approved), "a later human gate opened without its new full check")
+                    self.assertIn(next_human, ready(steps, approved | {next_full}))
 
 
 class ReleaseApproval(unittest.TestCase):

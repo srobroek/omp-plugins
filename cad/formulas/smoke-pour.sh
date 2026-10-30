@@ -159,6 +159,8 @@ bd ready --json --limit 0 | python3 -c 'import json,sys; sys.exit("FAIL: revise-
 
 # Dry walk of one stage's two gates on a fresh cad-product root. L1 LAYOUT: the provisional gate opens the
 # full check and L2 PARTS, a VOID reopen blocks both again, and the human gate opens only after the full check.
+# A change named at the human gate after the full check passed, with L2 already integrated on that version,
+# reopens the full check and the L2 steps too.
 walk_root=$(pour cad-product --var product=smoke-walk --var scope=hw/ --var kernel=cadquery --var process_default=fdm)
 bd list --parent "$walk_root" --all --json >"$work/walk.json"
 # The id of the one walk step whose title starts with $1.
@@ -195,6 +197,26 @@ for want in wants:
 print(f"walk {moment}: ready {titles}")
 PY
 }
+# The VOID of skill://cad-flow Gate control: $1 is the reason, $2 the provisional gate's title, the rest the
+# stage's own step titles. It also reopens every closed later step built on the voided version, except fan-out
+# steps and bonded molecules (ids `<step-id>.<ref>`).
+walk_void() {
+  local reason=$1 provisional=$2 own=() title later
+  shift 2
+  for title in "$@"; do own+=("$(walk_step "$title")"); done
+  bd dep tree "$(walk_step "$provisional")" --direction=up --status=closed --json >"$work/tree.json"
+  bd list --parent "$walk_root" --label fanout --all --json >"$work/fanouts.json"
+  later=$(python3 - "$work/tree.json" "$work/fanouts.json" "${own[@]}" <<'PY'
+import json, sys
+tree = {i["id"] for i in json.load(open(sys.argv[1]))}
+fanouts = {i["id"] for i in json.load(open(sys.argv[2]))}
+print(" ".join(sorted(i for i in tree - fanouts - set(sys.argv[3:]) if "." not in i)))
+PY
+)
+  # shellcheck disable=SC2086 # $later is a space-separated list of bead ids
+  bd reopen "${own[@]}" $later --reason "$reason" >/dev/null
+}
+layout_steps=('L1 LAYOUT' 'LAYOUT provisional gate' 'LAYOUT full check')
 walk_pass GROUND 'smoke: grounded'
 walk_approve "$(walk_step 'INTENT gate')"
 walk_pass 'INTENT gate' 'smoke: user approved'
@@ -208,13 +230,25 @@ walk_pass 'L1 LAYOUT' 'smoke: v1 built, fast checks 1-4 passed'
 walk_ready 'v1 fast checks passed' '+LAYOUT provisional gate' '-LAYOUT full check' '-L2 PARTS: fan out' '-LAYOUT freeze gate'
 walk_pass 'LAYOUT provisional gate' 'PROVISIONAL, temporary until layout-full-check: v1 passed fast checks 1-4'
 walk_ready 'v1 provisional' '+LAYOUT full check' '+L2 PARTS: fan out' '-LAYOUT freeze gate'
-bd reopen "$(walk_step 'L1 LAYOUT')" "$(walk_step 'LAYOUT provisional gate')" --reason 'VOID: v1 full sweep failed' >/dev/null
+walk_void 'VOID: v1 full sweep failed' 'LAYOUT provisional gate' "${layout_steps[@]}"
 walk_ready 'v1 full check failed (VOID)' '+L1 LAYOUT' '-LAYOUT provisional gate' '-LAYOUT full check' '-L2 PARTS: fan out'
 walk_pass 'L1 LAYOUT' 'smoke: v2 built, fast checks 1-4 passed'
 walk_pass 'LAYOUT provisional gate' 'PROVISIONAL, temporary until layout-full-check: v2 passed fast checks 1-4'
 walk_ready 'v2 provisional' '+LAYOUT full check' '+L2 PARTS: fan out' '-LAYOUT freeze gate'
 walk_pass 'LAYOUT full check' 'smoke: v2 full check passed'
 walk_ready 'v2 full check passed, human gate open' '-LAYOUT freeze gate' '+L2 PARTS: fan out'
+walk_pass 'L2 PARTS: fan out' 'smoke: no units'
+walk_pass 'L2 PARTS: integrate' 'smoke: v3 built on the v2 layout, fast checks 1-4 passed'
+walk_pass 'PARTS provisional gate' 'PROVISIONAL, temporary until parts-full-check: v3 passed fast checks 1-4'
+walk_ready 'v3 parts provisional' '+PARTS full check' '+L3 DETAIL: fan out' '-LAYOUT freeze gate'
+walk_void 'VOID: the user named a layout change at the LAYOUT freeze gate' 'LAYOUT provisional gate' "${layout_steps[@]}"
+walk_ready 'layout change named at the human gate (VOID)' '+L1 LAYOUT' '-LAYOUT full check' '-LAYOUT freeze gate' \
+  '-L2 PARTS: integrate' '-PARTS provisional gate' '-PARTS full check' '-L3 DETAIL: fan out'
+walk_pass 'L1 LAYOUT' 'smoke: v4 built, fast checks 1-4 passed'
+walk_pass 'LAYOUT provisional gate' 'PROVISIONAL, temporary until layout-full-check: v4 passed fast checks 1-4'
+walk_ready 'v4 provisional' '+LAYOUT full check' '+L2 PARTS: integrate' '-LAYOUT freeze gate' '-PARTS provisional gate'
+walk_pass 'LAYOUT full check' 'smoke: v4 full check passed'
+walk_ready 'v4 full check passed, human gate open' '-LAYOUT freeze gate'
 walk_approve "$(walk_step 'LAYOUT freeze gate')"
 walk_ready 'user approved the freeze' '+LAYOUT freeze gate'
 
