@@ -89,7 +89,7 @@ def audit(chain: Any, plan: Any, picks: Sequence[Mapping[str, Any]], session: An
             chosen[key] = {**pick, "placement": placement}
     items = list(chosen.values())
     requests = [pair_measure.Request(chain.pn(plan.measured[item["pair"]][0]), chain.pn(plan.measured[item["pair"]][1]),
-                                     item["placement"], sample_id=item["sample"], mode="exact", require_exact=True)
+                                     item["placement"], sample_id=str(item["sample"]), mode="exact", require_exact=True)
                 for item in items]
     outcomes = session.measure(requests, deadline=deadline) if requests else []
     checks, failures, unmeasured = [], [], 0

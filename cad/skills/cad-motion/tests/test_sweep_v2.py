@@ -210,6 +210,177 @@ class PartitionTests(unittest.TestCase):
         self.assertEqual(split.digest(), self.split()[1].digest())
         self.assertNotEqual(split.digest(), other.digest())
 
+sweep = load("cad_motion_sweep", SCRIPTS / "sweep.py")
+measure = sweep.pair_measure
+MARGINS = sweep.design_rules.ClearanceMargins(0.1, {"IF-001": 0.1})
+
+
+class ReducerTests(unittest.TestCase):
+    """The sweep's statistics on given outcomes: subsystem selections combine into exactly the whole
+    sweep; needs no OCP. Every request reads from `reading(sample, pair)`."""
+
+    def setUp(self) -> None:
+        self.chain, groups = chain_of(ENGINE)
+        self.samples = sweep.generate_poses(self.chain, 5, 0)
+        self.pairs, _ = sweep.pairs_to_check(self.chain, [])
+        self.requirements = {("piston-1", "piston-2"): {"required_mm": 0.5, "source": "IF-001", "interface": "IF-001"}}
+        whole = self.plan(None)
+        self.split = subsystems.partition(self.chain, groups, whole.measured)
+        # far apart: each pose's x grows with the sample, so the last sample reaches farthest
+        self.effectors = {s.index: {"low": [0.0] * 3, "high": [1.0] * 3, "centre": [float(s.index), 0.0, 0.0]}
+                          for s in self.samples}
+
+    def plan(self, selection):
+        return sweep.plan(self.chain, self.samples, self.pairs, set(), self.requirements, 0.0, MARGINS, selection)
+
+    def reading(self, sample: int, pair: tuple[str, str]):
+        if pair == ("piston-1", "valve-1") and sample == 4:
+            return measure.Measured(0.0, 2.0)  # an interface collision at the farthest-reaching sample
+        if pair == ("piston-1", "piston-2"):
+            return measure.Measured(0.55 if sample == 2 else 0.9 + sample, 0.0)  # 0.05 above its 0.5 minimum
+        if pair == ("TST-0001", "valve-1") and sample == 1:
+            return measure.Cleared(3.0, 5.0, "mesh", mesh_mm=4.0)
+        return measure.Measured(10.0 + sample + len(pair[0]), 0.0)
+
+    def statistics(self, plan):
+        outcomes = [self.reading(item.sample.index, plan.measured[index]) for item in plan.samples
+                    if item.transforms is not None for index in plan.selected]
+        return sweep.accumulate(plan, outcomes, len(plan.samples), set(), self.requirements, 1e-3, self.effectors)
+
+    def test_the_owners_statistics_combine_into_the_whole_sweeps_and_its_findings(self) -> None:
+        whole = self.plan(None)
+        parts = [self.statistics(self.plan(self.split.select([owner]))) for owner in self.split.owners]
+        combined = sweep.combine_statistics(parts)
+        expected = self.statistics(whole)
+        self.assertEqual(json_round(combined["pairs"]), json_round(expected["pairs"]))
+        self.assertEqual(combined["samples"], expected["samples"])
+        reference = (0.0, 0.0, 0.0)
+        for criterion in sweep.CRITERIA:
+            with self.subTest(criterion):
+                merged, alone = (sweep.finalize(self.chain, whole, stats, reference, criterion)
+                                 for stats in (combined, expected))
+                self.assertEqual((merged.collisions, merged.worst, merged.clearance, merged.bounds.keys()),
+                                 (alone.collisions, alone.worst, alone.clearance, alone.bounds.keys()))
+        reach = sweep.finalize(self.chain, whole, combined, reference, "max_horizontal_reach")
+        self.assertEqual(reach.worst["sample"].index, 3)  # sample 4 collides in the interface run
+        bottom = sweep.finalize(self.chain, whole, parts[0], reference, "max_horizontal_reach")
+        self.assertEqual(bottom.worst["sample"].index, 4)  # one subsystem alone would take the colliding pose
+        self.assertEqual([row["pair"] for row in combined["mesh_cleared"]], [whole.measured.index(("TST-0001", "valve-1"))])
+
+    def test_overlapping_or_mismatched_selections_are_refused(self) -> None:
+        part = self.statistics(self.plan(self.split.select(["bottom"])))
+        with self.assertRaisesRegex(ValueError, "two inputs"):
+            sweep.combine_statistics([part, part])
+        other = self.statistics(self.plan(self.split.select(["top"])))
+        other["samples"][0]["settings"] = {"J-001": 1.0}
+        with self.assertRaisesRegex(ValueError, "same samples"):
+            sweep.combine_statistics([part, other])
+
+    def test_a_minimum_within_its_margin_warns_and_one_below_its_requirement_fails_without_a_warning(self) -> None:
+        whole = self.plan(None)
+        state = sweep.finalize(self.chain, whole, self.statistics(whole), (0.0, 0.0, 0.0), "minimum_clearance")
+        warnings = sweep.margin_warnings(self.chain, whole, state)
+        self.assertEqual([(row["check"], row["pair"], row["clearance_mm"], row["required_mm"], row["margin_mm"])
+                          for row in warnings], [("margin", ["@piston-1", "@piston-2"], 0.55, 0.5, 0.1)])
+        self.requirements[("piston-1", "piston-2")]["required_mm"] = 0.6
+        whole = self.plan(None)
+        state = sweep.finalize(self.chain, whole, self.statistics(whole), (0.0, 0.0, 0.0), "minimum_clearance")
+        self.assertEqual(sweep.margin_warnings(self.chain, whole, state), [])
+        self.assertEqual(whole.clearing[("piston-1", "piston-2")], 0.6 + 0.1)  # fast mode clears past the margin too
+
+    def test_a_stopped_sweep_reduces_only_samples_whose_pruned_requests_are_proved_inside_them(self) -> None:
+        """One pair, one request per sample: sample 1 is pruned on sample 3's distance."""
+        samples = [sweep.PlannedSample(None, [], {}, start) for start in range(5)]
+        plan = sweep.Plan({("a", "b")}, [("a", "b")], [0], {}, {}, {}, samples, [])
+        hit, pruned = measure.Measured, measure.Pruned
+        for outcomes, taken in (([hit(1.0, 0.0), pruned(3, 2.0), hit(2.0, 0.0), hit(0.5, 0.0), None], 4),
+                                ([hit(1.0, 0.0), pruned(3, 2.0), hit(2.0, 0.0), None, None], 1),
+                                ([hit(1.0, 0.0), pruned(0, 2.0), hit(2.0, 0.0), hit(0.5, 0.0), hit(0.7, 0.0)], 5)):
+            with self.subTest(outcomes=outcomes):
+                self.assertEqual(sweep.measured_prefix(None, plan, outcomes), taken)
+
+
+def json_round(value):
+    import json
+    return json.loads(json.dumps(value))
+
+
+@unittest.skipUnless(__import__("shutil").which("uv"), "uv is required to build and read STEP through OCP")
+class BetweenSampleCliTests(unittest.TestCase):
+    """sweep.py on continuous_collision.py's cubes: the samples pass, the between-sample check
+    finds the collision at 0 degrees and replays it there."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        import subprocess
+        import tempfile
+        import yaml
+
+        sys.path.insert(0, str(HERE / "fixtures"))
+        import continuous_collision as fixture
+
+        cls.fixture = fixture
+        cls.tmp = tempfile.TemporaryDirectory()
+        root = Path(cls.tmp.name)
+        cls.parts, cls.hw = root / "parts", root / "project" / "hw"
+        proc = subprocess.run(["uv", "run", "--quiet", "--script", str(HERE / "fixtures" / "continuous_collision.py"),
+                               str(cls.parts)], capture_output=True, text=True, check=False, timeout=900)
+        if proc.returncode != 0:
+            raise RuntimeError(f"fixture build failed: {proc.stderr[-2000:]}")
+        (cls.hw / "parts").mkdir(parents=True)
+        (cls.hw / "assembly.yaml").write_text(yaml.safe_dump(fixture.record(), sort_keys=False), encoding="utf-8")
+        (cls.hw / "interfaces.yaml").write_text(yaml.safe_dump(fixture.interfaces(), sort_keys=False), encoding="utf-8")
+        for pn, (title, frame, *_) in fixture.PARTS.items():
+            (cls.hw / "parts" / pn).mkdir()
+            (cls.hw / "parts" / pn / "part.yaml").write_text(f"PN: {pn}\ntitle: {title}\nmodel_frame: {frame}\n",
+                                                            encoding="utf-8")
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls.tmp.cleanup()
+
+    def sweep(self, *options: str):
+        import json
+        import subprocess
+        import tempfile
+
+        out = Path(tempfile.mkdtemp(dir=self.hw.parent / ".cad-work" if (self.hw.parent / ".cad-work").is_dir()
+                                    else self.make_work()))
+        proc = subprocess.run(["uv", "run", "--quiet", "--script", str(SCRIPTS / "sweep.py"), "--hw", str(self.hw),
+                               "--parts-dir", str(self.parts), "--steps", "2", "--grid", "0", "--no-cache",
+                               "--worst-step", str(out / "worst.step"), *options],
+                              capture_output=True, text=True, check=False, timeout=900)
+        return proc, json.loads(proc.stdout) if proc.stdout.strip() else {}
+
+    def make_work(self) -> Path:
+        work = self.hw.parent / ".cad-work"
+        work.mkdir(exist_ok=True)
+        return work
+
+    def test_a_collision_between_two_passing_samples_is_found_and_replayable(self) -> None:
+        proc, result = self.sweep()
+        self.assertEqual(proc.returncode, 1, proc.stderr[-2000:])
+        self.assertEqual((result["collision_pose_count"], result["status"]), (0, "fail"))
+        between = result["continuous"]
+        self.assertEqual((between["status"], between["rigorous"]), ("finding", False))
+        finding = between["between_sample_findings"][0]
+        self.assertEqual((finding["kind"], finding["pair"], finding["coordinate"]),
+                         ("collision", [self.fixture.TURNING, self.fixture.OBSTACLE], 0.0))  # chain order
+        self.assertGreater(finding["overlap_mm3"], 1e-3)
+        self.assertEqual(finding["independent_pose"], {"J-001": 0.0})
+        self.assertIn("Jacobians", between["limitation"])
+
+    def test_without_the_check_or_its_bisection_the_sweep_says_what_it_did_not_prove(self) -> None:
+        sampled, result = self.sweep("--no-continuous")
+        self.assertEqual(sampled.returncode, 0, sampled.stderr[-2000:])
+        self.assertEqual((result["status"], result["continuous"]["status"]), ("pass", "disabled"))
+        shallow, result = self.sweep("--continuous-depth", "0")
+        self.assertEqual(shallow.returncode, 2, shallow.stderr[-2000:])
+        self.assertEqual((result["status"], result["continuous"]["status"]), ("incomplete", "unproved"))
+        refused, _ = self.sweep("--continuous-depth", "7")
+        self.assertEqual(refused.returncode, 2)
+        self.assertIn("--continuous-depth", refused.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

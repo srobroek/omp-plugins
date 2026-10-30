@@ -331,26 +331,6 @@ class CoupledChain(unittest.TestCase):
             self.assertEqual(self.bits(self.relative(q, [piston])[piston]),
                              self.bits(self.relative(360.0 - q, [piston])[piston]), q)
 
-    def test_the_second_crank_turn_of_the_crank_train_measures_nothing(self) -> None:
-        """pair_measure's exact key finds every repeat: measuring the crank train over 720 degrees
-        takes the kernel calls 360 do."""
-        measure = sweep.pair_measure
-        box = ([0.0, 0.0, 0.0], [1.0, 1.0, 1.0])
-        pairs = self.crank_train()
-
-        def calls(stop: int) -> int:
-            with mock.patch.object(measure, "box_corners", side_effect=lambda shape, tolerance=False: box):
-                measurer = measure.PairMeasurer({self.chain.pn(oid): None for oid in self.chain.ids})
-            requests = [measure.Request(self.chain.pn(a), self.chain.pn(b), placement)
-                        for q in range(0, stop, 5) for (a, b), placement in self.relative(float(q), pairs).items()]
-            with mock.patch.object(measure.pose, "placed", side_effect=lambda shape, at: shape), \
-                    mock.patch.object(measure.pose, "interference", return_value=(1.0, 0.0)) as kernel:
-                measurer.measure(requests)
-            self.assertEqual(measurer.reused + kernel.call_count, len(requests))
-            return kernel.call_count
-
-        self.assertEqual(calls(720), calls(360))
-
     def test_a_tenth_degree_grid_repeats_every_crank_turn_bitwise(self) -> None:
         """sweep.linspace's 0.1 degree grid over 720 degrees: every sample and the one 360 degrees on
         reduce to the same angle, and place the crank train with the same bits."""

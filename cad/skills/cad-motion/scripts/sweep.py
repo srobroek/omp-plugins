@@ -390,13 +390,8 @@ class Geometry:
 
     def effector_row(self, rigid: Any) -> dict[str, list[float]]:
         """{low, high, centre} of the effector placed by `rigid`."""
-        from OCP.Bnd import Bnd_Box
-        from OCP.BRepBndLib import BRepBndLib
-
-        box = Bnd_Box()
-        BRepBndLib.Add_s(pose.placed(self.shape, rigid), box)
-        x0, y0, z0, x1, y1, z1 = box.Get()
-        return {"low": [x0, y0, z0], "high": [x1, y1, z1], "centre": list(rigid.apply(self.centre))}
+        low, high = pose.box_corners(pose.placed(self.shape, rigid))
+        return {"low": list(low), "high": list(high), "centre": list(rigid.apply(self.centre))}
 
 
 @dataclass
@@ -510,7 +505,7 @@ def plan(chain: Any, samples: list[Sample], pairs: list[tuple[str, str]], fitted
         relative = chain.relative_transforms(sample.values, chosen)
         for a, b in chosen:
             requests.append(pair_measure.Request(
-                chain.pn(a), chain.pn(b), relative[(a, b)], group=(a, b), sample_id=sample.index, mode=mode,
+                chain.pn(a), chain.pn(b), relative[(a, b)], group=(a, b), sample_id=str(sample.index), mode=mode,
                 box_gap_mm=None if posed_boxes is None else gap(posed_boxes[a], posed_boxes[b]),
                 minimum_mm=clearing[(a, b)]))
     return Plan(checked, measured, selected, clearing, applicable, tightest, planned, requests, posed)
@@ -761,11 +756,11 @@ def suspect_report(chain: Any, plan: Plan, suspects: list[Any]) -> list[dict[str
     for suspect in suspects:
         sample, (a, b) = places[suspect.requests[0]]
         reevaluated = []
-        for label, outcome, query in suspect.reevaluated:
+        for label, outcome, interval in suspect.reevaluated:
             row = {"at": label, **({"error": outcome.message} if isinstance(outcome, pair_measure.Failure)
                                    else {"distance_mm": outcome.distance_mm, "overlap_mm3": outcome.overlap_mm3})}
-            if query is not None and query.available:
-                row["bound_mm"] = [query.lower_mm, _number(query.upper_mm)]
+            if interval is not None:
+                row["bound_mm"] = [interval[0], _number(interval[1])]
             reevaluated.append(row)
         rows.append(((sample.index, order[(a, b)]), {
             "pair": [chain.ref(a), chain.ref(b)], "sample": sample.index, "independent_pose": rounded(sample.settings),
@@ -1097,8 +1092,8 @@ def usage_problem(args: argparse.Namespace) -> str | None:
         return "--steps must be >= 2, and --grid 0 or >= 2"
     if not (math.isfinite(args.mesh_band) and args.mesh_band > 0):
         return "--mesh-band must be a finite number > 0"
-    if not (math.isfinite(args.time_limit) and args.time_limit > 0):
-        return "--time-limit must be a finite number > 0"
+    if not (math.isfinite(args.time_limit) and args.time_limit >= 0):
+        return "--time-limit must be a finite number >= 0"
     for option, value in (("--continuous-grid-deg", args.continuous_grid_deg),
                           ("--continuous-grid-mm", args.continuous_grid_mm)):
         if not (math.isfinite(value) and value > 0):
