@@ -6,6 +6,7 @@ from __future__ import annotations
 import os
 import json
 import hashlib
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -135,93 +136,67 @@ class RecheckHookTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("cannot parse staged hw/product.yaml", result.stderr)
 
-    def foreign_hooks(self, pre_commit_exit: int = 0) -> Path:
-        """A hooks directory outside the repository, like Git Defender's, whose hooks log each run."""
-        hooks = Path(self.temporary.name) / "org-hooks"
-        hooks.mkdir()
-        self.hook_log = Path(self.temporary.name) / "org-hooks.log"
-        for name, code in (("pre-commit", pre_commit_exit), ("commit-msg", 0), ("code-defender-daemon", 0)):
-            (hooks / name).write_text(f'#!/bin/sh\necho "{name}" >> "{self.hook_log}"\nexit {code}\n', encoding="utf-8")
-            (hooks / name).chmod(0o755)
-        return hooks
-
-    def use_global_hooks_path(self, hooks: Path) -> None:
-        self.git("config", "--local", "--unset", "core.hooksPath")
-        self.git("config", "--global", "core.hooksPath", str(hooks))
-
-    def hook_runs(self) -> list[str]:
-        return self.hook_log.read_text(encoding="utf-8").split() if self.hook_log.exists() else []
-
-    def commit_readme(self, text: str) -> subprocess.CompletedProcess[str]:
-        (self.root / "README.md").write_text(text, encoding="utf-8")
-        self.git("add", "README.md")
-        return self.commit()
-
-    def test_a_global_hooks_path_is_chained_and_left_unchanged(self) -> None:
-        hooks = self.foreign_hooks()
-        self.use_global_hooks_path(hooks)
-        global_before = self.global_config.read_bytes()
-        hooks_before = {path.name: path.read_bytes() for path in hooks.iterdir()}
+    def test_existing_hooks_path_is_refused_without_force(self) -> None:
+        self.git("config", "core.hooksPath", ".husky")
+        before = self.git("config", "--local", "--get", "core.hooksPath").stdout
         result = self.install_hook()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn(f"The hooks in {hooks.resolve()} still run first", result.stdout)
-        self.assertEqual(self.global_config.read_bytes(), global_before)
-        self.assertEqual({path.name: path.read_bytes() for path in hooks.iterdir()}, hooks_before)
-        self.assertEqual(self.git("config", "--local", "--get", "core.hooksPath").stdout.strip(), ".githooks")
-        self.assertFalse((self.root / ".githooks" / "code-defender-daemon").exists())
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("core.hooksPath is set elsewhere", result.stderr)
+        self.assertEqual(self.git("config", "--local", "--get", "core.hooksPath").stdout, before)
 
-        self.assertEqual(self.commit_readme("docs\n").returncode, 0)
-        self.assertEqual(self.hook_runs(), ["pre-commit", "commit-msg"])
-        self.stage_product("release")
-        refused = self.commit()
-        self.assertNotEqual(refused.returncode, 0)
-        self.assertIn("no staged hw/.cad/recheck.json", refused.stderr)
-        self.assertEqual(self.hook_runs(), ["pre-commit", "commit-msg", "pre-commit"])
-
-        again = self.install_hook()
-        self.assertEqual(again.returncode, 0, again.stderr)
-        self.assertEqual(self.git("config", "--local", "--get", "cad-recheck.chainedHooksPath").stdout.strip(),
-                         str(hooks.resolve()))
-
-    def test_a_failing_chained_pre_commit_stops_the_commit(self) -> None:
-        self.use_global_hooks_path(self.foreign_hooks(pre_commit_exit=1))
-        self.assertEqual(self.install_hook().returncode, 0)
-        head = self.git("rev-parse", "HEAD").stdout
-        self.assertNotEqual(self.commit_readme("docs\n").returncode, 0)
-        self.assertEqual(self.git("rev-parse", "HEAD").stdout, head)
-        self.assertEqual(self.hook_runs(), ["pre-commit"])
-
-    def test_a_hook_in_dot_git_hooks_is_chained(self) -> None:
-        self.git("config", "--local", "--unset", "core.hooksPath")
-        self.hook_log = Path(self.temporary.name) / "local-hooks.log"
-        hook = self.root / ".git" / "hooks" / "pre-commit"
-        hook.parent.mkdir(parents=True, exist_ok=True)
-        hook.write_text(f'#!/bin/sh\necho local-pre-commit >> "{self.hook_log}"\n', encoding="utf-8")
-        hook.chmod(0o755)
-        self.assertEqual(self.install_hook().returncode, 0)
-        self.assertEqual(self.commit_readme("docs\n").returncode, 0)
-        self.assertEqual(self.hook_runs(), ["local-pre-commit"])
-
-    def test_force_replaces_the_previous_hooks_instead_of_chaining_them(self) -> None:
-        self.use_global_hooks_path(self.foreign_hooks())
-        self.assertEqual(self.install_hook().returncode, 0)
+    def test_existing_hooks_path_is_replaced_with_force(self) -> None:
+        self.git("config", "core.hooksPath", ".husky")
         result = self.install_hook("--force")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.git("config", "--get", "core.hooksPath").stdout.strip(), ".githooks")
-        self.assertEqual(self.git("config", "--local", "--get", "cad-recheck.chainedHooksPath", check=False).stdout, "")
-        self.assertEqual(self.commit_readme("docs\n").returncode, 0)
-        self.assertEqual(self.hook_runs(), [])
 
-    def test_a_differing_githooks_pre_commit_is_refused_without_force(self) -> None:
-        hook = self.root / ".githooks" / "pre-commit"
+    def test_a_global_hooks_path_is_refused_even_with_force_and_names_the_verify_command(self) -> None:
+        managed = Path(self.temporary.name) / "managed-hooks"
+        managed.mkdir()
+        (managed / "pre-commit").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        (managed / "pre-commit").chmod(0o755)
+        self.git("config", "--local", "--unset", "core.hooksPath")
+        shutil.rmtree(self.root / ".githooks")
+        self.git("config", "--global", "core.hooksPath", str(managed))
+        global_before = self.global_config.read_bytes()
+        for args in ((), ("--force",)):
+            with self.subTest(args=args):
+                result = self.install_hook(*args)
+                self.assertEqual(result.returncode, 3, result.stderr)
+                self.assertIn(f"{managed.resolve()} (global scope)", result.stderr)
+                self.assertIn("--force does not override this", result.stderr)
+                self.assertIn(f"uv run --script {STAMP} --verify", result.stderr)
+                self.assertEqual(self.git("config", "--local", "--get", "core.hooksPath", check=False).stdout, "")
+                self.assertFalse((self.root / ".githooks").exists())
+                self.assertEqual(self.global_config.read_bytes(), global_before)
+
+        # The named alternative is the hook's own check: pass below the threshold, fail at it unstamped.
+        self.assertEqual(self.run_python(STAMP, "--verify", cwd=self.root).returncode, 0)
+        self.stage_product("release")
+        refused = self.run_python(STAMP, "--verify", cwd=self.root)
+        self.assertEqual(refused.returncode, 2)
+        self.assertIn("no staged hw/.cad/recheck.json", refused.stderr)
+
+    def test_existing_git_hook_is_refused_without_force(self) -> None:
+        hooks_path = self.git("rev-parse", "--git-path", "hooks").stdout.strip()
+        hooks_dir = self.root / hooks_path
+        hook = hooks_dir / "pre-commit"
+        hook.parent.mkdir(parents=True, exist_ok=True)
         hook.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
         result = self.install_hook()
         self.assertEqual(result.returncode, 2)
-        self.assertIn("refusing to overwrite existing hook with different contents", result.stderr)
-        self.assertEqual(hook.read_text(encoding="utf-8"), "#!/bin/sh\nexit 0\n")
-        forced = self.install_hook("--force")
-        self.assertEqual(forced.returncode, 0, forced.stderr)
-        self.assertEqual(hook.read_bytes(), (SKILL / "scripts" / "pre-commit").read_bytes())
+        self.assertIn("existing non-sample hooks", result.stderr)
+        self.assertEqual(self.git("config", "--local", "--get", "core.hooksPath").stdout.strip(), ".githooks")
+
+    def test_existing_git_hook_is_ignored_with_force(self) -> None:
+        hooks_path = self.git("rev-parse", "--git-path", "hooks").stdout.strip()
+        hooks_dir = self.root / hooks_path
+        hook = hooks_dir / "pre-commit"
+        hook.parent.mkdir(parents=True, exist_ok=True)
+        hook.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        result = self.install_hook("--force")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.git("config", "--get", "core.hooksPath").stdout.strip(), ".githooks")
 
 
     def test_at_or_after_threshold_refuses_missing_stamp(self) -> None:
