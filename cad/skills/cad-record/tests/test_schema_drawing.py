@@ -62,6 +62,8 @@ BASE = {
                      "boss": {"size": "general", "axial_location_from": "A", "tolerance_policy": "fdm_supplier"}},
         "dimensions": [{"id": "boss_height", "operation": "distance", "features": ["boss", "bed_face"],
                         "datum_frame": ["A"], "tolerance": {"deviation_mm": [-0.2, 0.2]}},
+                       {"id": "hole_x", "operation": "distance", "features": ["bed_face", "pivot_bore"],
+                        "instance": 1, "tolerance": {"deviation_mm": [-0.2, 0.2]}},
                        {"id": "overall_height", "operation": "length", "features": ["base_profile"], "reference": True}],
         "edges": {"external": [-0.5, 0.0], "internal": [0.0, 0.5]},
         "surface_texture": {"open": "no published roughness for the bureau's as-printed PETG"},
@@ -85,7 +87,7 @@ INTERFACES = {"interfaces": [{
     "id": "IF-001", "from": "base", "to": "pin", "type": "mounting", "description": "Pin pressed into the base bore.",
     "limits": {
         "press_fit": {"fit": "5 H7/p6", "hole": {"PN": "TST-0001", "feature": "pivot_bore", "region": "upper_span"},
-                      "shaft": {"PN": "TST-0002", "feature": "press_band"}},
+                      "shaft": {"PN": "TST-0002", "feature": "press_band"}, "axial_retainer": {"type": "press_fit"}},
         "running_fit": {"fit": "5 H8/f7", "pair": ["TST-0001", "TST-0002"], "note": "kept as a part pair"},
         "heat_set": [{"pair": ["TST-0001", "TST-0002"], "hole_d": 4.0, "insert": "M3 x 5.7 brass insert",
                       "source": "https://example.com/inserts/m3"},
@@ -172,7 +174,8 @@ class DrawingRecordAdditions(unittest.TestCase):
         del self.docs["product.yaml"]["drawing"]
         for part in self.parts.values():
             del part["drawing"], part["procurement"]
-        self.docs["interfaces.yaml"]["interfaces"][0]["limits"] = {"press_fit": {"fit": "5 H7/p6", "pair": ["TST-0001", "TST-0002"]}}
+        self.docs["interfaces.yaml"]["interfaces"][0]["limits"] = {
+            "press_fit": {"fit": "5 H7/p6", "pair": ["TST-0001", "TST-0002"], "axial_retainer": {"type": "shoulder"}}}
         self.procurement_columns = False
         self.assert_valid()
 
@@ -213,6 +216,7 @@ class DrawingRecordAdditions(unittest.TestCase):
             "section without plane": (lambda d: d["views"][2].pop("through"), "drawing/views/2"),
             "orthographic without direction": (lambda d: d["views"][0].pop("normal_to"), "drawing/views/0"),
             "dimension carrying a value": (lambda d: d["dimensions"][0].update(value=12.5), "drawing/dimensions/0"),
+            "zeroth centre distance": (lambda d: d["dimensions"][1].update(instance=0), "drawing/dimensions/1"),
             "undeclared datum": (lambda d: d["views"][0].update(normal_to="D"), "datum D is not declared"),
             "undeclared datum in a frame": (lambda d: d["dimensions"][0].update(datum_frame=["A", "E"]), "datum E is not declared"),
             "machining policy on FDM": (lambda d: d.update(tolerance_policy="machining"),

@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
 import math
@@ -25,17 +26,27 @@ import importlib.util
 import shutil
 import sys
 
-LAYOUT_PATH = Path(__file__).resolve().parents[2] / "cad-record" / "scripts" / "layout.py"
-_LAYOUT_SPEC = importlib.util.spec_from_file_location("cad_record_layout", LAYOUT_PATH)
-if _LAYOUT_SPEC is None or _LAYOUT_SPEC.loader is None:
-    raise ImportError(f"{LAYOUT_PATH} not found")
-LAYOUT = sys.modules.get("cad_record_layout")
-if LAYOUT is None:
-    LAYOUT = importlib.util.module_from_spec(_LAYOUT_SPEC)
-    sys.modules["cad_record_layout"] = LAYOUT
-    _LAYOUT_SPEC.loader.exec_module(LAYOUT)
+
+def _load_module(name: str, path: Path) -> Any:
+    """A sibling skill's script module, loaded once per process under `name`."""
+    if name in sys.modules:
+        return sys.modules[name]
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"{path} not found")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+SKILLS = Path(__file__).resolve().parents[2]
+LAYOUT = _load_module("cad_record_layout", SKILLS / "cad-record" / "scripts" / "layout.py")
+# The FreeCAD job runs in a private process group that dies with this process, Gmsh and ccx included.
+lifecycle = _load_module("cad_flow_process_lifecycle", SKILLS / "cad-flow" / "scripts" / "process_lifecycle.py")
 
 POSE_TOL = 1e-6  # cad-motion's sweep reports pose values rounded to 6 decimals
+DEFAULT_TIMEOUT_SECONDS = 600.0  # a case's timeout_seconds overrides it
 
 
 class CaseError(ValueError):
@@ -152,6 +163,11 @@ def load_case(path: Path) -> dict[str, Any]:
         or required_safety_factor <= 0
     ):
         raise CaseError("required_safety_factor must be a positive finite number")
+    timeout = raw.get("timeout_seconds")
+    if timeout is not None and (
+        not isinstance(timeout, (int, float)) or isinstance(timeout, bool) or not math.isfinite(timeout) or timeout <= 0
+    ):
+        raise CaseError("timeout_seconds must be a positive finite number")
     if "pose" in raw and not valid_pose(raw["pose"]):
         raise CaseError("pose must map joint IDs to finite numeric values")
     if raw.get("evidence") is not None:
@@ -223,15 +239,27 @@ def run_directory(case_path: Path, run_id: str, scratch_root: Path | None = None
     return parent / run_id
 
 
-def run_job(case_path: Path, case: dict[str, Any], timeout: float = 600.0, *, scratch_root: Path | None = None,
-            result_path: Path | None = None, solver_versions: dict[str, str] | None = None) -> tuple[dict[str, Any], int]:
+def run_job(case_path: Path, case: dict[str, Any], *, scratch_root: Path | None = None,
+            result_path: Path | None = None,
+            solver_versions: dict[str, dict[str, str]] | None = None,
+            guard: Any = None) -> tuple[dict[str, Any], int]:
+    """Run one case; `guard` (process_lifecycle.RunGuard) records the FreeCAD job's process group."""
+    timeout = case.get("timeout_seconds", DEFAULT_TIMEOUT_SECONDS)
+    versions = solver_versions or {}
+    freecad = find_freecad()
+    if freecad is None:
+        return error("freecadcmd not found; set FREECADCMD or add it to PATH", code="freecad_unavailable"), 2
+    # The job runs the ccx whose version is recorded, resolved beside FreeCAD first, then on PATH.
+    calculix = (versions.get("calculix") or {}).get("path") or _solver_binary(freecad, "ccx")
+    if calculix is None:
+        return error("CalculiX ccx not found beside FreeCAD or on PATH", code="solver_unavailable"), 2
     run_id = uuid.uuid4().hex
     run_dir = run_directory(case_path, run_id, scratch_root)
     run_dir.mkdir(parents=True, exist_ok=True)
     job_path = run_dir / "fea_job.py"
     marker_path = run_dir / f"fea_static_{run_id}.json"
+    phase_path = run_dir / f"fea_static_{run_id}_phase.json"
     output_path = result_path or case_path.parent.resolve() / "results.json"
-    versions = solver_versions or {}
     job = {
         "run_id": run_id,
         "step": case["_step"],
@@ -247,7 +275,9 @@ def run_job(case_path: Path, case: dict[str, Any], timeout: float = 600.0, *, sc
         "loads": case["loads"],
         "mesh_size": case["mesh_size"],
         "output": str(marker_path),
+        "phase_output": str(phase_path),
         "run_directory": str(run_dir),
+        "calculix": str(calculix),
         "solver_versions": versions,
     }
     job_json = json.dumps(job)
@@ -258,6 +288,13 @@ from femtools.ccxtools import CcxTools
 JOB=json.loads({job_json!r})
 sys.path.insert(0, os.path.dirname(JOB["selection_module"]))
 from fea_part_selection import select_occurrence, select_solid_index
+from ccx_failure import ccx_failure
+class AnalysisError(RuntimeError):
+    def __init__(self, error):
+        super().__init__(error["message"]); self.error=error
+def phase(name):
+    # The parent names this phase if the job times out.
+    with open(JOB["phase_output"], "w", encoding="utf-8") as f: json.dump({{"phase": name}}, f)
 def selected_faces(obj, selector):
     if "indices" in selector:
         indices=selector["indices"]
@@ -314,6 +351,7 @@ def selected_part(doc):
     geom.Placement=source.Placement
     return geom
 def run():
+    phase("import")
     doc=App.newDocument("StaticAnalysis")
     try:
         geom=selected_occurrence(doc) if JOB.get("occurrence") is not None else selected_part(doc)
@@ -333,6 +371,7 @@ def run():
             force=ObjectsFem.makeConstraintForce(doc, "FaceForce%d" % n); force.References=selected_faces(geom, spec["selector"])
             force.Force="%.12g N" % math.sqrt(fx*fx+fy*fy+fz*fz)
             force.Direction=(direction,["Edge1"]); force.Reversed=False; a.addObject(force)
+        phase("mesh")
         mesh=ObjectsFem.makeMeshGmsh(doc, "GmshMesh"); a.addObject(mesh); mesh.Shape=geom; mesh.ElementDimension="3D"; mesh.ElementOrder="2nd"; mesh.HighOrderOptimize="Elastic"; mesh.CharacteristicLengthMax="%s mm" % JOB["mesh_size"]; mesh.CharacteristicLengthMin="%s mm" % (JOB["mesh_size"]*0.5); mesh.OptimizeStd=False; mesh.OptimizeNetgen=False; doc.recompute()
         gm=GmshTools(mesh); gm.prepare()
         gm.write_part_file()
@@ -356,20 +395,21 @@ def run():
         doc.recompute()
         nodes=int(mesh.FemMesh.NodeCount); elements=len(mesh.FemMesh.Volumes)
         if nodes <= 0 or elements <= 0: raise RuntimeError("Gmsh produced an empty mesh")
-        solver_started=time.perf_counter(); fea=CcxTools(solver); fea.reset_mesh_purge_results_checked(); fea.update_objects(); fea.setup_working_dir(solver.WorkingDir); fea.setup_ccx()
+        solver_started=time.perf_counter(); fea=CcxTools(solver); fea.reset_mesh_purge_results_checked(); fea.update_objects(); fea.setup_working_dir(solver.WorkingDir); fea.setup_ccx(JOB["calculix"])
+        if not fea.ccx_binary_present: raise RuntimeError("%s did not identify itself as CalculiX ccx" % JOB["calculix"])
         problems=fea.check_prerequisites()
         if problems: raise RuntimeError("CalculiX prerequisites failed: %r" % problems)
-        fea.write_inp_file(); fea.ccx_run(); fea.load_results(); solve_seconds=time.perf_counter()-solver_started
+        fea.write_inp_file(); phase("solve")
+        # ccx creates spooles.out on entering the SPOOLES factorisation.
+        failure=ccx_failure(fea.start_ccx(), fea.ccx_stdout, spooles_started=os.path.isfile(os.path.join(JOB["run_directory"], "spooles.out")), node_count=nodes)
+        if failure: raise AnalysisError(failure)
+        phase("results"); fea.load_results(); solve_seconds=time.perf_counter()-solver_started
         results=next((obj for obj in a.Group if hasattr(obj, "vonMises") and hasattr(obj, "DisplacementLengths")), None)
         if results is None: raise RuntimeError("CalculiX did not produce a result object")
         stress=[float(v) for v in results.vonMises]; displacement=[float(v) for v in results.DisplacementLengths]
         if not stress or not displacement: raise RuntimeError("solver returned no stress or displacement results")
         max_stress=max(stress); max_displacement=max(displacement); y=float(JOB["material"]["yield"])
         safety_factor=y/max_stress if max_stress else None
-        solver_started=time.perf_counter(); fea=CcxTools(solver); fea.reset_mesh_purge_results_checked(); fea.update_objects(); fea.setup_working_dir(solver.WorkingDir); fea.setup_ccx()
-        problems=fea.check_prerequisites()
-        if problems: raise RuntimeError("CalculiX prerequisites failed: %r" % problems)
-        fea.write_inp_file(); fea.ccx_run(); fea.load_results(); solve_seconds=time.perf_counter()-solver_started
         result={{"run_id":JOB["run_id"], "part":JOB.get("part"), "occurrence":JOB.get("occurrence"), "solid_index":JOB.get("solid_index"), "max_von_mises_mpa":max_stress, "max_displacement_mm":max_displacement, "safety_factor_yield":safety_factor, "node_count":nodes, "element_count":elements, "solve_time_seconds":solve_seconds}}
         result["solver_versions"]=JOB["solver_versions"]
         result["warnings"]=[]
@@ -386,26 +426,37 @@ def run():
         App.closeDocument(doc.Name)
 try: run()
 except Exception as e:
-    result={{"status":"error", "run_id":JOB["run_id"], "error":{{"code":"analysis_failed", "message":str(e)}}, "warnings":[]}}
+    failure=e.error if isinstance(e, AnalysisError) else {{"code":"analysis_failed", "message":str(e)}}
+    result={{"status":"error", "run_id":JOB["run_id"], "error":failure, "warnings":[]}}
     with open(JOB["output"],"w",encoding="utf-8") as f: json.dump(result,f,indent=2); f.write("\\n")
 '''
     job_path.write_text(script, encoding="utf-8")
     try:
-        freecad = find_freecad()
-        if freecad is None:
-            return error("freecadcmd not found; set FREECADCMD or add it to PATH", code="freecad_unavailable"), 2
-        completed = subprocess.run([str(freecad), str(job_path)], cwd=run_dir, capture_output=True, text=True, timeout=timeout)
+        completed = lifecycle.run([str(freecad), str(job_path)], cwd=run_dir, timeout=timeout, capture_output=True,
+                                  text=True, guard=guard)
     except subprocess.TimeoutExpired:
-        result = error(f"FreeCAD job exceeded timeout of {timeout} seconds", code="freecad_timeout")
+        phase = _job_phase(phase_path)
+        during = {
+            "import": "while importing the STEP",
+            "mesh": f"while Gmsh meshed at mesh_size {case['mesh_size']} mm, optimising its curved "
+                    "second-order elements",
+            "solve": "while CalculiX ccx was solving",
+            "results": "while reading the CalculiX results",
+        }
+        remedy = "raise timeout_seconds in the case YAML" + (" or change mesh_size" if phase == "mesh" else "")
+        result = error(f"FreeCAD job exceeded its timeout_seconds of {timeout:g} "
+                       f"{during.get(phase, 'before it started')}; {remedy}", code="freecad_timeout")
+        result["error"]["details"] = {"phase": phase}
         result.update({"run_id": run_id, "run_directory": str(run_dir)})
         output_path.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
         return result, 2
-    except OSError as exc:
+    except (OSError, lifecycle.LifecycleError) as exc:
         return error(f"cannot start FreeCAD: {exc}", code="freecad_unavailable"), 2
     if not marker_path.is_file():
         result = error("FreeCAD job did not write its run-specific completion marker", code="missing_completion_marker")
         result.update({"run_id": run_id, "run_directory": str(run_dir)})
-        result["details"] = {"returncode": completed.returncode, "stderr": completed.stderr[-4000:]}
+        result["details"] = {"returncode": completed.returncode, "phase": _job_phase(phase_path),
+                             "stderr": completed.stderr[-4000:]}
         output_path.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
         return result, 2
     try:
@@ -422,8 +473,9 @@ except Exception as e:
         result["warnings"].append("FreeCAD exited with 139 after writing its result marker; outputs were validated.")
     elif completed.returncode != 0:
         result["warnings"].append(f"FreeCAD exited with status {completed.returncode}.")
-        result["status"] = "error"
-        result["error"] = {"code": "freecad_failed", "message": f"FreeCAD exited with status {completed.returncode}"}
+        if result.get("status") != "error":  # the job's own diagnosis outranks FreeCAD's exit status
+            result["status"] = "error"
+            result["error"] = {"code": "freecad_failed", "message": f"FreeCAD exited with status {completed.returncode}"}
     if completed.stderr.strip():
         result["warnings"].append("FreeCAD emitted diagnostics on stderr.")
     status = result_exit_code(result)
@@ -431,6 +483,14 @@ except Exception as e:
         result = error("FreeCAD result has an unknown status", code="invalid_result")
     output_path.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     return result, status
+
+
+def _job_phase(path: Path) -> str | None:
+    try:
+        return json.loads(path.read_text(encoding="utf-8")).get("phase")
+    except (OSError, json.JSONDecodeError, AttributeError):
+        return None
+
 
 def _solver_binary(freecad: Path, name: str) -> Path | None:
     candidates = [freecad.resolve().parent / name]
@@ -491,7 +551,8 @@ def _is_solver_evidence(relative_path: str) -> bool:
 
 
 def _producer_code_hashes() -> dict[str, str]:
-    paths = (Path(__file__), Path(__file__).with_name("fea_part_selection.py"))
+    paths = (Path(__file__), Path(__file__).with_name("fea_part_selection.py"),
+             Path(__file__).with_name("ccx_failure.py"))
     return {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in paths}
 
 
@@ -535,6 +596,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if bool(args.hw) != bool(args.version):
         parser.error("--hw and --version must be provided together")
+    if args.hw:
+        # The FreeCAD job runs in its own directory, so the paths derived from hw must be absolute.
+        args.hw = args.hw.resolve()
     if find_freecad() is None:
         print(json.dumps(error("freecadcmd not found; set FREECADCMD or add it to PATH", code="freecad_unavailable")))
         return 2
@@ -583,12 +647,14 @@ def main(argv: list[str] | None = None) -> int:
                 result["reused"] = True
                 status = result_exit_code(result)
             else:
-                stage = LAYOUT.staging(args.hw, "bundle.analysis")
-                output = stage / "results.json"
-                job_scratch = Path(args.hw).parent / ".cad-work"
-                job_scratch.mkdir(parents=True, exist_ok=True)
-                result, status = run_job(case_path, case, scratch_root=job_scratch,
-                                         result_path=output, solver_versions=tools)
+                # one run per case and version: refused while this very case or a stray run runs
+                with lifecycle.claim_run(args.hw, "fea", scope=f"{version}/{case_id}") as guard:
+                    stage = LAYOUT.staging(args.hw, "bundle.analysis")
+                    output = stage / "results.json"
+                    job_scratch = Path(args.hw).parent / ".cad-work"
+                    job_scratch.mkdir(parents=True, exist_ok=True)
+                    result, status = run_job(case_path, case, scratch_root=job_scratch,
+                                             result_path=output, solver_versions=tools, guard=guard)
                 if status != 2:
                     run_dir = Path(result["run_directory"])
                     evidence_files = []
@@ -616,13 +682,21 @@ def main(argv: list[str] | None = None) -> int:
                 else:
                     shutil.rmtree(stage, ignore_errors=True)
         else:
-            output = None
+            output, project_hw = None, None
             if args.out is not None:
-                output = LAYOUT.scratch_path(_scratch_hw(args.out), args.out, "--out")
+                project_hw = _scratch_hw(args.out)
+                output = LAYOUT.scratch_path(project_hw, args.out, "--out")
             scratch_root = output.parent if output is not None else None
             if output is not None:
                 output.parent.mkdir(parents=True, exist_ok=True)
-            result, status = run_job(case_path, case, scratch_root=scratch_root, result_path=output)
+            # A scratch run is recorded in its project's hw/, one per case file; it is supervised either way.
+            with (lifecycle.claim_run(project_hw, "fea", scope=str(case_path)) if project_hw is not None and project_hw.is_dir()
+                  else contextlib.nullcontext()) as guard:
+                result, status = run_job(case_path, case, scratch_root=scratch_root, result_path=output, guard=guard)
+    except lifecycle.LifecycleError as exc:
+        refused = isinstance(exc, lifecycle.RunRefused)
+        print(json.dumps(error(str(exc), code="run_refused" if refused else "process_supervision_unavailable")))
+        return 2
     except (CaseError, OSError, LAYOUT.LayoutError) as exc:
         print(json.dumps(error(str(exc), code="invalid_case")))
         return 2

@@ -26,6 +26,7 @@ from referencing import Registry, Resource
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import assembly_data  # noqa: E402 - the sibling module, beside this script in the skill
+import design_rules  # noqa: E402 - the sibling module: margins, retention, feasibility and visibility rules
 
 
 def _load_module(name: str, path: Path) -> Any:
@@ -63,11 +64,18 @@ NONBLOCKING = frozenset({"warning", "info"})
 
 def finding(path: str, message: str, *, severity: str = "error", code: str | None = None,
             canonical_location: str | None = None, action: str | None = None) -> dict[str, Any]:
-    """One report item; a layout finding also carries its stable `code`, `canonical_location` and `action`."""
+    """One report item; a layout finding also carries its stable `code`, `canonical_location` and `action`.
+
+    A design-rule finding (`check_design_rules`) carries a stable `code` only."""
     item: dict[str, Any] = {"path": path, "message": message, "severity": severity}
     if code is not None:
         item.update(code=code, canonical_location=canonical_location, action=action)
     return item
+
+
+def is_layout_finding(item: Mapping[str, Any]) -> bool:
+    """Whether a report item is a cad-record layout.json finding, which the migration plan turns into a step."""
+    return str(item.get("code", "")).startswith("layout.")
 
 
 def blocking(findings: Iterable[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
@@ -548,6 +556,75 @@ def layout_strict(product: Any, hw: Path) -> bool:
     return stage not in stages() or stages().index(stage) >= stages().index("design_freeze")
 
 
+def stage_reached(product: Any, stage: str) -> bool:
+    """Whether product.yaml's flow stage is `stage` or later; a missing or unknown stage counts as reached,
+    as it does for `layout_strict`."""
+    flow = product.get("flow") if isinstance(product, dict) else None
+    current = flow.get("stage") if isinstance(flow, dict) else None
+    return current not in stages() or stages().index(current) >= stages().index(stage)
+
+
+def check_retention_decisions(hw: Path, documents: Mapping[str, Any], valid: Mapping[str, bool],
+                              findings: list[dict[str, Any]]) -> None:
+    """Each `torque_path` and `axial_retainer` decision exists under decisions/, like every DR link."""
+    def missing(decision: str | None) -> bool:
+        return decision is not None and not (hw / "decisions" / f"{decision}.md").is_file()
+
+    if valid.get("assembly.yaml"):
+        for joint in documents["assembly.yaml"].get("joints", []):
+            decision = (joint.get("torque_path") or {}).get("decision")
+            if missing(decision):
+                findings.append(finding(str(hw / "assembly.yaml"), f"{joint['id']} torque_path/decision {decision} "
+                                                                   f"does not exist at decisions/{decision}.md"))
+    if valid.get("interfaces.yaml"):
+        for index, interface in enumerate(documents["interfaces.yaml"]["interfaces"]):
+            for kind in ("press_fit", "running_fit", "locating_fit"):
+                fit = (interface.get("limits") or {}).get(kind)
+                decision = ((fit or {}).get("axial_retainer") or {}).get("decision")
+                if missing(decision):
+                    findings.append(finding(str(hw / "interfaces.yaml"),
+                                            f"interfaces/{index}/limits/{kind}/axial_retainer/decision {decision} "
+                                            f"does not exist at decisions/{decision}.md"))
+
+
+def check_design_rules(hw: Path, documents: Mapping[str, Any], valid: Mapping[str, bool],
+                       part_records: Mapping[str, tuple[dict[str, Any], str]],
+                       inventory: assembly_data.Inventory | None, findings: list[dict[str, Any]]) -> None:
+    """design_rules.py over the schema-valid record: visibility bindings resolve at every stage; the
+    retention rules are errors from stage parts on and unreported before it; a structured transparent-FDM
+    contradiction is a warning before stage parts and an error from it on; a transparency claim in prose is
+    only ever a warning."""
+    product = documents.get("product.yaml") if valid.get("product.yaml") else None
+    at_parts = stage_reached(product, "parts")
+
+    def report(path: Path | str, items: Iterable[design_rules.RuleFinding], severity: str = "error") -> None:
+        for item in items:
+            graded = "warning" if item.code == design_rules.TRANSPARENCY_CLAIM_CODE else severity
+            findings.append({**finding(f"{path}#/{item.location}", item.message, severity=graded), "code": item.code})
+
+    def resolve(ref: str) -> str | None:
+        try:
+            return inventory.resolve(ref).id if inventory is not None else None
+        except assembly_data.UnresolvedReference:
+            return None
+
+    check_retention_decisions(hw, documents, valid, findings)
+    if inventory is not None and at_parts:
+        report(hw / "assembly.yaml", design_rules.torque_path_findings(documents["assembly.yaml"], resolve))
+        if valid.get("interfaces.yaml"):
+            report(hw / "interfaces.yaml", design_rules.axial_retainer_findings(documents["interfaces.yaml"], resolve))
+    requirements = documents.get("requirements.yaml") if valid.get("requirements.yaml") else None
+    if inventory is not None and requirements is not None:
+        report(hw / "requirements.yaml", design_rules.visibility_findings(requirements, resolve))
+
+    feasibility = "error" if at_parts else "warning"
+    for part, part_path in part_records.values():
+        report(part_path, design_rules.part_feasibility_findings(part), feasibility)
+    if requirements is not None and product is not None:
+        report(hw / "requirements.yaml", design_rules.requirement_feasibility_findings(
+            requirements, product, (part for part, _ in part_records.values())), feasibility)
+
+
 def check_layout(hw: Path, product: Any, part_records: dict[str, Any], findings: list[dict[str, str]]) -> None:
     """Every file and directory under hw/, tracked, untracked or ignored, against cad-record layout.json."""
     references = {}
@@ -808,6 +885,7 @@ def validate_project(project_dir: Path) -> list[dict[str, str]]:
             check_release_readiness(hw, verification, part_records, str(path), findings)
     if valid.get("product.yaml"):
         check_flow(documents["product.yaml"], str(hw / "product.yaml"), hw, part_records, findings)
+    check_design_rules(hw, documents, valid, part_records, inventory, findings)
     check_layout(hw, documents.get("product.yaml"), part_records, findings)
     return findings
 
@@ -910,7 +988,7 @@ def migration_plan(project_dir: Path) -> dict[str, Any]:
         data = load_yaml(path, [])
         if isinstance(data, dict):
             records[path.parent.name] = data
-    items = [plan_item(hw, item, records) for item in validate_project(project_dir) if "code" in item]
+    items = [plan_item(hw, item, records) for item in validate_project(project_dir) if is_layout_finding(item)]
     items += legacy_items(hw)
     targets: dict[str, list[str]] = {}
     for item in items:

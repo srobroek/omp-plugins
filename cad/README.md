@@ -114,6 +114,9 @@ It shows each environment's apparent size and the space deleting it frees. That 
 ## Flow
 
 `cad-flow` leads GROUND → INTENT → SPECIFY → L0 CONCEPT → VARIANT gate → L1 LAYOUT → LAYOUT freeze → L2 PARTS → L3 DETAIL → BOM → L4 ANALYSIS → parallel CRITIQUE → RECONCILE → DESIGN freeze → RELEASE gate → RELEASE. On each L1 to L4 commit batch, run `cad-model run`, then `cad-model check`; a blocking failure stops it. Then run `cad-render` for that version and show images at the gate. Before L2, `form_check` must pass at F2 or higher; before L3, at F3. The layout threshold, user “commit”, or hardware git pre-commit hook starts the broader changed-parts/dependents recheck.
+
+Each stage passes two gates. The agent resolves a provisional gate once every fast check passes, and its evidence marks the approval temporary. The full check follows: the full sweep and its between-sample check. Then the human gate gives the definitive approval. A full-check failure voids the provisional gate and reopens the stage. Downstream work may start after the provisional gate, but nothing is frozen or released before the human gate. Checks run fail-fast, cheapest first: the changed parts' build with the record validator, form, DFM and retention checks; `cad-model check --changed-only`; a `sweep.py --smoke` sweep; renders and visibility; then the full sweep with its between-sample check.
+
 `cad-record/references/layout.md` is the generated source of truth for every `hw/` path; use its `layout-api.md` from commands. Versioned producers publish immutable bundles with manifests, reusing matching recipes; changed recipes require `--replace` and retain old bundles. Explicit output paths are new `.cad-work/` paths only. Inputs are read from each version's `record/` snapshot. On an existing project, validate `--migration-plan` before freeze; it is read-only and nothing is moved. Legacy versions and v1 releases are not changed or reissued. Freeze pins the exact version and manifest hash, and `release.py` seals a deterministic package; it refuses failed or incomplete manufacturing/evidence instead of accepting an agent-written inventory. See `cad-flow` and `cad/formulas/README.md` for the workflow and gates.
 
 ## Skills
@@ -127,7 +130,7 @@ The table lists every directory under `cad/skills/`, including the OCP viewer an
 | `cad-concept` | Available | Explore and compare rapid visual concepts |
 | `cad-model` | Available | Build, check, and diff parametric CadQuery/build123d models |
 | `cad-design` | Available | F0 to F3 product fidelity and form-check gates |
-| `cad-motion` | Available | Pose assemblies, sweep joint motion, and select worst-case poses |
+| `cad-motion` | Available | Pose assemblies, sweep joint motion with between-sample proofs and subsystem runs, and select worst-case poses |
 | `cad-render` | Available | Automated three.js PBR version renders and gate imagery |
 | `cad-viewer` | Available | Interactive OCP CAD Viewer inspection and Studio look-dev |
 | `cad-analysis` | Available | Static finite-element analysis at worst-case poses |
@@ -151,7 +154,7 @@ The lead dispatches each stage's workers in one parallel batch, then integrates 
 
 ## Formulas
 
-Poured formulas start a workflow root. Each stage that has independent units starts with a fan-out step that bonds one worker molecule per unit, all in one parallel batch. The stage then has one lead integration step that waits for every unit, followed by one human gate. `cad/formulas/README.md` shows the bond commands.
+Poured formulas start a workflow root. Each stage that has independent units starts with a fan-out step that bonds one worker molecule per unit, all in one parallel batch. The stage then has one lead integration step that waits for every unit, followed by its provisional gate, the full check and the human gate. `cad/formulas/README.md` shows the bond commands.
 
 | Formula | Use |
 |---|---|

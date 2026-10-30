@@ -8,7 +8,8 @@
 4. requirements: each feature kind's required characteristics were measured (``drawing_intent``);
 5. coverage: every characteristic has a controlling tolerance, fit, basic dimension or specification;
 6. consistency: no characteristic is controlled twice with different values;
-7. visibility: every characteristic sits on a visible point of its own feature in some view;
+7. visibility: every characteristic sits on a visible point of its own feature in some view, and an
+   individual tolerance (fit, explicit, feature policy, vendor) is printed in its annotation's text;
 8. cross-part fit: each fit endpoint naming this part names one of its bound features;
 9. product notes: a detail drawing states its edges (ISO 13715), general surface texture and finish, and
    every feature's own texture symbol or edge sizes sit on a visible point of that feature;
@@ -25,6 +26,7 @@ composed sheets. A passing report proves this implemented contract, not ISO or A
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any
 
 import feature_coverage
@@ -33,9 +35,22 @@ from drawing_document import CoverageReport
 from drawing_intent import FIT_KEYS, Characteristic, Measured, finding
 from feature_geometry import Binding, Face
 from feature_recognition import Recognition
-from sheet import Presentation, dimension_key
+from sheet import Presentation, dimension_key, tolerance_text
 
 UNTOLERANCED = ("profile", "thread")   # controlled by their frame or designation
+
+
+@dataclass(frozen=True)
+class SheetText:
+    """What the laid-out sheet prints: each annotation's and note's text lines by id, in the sheet's regime."""
+
+    regime: str
+    lines: Mapping[str, Sequence[str]]
+
+    def shows_tolerance(self, char: Characteristic, annotation: str) -> bool:
+        """One line of the annotation prints the characteristic's nominal with its tolerance."""
+        nominal, suffix = tolerance_text(char.tolerance, abs(char.value), self.regime)
+        return any(nominal in line and suffix.strip() in line for line in self.lines.get(annotation, ()))
 
 
 def _endpoint_findings(pn: str, interfaces: Sequence[Mapping[str, Any]], binding: Binding) -> list[dict[str, Any]]:
@@ -93,7 +108,8 @@ def _repeated_dimensions(chars: Sequence[Characteristic], presentation: Presenta
 def evaluate(pn: str, part: Mapping[str, Any], interfaces: Sequence[Mapping[str, Any]], binding: Binding,
              measured: Measured, presentation: Presentation | None, step_sha256: str,
              sections: Sequence[section_hatch.SectionFill] = (), recognition: Recognition | None = None,
-             faces: Mapping[int, Face] | None = None) -> CoverageReport:
+             faces: Mapping[int, Face] | None = None, text: SheetText | None = None) -> CoverageReport:
+    """The coverage report; ``text``, the laid-out sheet's text, checks each individual tolerance is printed."""
     findings: list[dict[str, Any]] = [dict(f) for f in binding.findings] + [dict(f) for f in measured.findings]
     findings += _endpoint_findings(pn, interfaces, binding)
     findings += _conflicts(measured.characteristics)
@@ -113,6 +129,13 @@ def evaluate(pn: str, part: Mapping[str, Any], interfaces: Sequence[Mapping[str,
             status = "fail"
         placed = presentation.placed.get(char.id) if presentation is not None else None
         if presentation is not None and placed is None:
+            status = "fail"
+        if text is not None and placed is not None and char.tolerance is not None and char.tolerance.individual \
+                and not char.reference and char.operation not in UNTOLERANCED \
+                and not text.shows_tolerance(char, placed["annotation"]):
+            findings.append(finding("tolerance_not_printed", f"{char.id} ({char.operation} {char.value:.3f}): its "
+                                    f"{char.tolerance.kind} tolerance is not printed on {placed['annotation']}",
+                                    feature=char.feature))
             status = "fail"
         rows.append({"feature": char.feature, "requirement": char.operation, "characteristic": char.id,
                      "value_mm": round(char.value, 6), "quantity": char.quantity, "axis": char.axis,

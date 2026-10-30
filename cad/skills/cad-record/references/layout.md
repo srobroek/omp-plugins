@@ -25,6 +25,7 @@ listed files and nothing else.
 | `{CAPTURE_SHA}` | `[0-9a-f]{64}` | `2222222222222222222222222222222222222222222222222222222222222222` | sha256 of the captured viewer state |
 | `{PID}` | `[0-9]+` | `4242` | process id of the writing run |
 | `{STAMP}` | `[0-9]+` | `1730000000` | monotonic clock stamp of the writing run |
+| `{RUN}` | `[A-Za-z0-9][A-Za-z0-9._-]{0,127}` | `3f2b9c1e8d7a4b6c9e0f1a2b3c4d5e6f` | id of one supervised sweep, check or FEA run |
 | `{NAME}` | `[^/]+` | `notes.md` | one file or directory name |
 
 ## Paths
@@ -58,6 +59,11 @@ listed files and nothing else.
 | `bundle.analysis` | `hw/analysis/{V}/{S}/` | generated, sealed by its bundle manifest | `results.json` (data), `evidence/**` (evidence, optional), `manifest.json` (manifest) | cad-analysis fea_static.py, an accepted stack-up adapter | analysis | immutable | one analysis case result with every retained solver file |
 | `release.package` | `hw/releases/{REV}/` | generated, sealed by its release manifest | `manifest.json` (manifest), `definition/**` (definition, optional), `manufacturing/**` (manufacture, optional), `drawings/**` (document, optional), `analysis/**` (evidence, optional), `checks/**` (evidence, optional), `motion/**` (evidence, optional), `bom.csv` (snapshot, optional), `verification.csv` (snapshot, optional), `docs/**` (document, optional) | cad-record release.py (lead) | release | immutable | a sealed release package; a used revision is never overwritten |
 | `control.recheck` | `hw/.cad/recheck.json` | generated | (control) | cad-recheck stamp.py | layout | regenerated | stamp bound to the staged hw/ tree; any staged change invalidates it |
+| `cache.pairs` | `hw/.cad/pairs-v2.sqlite` | generated | (data) | cad-motion pair_measure.py PairCache (sweep.py, spot_check.py, cad-model check) | any | scratch | disposable pair-measurement cache the sweep and the static check share; deleting it costs time, never a result; git-ignored, never evidence |
+| `cache.pairs_wal` | `hw/.cad/pairs-v2.sqlite-wal` | generated | (data) | SQLite, for cad-motion pair_measure.py PairCache | any | scratch | the pair cache's write-ahead log; disposable with the cache |
+| `cache.pairs_shm` | `hw/.cad/pairs-v2.sqlite-shm` | generated | (data) | SQLite, for cad-motion pair_measure.py PairCache | any | scratch | the pair cache's shared-memory index; disposable with the cache |
+| `control.run` | `hw/.cad/runs/{RUN}.json` | generated | (control) | cad-flow process_lifecycle.py claim_run (cad-motion sweep.py, cad-model check, cad-analysis fea_static.py) | any | scratch | the process groups of one running sweep, check or FEA run, removed when it ends; a live one refuses an overlapping run; git-ignored |
+| `control.run_lock` | `hw/.cad/runs/.lock` | generated | (control) | cad-flow process_lifecycle.py claim_run | any | scratch | lock held only while a run claims its record; disposable |
 | `scratch` | `.cad-work/` | scratch | `**` (scratch) | cad-flow scratch.py, scoped workers, layout.py publication staging | any | scratch | drafts, jobs, logs, publication staging and replaced bundles, beside hw/ |
 
 ## Kinds
@@ -109,6 +115,8 @@ reported with the action below; `vcs` paths are accepted.
 | `hw/renders/.{V}.partial-{STAMP}`/ | transient | cad-render render.py | An interrupted render left this staging folder. Delete it once no render is in progress. |
 | `hw/renders/.{V}.old-{STAMP}`/ | transient | cad-render render.py | An interrupted render left the set it was replacing. Delete it once no render is in progress. |
 | `hw/.cad/.recheck.json.tmp` | transient | cad-recheck stamp.py | An interrupted stamp left this temporary file. Delete it once no stamp is in progress. |
+| `hw/.cad/runs/.{RUN}.json.{PID}.tmp` | transient | cad-flow process_lifecycle.py claim_run | An interrupted run claim left this temporary record. Delete it once no sweep, check or FEA run is in progress. |
+| `hw/motion/{V}/.sweep-{S}.json` | transient | cad-motion sweep.py of an earlier release | An earlier sweep's process-group record. Stop its group if it still runs (`kill -TERM -- -PGID` with the pgid it names), then delete it; current sweeps record runs under hw/.cad/runs/. |
 | `hw/**/.DS_Store` | metadata | macOS Finder | Operating-system metadata, not a CAD file. Delete it and ignore it in git. |
 | `hw/**/Thumbs.db` | metadata | Windows Explorer | Operating-system metadata, not a CAD file. Delete it and ignore it in git. |
 | `hw/parts/{PN}/__pycache__`/ | metadata | a Python import of model.py | Python bytecode from a direct import of model.py. Delete it; cad-model runs model.py with bytecode writing off. |

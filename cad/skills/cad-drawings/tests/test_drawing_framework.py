@@ -19,6 +19,7 @@ import unittest
 from pathlib import Path
 
 import yaml
+from defusedxml import ElementTree as SafeET
 
 HERE = Path(__file__).resolve().parent
 SCRIPTS = HERE.parent / "scripts"
@@ -27,10 +28,11 @@ sys.path.insert(0, str(SCRIPTS))
 import drawing_contract  # noqa: E402
 import drawing_document  # noqa: E402
 import freecad_runtime  # noqa: E402
+import sheet_export  # noqa: E402
 from drawing_document import (CompositionError, CoverageReport, SheetMetadata, SvgAnnotation, SvgNote,  # noqa: E402
                               SvgTable, compose_page, page_layout, publish_package, sheet_specs)
 from freecad_views import Circle, ViewGeometry  # noqa: E402
-from layout_check import Box, check_layout, path_points  # noqa: E402
+from layout_check import SVG_NS, Box, check_layout, path_points  # noqa: E402
 from sheet import TextureSymbol  # noqa: E402
 
 FREECADCMD = freecad_runtime.find_freecadcmd()
@@ -304,6 +306,31 @@ class ComposePage(unittest.TestCase):
             self.compose(title="A title far too long for the title block cell even at the smallest lettering height " * 2)
         self.assertEqual(raised.exception.code, "layout_check_failed")
 
+    def test_a_long_general_tolerance_wraps_into_its_cell_at_the_minimum_lettering(self) -> None:
+        value = "Explicit tolerances only; no default tolerance is approved."   # 63.7 mm at 1.8 mm; the cell 57.6
+        cell = drawing_document._title_cells(self.spec.regions.title_block)["general_tolerance"]
+        self.assertGreater(drawing_document.text_width(value, 1.8), cell.x1 - cell.x0 - 2 * drawing_document.CELL_PAD)
+        sheet = self.compose(general_tolerance=value)
+        self.assertEqual(check_layout(sheet.svg, sheet.regions, sheet.placeholders), [])
+        root = SafeET.fromstring(sheet.svg)
+        block = next(g for g in root.iter(f"{{{SVG_NS}}}g") if g.get("id") == "cad-title-block")
+        rows = [(t.text, float(t.get("x")), float(t.get("y")), float(t.get("font-size")))
+                for t in block.iter(f"{{{SVG_NS}}}text") if cell.x0 <= float(t.get("x")) < cell.x1
+                and cell.y0 < float(t.get("y")) < cell.y1]
+        label, *lines = sorted(rows, key=lambda row: row[2])
+        self.assertEqual(label[0], "General tolerances")
+        self.assertEqual(" ".join(text for text, *_ in lines), value)
+        self.assertEqual([size for *_, size in lines], [1.8, 1.8])
+        for text, x, y, size in lines:   # inside the cell, under the label, apart from each other
+            self.assertLessEqual(x + drawing_document.text_width(text, size), cell.x1 - drawing_document.CELL_PAD)
+        self.assertGreater(lines[0][2] - 0.8 * 1.8, label[2] + 0.25 * 1.8)
+        self.assertGreater(lines[1][2] - 0.8 * 1.8, lines[0][2] + 0.25 * 1.8)
+        self.assertLess(lines[1][2] + 0.25 * 1.8, cell.y1)
+        self.assertEqual(sheet.required_text[-2:], tuple(text for text, *_ in lines))   # the PDF text layer check
+        with self.assertRaises(CompositionError) as raised:
+            self.compose(general_tolerance=value * 2)
+        self.assertEqual(raised.exception.code, "layout_check_failed")
+
     def test_invalid_content_is_refused(self) -> None:
         view = rectangle_view("plan", (120.0, 100.0), (60.0, 40.0))
         for name, call in {
@@ -402,10 +429,10 @@ class FreeCadViewsAndPackage(unittest.TestCase):
         for view in self.views.values():
             self.assertEqual(ViewGeometry.from_dict(json.loads(json.dumps(view.to_dict()))), view)
 
-    def compose(self, annotations: list[SvgAnnotation]) -> drawing_document.ComposedSheet:
+    def compose(self, annotations: list[SvgAnnotation], **meta) -> drawing_document.ComposedSheet:
         tip = self.anchors["front"]["big_bore_top"]
         callout = leader("big-bore", (tip[0] - 8.0, tip[1]), (40.0, 25.0), "⌀8")
-        return compose_page(self.spec, metadata(), list(self.views.values()), [callout, *annotations],
+        return compose_page(self.spec, metadata(**meta), list(self.views.values()), [callout, *annotations],
                             [SvgTable("parts", ("Item", "PN", "Qty"), (("1", PN, "1"),))],
                             [SvgNote("edges", "Break sharp edges.")])
 
@@ -447,6 +474,17 @@ class FreeCadViewsAndPackage(unittest.TestCase):
         self.assertEqual([p.name for p in stranger.iterdir()], ["notes.txt"])
         with self.assertRaises(ValueError):
             publish_package(context, [sheet, sheet], CoverageReport("pass"), output, FREECADCMD, 300)
+
+    def test_a_wrapped_general_tolerance_publishes_with_both_lines_in_the_pdf_text(self) -> None:
+        context = drawing_contract.load_context(*write_project(self.root / "wrapped-record"))
+        sheet = self.compose([], general_tolerance="Explicit tolerances only; no default tolerance is approved.")
+        output = self.root / "wrapped-package"
+        report = publish_package(context, [sheet], CoverageReport("pass", rows=({"feature": "bed_face"},)), output,
+                                 FREECADCMD, 300, bundle_path=context.hw / "drawings" / "v1" / PN)
+        self.assertEqual((report.status, report.findings), ("pass", ()), report.findings)
+        lines = sheet_export.read_pdf(output / "sheet-1.pdf").text.split("\n")
+        self.assertIn("Explicit tolerances only; no default tolerance is", lines)
+        self.assertIn("approved.", lines)
 
 
 class DrawingPublication(unittest.TestCase):
