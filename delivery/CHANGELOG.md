@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.4](https://github.com/srobroek/omp-plugins/compare/delivery--v1.4.3...delivery--v1.4.4) (2026-10-30)
+
+
+### Bug Fixes
+
+* **delivery:** fetch landed commits before proving a merge, and recognise gitlab.aws.dev ([#724](https://github.com/srobroek/omp-plugins/issues/724)) ([2cb572f](https://github.com/srobroek/omp-plugins/commit/2cb572fe890178966a109040d6f1817f676ebe02))
+
 ## [1.4.3](https://github.com/srobroek/omp-plugins/compare/delivery--v1.4.2...delivery--v1.4.3) (2026-10-10)
 
 
