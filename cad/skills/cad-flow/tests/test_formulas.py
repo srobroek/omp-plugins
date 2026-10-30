@@ -5,12 +5,20 @@ provisional gate the lead resolves after the fast checks, a full check, and a hu
 
 from __future__ import annotations
 
+import re
 import tomllib
 import unittest
 from pathlib import Path
 
 FORMULAS = Path(__file__).resolve().parents[3] / "formulas"
 SEALS = "cad-record/scripts/release.py"
+# The VOID instruction in each `<stage>-full-check` description: the `bd reopen` command, and the `bd dep tree`
+# query that resolves its `<later closed steps>` placeholder.
+REOPEN = re.compile(r"`bd reopen ([^`]*) --reason [^`]*`")
+LATER = re.compile(
+    r"where `<later closed steps>` are the ids `bd dep tree <([a-z0-9-]+)-step> --direction=up --status=closed --json` "
+    r"lists, except steps labelled `([^`]+)` and bonded molecules"
+)
 
 
 def ancestors(steps: dict[str, dict], step_id: str) -> set[str]:
@@ -34,18 +42,34 @@ def ready(steps: dict[str, dict], closed: set[str]) -> set[str]:
     return {step_id for step_id, step in steps.items() if step_id not in closed and set(step.get("needs", [])) <= closed}
 
 
-def descendants(steps: dict[str, dict], step_id: str) -> set[str]:
-    """Every step that needs `step_id`, directly or through another step."""
-    return {other for other in steps if step_id in ancestors(steps, other)}
+def dep_tree_closed(steps: dict[str, dict], root: str, closed: set[str]) -> set[str]:
+    """What `bd dep tree <root> --direction=up --status=closed` lists: `root` and the closed steps that need it,
+    directly or through other closed steps (bonded molecules are not modelled)."""
+    found: set[str] = set()
+    pending = [root] if root in closed else []
+    while pending:
+        node = pending.pop()
+        if node not in found:
+            found.add(node)
+            pending.extend(other for other, step in steps.items() if node in step.get("needs", []) and other in closed)
+    return found
 
 
-def void(steps: dict[str, dict], closed: set[str], provisional: str) -> set[str]:
-    """`closed` after the VOID that skill://cad-flow Gate control documents: reopen the stage's integrate step, its
-    provisional gate and everything after it, except fan-out steps (whose deliveries stay integrated)."""
-    (integrate,) = steps[provisional]["needs"]
-    fanouts = {i for i, s in steps.items() if "fanout" in s.get("labels", [])}
-    return closed - (({integrate, provisional} | descendants(steps, provisional)) - fanouts)
-
+def void(steps: dict[str, dict], closed: set[str], full: str) -> set[str]:
+    """`closed` after a VOID that runs exactly the `bd reopen` command the stage's full-check step `full` gives."""
+    text = steps[full]["description"]
+    (arguments,) = REOPEN.findall(text)
+    reopened: set[str] = set()
+    for placeholder in re.findall(r"<([^>]+)>", arguments):
+        if placeholder == "later closed steps":
+            ((root, label),) = LATER.findall(text)
+            reopened |= {i for i in dep_tree_closed(steps, root, closed) if label not in steps[i].get("labels", [])}
+            continue
+        step_id = placeholder.removesuffix("-step")
+        if not placeholder.endswith("-step") or step_id not in steps:
+            raise AssertionError(f"{full} reopens {placeholder!r}, which names no step")
+        reopened.add(step_id)
+    return closed - reopened
 
 
 # Per root, each built stage in order: (provisional gate, the next stage's first step, the next integration step).
@@ -120,7 +144,7 @@ class StageGates(unittest.TestCase):
                     target = next_integrate or full
                     closed = ancestors(steps, target)
                     self.assertIn(target, ready(steps, closed))
-                    voided = void(steps, closed, gate)
+                    voided = void(steps, closed, full)
                     self.assertEqual(ready(steps, voided) & {integrate, gate, full, target}, {integrate})
 
     def assert_human_gate_waits_for_a_new_full_check(self, steps: dict[str, dict], voided: set[str], gate: str) -> None:
@@ -138,10 +162,10 @@ class StageGates(unittest.TestCase):
             steps = formula_steps(name)
             for gate, _, _ in stages:
                 with self.subTest(formula=name, gate=gate):
-                    human = self.stage(steps, gate)[2]
+                    _, full, human = self.stage(steps, gate)
                     closed = ancestors(steps, human)  # the full check passed; the user names a change at the gate
                     self.assertIn(human, ready(steps, closed))
-                    self.assert_human_gate_waits_for_a_new_full_check(steps, void(steps, closed, gate), gate)
+                    self.assert_human_gate_waits_for_a_new_full_check(steps, void(steps, closed, full), gate)
 
     def test_a_late_major_review_reopens_the_full_check_and_both_reviews(self) -> None:
         for name in ("cad-product", "cad-part"):
@@ -151,7 +175,7 @@ class StageGates(unittest.TestCase):
                 reviews = {"parts-mech-review", "parts-dfm-review"}
                 self.assertLessEqual(reviews, set(steps[human]["needs"]))
                 closed = ancestors(steps, human)  # full check closed, then a review returned MAJOR
-                voided = void(steps, closed, "parts-provisional-gate")
+                voided = void(steps, closed, full)
                 self.assertFalse(reviews & voided, "a MAJOR review must run again on the fixed version")
                 self.assert_human_gate_waits_for_a_new_full_check(steps, voided, "parts-provisional-gate")
                 fixed = voided | {integrate, "parts-provisional-gate", full}
@@ -166,7 +190,7 @@ class StageGates(unittest.TestCase):
                     next_integrate, next_full, next_human = self.stage(steps, next_gate)
                     # The later stage integrated and fully checked vN; this stage's full check passed and its gate is open.
                     closed = ancestors(steps, next_full) | {next_full} | ancestors(steps, human)
-                    voided = void(steps, closed, gate)
+                    voided = void(steps, closed, full)
                     self.assertFalse({next_integrate, next_gate, next_full} & voided, "a later stage survived the VOID")
                     self.assertFalse(ready(steps, voided) & {next_integrate, next_gate, next_full, human, next_human})
                     self.assert_human_gate_waits_for_a_new_full_check(steps, voided, gate)

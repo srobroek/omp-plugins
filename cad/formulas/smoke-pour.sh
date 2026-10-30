@@ -197,26 +197,45 @@ for want in wants:
 print(f"walk {moment}: ready {titles}")
 PY
 }
-# The VOID of skill://cad-flow Gate control: $1 is the reason, $2 the provisional gate's title, the rest the
-# stage's own step titles. It also reopens every closed later step built on the voided version, except fan-out
-# steps and bonded molecules (ids `<step-id>.<ref>`).
-walk_void() {
-  local reason=$1 provisional=$2 own=() title later
-  shift 2
-  for title in "$@"; do own+=("$(walk_step "$title")"); done
-  bd dep tree "$(walk_step "$provisional")" --direction=up --status=closed --json >"$work/tree.json"
-  bd list --parent "$walk_root" --label fanout --all --json >"$work/fanouts.json"
-  later=$(python3 - "$work/tree.json" "$work/fanouts.json" "${own[@]}" <<'PY'
-import json, sys
-tree = {i["id"] for i in json.load(open(sys.argv[1]))}
-fanouts = {i["id"] for i in json.load(open(sys.argv[2]))}
-print(" ".join(sorted(i for i in tree - fanouts - set(sys.argv[3:]) if "." not in i)))
+# The VOID a stage's full-check step gives: it runs exactly the step's own `bd reopen` command, resolving
+# `<later closed steps>` with the `bd dep tree` query the step names. Written to a file because bash misparses
+# backticks in a heredoc inside `$(...)`.
+cat >"$work/void_ids.py" <<'PY'
+import json, re, subprocess, sys, tomllib
+formula, full, walk_path, root = sys.argv[1:]
+with open(formula, "rb") as handle:
+    steps = {step["id"]: step for step in tomllib.load(handle)["steps"]}
+walk = json.load(open(walk_path))
+def issue(step_id):
+    title = steps[step_id]["title"].replace("{{product}}", "smoke-walk")
+    found = [i["id"] for i in walk if i["title"] == title]
+    if len(found) != 1:
+        sys.exit(f"FAIL: {full} reopens {step_id!r}, which matches {len(found)} walk steps")
+    return found[0]
+def bd(*args):
+    return json.loads(subprocess.run(["bd", *args], check=True, capture_output=True, text=True).stdout)
+text = steps[full]["description"]
+(arguments,) = re.findall(r"`bd reopen ([^`]*) --reason [^`]*`", text)
+ids = []
+for placeholder in re.findall(r"<([^>]+)>", arguments):
+    if placeholder != "later closed steps":
+        ids.append(issue(placeholder.removesuffix("-step")))
+        continue
+    ((tree_root, label),) = re.findall(
+        r"where `<later closed steps>` are the ids `bd dep tree <([a-z0-9-]+)-step> --direction=up --status=closed --json` "
+        r"lists, except steps labelled `([^`]+)` and bonded molecules", text)
+    labelled = {i["id"] for i in bd("list", "--parent", root, "--label", label, "--all", "--json")}
+    tree = bd("dep", "tree", issue(tree_root), "--direction=up", "--status=closed", "--json")
+    ids += [i["id"] for i in tree if i["id"] not in labelled and "." not in i["id"]]
+print(" ".join(dict.fromkeys(ids)))
 PY
-)
-  # shellcheck disable=SC2086 # $later is a space-separated list of bead ids
-  bd reopen "${own[@]}" $later --reason "$reason" >/dev/null
+# $1 is the VOID reason, $2 the formula id of the stage's full-check step.
+walk_void() {
+  local reason=$1 full=$2 ids
+  ids=$(python3 "$work/void_ids.py" "$work/.beads/formulas/cad-product.formula.toml" "$full" "$work/walk.json" "$walk_root")
+  # shellcheck disable=SC2086 # $ids is a space-separated list of bead ids
+  bd reopen $ids --reason "$reason" >/dev/null
 }
-layout_steps=('L1 LAYOUT' 'LAYOUT provisional gate' 'LAYOUT full check')
 walk_pass GROUND 'smoke: grounded'
 walk_approve "$(walk_step 'INTENT gate')"
 walk_pass 'INTENT gate' 'smoke: user approved'
@@ -230,7 +249,7 @@ walk_pass 'L1 LAYOUT' 'smoke: v1 built, fast checks 1-4 passed'
 walk_ready 'v1 fast checks passed' '+LAYOUT provisional gate' '-LAYOUT full check' '-L2 PARTS: fan out' '-LAYOUT freeze gate'
 walk_pass 'LAYOUT provisional gate' 'PROVISIONAL, temporary until layout-full-check: v1 passed fast checks 1-4'
 walk_ready 'v1 provisional' '+LAYOUT full check' '+L2 PARTS: fan out' '-LAYOUT freeze gate'
-walk_void 'VOID: v1 full sweep failed' 'LAYOUT provisional gate' "${layout_steps[@]}"
+walk_void 'VOID: v1 full sweep failed' layout-full-check
 walk_ready 'v1 full check failed (VOID)' '+L1 LAYOUT' '-LAYOUT provisional gate' '-LAYOUT full check' '-L2 PARTS: fan out'
 walk_pass 'L1 LAYOUT' 'smoke: v2 built, fast checks 1-4 passed'
 walk_pass 'LAYOUT provisional gate' 'PROVISIONAL, temporary until layout-full-check: v2 passed fast checks 1-4'
@@ -241,7 +260,7 @@ walk_pass 'L2 PARTS: fan out' 'smoke: no units'
 walk_pass 'L2 PARTS: integrate' 'smoke: v3 built on the v2 layout, fast checks 1-4 passed'
 walk_pass 'PARTS provisional gate' 'PROVISIONAL, temporary until parts-full-check: v3 passed fast checks 1-4'
 walk_ready 'v3 parts provisional' '+PARTS full check' '+L3 DETAIL: fan out' '-LAYOUT freeze gate'
-walk_void 'VOID: the user named a layout change at the LAYOUT freeze gate' 'LAYOUT provisional gate' "${layout_steps[@]}"
+walk_void 'VOID: the user named a layout change at the LAYOUT freeze gate' layout-full-check
 walk_ready 'layout change named at the human gate (VOID)' '+L1 LAYOUT' '-LAYOUT full check' '-LAYOUT freeze gate' \
   '-L2 PARTS: integrate' '-PARTS provisional gate' '-PARTS full check' '-L3 DETAIL: fan out'
 walk_pass 'L1 LAYOUT' 'smoke: v4 built, fast checks 1-4 passed'
