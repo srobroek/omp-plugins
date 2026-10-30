@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.3.0](https://github.com/srobroek/omp-plugins/compare/cad--v0.2.0...cad--v0.3.0) (2026-10-30)
+
+
+### Features
+
+* **cad:** render custom view directions and assess shadows only when the floor is in frame ([12031db](https://github.com/srobroek/omp-plugins/commit/12031db46e5bd4120368ec857ed3ffa83221d2ce))
+
+
+### Bug Fixes
+
+* **cad:** clear error when a model version label already exists ([00e7dbf](https://github.com/srobroek/omp-plugins/commit/00e7dbf43f700a0de1c8f2998b7836577b10b272))
+* **cad:** distinguish blocks from planar frames ([9e08010](https://github.com/srobroek/omp-plugins/commit/9e080107afc9f664dca19edd970c4ffff166dc52))
+* **cad:** save concept viewer screenshots ([533654f](https://github.com/srobroek/omp-plugins/commit/533654fd1d02addfb2b3a6567dea854c1e56b6a2))
+
+
+### Performance
+
+* **cad:** clear far pair-poses by mesh bounds and reuse periodic placements in sweeps ([30083fc](https://github.com/srobroek/omp-plugins/commit/30083fc8fc37c4018c410f5f8623f08ded469ba2))
+
 ## [0.2.0](https://github.com/srobroek/omp-plugins/compare/cad--v0.1.0...cad--v0.2.0) (2026-10-30)
 
 
