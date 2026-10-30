@@ -704,11 +704,109 @@ def parse_values(specs: Iterable[str]) -> dict[str, float]:
 
 @dataclass(frozen=True)
 class Part:
-    """One part definition: the geometry every occurrence of `pn` places."""
+    """One part definition: the geometry every occurrence of `pn` places. `geometry_id` is its
+    provenance when the shape was read from that very STEP file (`step_data_hash`), else None; a
+    shape built, modified or imported from elsewhere carries none (`geometry_ids` hashes its BRep)."""
 
     pn: str
     name: str  # STEP product name, PN first
     shape: Any  # TopoDS_Shape in the PN's model frame, unlocated
+    geometry_id: bytes | None = None
+
+
+# Domain tags of the two geometry identities, so a STEP DATA hash never equals a BRep hash.
+STEP_DATA_TAG = b"cad-motion geometry: STEP DATA sections v1\0"
+BREP_TAG = b"cad-motion geometry: BRep bytes v1\0"
+_STEP_SCAN = re.compile(rb"'|/\*|;")  # what ends a STEP statement, or starts a string or comment
+_STEP_KEYWORD = re.compile(rb"(?:\s|/\*.*?\*/)*(DATA|ENDSEC)\b", re.S)
+_STEP_DATA = re.compile(rb"DATA(?:\s|/\*.*?\*/)*(\(.*\))?(?:\s|/\*.*?\*/)*", re.S)
+_STEP_ENDSEC = re.compile(rb"ENDSEC(?:\s|/\*.*?\*/)*", re.S)
+
+
+def step_data_hash(path: Path) -> bytes:
+    """sha256, tagged STEP_DATA_TAG, of the DATA sections of the STEP file at `path`, in order:
+    each section's parameters (`DATA(...)`) and its body, the bytes up to its ENDSEC. The HEADER
+    (file name, timestamp, originating system) and the exchange terminator are left out, so a
+    rebuild that writes the same entities hashes the same. Sections are found by statement, outside
+    strings ('...' with '' inside) and comments (/* */). Nothing is normalized: renumbered entities
+    or changed whitespace hash differently, which only misses the cache. A file with no DATA
+    section, an unterminated string, comment or DATA section is refused, never hashed."""
+    try:
+        data = path.read_bytes()
+    except OSError as error:
+        raise MotionError(f"cannot read STEP file {path}: {error}") from error
+    digest, sections, body_start, params = sha256(STEP_DATA_TAG), 0, None, b""
+    start = position = 0
+    while (found := _STEP_SCAN.search(data, position)) is not None:
+        token = found.group()
+        if token == b"'":
+            position = found.end()
+            while True:
+                close = data.find(b"'", position)
+                if close < 0:
+                    raise MotionError(f"{path}: unterminated STEP string")
+                if data[close + 1:close + 2] != b"'":
+                    position = close + 1
+                    break
+                position = close + 2
+            continue
+        if token == b"/*":
+            close = data.find(b"*/", found.end())
+            if close < 0:
+                raise MotionError(f"{path}: unterminated STEP comment")
+            position = close + 2
+            continue
+        end = found.start()  # one statement: data[start:end], its ';' at end
+        keyword = _STEP_KEYWORD.match(data, start, end)
+        if keyword is not None:
+            head = keyword.start(1)
+            if body_start is None and keyword.group(1) == b"DATA":
+                section = _STEP_DATA.fullmatch(data, head, end)
+                if section is not None:
+                    body_start, params = end + 1, section.group(1) or b""
+            elif body_start is not None and keyword.group(1) == b"ENDSEC" and _STEP_ENDSEC.fullmatch(data, head, end):
+                body = data[body_start:head]
+                for chunk in (params, body):
+                    digest.update(len(chunk).to_bytes(8, "little"))
+                    digest.update(chunk)
+                sections, body_start = sections + 1, None
+        start = position = found.end()
+    if body_start is not None:
+        raise MotionError(f"{path}: a STEP DATA section has no ENDSEC")
+    if not sections:
+        raise MotionError(f"{path}: no STEP DATA section")
+    return digest.digest()
+
+
+def shape_bytes(shape: Any) -> bytes:
+    """`shape` in OCCT's binary BRep format, without triangulation."""
+    import io
+
+    from OCP.BinTools import BinTools, BinTools_FormatVersion
+
+    buffer = io.BytesIO()
+    BinTools.Write_s(shape, buffer, False, False, BinTools_FormatVersion.BinTools_FormatVersion_CURRENT)
+    return buffer.getvalue()
+
+
+def box_corners(shape: Any, tolerance: bool = False) -> tuple[list[float], list[float]]:
+    """(min, max) corners of `shape`'s optimal bounding box from its exact geometry; with `tolerance`
+    enlarged by the shape's vertex, edge and face tolerances, so the box holds the shape."""
+    from OCP.Bnd import Bnd_Box
+    from OCP.BRepBndLib import BRepBndLib
+
+    box = Bnd_Box()
+    BRepBndLib.AddOptimal_s(shape, box, False, tolerance)
+    low, high = box.CornerMin(), box.CornerMax()
+    return [low.X(), low.Y(), low.Z()], [high.X(), high.Y(), high.Z()]
+
+
+def geometry_ids(parts: Mapping[str, Part]) -> dict[str, bytes]:
+    """Definition key -> geometry identity: the part's STEP DATA provenance (`geometry_id`), else
+    the sha256, tagged BREP_TAG, of its BRep bytes. Equal identities mean equal measured geometry,
+    so pair results keyed by them are shared across runs and tools."""
+    return {key: part.geometry_id if part.geometry_id is not None else sha256(BREP_TAG + shape_bytes(part.shape)).digest()
+            for key, part in parts.items()}
 
 
 @dataclass(frozen=True)
@@ -1011,7 +1109,9 @@ def read_assembly_step(path: Path) -> StepAssembly:
 
 
 def load_definitions(hw: Path, parts_dir: Path, record_hw: Path | None = None) -> dict[str, Part]:
-    """Part definitions keyed by PN from one STEP per part."""
+    """Part definitions keyed by PN from one STEP per part, each with its file's DATA hash as its
+    `geometry_id`: the shape is what this module reads from those entities (rule_version covers
+    the reading code and kernel)."""
     if not parts_dir.is_dir():
         raise MotionError(f"parts directory not found: {parts_dir}")
     records = _part_records(record_hw or hw)
@@ -1023,19 +1123,20 @@ def load_definitions(hw: Path, parts_dir: Path, record_hw: Path | None = None) -
         pn = match.group(1)
         if pn in found:
             raise MotionError(f"{parts_dir}: more than one STEP file for {pn}")
-        named = read_assembly_step(path)
+        named, geometry_id = read_assembly_step(path), step_data_hash(path)
         if set(named.definitions) == {pn}:
             if len(named.components) != 1:
                 raise MotionError(f"{path}: places {pn} {len(named.components)} times; a part STEP holds one definition")
             part, location = named.definitions[pn], named.components[0].location
+            shape = part.shape
             if location != Rigid.identity():  # a located single product keeps its in-file position
                 from OCP.BRepBuilderAPI import BRepBuilderAPI_Transform
 
-                part = Part(pn, part.name, BRepBuilderAPI_Transform(part.shape, to_trsf(location), True).Shape())
-            found[pn] = part  # the file's own product name, PN first
+                shape = BRepBuilderAPI_Transform(part.shape, to_trsf(location), True).Shape()
+            found[pn] = Part(pn, part.name, shape, geometry_id)  # the file's own product name, PN first
         elif not named.definitions:
             title = records.get(pn, {}).get("title")
-            found[pn] = Part(pn, f"{pn} {title}" if isinstance(title, str) else pn, _read_single(path))
+            found[pn] = Part(pn, f"{pn} {title}" if isinstance(title, str) else pn, _read_single(path), geometry_id)
         else:
             raise MotionError(f"{path}: holds products of {sorted(named.definitions)}, expected only {pn}")
     return found
