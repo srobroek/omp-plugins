@@ -34,6 +34,7 @@ Draft, show live previews, and collect feedback. Continue until the user says â€
 - Each L1-L4 commit batch builds one version and checks it in the [fail-fast order](#fail-fast-check-order). Stop on any blocking failure. Show that exact version's renders at the stage gates.
 - An explicit check output is a new path under `.cad-work/`; generated version and producer paths come from the cad-record layout API.
 - The user's commit, the layout threshold, or the hardware git pre-commit hook triggers broader changed-parts/dependents recheck. Use `flow.recheck_from` and applicable earlier-stage checks; stamp the exact staged `hw/` only after every required check passes.
+- When the cad-recheck pre-commit hook is not installed, run its check yourself before each commit of `hw/` changes. `install-hook.py --project <project-directory>` exits 3 when `core.hooksPath` is managed outside the repository (such as Git Defender) and 2 on another refusal; neither installs the hook. After staging, run `uv run --script skill://cad-recheck/scripts/stamp.py --verify` from the project directory, the same check the hook runs. Exit 0 allows the commit. Exit 2 means do not commit: fix the reason it prints on stderr, restamp, and verify again.
 - Record changed items, dependents, checks, results, and artifacts. A later edit starts a new batch on the next commit.
 - After DESIGN freeze, reopen only affected parts and dependents. Preserve unaffected parts and their evidence. Before another release, build a new version and re-freeze its exact manifest anchor.
 - Before using `uv run --script skill://<name>/scripts/...` on a non-OMP harness, resolve `skill://<name>/` to that skill's base directory; OMP resolves the URI directly.
@@ -114,7 +115,7 @@ Each worker's brief is self-contained. It names:
 
 - the unit id, and the molecule step text or, without Beads, the same instruction;
 - the PNs, variant, or case the unit owns; a motion case also names the requirements and use cases its plan must show;
-- the inputs as absolute paths (record files, version label, frozen interfaces, shared node ids), plus kernel and fidelity;
+- the inputs as absolute paths (record files, version label, frozen interfaces, shared node ids), plus kernel and fidelity; a part or detail unit also gets each `--attach REF=PARENT_REF` the lead's integrated build passes to `cad-model run`, for its `scratch.py build`;
 - the write boundary, and that the worker asks the user nothing and writes no ledger entry;
 - the report format, which gives every file as an absolute path.
 
@@ -127,7 +128,8 @@ Read every report of the batch before you change anything. Accept a part deliver
 A part designer works in `.cad-work/<unit>/` next to `hw/`; `scratch.py` writes a `.gitignore` there so git ignores the directory.
 
 - `uv run --script skill://cad-flow/scripts/scratch.py init --hw hw --unit <unit> --part <PN> [--part <PN> ...]` copies `hw/` without `versions/`, `renders/`, `releases/`, or `.git/` and records a baseline.
- - `scratch.py deliver --hw hw --unit <unit>` accepts only canonical source files under authorized part records (including a PN authorized at `init`), rejects generated subtrees, stray paths and unauthorized PNs, and writes nothing when a conflict is detected. The lead integrates the returned part files only after the passing scratch build.
+- `scratch.py build --hw hw --unit <unit> --fidelity F2|F3 [--kernel auto|cadquery|build123d] [--attach REF=PARENT_REF ...]` builds and checks the scratch copy under its own label and runs the form check on the unit's PNs; `hw/versions/` is never touched. Pass the same `--attach` entries as the lead's integrated build, so the unit checks the same rigid attachments; the report echoes them as `attach`.
+- `scratch.py deliver --hw hw --unit <unit>` accepts only canonical source files under authorized part records (including a PN authorized at `init`), rejects generated subtrees, stray paths and unauthorized PNs, and writes nothing when a conflict is detected. The lead integrates the returned part files only after the passing scratch build.
 
 Every path in its JSON output is absolute. `.cad-work/` is disposable once the stage's human gate passes.
 

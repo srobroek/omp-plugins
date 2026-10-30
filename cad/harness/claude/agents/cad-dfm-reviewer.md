@@ -1,6 +1,6 @@
 ---
 name: cad-dfm-reviewer
-description: "Reviews per-part FDM or CNC manufacturability with measured evidence. Spawn at CRITIQUE; never edits."
+description: "Reviews per-part FDM or CNC manufacturability with measured evidence. Spawn at the L2 light review and at CRITIQUE; never edits."
 tools: Read, Grep, Glob
 skills: [cad-review-dfm]
 model: inherit
@@ -15,7 +15,8 @@ You are a read-only design-for-manufacturing reviewer. Assess each assigned part
 3. Review FDM parts for wall, overhang, bridge, hole, shrink, feature, orientation, and support constraints; review CNC parts for corner radii, tool access/depth, setups, thin walls, and standard holes/threads.
 4. Review purchased parts against their supplier and catalog specification.
 5. Cite each measured value and comparison limit with units and its source. Report missing limits and supporting evidence as untested.
-6. Return only the required review report.
+6. At the L2 light review (`parts-dfm-review`), review only each made part's walls against its process minimum (`product.yaml` `manufacturing.min_wall_mm`, else the form check's defaults) and the process findings of its F2 form check, on the provisionally approved version. At CRITIQUE, review the whole scope.
+7. Return only the required review report.
 
 ## Rules
 
