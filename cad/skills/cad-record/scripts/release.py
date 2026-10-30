@@ -5,7 +5,8 @@
 """Seal a release package of the frozen version: byte copies and a v2 manifest under hw/releases/<REV>/.
 
     uv run --script release.py HW --rev A --version v3 --decision DR-007
-
+    uv run --script release.py HW --rev A --version v3 --decision DR-007 --prune
+    uv run --script release.py HW --rev A --version v3 --decision DR-007 --prune --yes
 The frozen version (product.yaml flow.frozen) defines what a release holds; release.py copies and
 never builds. It refuses the release when any of these fails, and then writes nothing outside
 .cad-work/:
@@ -25,12 +26,13 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import importlib.util
 import json
+import importlib.util
 import os
 import posixpath
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass, field
@@ -58,6 +60,153 @@ MANIFEST = layout.MANIFEST
 SCHEMA_VERSION = 2
 WORKFLOW_KEYS = {"product.yaml": ("flow",)}  # workflow state; advancing it is not a design change
 EVIDENCE_PATH = re.compile(r"hw/[^\s,;()\"'<>]+")  # a project-relative path inside a verification evidence cell
+
+PRUNED_BUNDLE_KINDS = ("checks", "renders", "drawings", "motion", "analysis", "captures")
+
+
+def _decision_references(hw: Path) -> set[str]:
+    """Decision identifiers that appear as record links or record files."""
+    refs = {path.stem for path in (hw / "decisions").glob("DR-[0-9][0-9][0-9].md")}
+    product = _yaml(hw / "product.yaml")
+    flow = product.get("flow") if isinstance(product, dict) else None
+    if isinstance(flow, dict):
+        for key in ("frozen", "change"):
+            value = flow.get(key)
+            if isinstance(value, dict) and isinstance(value.get("decision"), str):
+                refs.add(value["decision"])
+    for path in (hw / "parts").glob("*/part.yaml"):
+        part = _yaml(path)
+        if isinstance(part, dict):
+            refs.update(item for item in part.get("decisions", []) if isinstance(item, str))
+            for key in ("manufacture", "procurement"):
+                value = part.get(key)
+                if isinstance(value, dict) and isinstance(value.get("decision"), str):
+                    refs.add(value["decision"])
+    def collect(value: Any) -> None:
+        if isinstance(value, dict):
+            decision = value.get("decision")
+            if isinstance(decision, str) and re.fullmatch(r"DR-[0-9]{3}", decision):
+                refs.add(decision)
+            for child in value.values():
+                collect(child)
+        elif isinstance(value, list):
+            for child in value:
+                collect(child)
+    for name in ("assembly.yaml", "interfaces.yaml"):
+        collect(_yaml(hw / name))
+    return refs
+
+
+def milestone_versions(hw: Path) -> set[str]:
+    """A milestone is frozen or is explicitly named by a record approval/DR or release base."""
+    milestones: set[str] = set()
+    product = _yaml(hw / "product.yaml")
+    flow = product.get("flow") if isinstance(product, dict) else None
+    frozen = flow.get("frozen") if isinstance(flow, dict) else None
+    if isinstance(frozen, dict) and isinstance(frozen.get("version"), str):
+        milestones.add(frozen["version"])
+    decisions = _decision_references(hw)
+    for version in layout.versions(hw):
+        manifest = _json(layout.version_dir(hw, version) / MANIFEST)
+        if isinstance(manifest, dict) and any(isinstance(manifest.get(key), str) and manifest[key] in decisions
+                                              for key in ("decision", "approval")):
+            milestones.add(version)
+    for path in sorted((hw / "decisions").glob("DR-[0-9][0-9][0-9].md")):
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        milestones.update(re.findall(r"(?<![A-Za-z0-9])v[1-9][0-9]*(?![A-Za-z0-9])", text))
+    for path in sorted((hw / "releases").glob("*/manifest.json")):
+        manifest = _json(path)
+        frozen_release = manifest.get("frozen") if isinstance(manifest, dict) else None
+        base = frozen_release.get("version") if isinstance(frozen_release, dict) else None
+        if isinstance(base, str):
+            milestones.add(base)
+    return milestones
+
+
+def released_versions(hw: Path) -> set[str]:
+    released: set[str] = set()
+    for path in sorted((hw / "releases").glob("*/manifest.json")):
+        manifest = _json(path)
+        if not isinstance(manifest, dict):
+            raise layout.LayoutError(f"cannot read release manifest {path}")
+        frozen = manifest.get("frozen")
+        version = frozen.get("version") if isinstance(frozen, dict) else None
+        if not isinstance(version, str):
+            raise layout.LayoutError(f"release manifest {path} has no frozen base version")
+        released.add(version)
+    return released
+
+
+def prune_plan(hw: Path) -> dict[str, Any]:
+    built = set(layout.versions(hw))
+    latest = layout.latest(hw)
+    released = released_versions(hw)
+    milestones = milestone_versions(hw)
+    keep = built & (released | milestones | ({latest} if latest else set()))
+    remove = built - keep
+    bundles = {}
+    for kind in PRUNED_BUNDLE_KINDS:
+        root = hw / kind
+        bundles[kind] = [f"hw/{kind}/{version}" for version in sorted(remove) if (root / version).is_dir()]
+    return {"latest": latest, "released": sorted(built & released), "milestones": sorted(built & milestones),
+            "keep": sorted(keep), "prune": sorted(remove), "bundles": bundles}
+
+
+def _assert_prunable(hw: Path, versions: set[str]) -> None:
+    """Refuse if any surviving sealed manifest points to version data selected for deletion."""
+    for path in sorted(hw.glob("**/manifest.json")):
+        if any(f"versions/{version}/" in path.as_posix() for version in versions):
+            continue
+        manifest = _json(path)
+        if not isinstance(manifest, dict):
+            raise layout.LayoutError(f"cannot read manifest before pruning: {path}")
+        if path.parent.parent == hw / "releases":
+            continue  # releases copy files, not live source objects
+        inventory = manifest.get("files")
+        if not isinstance(inventory, dict):
+            continue
+        for item in inventory.values():
+            original = item.get("original") if isinstance(item, dict) else item
+            if isinstance(original, str) and any(re.search(rf"(?:^|/)versions/{re.escape(v)}(?:/|$)", original)
+                                                  for v in versions):
+                raise layout.LayoutError(f"{path} references a version selected for pruning: {original}")
+
+
+def _store_gc(hw: Path) -> dict[str, Any]:
+    script = Path(__file__).resolve().parents[2] / "cad-model" / "scripts" / "cad_model.py"
+    result = subprocess.run([sys.executable, str(script), "store", "gc", str(hw)],
+                            capture_output=True, text=True, check=False, timeout=300)
+    if result.returncode != 0:
+        raise layout.LayoutError(f"store gc failed ({result.returncode}): {result.stderr.strip() or result.stdout.strip()}")
+    try:
+        return json.loads(result.stdout)
+    except json.JSONDecodeError as error:
+        raise layout.LayoutError(f"store gc returned invalid JSON: {result.stdout!r}") from error
+
+
+def prune_after_release(hw: Path, rev: str, version: str, decision: str, yes: bool) -> dict[str, Any]:
+    """Print plan or prune, only for the already sealed release matching this request."""
+    hw = hw.resolve()
+    package = hw / "releases" / rev
+    if not package.is_dir() or layout.verify(package):
+        raise layout.LayoutError(f"release package hw/releases/{rev} is not sealed; refusing to prune")
+    manifest = _json(package / MANIFEST)
+    frozen = manifest.get("frozen") if isinstance(manifest, dict) else None
+    if not isinstance(frozen, dict) or frozen.get("version") != version or manifest.get("approval") != decision:
+        raise layout.LayoutError(f"sealed release hw/releases/{rev} does not match {version} approved by {decision}")
+    plan = prune_plan(hw)
+    if not yes:
+        return {"status": "plan", "plan": plan}
+    _assert_prunable(hw, set(plan["prune"]))
+    for label in plan["prune"]:
+        shutil.rmtree(hw / "versions" / label)
+    for paths in plan["bundles"].values():
+        for rel in paths:
+            shutil.rmtree(layout.locate(hw, rel))
+    return {"status": "pruned", "plan": plan, "store_gc": _store_gc(hw)}
 
 
 @dataclass(frozen=True)
@@ -441,7 +590,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--rev", required=True, help="the release revision letter, A to Y without I, O, Q, S, X")
     parser.add_argument("--version", required=True, help="the frozen version, as product.yaml flow.frozen names it")
     parser.add_argument("--decision", required=True, help="DR-### approving this release, in hw/decisions/")
+    parser.add_argument("--prune", action="store_true", help="after sealing, show a dry-run version cleanup plan")
+    parser.add_argument("--yes", action="store_true", help="apply the displayed prune plan; requires --prune")
     args = parser.parse_args(argv)
+    if args.yes and not args.prune:
+        parser.error("--yes requires --prune")
     if not args.hw.is_dir():
         print(json.dumps({"status": "error", "message": f"{args.hw} is not a directory"}))
         return 2
@@ -450,6 +603,12 @@ def main(argv: list[str] | None = None) -> int:
     except layout.LayoutError as error:
         print(json.dumps({"status": "error", "message": str(error)}))
         return 2
+    if code == 0 and args.prune:
+        try:
+            report["pruning"] = prune_after_release(args.hw, args.rev, args.version, args.decision, args.yes)
+        except layout.LayoutError as error:
+            print(json.dumps({"status": "prune_refused", **report, "message": str(error)}, indent=2))
+            return 1
     print(json.dumps(report, indent=2))
     return code
 

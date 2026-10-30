@@ -270,6 +270,87 @@ class Release(ReleaseCase):
         self.assertIn("releases/A/docs/notes.md", json.dumps(validate.blocking(validate.validate_project(hw))))
 
 
+class Pruning(ReleaseCase):
+    def test_plan_keeps_released_frozen_decision_milestone_and_latest(self) -> None:
+        hw = self.project()
+        for version in ("v2", "v3", "v4"):
+            folder = hw / "versions" / version
+            folder.mkdir()
+            write(folder / "manifest.json", json.dumps({"label": version, "files": {}}))
+        edit_yaml(hw / "product.yaml", lambda data: data["flow"].update(
+            frozen={"version": "v2", "manifest_sha256": "0" * 64, "decision": "DR-004"}))
+        write(hw / "versions" / "v3" / "manifest.json",
+              json.dumps({"label": "v3", "files": {}, "approval": "DR-005"}))
+        write(hw / "decisions" / "DR-006.md", "# Approval of milestone v3\n")
+        # A synthetic v1 release records the release-base milestone without rebuilding package files.
+        write(hw / "versions" / "v1" / "manifest.json", json.dumps({"label": "v1", "files": {}}))
+        (hw / "releases" / "A").mkdir(parents=True)
+        write(hw / "releases" / "A" / "manifest.json", json.dumps({"frozen": {"version": "v1"}, "files": {}}))
+        write(hw / "versions" / "latest.json", json.dumps({"label": "v4", "manifest": "versions/v4/manifest.json"}))
+        plan = release.prune_plan(hw)
+        self.assertEqual(plan["keep"], ["v1", "v2", "v3", "v4"])
+        self.assertEqual(plan["prune"], [])
+
+    def test_plan_prunes_superseded_versions_and_lists_each_bundle_family(self) -> None:
+        hw = self.root / "plan-hw"
+        hw.mkdir()
+        (hw / "versions").mkdir()
+        for version in ("v1", "v2"):
+            folder = hw / "versions" / version
+            folder.mkdir()
+            write(folder / "manifest.json", json.dumps({"label": version, "files": {}}))
+        write(hw / "versions" / "latest.json", json.dumps({"label": "v2", "manifest": "versions/v2/manifest.json"}))
+        for kind in release.PRUNED_BUNDLE_KINDS:
+            write(hw / kind / "v1" / "sample" / "manifest.json", json.dumps({"files": {}}))
+        plan = release.prune_plan(hw)
+        self.assertEqual(plan["keep"], ["v2"])
+        self.assertEqual(plan["prune"], ["v1"])
+        for kind in release.PRUNED_BUNDLE_KINDS:
+            self.assertEqual(plan["bundles"][kind], [f"hw/{kind}/v1"])
+
+    def test_prune_plan_without_yes_preserves_tree(self) -> None:
+        hw = self.project()
+        before = tree(hw)
+        result = subprocess.run([sys.executable, str(RELEASE), str(hw), "--rev", "A", "--version", "v1",
+                                 "--decision", "DR-005", "--prune"], capture_output=True, text=True,
+                                timeout=120, check=False)
+        report = json.loads(result.stdout)
+        self.assertEqual((result.returncode, report["status"], report["pruning"]["status"]),
+                         (0, "released", "plan"))
+        after = tree(hw)
+        self.assertTrue((hw / "versions" / "v1").is_dir())
+        self.assertEqual([path for path in before if path.startswith("versions/")],
+                         [path for path in after if path.startswith("versions/")])
+
+    def test_yes_executes_prune_only_after_seal_and_runs_gc(self) -> None:
+        hw = self.project()
+        (hw / "versions" / "v2").mkdir()
+        write(hw / "versions" / "v2" / "manifest.json", json.dumps({"label": "v2", "files": {}}))
+        edit_yaml(hw / "product.yaml", lambda data: data["flow"].update(stage="release"))
+        result = subprocess.run([sys.executable, str(RELEASE), str(hw), "--rev", "A", "--version", "v1",
+                                 "--decision", "DR-005", "--prune", "--yes"], capture_output=True, text=True,
+                                timeout=120, check=False)
+        report = json.loads(result.stdout)
+        self.assertEqual(result.returncode, 0, report)
+        self.assertTrue((hw / "versions" / "v1" / "manifest.json").is_file())
+        self.assertFalse((hw / "versions" / "v2").exists())
+        self.assertEqual(report["pruning"]["status"], "pruned")
+        self.assertIn("store_gc", report["pruning"])
+
+    def test_surviving_manifest_reference_refuses_prune(self) -> None:
+        hw = self.project()
+        before = tree(hw)
+        write(hw / "versions" / "v2" / "manifest.json", json.dumps({"label": "v2", "files": {}}))
+        edit_yaml(hw / "product.yaml", lambda data: data["flow"].update(stage="release"))
+        self.assertEqual(self.release(hw)[0], 0)
+        (hw / "checks" / "v2" / "ref").mkdir(parents=True)
+        write(hw / "checks" / "v2" / "ref" / "manifest.json", json.dumps(
+            {"files": {"x": "hw/versions/v2/assembly.step"}}))
+        with self.assertRaisesRegex(layout.LayoutError, "references a version selected for pruning"):
+            release.prune_after_release(hw, "A", "v1", "DR-005", yes=True)
+
+
+
 class Refusal(ReleaseCase):
     """Each gap refuses with a finding that names it, and hw/ is byte-identical afterwards."""
 

@@ -78,6 +78,8 @@ It stages byte copies in `.cad-work/release-<rev>/` and writes `manifest.json` (
 
 The manifest maps each package file to its `sha256` and `original`. For each custom-made PN it records the `process`, the assembled `quantity` and the files. It lists each selected bundle with its `manifest_sha256`, and a cited render or capture bundle appears there without a copy. A catalog buy has no manufacturing files. Its part.yaml snapshot, specification artifact and vendor sheet define it. A part placed more than once gets one output with its quantity.
 
+After a release is sealed, run the same release command with `--prune` to print a dry-run plan without changing files. Inspect its `keep`, `prune`, and bundle lists; then rerun the command with `--prune --yes` to remove superseded versions and their version-bound bundles and run `cad_model.py store gc`. Without `--yes`, the displayed plan is returned without deleting files. A version is kept if released, latest, frozen by `product.yaml flow.frozen`, named by a record decision or approval, or used as a release base. A DR that names a version marks it as a milestone because it records a design decision about that exact build. Release manifests copy package files, so source versions may be removed only after checking that no surviving manifest references them.
+
 ## Rules
 
 MUST Use revisions `X1`, `X2`, and so on for prototypes. Use released letters `A` to `Y`, excluding `I`, `O`, `Q`, `S`, `X`, and `Z`.
