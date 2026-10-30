@@ -68,7 +68,7 @@
           "nominal": {"description": "The value of an independent joint; a coupled joint has none", "type": "number"},
           "coupling": {"$ref": "#/$defs/coupling"},
           "torque": {
-            "description": "Whether the child carries drive torque. From stage parts on, every revolute declares it (none for a hand-positioned or free-running joint), and so does every fixed joint inside the drive train a transmitted revolute starts; a fixed joint declared transmitted names its torque_path",
+            "description": "Whether the child carries drive torque. From stage parts on, every revolute declares it (none for a hand-positioned or free-running joint), and so does every fixed joint inside the drive train that a revolute not declared none starts; a fixed joint declared transmitted names its torque_path",
             "type": "string", "enum": ["transmitted", "none"]
           },
           "torque_path": {"$ref": "#/$defs/torque_path"}

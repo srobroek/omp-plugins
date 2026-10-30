@@ -123,14 +123,30 @@ class Retention(LampRecord):
         self.fit(1, "locating_fit", axial_retainer={"type": "shoulder"})
         self.assertEqual(self.coded("retention."), {}, "a feature retainer names no hardware")
 
-    def test_every_revolute_declares_torque_from_parts_on(self) -> None:
+    def test_an_undeclared_revolute_and_the_fixed_joints_on_its_child_are_reported_in_one_run(self) -> None:
         for joint in ("J-001", "J-003"):
             self.joint(joint, torque=None)
         self.assertEqual(self.coded("retention."), {}, "not reported before stage parts")
         self.stage("parts")
         found = self.coded("retention.torque_path")
-        self.assertEqual(sorted(found), ["assembly.yaml#/joints/J-001", "assembly.yaml#/joints/J-003"])
+        # J-001 and J-003 themselves, the lower link's J-004, J-005, J-010 and J-011, and the head's J-008 and
+        # J-009. J-002 is declared none, so the upper link's J-006 and J-012 stay quiet.
+        self.assertEqual(sorted(found), [f"assembly.yaml#/joints/J-{n:03d}" for n in (1, 3, 4, 5, 8, 9, 10, 11)])
         self.assertIn("J-001 turns LMP-0002 but declares no torque", found["assembly.yaml#/joints/J-001"]["message"])
+
+    def test_the_engine_crank_reports_its_web_and_flywheel_on_the_first_run(self) -> None:
+        # The engine record before any declaration: crank J-009 (block -> web set), and the web set's shaft
+        # J-014 and flywheel J-015 fixed to it, none with a torque or torque path.
+        def fixed(joint_id: str, parent: str, child: str) -> dict[str, Any]:
+            return {"id": joint_id, "type": "fixed", "parent": parent, "child": child, "nominal": 0}
+        assembly = {"joints": [
+            {"id": "J-009", "type": "revolute", "parent": "VSX-0011", "child": "VSX-0101", "nominal": 0},
+            fixed("J-014", "VSX-0101", "VSX-0102"), fixed("J-015", "VSX-0101", "VSX-0110"),
+            fixed("J-020", "VSX-0011", "VSX-0012")]}  # the block's own fixed joint does not rotate
+        found = rules.torque_path_findings(assembly, lambda ref: ref)
+        self.assertEqual([(item.code, item.location) for item in found],
+                         [("retention.torque_path", "joints/J-009"), ("retention.torque_path", "joints/J-014"),
+                          ("retention.torque_path", "joints/J-015")])
 
     def test_an_uncoupled_drive_shaft_flags_every_undeclared_fixed_joint_on_it(self) -> None:
         # The engine's crankshaft: an independent revolute (no coupling, drives none) that carries the drive

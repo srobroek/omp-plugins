@@ -149,7 +149,7 @@ MUST Keep BOM columns in this order: `level,PN,rev,qty,title,material,process,ma
 `validate.py` also runs `scripts/design_rules.py`; each finding carries a stable `code`. LOAD [references/design-rules.md](references/design-rules.md) before fixing one or reading the clearance margin.
 
 - Clearance margin: distance < minimum fails; minimum ≤ distance < minimum + margin is a `margin` warning. cad-model check and cad-motion sweep read the margin through `load_clearance_margins`.
-- Retention (`retention.torque_path`, `retention.axial_retainer`): errors from stage `parts` on. Every revolute declares `torque`; every fixed joint on a `transmitted` revolute's child declares it too; every `press_fit` and `locating_fit` declares an `axial_retainer`; hardware is a modelled part. The reference lists the retrofit steps.
+- Retention (`retention.torque_path`, `retention.axial_retainer`): errors from stage `parts` on. Every revolute declares `torque`, as does every fixed joint on the child of a revolute not declared `none`; every `press_fit` and `locating_fit` declares an `axial_retainer`; hardware is a modelled part.
 - Process feasibility: an FDM part declared `transparency: transparent` is `feasibility.transparent_fdm`, a warning before stage `parts` and an error from it on. See-through prose is only ever a `feasibility.transparency_claim` warning.
 - Visibility bindings (`visibility.binding`): window and target parts resolve, at every stage.
 

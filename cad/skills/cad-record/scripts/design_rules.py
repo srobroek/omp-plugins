@@ -163,9 +163,10 @@ def torque_path_findings(assembly: Mapping[str, Any], resolve: Resolve) -> list[
 
     Each revolute declares `torque`: `transmitted` when its child carries drive torque (a crank, camshaft,
     gear or pulley shaft, coupled or not), or `none` for a hand-positioned or free-running joint. A drive
-    train is the child of a `transmitted` revolute and its fixed-joint descendants. Each fixed joint inside
-    it declares `torque`, and a fixed joint declared `transmitted` names its `torque_path`. A hardware torque
-    path names the modelled hardware.
+    train is the child of every revolute not declared `none` (an undeclared one counts, so one run reports
+    all of its fixed joints) and that child's fixed-joint descendants. Each fixed joint inside it declares
+    `torque`, and a fixed joint declared `transmitted` names its `torque_path`. A hardware torque path names
+    the modelled hardware.
     """
     joints = [joint for joint in assembly.get("joints", []) if isinstance(joint, Mapping)]
     fixed_by_parent: dict[str, list[Mapping[str, Any]]] = {}
@@ -175,7 +176,7 @@ def torque_path_findings(assembly: Mapping[str, Any], resolve: Resolve) -> list[
             fixed_by_parent.setdefault(parent, []).append(joint)
     in_drive_train: set[str] = set()  # fixed joint ids inside a drive train
     stack = [oid for oid in (resolve(joint["child"]) for joint in joints
-                             if joint["type"] == "revolute" and joint.get("torque") == "transmitted") if oid]
+                             if joint["type"] == "revolute" and joint.get("torque") != "none") if oid]
     seen: set[str] = set()
     while stack:
         oid = stack.pop()
