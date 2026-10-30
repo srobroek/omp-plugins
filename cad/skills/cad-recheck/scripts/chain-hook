@@ -1,0 +1,15 @@
+#!/bin/sh
+# Run the hook this repository ran before cad-recheck's install-hook.py set core.hooksPath=.githooks.
+# Usage: cad-recheck-chain HOOK-NAME [ARGS...]; stdin passes through to the chained hook.
+# install-hook.py records that hooks directory as the repository-local cad-recheck.chainedHooksPath;
+# when it is unset, or has no executable HOOK-NAME, there is nothing to chain.
+# No `set -u`: bash 3.2, macOS's /bin/sh, rejects an empty "$@" under it.
+set -e
+
+name=$1
+shift
+chained=$(git config --get cad-recheck.chainedHooksPath || true)
+[ -n "$chained" ] || exit 0
+hook="$chained/$name"
+[ -f "$hook" ] && [ -x "$hook" ] || exit 0
+exec "$hook" "$@"

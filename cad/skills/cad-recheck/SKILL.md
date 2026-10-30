@@ -19,7 +19,7 @@ TRIGGER
 5. Stage the design changes and `hw/.cad/recheck.json`. The pre-commit hook accepts only a passing stamp for the exact staged `hw/` tree.
 6. Install the hook in a hardware project's repository with `uv run --script skill://cad-recheck/scripts/install-hook.py --project <project-directory>`.
 
-The installer refuses to replace a different `core.hooksPath` or ignore non-sample hooks in `.git/hooks/`. Integrate the CAD hook with existing hooks, or explicitly pass `--force` to replace/ignore them. Commit the generated `.githooks/` directory so the hook and its stamp verifier are available to other checkouts.
+The installer sets the repository-local `core.hooksPath=.githooks` and chains the hooks git ran before, so they keep running. These are a `core.hooksPath` at any scope, such as an organisation's global hooks directory (Git Defender), or the hooks in `.git/hooks/`. It records that directory as the repository-local `cad-recheck.chainedHooksPath`. The CAD pre-commit runs the chained pre-commit first, and a failure there stops the commit. Every other chained hook gets a `.githooks/` shim that runs it. The installer never writes the chained directory or any config outside the repository. It refuses to overwrite a differing `.githooks/` hook. `--force` overwrites that hook and replaces the previous hooks instead of chaining them. Run the installer in each checkout, because the chain is local config. Commit the generated `.githooks/` directory so the hook, its shims, and its stamp verifier are available to other checkouts.
 
 `stamp.py` parses staged YAML with `yaml.safe_load` and declares `pyyaml>=6.0` for `uv run --script`; keep that PEP 723 dependency declaration when changing its dependencies.
 

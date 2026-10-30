@@ -254,6 +254,35 @@ class WarmRecordTests(unittest.TestCase):
         self.assertIs(kwargs["stdin"], subprocess.DEVNULL)
         self.assertEqual(started["log"], str(self.path.with_suffix(".log")))
 
+    def test_background_warm_up_outlives_the_launchers_ephemeral_uv_environment(self) -> None:
+        # `uv run` deletes its ephemeral environment once the launcher exits; the detached child
+        # must neither run from that environment nor hand its VIRTUAL_ENV to the uv calls it makes.
+        launcher_env = Path(self.environ["HOME"]) / "builds-v0" / ".tmp-launcher"
+        spawned = []
+
+        class Child:
+            pid = 424243
+
+            def __init__(self, command, **kwargs):
+                spawned.append((command, kwargs))
+                preflight._write_record(self_path, {"state": "running", "pid": self.pid, "started_at": "t0"})
+
+            def poll(self):
+                return None
+
+        self_path = self.path
+        base_interpreter = sys.executable
+        environ = {**self.environ, "VIRTUAL_ENV": str(launcher_env), "PATH": os.environ.get("PATH", "")}
+        with patch.object(preflight.subprocess, "Popen", Child), \
+                patch.object(preflight.sys, "_base_executable", base_interpreter, create=True), \
+                patch.object(preflight.sys, "executable", str(launcher_env / "bin" / "python")):
+            started = preflight.start_background(environ)
+        self.assertTrue(started["started"], started)
+        command, kwargs = spawned[0]
+        self.assertEqual(command[0], base_interpreter)
+        self.assertNotIn("VIRTUAL_ENV", kwargs["env"])
+        self.assertEqual(kwargs["env"]["PATH"], environ["PATH"])
+
     def test_a_running_warm_up_is_reused_instead_of_started_twice(self) -> None:
         preflight._write_record(self.path, {"state": "running", "pid": os.getpid(), "started_at": "t0"})
         with patch.object(preflight.subprocess, "Popen") as popen:

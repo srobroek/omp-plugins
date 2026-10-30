@@ -8,6 +8,7 @@
 Usage:
     uv run --script scratch.py init    --hw HW --unit UNIT --part PN [--part PN ...] [--reset]
     uv run --script scratch.py build   --hw HW --unit UNIT --fidelity F0|F1|F2|F3 [--kernel auto|cadquery|build123d]
+                                       [--attach REF=PARENT_REF ...]
     uv run --script scratch.py deliver --hw HW --unit UNIT
 
 The workspace is <project>/.cad-work/<UNIT>/, <project> being the directory that holds HW.
@@ -18,11 +19,13 @@ init    copies HW into <workspace>/hw/ without versions/, renders/, releases/, .
 build   runs cad-model `run` on the scratch hw/ under the next scratch label, cad-model `check`
         on that version, and cad-design form_check at --fidelity. HW itself is never passed to
         any of them, so HW/versions/ is neither created nor changed. Form findings are split
-        into the unit's own PNs and the rest; only the unit's own block it.
+        into the unit's own PNs and the rest; only the unit's own block it. Each --attach is
+        passed to cad-model `run` and recorded in the scratch version, so a unit builds and
+        checks against the same rigid attachments as the lead's integrated build.
 deliver copies each unit PN's scratch hw/parts/<PN>/ over HW/parts/<PN>/ and lists every other
         scratch file that differs from the baseline as a proposal for the lead. When any
         HW/parts/<PN>/ changed since init it writes nothing and exits 1. Generated
-        versions/, renders/, and releases/ output is ignored during delivery.
+        versions/, renders/, and releases/ output and every __pycache__/ are ignored during delivery.
 
 stdout: one JSON document; every path in it is absolute. build writes each tool's diagnostics to
 <workspace>/<tool>-<label>.log and names the log in the JSON, so its output stays small.
@@ -158,16 +161,21 @@ def next_label(scratch_hw: Path) -> str:
     return f"v{max(built, default=0) + 1}"
 
 
-def build(hw: Path, unit: str, kernel: str, fidelity: str) -> tuple[int, dict[str, Any]]:
+def build(hw: Path, unit: str, kernel: str, fidelity: str,
+          attach: tuple[str, ...] | list[str] = ()) -> tuple[int, dict[str, Any]]:
     work = workspace(hw, unit)
     baseline = load_baseline(work)
     own = set(baseline["parts"])
     scratch_hw = work / "hw"
     label = next_label(scratch_hw)
-    report: dict[str, Any] = {"unit": unit, "scratch_hw": str(scratch_hw), "label": label, "parts": sorted(own)}
+    attachments = list(attach)
+    report: dict[str, Any] = {"unit": unit, "scratch_hw": str(scratch_hw), "label": label, "parts": sorted(own),
+                              "attach": attachments}
 
     run_log = work / f"run-{label}.log"
-    code, ran = run_tool([str(CAD_MODEL), "run", str(scratch_hw), "--label", label, "--kernel", kernel], run_log)
+    attach_args = [arg for spec in attachments for arg in ("--attach", spec)]
+    code, ran = run_tool([str(CAD_MODEL), "run", str(scratch_hw), "--label", label, "--kernel", kernel,
+                          *attach_args], run_log)
     report["run"] = {"exit": code, "log": str(run_log), "findings": (ran or {}).get("findings", [])}
     if code != 0:
         report["status"] = "fail" if code == 1 else "error"
@@ -203,13 +211,15 @@ def build(hw: Path, unit: str, kernel: str, fidelity: str) -> tuple[int, dict[st
 
 def delivery_tree(root: Path) -> tuple[dict[str, str], set[str]]:
     files, directories = {}, set()
+    skipped = skips(root)
     for current, dirnames, filenames in os.walk(root, followlinks=False):
         directory = Path(current)
+        ignored = skipped(current, dirnames)
         for name in list(dirnames):
             path = directory / name
             if path.is_symlink():
                 raise UsageError(f"scratch contains a symlink at {path.relative_to(root)}")
-            if directory == root and name in NOT_COPIED:
+            if name in ignored:
                 dirnames.remove(name)
                 continue
             directories.add(path.relative_to(root).as_posix())
@@ -320,13 +330,16 @@ def main(argv: list[str] | None = None) -> int:
         if name == "build":
             command.add_argument("--fidelity", choices=("F0", "F1", "F2", "F3"), required=True)
             command.add_argument("--kernel", choices=("auto", "cadquery", "build123d"), default="auto")
+            command.add_argument("--attach", action="append", default=[], metavar="REF=PARENT_REF",
+                                 help="passed to cad-model run: rigidly attach an occurrence without a joint "
+                                      "(a PN or @id; repeatable), as the lead's integrated build does")
     args = parser.parse_args(argv)
     hw = args.hw.resolve()
     try:
         if args.command == "init":
             code, report = init(hw, args.unit, args.part, args.reset)
         elif args.command == "build":
-            code, report = build(hw, args.unit, args.kernel, args.fidelity)
+            code, report = build(hw, args.unit, args.kernel, args.fidelity, args.attach)
         else:
             code, report = deliver(hw, args.unit)
     except (UsageError, OSError, ValueError) as error:
