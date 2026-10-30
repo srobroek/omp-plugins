@@ -106,19 +106,29 @@ MUST Keep BOM columns in this order: `level,PN,rev,qty,title,material,process,ma
   - Optional `drawing`: the production drawing policy with `definition: model_and_drawing`, an explicit `projection` (`first_angle` or `third_angle`), `standards`, `default_sheet` (`sizes`, `orientation`, `scale`), named `tolerance_policies`, and `general_tolerance_policy`.
   - A tolerance policy is `kind: standard` (ISO 2768-1:1989 with a class) or `kind: limits` (`linear_mm` with its source `reference`). Each names the processes it `applies_to`.
   - `general_tolerance` must state the general policy exactly: `ISO 2768-m`, or the `linear_mm` number. `standards.dimensioning` must belong to the regime.
+  - Optional `design.clearance_margin_mm` (≥ 0; 0.1 when absent): the margin above every clearance requirement's minimum (see Design rules).
+  - Optional `manufacturing`:
+    - `processes`: the `fdm`, `cnc` and `purchased` processes planned at INTENT, before any part record exists.
+    - `min_wall_mm`: a minimum wall per made process (`fdm`, `cnc`, each > 0) that overrides the cad-design form check's built-in default.
+  - Optional `storage.results_in_git`: whether the user chose to track generated results in git. Absent means the user has not been asked.
 - `requirements.yaml`: `REQ-###` statements with rationale, source, priority, method, and verification criteria.
-- `interfaces.yaml`: mating, motion, clearance, electrical, or thermal contracts. `limits.press_fit` and `limits.running_fit` hold a `fit` designation and either a part `pair` or feature endpoints `hole` and `shaft` (`PN`, optional `occurrence: "@id"`, `feature`, optional `region`); `limits.heat_set` lists inserts as `{pair: [host, insert], hole_d, insert, source}` with optional `hole_tol`, `depth_min` and `note`. A pair item is a PN placed at most once or an `"@id"`; every PN must name a part record, and a fit on one occurrence never covers another occurrence of its PN. A `from`/`to` starting with `@` must name an occurrence.
+  - Optional `visibility`: show-the-motion bindings `{view, window, targets, min_visible_fraction}` for cad-render (see Design rules). `view` is `iso`, `front`, `side` or `dir-X-Y-Z`; `window` and `targets` are disjoint part references; the fraction defaults to 0.5.
+- `interfaces.yaml`: mating, motion, clearance, electrical, or thermal contracts. `limits.press_fit`, `limits.locating_fit` and `limits.running_fit` hold a `fit` designation and either a part `pair` or feature endpoints `hole` and `shaft` (`PN`, optional `occurrence: "@id"`, `feature`, optional `region`). A `press_fit` or `locating_fit` also holds `axial_retainer: {type, parts?, decision?}` (see Design rules). `limits.heat_set` lists inserts as `{pair: [host, insert], hole_d, insert, source}` with optional `hole_tol`, `depth_min` and `note`. A pair item is a PN placed at most once or an `"@id"`; every PN must name a part record, and a fit on one occurrence never covers another occurrence of its PN. A `from`/`to` starting with `@` must name an occurrence.
   - A clearance requirement is a `type: clearance` interface. Its top-level `pair: [REF, REF]` names two parts, and its `min_clearance_mm` is above 0. A clearance interface without `pair` stays descriptive. Example:
 
     ```yaml
     - {id: IF-006, from: valve-3, to: piston-3, type: clearance, description: Valve 3 clears the piston crown., pair: ["@valve-3", "@piston-3"], min_clearance_mm: 1.0}
     ```
 
+  - Optional `margin_mm` (≥ 0, needs `min_clearance_mm`) overrides product.yaml `design.clearance_margin_mm` for this requirement.
   - `validate.py` rejects a requirement with an unresolved reference or a value of 0 or less. It also rejects two references to one occurrence, and a second requirement on one occurrence pair.
   - cad-model `check` holds a requirement at the nominal pose, and cad-motion `sweep.py` at every sample. A joint or a fit on the pair does not exempt it.
 - `assembly.yaml`: optional top-level `occurrences` (`id` lowercase, `PN`, optional `placement`: `translation_mm` and `rotation: {axis, angle_deg}`, rotation about the part's local origin first), subassemblies listing `parts` (each PN one implicit occurrence at the identity) and/or `occurrences: ["@id", ...]` (each explicit occurrence in exactly one subassembly; a PN with explicit occurrences is never also in `parts`), and joints with travel limits. `scripts/assembly_data.py` is the shared normalizer and reference resolver.
+  - `torque: transmitted | none` on a revolute or fixed joint, never a prismatic one; from stage `parts` on every revolute declares it. A fixed `transmitted` joint also declares `torque_path: {type, parts?, decision?}`, where `type` is `key`, `set_screw`, `d_flat`, `press_fit`, `spline`, `clamp`, `pin` or `adhesive`.
 - `parts/<PN>/part.yaml` optional `model_frame`: `assembly_zero` (default; geometry in assembly coordinates at the zero joint pose, one identity-placed occurrence) or `part_local` (the part's own frame, placed by its occurrences).
 - `parts/<PN>/part.yaml`: part number and revision, material, process, finish, mass target in grams, make/buy, optional supplier, and optional `decisions: [DR-###, ...]` references validated against `hw/decisions/`; `model.py` is the parametric CAD source.
+  - Optional `form_class`: `solid` (default), `frame`, `plate`, `skeleton` or `shell`. The cad-design form check judges only a `solid` part `block_like`.
+  - Optional `transparency`: `opaque` (default), `translucent` or `transparent`. Only a `transparent` part is see-through to the visibility check.
   - Optional `procurement`: `mode` (`catalog` needs `make_buy: buy`; `made_to_drawing`), manufacturer and supplier part numbers, `designation`, `specification`, `open`, `approved_sources`, `qualification_evidence` and `certificates`. With open orderable identity, include its reason. `open` fields are not set elsewhere in the record. Keep a frozen `specification.artifact` copy in `parts/<PN>/sources/`.
   - Optional `manufacture`, for a custom-made part only (`make_buy: make`, or `procurement.mode: made_to_drawing`): `relationship: same` (made in its installed shape) or `different`. A different state, such as a strap printed flat, also needs `state`, `reason`, the approving `decision`, and `volume_rel_tolerance` or `volume_abs_tolerance_mm3`. Optional `mesh` overrides the STL tessellation (default 0.05 mm linear, 0.1 rad angular).
   - Optional `drawing`: `type` (`detail` for a made-to-drawing part; `vendor_specification` or `source_control` for a catalog item), `tolerance_policy`, `datum_features`, `coordinate_frame`, `views`, `features`, `dimensions` (requests without values, because every value comes from the model), structured `notes`, `manufacturing`, and `sheet`. `validate.py` checks that `datum_features` declares every datum label in use, that view and dimension ids are unique, and that each named tolerance policy exists in product.yaml and applies to the part's process.
@@ -133,6 +143,15 @@ MUST Keep BOM columns in this order: `level,PN,rev,qty,title,material,process,ma
 - `concept/screenshots/<scene-sha256>/<capture-sha256>/`: concept viewer preview bundles.
 - `docs/`: free-form notes, guides and reference material. It earns no geometry, check or release credit and never holds geometry or scripts.
 - `assets/docs-templates/` contains the GitBuilding build guide, DIN SPEC 3105-1 checklist, and OKH manifest templates.
+
+## Design rules
+
+`validate.py` also runs `scripts/design_rules.py`; each finding carries a stable `code`. LOAD [references/design-rules.md](references/design-rules.md) before fixing one or reading the clearance margin.
+
+- Clearance margin: distance < minimum fails; minimum ≤ distance < minimum + margin is a `margin` warning. cad-model check and cad-motion sweep read the margin through `load_clearance_margins`.
+- Retention (`retention.torque_path`, `retention.axial_retainer`): errors from stage `parts` on. Every revolute declares `torque`, as does every fixed joint on the child of a revolute not declared `none`; every `press_fit` and `locating_fit` declares an `axial_retainer`; hardware is a modelled part.
+- Process feasibility: an FDM part declared `transparency: transparent` is `feasibility.transparent_fdm`, a warning before stage `parts` and an error from it on. See-through prose is only ever a `feasibility.transparency_claim` warning.
+- Visibility bindings (`visibility.binding`): window and target parts resolve, at every stage.
 
 ## Rules
 

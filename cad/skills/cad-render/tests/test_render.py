@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Regression tests for cad-render heuristics, cache, renderer assets and policy.
+"""Regression tests for cad-render heuristics, cache, reuse, visibility, renderer assets and policy.
 
 Run: python3 -m unittest discover -s cad/skills/cad-render/tests
-Pillow is only needed by the standalone image comparator's tests.
+Pillow is only needed by the standalone image comparator's tests. The browser tests need `uv` and
+Playwright Chromium, and skip without them.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ import hashlib
 import base64
 import importlib.util
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -21,6 +23,11 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+
+import yaml
+
+sys.path.insert(0, str(Path(__file__).resolve().parent / "fixtures"))
+import box_version  # noqa: E402 - kernel-free sealed box versions
 
 SKILL = Path(__file__).resolve().parent.parent
 RENDER_PY = SKILL / "scripts" / "render.py"
@@ -759,6 +766,308 @@ class Cli(unittest.TestCase):
         result = self.run_cli(str(TEMPLATE_HW), "--jobs", "9")
         self.assertEqual(result.returncode, 2)
         self.assertIn("--jobs must be between 1 and 8", json.loads(result.stdout)["error"])
+
+
+WINDOW, TARGET, OTHER = "TST-0001", "TST-0002", "TST-0003"
+PART_VIEW = f"part-{TARGET}"
+# From the front (-Y, a little above), the window plate covers the whole target behind it.
+BOXES = {WINDOW: ((-30.0, -22.0, 0.0), (30.0, -20.0, 40.0)),
+         TARGET: ((-10.0, -5.0, 5.0), (10.0, 5.0, 25.0)),
+         OTHER: ((40.0, -10.0, 0.0), (60.0, 10.0, 20.0))}
+GROWN_TARGET = ((-10.0, -5.0, 5.0), (10.0, 5.0, 30.0))
+GROWN_OTHER = ((40.0, -10.0, 0.0), (70.0, 10.0, 25.0))
+
+
+def box_parts(transparency: str | None = None, target_material: str = "Aluminum 6061-T6") -> dict[str, dict]:
+    """part.yaml records of the box version; `transparency` is the window's."""
+    window = {"title": "Window", "material": "PETG", **({"transparency": transparency} if transparency else {})}
+    return {WINDOW: window, TARGET: {"title": "Target", "material": target_material, "finish": "Machined"},
+            OTHER: {"title": "Other", "material": "Aluminum 6061-T6", "finish": "Machined"}}
+
+
+def requirements(hw: Path, *bindings: dict, text: str = "The target is visible through the window.") -> Path:
+    path = hw / "requirements.yaml"
+    path.write_text(yaml.safe_dump({"requirements": [{"id": "REQ-001", "text": text, "visibility": list(bindings)}]}),
+                    encoding="utf-8")
+    return path
+
+
+FRONT = {"view": "front", "window": [WINDOW], "targets": [TARGET]}
+
+
+class VisibilityChecks(unittest.TestCase):
+    """Bindings of the current requirements.yaml resolved against a box version (no browser)."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.hw = Path(self.tmp.name) / "hw"
+        box_version.write(self.hw, "v1", BOXES, box_parts("transparent"))
+        self.version = render.resolve_version(self.hw, "v1")
+        self.by_pn = {oid: o.pn for oid, o in self.version.occurrences.items()}
+        self.records = render.part_records(self.version.record, sorted(self.by_pn.values()))
+
+    def checks(self, *bindings: dict, records: dict | None = None) -> tuple[list, str | None]:
+        return render.visibility_checks(requirements(self.hw, *bindings), self.by_pn, records or self.records)
+
+    def test_a_binding_resolves_to_occurrences_with_its_view_and_the_default_minimum(self) -> None:
+        checks, digest = self.checks(FRONT)
+        self.assertEqual(digest, hashlib.sha256((self.hw / "requirements.yaml").read_bytes()).hexdigest())
+        front = render.DIRECTIONS["front"]
+        self.assertEqual(checks, [{"requirement": "REQ-001", "index": 0, "view": "front",
+                                   "direction": render.to_glb(front), "up": list(render.camera_up_reference(front)),
+                                   "window": [WINDOW], "targets": [TARGET], "see_through": [WINDOW],
+                                   "min_visible_fraction": 0.5}])
+
+    def test_only_a_transparent_part_is_see_through(self) -> None:
+        for transparency, see_through in (("transparent", [WINDOW]), ("translucent", []), ("opaque", []), (None, [])):
+            with self.subTest(transparency=transparency):
+                window = {k: v for k, v in self.records[WINDOW].items() if k != "transparency"}
+                if transparency:
+                    window["transparency"] = transparency
+                checks, _ = self.checks(FRONT, records={**self.records, WINDOW: window})
+                self.assertEqual(checks[0]["see_through"], see_through)
+
+    def test_a_custom_direction_is_normalized(self) -> None:
+        checks, _ = self.checks({**FRONT, "view": "dir-p0-m2-p0", "min_visible_fraction": 0.9})
+        self.assertEqual(checks[0]["direction"], render.to_glb((0.0, -1.0, 0.0)))
+        self.assertEqual(checks[0]["min_visible_fraction"], 0.9)
+
+    def test_views_that_move_or_hide_parts_are_refused(self) -> None:
+        for view in ("exploded", PART_VIEW, f"dir-p0-m1-p0-closeup-{TARGET}"):
+            with self.subTest(view=view), self.assertRaisesRegex(render.InfraError, "is not iso, front, side or dir"):
+                self.checks({**FRONT, "view": view})
+
+    def test_a_part_the_version_does_not_place_is_an_infra_error(self) -> None:
+        with self.assertRaisesRegex(render.InfraError, "REQ-001 visibility 0: no part or occurrence TST-0009"):
+            self.checks({**FRONT, "targets": ["TST-0009"]})
+
+    def test_without_a_requirements_file_there_is_nothing_to_check(self) -> None:
+        self.assertEqual(render.visibility_checks(self.hw / "requirements.yaml", self.by_pn, self.records), ([], None))
+
+    def test_the_resolved_checks_enter_the_cache_key_and_reworded_prose_does_not(self) -> None:
+        def keyed() -> dict:
+            return render.build_scene(self.hw, self.version, ["front"], (400, 300), materials.MaterialTable.load(),
+                                      self.hw / "requirements.yaml")[2]
+        requirements(self.hw, FRONT)
+        first = keyed()
+        requirements(self.hw, FRONT, text="Reworded.")
+        reworded = keyed()
+        self.assertEqual(reworded["key"], first["key"])
+        self.assertNotEqual(reworded["requirements_yaml_sha256"], first["requirements_yaml_sha256"])
+        requirements(self.hw, {**FRONT, "min_visible_fraction": 0.8})
+        self.assertNotEqual(keyed()["key"], first["key"])
+
+
+class VisibilityGrade(unittest.TestCase):
+    CAMERA = {"frame": "glb", "position": [0.0, 0.1, 0.3], "target": [0.0, 0.0, 0.0], "up": [0.0, 1.0, 0.0],
+              "fov_deg": 30, "aspect": 4 / 3, "near": 0.01, "far": 1.0}
+
+    def grade(self, *counts: tuple[int, int], minimum: float = 0.5) -> tuple[list, bool]:
+        names = [f"t{i}" for i in range(len(counts))]
+        check = {"requirement": "REQ-001", "index": 0, "view": "front", "window": [WINDOW], "targets": names,
+                 "see_through": [], "min_visible_fraction": minimum}
+        measured = {"targets": [{"occurrence": name, "silhouette_px": silhouette, "visible_px": visible}
+                                for name, (silhouette, visible) in zip(names, counts)], "camera": self.CAMERA}
+        return render.grade_visibility([check], [measured])
+
+    def test_each_target_must_show_the_minimum_share_of_its_own_silhouette(self) -> None:
+        reports, passed = self.grade((1000, 500), (400, 199))
+        self.assertFalse(passed)
+        self.assertEqual(reports[0]["status"], "fail")
+        self.assertEqual([(t["visible_fraction"], t["status"]) for t in reports[0]["targets"]],
+                         [(0.5, "pass"), (0.4975, "fail")])
+
+    def test_a_check_passes_when_every_target_does(self) -> None:
+        reports, passed = self.grade((1000, 1000), (400, 300))
+        self.assertTrue(passed)
+        self.assertEqual(reports[0]["status"], "pass")
+        self.assertEqual(reports[0]["camera"]["frame"], "assembly (mm, +Z up)")
+
+    def test_a_target_without_a_silhouette_fails(self) -> None:
+        reports, passed = self.grade((0, 0))
+        self.assertFalse(passed)
+        self.assertEqual(reports[0]["targets"][0]["visible_fraction"], 0.0)
+
+
+class MeshDigests(unittest.TestCase):
+    def digest(self, data: bytes, nodes: tuple[int, ...]) -> str | None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "assembly.glb"
+            path.write_bytes(data)
+            return render.mesh_digests(path, {TARGET: nodes})[TARGET]
+
+    def test_other_parts_changing_keep_a_parts_digest(self) -> None:
+        before = self.digest(box_version.glb({TARGET: BOXES[TARGET], OTHER: BOXES[OTHER]}), (1,))
+        # A part packed ahead of the target shifts every buffer offset; the other part grows.
+        after = self.digest(box_version.glb({WINDOW: BOXES[WINDOW], TARGET: BOXES[TARGET], OTHER: GROWN_OTHER}), (2,))
+        self.assertEqual(after, before)
+
+    def test_its_own_vertices_or_placement_change_a_parts_digest(self) -> None:
+        digests = {self.digest(box_version.glb({TARGET: BOXES[TARGET]}), (1,)),
+                   self.digest(box_version.glb({TARGET: GROWN_TARGET}), (1,)),
+                   self.digest(box_version.glb({TARGET: BOXES[TARGET]}, {TARGET: (0.01, 0.0, 0.0)}), (1,))}
+        self.assertEqual(len(digests), 3)
+
+    def test_an_accessor_it_cannot_slice_is_never_matched(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "assembly.glb"
+            path.write_bytes(box_version.glb({TARGET: BOXES[TARGET]}))
+            document, binary = render._glb_chunks(path)
+        document["accessors"][0]["sparse"] = {"count": 1}
+        self.assertIsNone(self.digest(box_version.pack(document, binary), (1,)))
+
+
+class Reuse(unittest.TestCase):
+    """view_inputs and reusable_views across box versions, with stand-in bundles (no browser)."""
+
+    VIEWS = ["iso", PART_VIEW]
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.hw = Path(self.tmp.name) / "hw"
+        box_version.write(self.hw, "v1", BOXES, box_parts())
+
+    def inputs(self, label: str) -> tuple[object, dict]:
+        version = render.resolve_version(self.hw, label)
+        scene, by_pn_material, keyed = render.build_scene(self.hw, version, self.VIEWS, (400, 300),
+                                                          materials.MaterialTable.load())
+        return version, render.view_inputs(version, scene, keyed, by_pn_material)
+
+    def publish(self, label: str, records: dict | None = None, status: str = "pass") -> Path:
+        """A stand-in render bundle of `label`: `records` (view -> (record, png)), else one fresh record
+        per view carrying the version's render inputs."""
+        if records is None:
+            _, inputs = self.inputs(label)
+            records = {}
+            for name in self.VIEWS:
+                png = f"{label} {name}".encode()
+                records[name] = ({"png": f"{name}.png", "sha256": render.sha256(png), "render_inputs": inputs[name],
+                                  "quality": {"status": status, "failures": [], "warnings": []},
+                                  "retry": {"strategy": "original", "attempts": []}}, png)
+        staged = render.layout.staging(self.hw, "bundle.renders")
+        for name, (_, png) in records.items():
+            (staged / f"{name}.png").write_bytes(png)
+        (staged / "render.json").write_text(json.dumps({"status": status, "views": {
+            name: record for name, (record, _) in records.items()}}), encoding="utf-8")
+        return render.layout.publish(self.hw, "bundle.renders", {"V": label, "S": "assembly"}, staged,
+                                     recipe={"views": self.VIEWS, "label": label}, producer="test", status=status).path
+
+    def reused(self, label: str) -> dict:
+        version, inputs = self.inputs(label)
+        return render.reusable_views(self.hw, version, "assembly", inputs)
+
+    def test_an_unchanged_part_view_is_reused_when_another_part_changes(self) -> None:
+        self.publish("v1")
+        box_version.write(self.hw, "v2", {**BOXES, OTHER: GROWN_OTHER}, box_parts())
+        found = self.reused("v2")
+        self.assertEqual(sorted(found), [PART_VIEW])
+        self.assertEqual(found[PART_VIEW]["png"], f"v1 {PART_VIEW}".encode())
+        self.assertEqual(found[PART_VIEW]["record"]["reused"],
+                         {"version": "v1", "bundle": "hw/renders/v1/assembly", "rendered_in": "v1",
+                          "sha256": render.sha256(f"v1 {PART_VIEW}".encode())})
+
+    def test_an_unchanged_scene_reuses_its_assembly_views_too(self) -> None:
+        self.publish("v1")
+        box_version.write(self.hw, "v2", BOXES, box_parts())
+        self.assertEqual(sorted(self.reused("v2")), sorted(self.VIEWS))
+
+    def test_any_input_of_a_part_view_invalidates_it(self) -> None:
+        self.publish("v1")
+        changes = {
+            "v2": ("subject geometry", {**BOXES, TARGET: GROWN_TARGET}, box_parts(), None),
+            "v3": ("subject material", BOXES, box_parts(target_material="PETG"), None),
+            "v4": ("subject placement", BOXES, box_parts(), {TARGET: (0.005, 0.0, 0.0)}),
+        }
+        for label, (change, boxes, parts, moved) in changes.items():
+            with self.subTest(change=change):
+                box_version.write(self.hw, label, boxes, parts, moved)
+                self.assertEqual(self.reused(label), {})
+        box_version.write(self.hw, "v5", BOXES, box_parts())
+        with self.subTest(change="renderer"), mock.patch.object(render, "renderer_sha256", return_value="other"):
+            self.assertEqual(self.reused("v5"), {})
+
+    def test_a_failed_or_tampered_prior_image_is_not_reused(self) -> None:
+        self.publish("v1", status="fail")
+        box_version.write(self.hw, "v2", BOXES, box_parts())
+        self.assertEqual(self.reused("v2"), {}, "failed")
+        bundle = self.publish("v2")
+        png = bundle / f"{PART_VIEW}.png"
+        png.chmod(0o644)
+        png.write_bytes(b"edited")
+        box_version.write(self.hw, "v3", BOXES, box_parts())
+        self.assertEqual(self.reused("v3"), {}, "tampered")
+
+    def test_a_reused_image_keeps_the_version_it_was_rendered_in(self) -> None:
+        self.publish("v1")
+        box_version.write(self.hw, "v2", BOXES, box_parts())
+        self.publish("v2", {name: (entry["record"], entry["png"]) for name, entry in self.reused("v2").items()})
+        box_version.write(self.hw, "v3", BOXES, box_parts())
+        reused = self.reused("v3")[PART_VIEW]["record"]["reused"]
+        self.assertEqual((reused["version"], reused["rendered_in"]), ("v2", "v1"))
+
+
+def chromium_installed() -> bool:
+    roots = [os.environ.get("PLAYWRIGHT_BROWSERS_PATH"), Path.home() / "Library" / "Caches" / "ms-playwright",
+             Path.home() / ".cache" / "ms-playwright"]
+    return any(root and Path(root).is_dir() and any(Path(root).glob("chromium*")) for root in roots)
+
+
+@unittest.skipUnless(shutil.which("uv") and chromium_installed(), "needs uv and Playwright Chromium")
+class BrowserRender(unittest.TestCase):
+    """render.py end to end in headless Chromium, on box versions."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.hw = Path(self.tmp.name) / "project" / "hw"
+
+    def render(self, *args: str) -> tuple[int, dict]:
+        proc = subprocess.run(["uv", "run", "--quiet", "--script", str(RENDER_PY), str(self.hw), "--size", "400x300",
+                               *args], capture_output=True, text=True, timeout=900)
+        self.assertIn(proc.returncode, (0, 1), proc.stdout[-3000:] + proc.stderr[-3000:])
+        return proc.returncode, json.loads(proc.stdout)
+
+    def test_an_opaque_window_hides_the_target_and_a_transparent_one_shows_it(self) -> None:
+        box_version.write(self.hw, "v1", BOXES, box_parts("opaque"))
+        box_version.write(self.hw, "v2", BOXES, box_parts("transparent"))
+        requirements(self.hw, FRONT)
+        reports = {}
+        for label in ("v1", "v2"):
+            code, summary = self.render("--version", label, "--views", "front",
+                                        "--out-dir", str(self.hw.parent / ".cad-work" / label))
+            self.assertEqual(summary["failures"], {}, label)
+            metadata = json.loads((Path(summary["out_dir"]) / "render.json").read_text(encoding="utf-8"))
+            self.assertEqual(metadata["inputs"]["requirements_yaml_sha256"],
+                             hashlib.sha256((self.hw / "requirements.yaml").read_bytes()).hexdigest())
+            reports[label] = (code, summary["visibility"], metadata["visibility"][0]["targets"][0])
+        opaque_code, opaque_summary, opaque = reports["v1"]
+        clear_code, clear_summary, clear = reports["v2"]
+        self.assertGreater(opaque["silhouette_px"], 1000)
+        self.assertEqual(clear["silhouette_px"], opaque["silhouette_px"])
+        self.assertEqual((opaque_code, opaque["visible_px"], opaque["status"]), (1, 0, "fail"))
+        self.assertEqual((clear_code, clear["visible_px"], clear["status"]), (0, clear["silhouette_px"], "pass"))
+        self.assertEqual(opaque_summary, {"REQ-001/0": {"status": "fail", "visible_fraction": {TARGET: 0.0}}})
+        self.assertEqual(clear_summary, {"REQ-001/0": {"status": "pass", "visible_fraction": {TARGET: 1.0}}})
+
+    def test_an_unchanged_part_view_is_copied_and_a_changed_one_rendered(self) -> None:
+        views = ("--views", "iso", PART_VIEW)
+        box_version.write(self.hw, "v1", BOXES, box_parts())
+        code, first = self.render("--version", "v1", *views)
+        self.assertEqual((code, first["reused"]), (0, {}))
+        box_version.write(self.hw, "v2", {**BOXES, OTHER: GROWN_OTHER}, box_parts())
+        code, second = self.render("--version", "v2", *views)
+        self.assertEqual((code, second["reused"]), (0, {PART_VIEW: "v1"}))
+        self.assertEqual(sorted(name for name in second["view_wall_s"] if not name.endswith("_s")), ["iso"])
+        self.assertEqual(Path(second["pngs"][PART_VIEW]).read_bytes(), Path(first["pngs"][PART_VIEW]).read_bytes())
+        self.assertNotEqual(Path(second["pngs"]["iso"]).read_bytes(), Path(first["pngs"]["iso"]).read_bytes())
+        record = json.loads((Path(second["out_dir"]) / "render.json").read_text(encoding="utf-8"))["views"][PART_VIEW]
+        self.assertEqual(record["reused"]["bundle"], "hw/renders/v1/assembly")
+        box_version.write(self.hw, "v3", {**BOXES, OTHER: GROWN_OTHER, TARGET: GROWN_TARGET}, box_parts())
+        code, third = self.render("--version", "v3", *views)
+        self.assertEqual((code, third["reused"]), (0, {}))
+        self.assertIn(PART_VIEW, third["view_wall_s"])
 
 
 if __name__ == "__main__":
