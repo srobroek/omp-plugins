@@ -418,6 +418,7 @@ async function boot() {
     transparent: true,
     depthWrite: false,
   });
+  const maskTransparentWindow = maskGhost;
   const maskFloor = new THREE.ShaderMaterial({
     uniforms: { heights: { value: heights.texture }, overhang: zones.overhang },
     vertexShader: UV_VERTEX,
@@ -652,6 +653,113 @@ async function boot() {
     }
     return { mask, floor };
   }
+  function renderVisibilityMask(target, visibleParts, transparentWindows) {
+    const savedNodes = [];
+    for (const [id, part] of parts) {
+      if (visibleParts.has(id)) continue;
+      for (const node of part.nodes) {
+        savedNodes.push([node, node.visible]);
+        node.visible = false;
+      }
+    }
+    try {
+      root.updateMatrixWorld(true);
+      world.background = null;
+      const toneMapping = renderer.toneMapping;
+      renderer.toneMapping = THREE.NoToneMapping;
+      withMaterials((id) => {
+        if (target.has(id)) return maskSubject;
+        if (visibleParts.has(id) && transparentWindows.has(id)) return maskTransparentWindow;
+        if (visibleParts.has(id)) return maskOther;
+        return maskGhost;
+      }, null, () => {
+        renderer.setRenderTarget(maskTarget);
+        renderer.setClearColor(0x000000, 1);
+        renderer.clear();
+        renderer.render(world, camera);
+        renderer.readRenderTargetPixels(maskTarget, 0, 0, width, height, rgba);
+      });
+      renderer.setRenderTarget(null);
+      renderer.toneMapping = toneMapping;
+      world.background = backdrop;
+      const mask = new Uint8Array(width * height);
+      for (let y = 0; y < height; y += 1) {
+        const src = (height - 1 - y) * width * 4, dst = y * width;
+        for (let x = 0; x < width; x += 1) {
+          const offset = src + x * 4;
+          mask[dst + x] = rgba[offset] > 200 ? 2 : rgba[offset] > 60 ? 1 : 0;
+        }
+      }
+      return mask;
+    } finally {
+      for (const [node, visible] of savedNodes) node.visible = visible;
+      root.updateMatrixWorld(true);
+    }
+  }
+
+  function visibilityCapture(binding) {
+    const targets = new Set(binding.targets);
+    const windows = new Set(binding.window);
+    const unknown = [...targets, ...windows].filter((id) => !parts.has(id));
+    if (unknown.length) throw new Error(`visibility names unknown occurrences ${unknown.join(", ")}`);
+    const transparentWindows = new Set(binding.transparentWindows);
+    const perTarget = {};
+    let totalVisible = 0;
+    let totalIsolated = 0;
+    for (const id of targets) {
+      const visible = renderVisibilityMask(new Set([id]), new Set([...targets, ...windows]), transparentWindows);
+      const isolated = renderVisibilityMask(new Set([id]), new Set([id]), new Set());
+      let seen = 0, silhouette = 0;
+      for (let index = 0; index < isolated.length; index += 1) {
+        if (isolated[index] !== 2) continue;
+        silhouette += 1;
+        if (visible[index] === 2) seen += 1;
+      }
+      perTarget[id] = { visible_pixels: seen, isolated_pixels: silhouette,
+                        visible_fraction: silhouette ? seen / silhouette : 0 };
+      totalVisible += seen;
+      totalIsolated += silhouette;
+    }
+    const fraction = totalIsolated ? totalVisible / totalIsolated : 0;
+    return { visible_fraction: fraction, visible_pixels: totalVisible, isolated_pixels: totalIsolated,
+             per_target: perTarget, min_visible_fraction: binding.minVisibleFraction,
+             status: fraction < binding.minVisibleFraction ? "fail" : "pass" };
+  }
+
+  function captureVisibility(viewName, binding) {
+    const view = scene.views.find((candidate) => candidate.name === viewName);
+    if (!view) throw new Error(`unknown visibility view ${viewName}`);
+    const saved = [];
+    try {
+      applyExplode(false);
+      for (const [id, part] of parts) {
+        part.nodes.forEach((node, index) => {
+          saved.push([node, node.visible]);
+          node.visible = part.rest[index].visible;
+        });
+      }
+      const included = new Set([...binding.targets, ...binding.window]);
+      for (const [id, part] of parts) {
+        if (included.has(id)) continue;
+        for (const node of part.nodes) node.visible = false;
+      }
+      root.updateMatrixWorld(true);
+      const meshes = [...included].flatMap((id) => parts.get(id).meshes);
+      const box = new THREE.Box3().makeEmpty();
+      meshes.forEach((mesh) => box.expandByObject(mesh));
+      stage(box, false);
+      const points = vertexSample(meshes);
+      const fit = fitCamera(camera, points, view.direction, 1.0, view.up);
+      const result = visibilityCapture(binding);
+      return { view: viewName, visibility: result, camera: { position: camera.position.toArray(),
+        target: fit.target.toArray(), up: camera.up.toArray(), fov_deg: camera.fov, aspect: camera.aspect,
+        near: camera.near, far: camera.far } };
+    } finally {
+      for (const [node, visible] of saved) node.visible = visible;
+      root.updateMatrixWorld(true);
+    }
+  }
+ 
   function withGhostContext(subject, body) {
     const saved = new Map();
     for (const [id, part] of parts) {
@@ -930,6 +1038,7 @@ async function boot() {
     capture,
     motionCamera,
     captureMotion,
+    captureVisibility,
     contactSheet,
     info: {
       three: THREE.REVISION,
@@ -960,4 +1069,5 @@ window.cadRender = {
   motionCamera: async (poses, direction, seed) => (await ready).motionCamera(poses, direction, seed),
   captureMotion: async (deltas, check) => (await ready).captureMotion(deltas, check),
   contactSheet: async (tiles, columns, tileWidth) => (await ready).contactSheet(tiles, columns, tileWidth),
+  captureVisibility: async (view, binding) => (await ready).captureVisibility(view, binding),
 };

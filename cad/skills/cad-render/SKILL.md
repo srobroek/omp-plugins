@@ -44,6 +44,8 @@ TRIGGER
    shadow is left out.
 3. Close-ups: add `closeup-<PN>` for each part/interface to show, or `part-<PN>` for a studio view of
    one part in stable resting orientation with the other assembly parts hidden.
+   Requirement visibility bindings in `hw/requirements.yaml` are checked at the nominal pose from their named `iso`, `front`, `side`, or `dir-X-Y-Z` view. The check renders only the window and target occurrences, records per-target and combined visible silhouette fractions in `render.json`, and fails below each binding's `min_visible_fraction`. Only `part.yaml` `transparency: transparent` window parts are see-through; opaque and translucent windows occlude targets. The current requirements file hash is recorded as input provenance.
+   When rendering a later version, `closeup-<PN>` images can reuse a verified prior close-up when the part STEP geometry, resolved material, view/recipe, image size, renderer, and parity policy match. The close-up entry records the source version, bundle and PNG hash. Assembly views are always rendered from the selected version and are not reused across versions.
 4. Read every PNG before describing it. Name the material each PN shows from
    `render.json` `materials.<PN>` (`rule`, `label`, `applied`).
 5. Gate: put each PNG's absolute path in the gate report, one per line, with one line on what the image shows. Absolute paths are clickable in the terminal; a path relative to `hw/` is not.

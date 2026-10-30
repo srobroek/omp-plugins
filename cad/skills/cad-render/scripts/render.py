@@ -224,6 +224,49 @@ def part_records(record_dir: Path, pns: list[str]) -> dict[str, dict[str, Any]]:
             raise InfraError(f"{path}: no material")
         records[pn] = record
     return records
+def visibility_input(hw: Path, occurrences: dict[str, Any], records: dict[str, dict[str, Any]]) -> tuple[list[dict[str, Any]], str | None]:
+    """Read current requirements visibility bindings through cad-record's shared accessor."""
+    path = hw / "requirements.yaml"
+    if not path.is_file():
+        return [], None
+    raw = path.read_bytes()
+    requirements = record_yaml(path)
+    if not any(isinstance(requirement, dict) and requirement.get("visibility")
+               for requirement in requirements.get("requirements", [])):
+        return [], sha256(raw)
+    rules_path = SKILL.parent / "cad-record" / "scripts" / "design_rules.py"
+    try:
+        rules = _load_sibling("cad_record_design_rules", rules_path)
+        bindings = rules.visibility_bindings(requirements)
+    except (OSError, ValueError, AttributeError) as exc:
+        raise InfraError(f"cannot load visibility bindings from {rules_path}: {exc}") from exc
+    result = []
+    for binding in bindings:
+        if binding.view not in {"iso", "front", "side"} and not binding.view.startswith("dir-"):
+            raise InfraError(f"{binding.requirement} visibility uses unsupported view {binding.view!r}")
+        if binding.view.startswith("dir-"):
+            parse_direction_view(binding.view)
+        window = [resolve_part_ref(ref, occurrences) for ref in binding.window]
+        targets = [resolve_part_ref(ref, occurrences) for ref in binding.targets]
+        result.append({"requirement": binding.requirement, "index": binding.index, "view": binding.view,
+                       "window": window, "targets": targets,
+                       "transparentWindows": sorted({occurrences[oid].pn for oid in window
+                                                      if records[occurrences[oid].pn].get("transparency") == "transparent"}),
+                       "minVisibleFraction": binding.min_visible_fraction})
+    return result, sha256(raw)
+
+
+def resolve_part_ref(ref: str, occurrences: dict[str, Any]) -> str:
+    """Resolve a requirement PN or explicit @occurrence to exactly one built occurrence."""
+    if ref.startswith("@"):
+        occurrence = ref[1:]
+        if occurrence in occurrences:
+            return occurrence
+    else:
+        matches = [oid for oid, occurrence in occurrences.items() if occurrence.pn == ref]
+        if len(matches) == 1:
+            return matches[0]
+    raise InfraError(f"visibility part reference {ref!r} does not resolve to one occurrence")
 
 
 def load_assembly(record_dir: Path) -> tuple[dict[str, Any], bytes]:
@@ -659,6 +702,7 @@ def build_scene(hw: Path, version: Version, views: list[str], size: tuple[int, i
         rule = table.resolve(str(rec["material"]), str(rec.get("finish") or ""))
         materials[pn] = {"part_material": rec["material"], "part_finish": rec.get("finish"),
                          "rule": rule.id, "label": rule.label, "pbr": rule.pbr}
+    visibility, requirements_sha = visibility_input(hw, occurrences, records)
 
     assembly, assembly_raw = load_assembly(version.record)
     try:
@@ -690,6 +734,7 @@ def build_scene(hw: Path, version: Version, views: list[str], size: tuple[int, i
         "views": view_specs,
         "explode": {oid: to_glb(offsets[oid], 0.001) for oid in occurrences if oid in offsets},
     }
+    scene["visibility"] = visibility
     assembly_sha = sha256(assembly_raw)
     sources = {name: sha256(version.files[name].read_bytes()) for name in SOURCE_FILES}
     key = {
@@ -702,7 +747,8 @@ def build_scene(hw: Path, version: Version, views: list[str], size: tuple[int, i
     }
     extra = {"explode_offsets_mm": {oid: [round(c, 3) for c in offsets[oid]] for oid in occurrences if oid in offsets},
              "assembly_yaml_sha256": assembly_sha,
-             "assembly_yaml_matches_version": assembly_sha == version.manifest.get("assembly_yaml_sha256")}
+             "assembly_yaml_matches_version": assembly_sha == version.manifest.get("assembly_yaml_sha256"),
+             "requirements_yaml_sha256": requirements_sha}
     return scene, materials, {"key": key, **extra}
 
 def cache_hit(out_dir: Path, key: dict[str, Any], views: list[str]) -> dict[str, Any] | None:
@@ -724,6 +770,38 @@ def cache_hit(out_dir: Path, key: dict[str, Any], views: list[str]) -> dict[str,
         if not entry or not png.is_file() or sha256(png.read_bytes()) != entry.get("sha256"):
             return None
     return metadata
+def part_closeup_recipe(version: Version, occurrence: BuiltOccurrence, view: str,
+                        size: tuple[int, int], materials: dict[str, Any]) -> dict[str, Any]:
+    """Inputs which must match before reusing a previous version's part close-up."""
+    part_step = version.folder / "parts" / f"{occurrence.pn}.step"
+    if not part_step.is_file():
+        return {"eligible": False}
+    return {"eligible": True, "geometry_sha256": sha256(part_step.read_bytes()),
+            "material": materials[occurrence.pn], "view": view, "direction": list(view_direction(view)),
+            "image": [*size], "renderer_sha256": renderer_sha256(),
+            "parity_policy": parity_policy.cache_key()}
+
+
+def reusable_part_closeup(hw: Path, version: Version, recipe: dict[str, Any], view: str) -> dict[str, Any] | None:
+    """Find the newest prior verified bundle with the exact part-close-up recipe."""
+    if not recipe.get("eligible"):
+        return None
+    labels = [label for label in layout.versions(hw) if int(label[1:]) < int(version.label[1:])]
+    for label in reversed(labels):
+        path = layout.bundle_dir(hw, "renders", label, "assembly")
+        if layout.verify(path):
+            continue
+        try:
+            manifest = json.loads((path / "render.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        provenance = manifest.get("closeup_provenance", {}).get(view)
+        entry = manifest.get("views", {}).get(view)
+        png = path / f"{view}.png"
+        if (manifest.get("status") in {"pass", "warn"} and provenance == recipe and entry and png.is_file()
+                and sha256(png.read_bytes()) == entry.get("sha256")):
+            return {"version": label, "bundle": str(path), "sha256": entry["sha256"], "recipe": recipe}
+    return None
 
 
 
@@ -884,7 +962,7 @@ async def _open_capture_page(browser_context: Any, url: str, errors: list[str]) 
     return page, await page.evaluate("window.cadRender.ready")
 
 
-async def _capture_page_views(page: Any, names: list[str]) -> tuple[dict[str, Any], dict[str, float]]:
+async def _capture_page_views(page: Any, names: list[str], visibility: list[dict[str, Any]] | None = None) -> tuple[dict[str, Any], dict[str, float]]:
     results: dict[str, Any] = {}
     timings: dict[str, float] = {}
     for name in names:
@@ -893,10 +971,18 @@ async def _capture_page_views(page: Any, names: list[str]) -> tuple[dict[str, An
         result["_quality"] = quality
         results[name] = result
         timings[name] = round(time.monotonic() - t0, 3)
+    for check in visibility or []:
+        t0 = time.monotonic()
+        result = await page.evaluate("({view, binding}) => window.cadRender.captureVisibility(view, binding)",
+                                     {"view": check["view"], "binding": check})
+        check["result"] = result.get("visibility")
+        check["camera"] = camera_record(result["camera"])
+        timings[f"visibility:{check['requirement']}:{check['index']}"] = round(time.monotonic() - t0, 3)
     return results, timings
 
 
-def capture_views(url: str, views: list[str], size: tuple[int, int], jobs: int = DEFAULT_JOBS) -> tuple[dict[str, Any], dict[str, Any], dict[str, float]]:
+def capture_views(url: str, views: list[str], size: tuple[int, int], jobs: int = DEFAULT_JOBS,
+                 visibility: list[dict[str, Any]] | None = None) -> tuple[dict[str, Any], dict[str, Any], dict[str, float]]:
     import asyncio
     from playwright.async_api import Error as PlaywrightError
     from playwright.async_api import async_playwright
@@ -928,13 +1014,13 @@ def capture_views(url: str, views: list[str], size: tuple[int, int], jobs: int =
                 viewport={"width": size[0], "height": size[1]}, device_scale_factor=1)
             try:
                 timings["browser_start_s"] = round(time.monotonic() - started, 3)
-                worker_count = min(jobs, len(views))
+                worker_count = min(jobs, len(views)) if views else 1
                 chunks = [views[index::worker_count] for index in range(worker_count)]
                 load_started = time.monotonic()
                 pages = await collect([_open_capture_page(browser_context, url, errors) for _ in chunks])
                 timings["load_s"] = round(time.monotonic() - load_started, 3)
-                worker_results = await collect([_capture_page_views(page, chunk)
-                                                for (page, _), chunk in zip(pages, chunks)])
+                worker_results = await collect([_capture_page_views(page, chunks[index],
+                    visibility if index == 0 else None) for index, (page, _) in enumerate(pages)])
                 info = pages[0][1]
                 info["chromium"] = browser.version
                 for name in views:
@@ -979,6 +1065,18 @@ def grade(results: dict[str, Any]) -> tuple[dict[str, Any], dict[str, bytes], bo
         if result.get("retry_note"):
             views[name]["retry"]["note"] = result["retry_note"]
     return views, pngs, passed
+def grade_visibility(checks: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], bool]:
+    reports = []
+    passed = True
+    for check in checks:
+        result = check.get("result")
+        if not isinstance(result, dict):
+            raise InfraError(f"{check['requirement']} visibility {check['index']} has no render result")
+        passed &= result.get("status") == "pass"
+        reports.append({"requirement": check["requirement"], "index": check["index"],
+                        "view": check["view"], "window": check["window"], "targets": check["targets"],
+                        "camera": check.get("camera"), **result})
+    return reports, passed
 
 
 # --------------------------------------------------------------------------- motion frames
@@ -1225,8 +1323,10 @@ def run(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     except material_rules.MaterialsError as exc:
         raise InfraError(str(exc)) from exc
     scene, materials, keyed = build_scene(hw, version, views, size, table)
+    visibility = scene["visibility"]
     recipe = {"views": views, "size": [*size], "renderer": {"name": "cad-render", "version": renderer_sha256()},
               "inputs": {"version_manifest_sha256": sha256(version.files["manifest"].read_bytes()),
+                         "requirements_yaml_sha256": keyed["requirements_yaml_sha256"],
                          "cache_key": keyed["key"], "parity_policy": keyed["key"]["parity"]}}
     params = {"V": version.label, "S": args.subject}
     existing = None
@@ -1242,26 +1342,49 @@ def run(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
             return 0, {"status": metadata["status"], "cache": "hit", "version": version.label,
                        "out_dir": str(existing), "pngs": {v: str(existing / f"{v}.png") for v in views},
                        "wall_s": round(time.monotonic() - wall, 3)}
+    closeup_provenance = {}
+    reused_closeups = {}
+    for view in views:
+        if view_kind(view) not in {"closeup", "part"}:
+            continue
+        oid = view_subject(view, {key: occurrence.pn for key, occurrence in version.occurrences.items()})
+        part_recipe = part_closeup_recipe(version, version.occurrences[oid], view, size, materials)
+        closeup_provenance[view] = part_recipe
+        if out_dir is None and view_kind(view) == "closeup":
+            reused = reusable_part_closeup(hw, version, part_recipe, view)
+            if reused:
+                reused_closeups[view] = reused
     server = make_server(scene, version.files["glb"], args.cache_dir or default_cache_dir())
     thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.1}, daemon=True)
     thread.start()
     port = server.server_address[1]
     try:
-        info, results, timings = capture_views(f"http://127.0.0.1:{port}/", views, size, args.jobs)
+        info, results, timings = capture_views(f"http://127.0.0.1:{port}/", views, size, args.jobs, visibility)
     finally:
         server.shutdown()
         server.server_close()
 
     view_records, pngs, passed = grade(results)
+    visibility_reports, visibility_passed = grade_visibility(visibility)
+    passed = passed and visibility_passed
+    for view, reused in reused_closeups.items():
+        png_bytes = (Path(reused["bundle"]) / f"{view}.png").read_bytes()
+        pngs[view] = png_bytes
+        record = view_records[view]
+        record["sha256"] = sha256(png_bytes)
+        record["reused"] = {"version": reused["version"], "bundle": reused["bundle"],
+                             "sha256": reused["sha256"]}
+        record["retry"] = {"strategy": "reused", "attempts": []}
+        record["quality"]["status"] = "pass"
     for name, record in view_records.items():
         record["wall_s"] = timings[name]
-    for pn, record in materials.items():
-        record["applied"] = results[views[0]]["materials"][pn]
     metadata = {
         "version": version.label,
         "status": "fail" if not passed else ("warn" if any(r["quality"]["warnings"] for r in view_records.values()) else "pass"),
         "views": view_records, "materials": materials,
         "retry": {name: record["retry"] for name, record in view_records.items()},
+        "visibility": visibility_reports,
+        "closeup_provenance": closeup_provenance,
         "renderer": {"name": "cad-render three.js PBR", "three": THREE_VERSION, "three_revision": info["three"],
                      "playwright": importlib.metadata.version("playwright"), "chromium": info["chromium"],
                      "webgl": "SwiftShader (ANGLE)", "studio": info["studio"]},
@@ -1269,6 +1392,7 @@ def run(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         "inputs": {**{name: str(version.files[name].relative_to(hw)) for name in SOURCE_FILES},
                    "version_manifest_sha256": recipe["inputs"]["version_manifest_sha256"],
                    "assembly_yaml_sha256": keyed["assembly_yaml_sha256"],
+                   "requirements_yaml_sha256": keyed["requirements_yaml_sha256"],
                    "assembly_yaml_matches_version": keyed["assembly_yaml_matches_version"]},
         "explode_offsets_mm": keyed["explode_offsets_mm"],
         "wall_s": {**{k: v for k, v in timings.items() if k.endswith("_s")},
@@ -1276,6 +1400,8 @@ def run(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     if out_dir is not None:
         out_dir.mkdir(parents=True)
         for name, record in view_records.items():
+            if name in reused_closeups:
+                record["png"] = f"{name}.png"
             image = Path(record["png"])
             (out_dir / image).parent.mkdir(parents=True, exist_ok=True)
             (out_dir / image).write_bytes(pngs[name])
@@ -1283,6 +1409,8 @@ def run(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     else:
         staged = layout.staging(hw, "bundle.renders")
         for name, record in view_records.items():
+            if name in reused_closeups:
+                record["png"] = f"{name}.png"
             image = Path(record["png"])
             (staged / image).parent.mkdir(parents=True, exist_ok=True)
             (staged / image).write_bytes(pngs[name])
