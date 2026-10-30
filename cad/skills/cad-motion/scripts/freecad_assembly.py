@@ -368,7 +368,7 @@ def crosscheck_spec(chain: Any, part_paths: dict[str, Path], names: dict[str, st
     """The cross-check job over the plan frames, and how each movable joint maps to FreeCAD."""
     if smoke:
         frames = smoke_frames(frames)
-        n = len(frames)
+    n = len(frames)
     times = [k / (n - 1) for k in range(n)]
     laws = chain.couplings.laws
     first = frames[0]["values"] if start == "coupled" else _far_branch(chain, frames[0]["values"])
