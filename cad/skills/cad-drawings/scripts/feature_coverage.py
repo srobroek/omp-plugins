@@ -45,7 +45,7 @@ SEPARATIONS = ("width", "length", "depth", "thickness", "height")
 SEPARATION_OPERATIONS = ("width", "length", "depth", "thickness", "plane_separation", "distance", "across_flats",
                          "extent", "height")
 LOCATIONS = ("location", "floor_location")
-POSITIONS = ("axis_location", "pattern", "slot_location", "location", "distance")
+POSITIONS = ("axis_location", "pattern", "slot_location", "location")
 LOCATED = ("hole", "boss", "shaft", "slot", "arc")
 NOT_DIMENSIONED = ("outline",)
 MODEL_DEFINED = ("dish", "taper", "engraving", "outline")   # freeform or defined by its own kind's callout
@@ -174,7 +174,7 @@ class _Checker:
 
     def positioned(self, item: Recognized) -> str | None:
         for char in self.chars:
-            if char.operation in POSITIONS and self.on(char, item.faces):
+            if (char.operation in POSITIONS or char.details.get("axis_dimension")) and self.on(char, item.faces):
                 return char.id
         if self.frame is None:
             return None

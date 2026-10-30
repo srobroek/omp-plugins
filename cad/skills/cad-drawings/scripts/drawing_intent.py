@@ -78,13 +78,12 @@ def finding(code: str, message: str, **where: Any) -> dict[str, Any]:
 class Tolerance:
     """What controls a characteristic: deviations from a nominal (mm), or a basic dimension."""
 
-    kind: str                      # fit, heat_set, explicit, general, basic, vendor
+    kind: str                      # fit, heat_set, explicit, policy, general, basic, vendor
     lower: Decimal = Decimal(0)
     upper: Decimal = Decimal(0)
     nominal: Decimal | None = None # interface nominal (fits, heat-set seats); None: the measured value is nominal
     designation: str | None = None # ISO 286 class, policy name or "basic"
     source: str = ""
-    feature_specific: bool = False # print this control on the dimension, not only in a general note
 
     def limits(self, measured: float) -> tuple[Decimal, Decimal]:
         nominal = self.nominal if self.nominal is not None else Decimal(str(round(measured, 6)))
@@ -93,7 +92,12 @@ class Tolerance:
     def to_dict(self) -> dict[str, Any]:
         return {"kind": self.kind, "lower_mm": str(self.lower), "upper_mm": str(self.upper),
                 "nominal_mm": None if self.nominal is None else str(self.nominal), "designation": self.designation,
-                "source": self.source, "feature_specific": self.feature_specific}
+                "source": self.source}
+
+    @property
+    def individual(self) -> bool:
+        """Printed on its own dimension: every control except the sheet's general tolerance and a basic size."""
+        return self.kind not in ("general", "basic")
 
 
 @dataclass(frozen=True)
@@ -508,13 +512,9 @@ class Measurer:
         self.binding = binding
         self.faces = {f.index: f for f in faces}
         self.policies = policies(product)
-        self.datum_axis_locations = {
-            feature.id for request in self.drawing.get("dimensions", [])
-            if request.get("operation") == "distance" and len(request.get("features", [])) == 2
-            for feature in (self.binding.features.get(name) for name in request["features"])
-            if feature is not None and feature.kind in ("bore", "shaft")
-            and any((datum := self.binding.features.get(name)) is not None and datum.kind == "plane_face"
-                    for name in request["features"])}
+        # the policy of the sheet's general-tolerance note; any other policy prints on its own dimensions
+        self.sheet_policy = self.drawing.get("tolerance_policy") or \
+            (product.get("drawing") or {}).get("general_tolerance_policy")
         self.intents: Mapping[str, Mapping[str, Any]] = self.drawing.get("features") or {}
         # a vendor or source-control sheet controls only what the item's specification states
         self.vendor = self.drawing.get("type") in VENDOR_TYPES
@@ -527,9 +527,7 @@ class Measurer:
 
     # policy -------------------------------------------------------------------------------------
     def policy(self, feature: str | None) -> Policy | None:
-        intent = self.intents.get(feature or "", {})
-        name = intent.get("tolerance_policy") or self.drawing.get("tolerance_policy") or \
-            (self.product.get("drawing") or {}).get("general_tolerance_policy")
+        name = self.intents.get(feature or "", {}).get("tolerance_policy") or self.sheet_policy
         if name is None:
             return None
         policy = self.policies.get(name)
@@ -554,9 +552,12 @@ class Measurer:
             deviation = policy.linear(abs(value))
         if deviation is None:
             return None
-        feature_specific = bool(self.intents.get(feature, {}).get("tolerance_policy"))
-        return Tolerance("general", -deviation, deviation, designation=policy.label, source=policy.name,
-                         feature_specific=feature_specific)
+        return self.policy_tolerance(policy, deviation)
+
+    def policy_tolerance(self, policy: Policy, deviation: Decimal) -> Tolerance:
+        """A policy's symmetric limits: the sheet's general tolerance, or a feature-specific policy (kind ``policy``)."""
+        kind = "general" if policy.name == self.sheet_policy else "policy"
+        return Tolerance(kind, -deviation, deviation, designation=policy.label, source=policy.name)
 
     def add(self, item: Mapping[str, Any]) -> None:
         self.result.findings.append(dict(item))
@@ -602,13 +603,12 @@ class Measurer:
             if self.vendor:
                 self._vendor_thread(feature, frame)
                 continue
-            if feature_id not in self.intents and not (
-                    feature_id in {d.feature for d in frame.datums.values()} and feature.kind == "plane_face"):
+            if feature_id not in self.intents:
                 self.add(finding("dimension_coverage_incomplete", f"feature {feature_id} has no drawing intent in "
-                                 "part.yaml drawing.features", feature=feature_id))
+                                 f"part.yaml drawing.features", feature=feature_id))
                 continue
             handler = getattr(self, f"_{feature.kind}", None)
-            if self.intents.get(feature_id, {}).get("presentation") == "general_note" and feature.kind not in ("round", "chamfer"):
+            if self.intents[feature_id].get("presentation") == "general_note" and feature.kind not in ("round", "chamfer"):
                 self.add(finding("invalid_drawing_intent", f"feature {feature_id}: only edge fillets and edge breaks "
                                  f"(round, chamfer) may go in the general note", feature=feature_id))
             if handler is None:
@@ -667,8 +667,6 @@ class Measurer:
                    and fg.axis_distance(inst.axis_point, d.point, d.direction) < EPS for d in frame.datums.values())
 
     def _axis_location(self, feature: ResolvedFeature, frame: DatumFrame, instances: Sequence[Instance]) -> None:
-        if feature.id in self.datum_axis_locations:
-            return
         axes = [frame.axis_of(inst.axis_dir) for inst in instances]
         if any(a is None for a in axes):
             raise IntentError("dimension_coverage_incomplete", "its axis is not parallel to a frame axis")
@@ -693,15 +691,11 @@ class Measurer:
                 value = coords["xyz".index(name)]
                 if abs(value) < EPS:
                     continue
-                datum_plane = next((d for d in frame.datums.values()
-                                    if d.role == "plane" and d.direction is not None
-                                    and fg.parallel(d.direction, frame.vector(name))), None)
-                if datum_plane is not None and abs(value) > EPS and feature.id != datum_plane.feature:
-                    self.char(feature, "axis_location", value, inst.faces, axis=name,
-                              suffix=f"{number}.{name}" if len(instances) > 1 else name,
-                              details={"axis_point": inst.axis_point, "axis_dir": inst.axis_dir, "instance": number})
-                elif frame.axisymmetric and abs(value) > EPS:
+                if frame.axisymmetric:
                     raise IntentError("datum_invalid", "an off-axis feature needs a clocking datum for an x or y frame axis")
+                self.char(feature, "axis_location", value, inst.faces, axis=name,
+                          suffix=f"{number}.{name}" if len(instances) > 1 else name,
+                          details={"axis_point": inst.axis_point, "axis_dir": inst.axis_dir, "instance": number})
 
     def _circular_pattern(self, instances: Sequence[Instance], frame: DatumFrame) -> dict[str, Any] | None:
         for datum in frame.datums.values():
@@ -1145,13 +1139,15 @@ class Measurer:
                                  f"{[*request['features'], *([at] if at else [])]}", dimension=request["id"]))
                 continue
             measured_at: dict[str, Any] = {}
+            centres = self._plane_to_centres(request, features)
             try:
+                if request.get("instance") is not None and centres is None:
+                    raise IntentError("invalid_drawing_intent", "instance selects the centres of a distance from a "
+                                      "plane_face to a bore or shaft")
                 if at is not None:
                     value, faces, axis, measured_at = self._measure_at(request, features, frame)
-                elif request["operation"] == "distance" and len(features) == 2 and sum(
-                        feature.kind == "plane_face" for feature in features) == 1 and sum(
-                        feature.kind in ("bore", "shaft") for feature in features) == 1:
-                    value, faces, axis, measured_at = self._measure_datum_axis(features, frame, request.get("instance"))
+                elif centres is not None:
+                    value, faces, axis, measured_at = self._measure_centres(*centres, frame, request.get("instance"))
                 else:
                     value, faces, axis = self._measure_request(request, features, frame)
             except IntentError as exc:
@@ -1168,13 +1164,12 @@ class Measurer:
                                           source=f"{document.get('reference')} rev {document.get('revision')}")
                 else:
                     tolerance = Tolerance("explicit", Decimal(str(low)), Decimal(str(high)),
-                                          source=f"dimension {request['id']}", feature_specific=True)
+                                          source=f"dimension {request['id']}")
             elif spec and "policy" in spec:
                 policy = self.policies.get(spec["policy"])
                 deviation = policy.linear(abs(value)) if policy else None
                 if deviation is not None:
-                    tolerance = Tolerance("general", -deviation, deviation, designation=policy.label,
-                                          source=policy.name, feature_specific=True)
+                    tolerance = self.policy_tolerance(policy, deviation)
             operation = request["operation"]
             # a request on a characteristic the feature type already requires replaces that row's control
             same = [c for c in self.result.characteristics
@@ -1182,25 +1177,25 @@ class Measurer:
                     and c.operation == operation and abs(c.value - value) < EPS]
             for existing in same:
                 self.result.characteristics.remove(existing)
-            policy_feature = measured_at.get("target_feature", request["features"][0])
+            # a hole centre's distance belongs to the hole, and takes its tolerance policy
+            subject = measured_at.get("target_feature", request["features"][0])
             if tolerance is None and not request.get("reference"):
-                tolerance = same[0].tolerance if same else self.general(policy_feature, operation, value)
+                tolerance = same[0].tolerance if same else self.general(subject, operation, value)
             details = {**(same[0].details if same else {}), "features": request["features"],
                        "datum_frame": request.get("datum_frame", []), **measured_at}
             if operation in ("radius", "diameter") and self._spherical(features[0]):
                 details["spherical"] = True   # SR, S⌀ (ISO 129-1, ASME Y14.5)
-            chain = operation in SEPARATION_REQUESTS and len(features) == 2 and at is None \
-                and not measured_at.get("axis_dimension") and all(f.kind == "plane_face" for f in features)
-            if chain:
+            chain = operation in SEPARATION_REQUESTS and len(features) == 2 and at is None and centres is None
+            if chain:   # drawn from the first feature's plane nearest the second
                 details["from_faces"] = self._separation_planes(features[0], features[1])[0]
-            quantity = measured_at.get("group_quantity", 1) if measured_at.get("axis_dimension") else (same[0].quantity if same else 1)
+            quantity = len(measured_at["centres"]) if centres is not None else (same[0].quantity if same else 1)
             if at is not None:   # every pair of planes at that width on the plane: 2× width 2.3
                 quantity = len(measured_at["pairs"])
             elif operation == "width" and len(features) == 2:
                 # a width callout states every opposed pair of the two features at that width: 4× width 0.6
                 pairs = self._pairs_at(features[0], features[1], value)
                 quantity, faces = len(pairs), sorted({b for _, b in pairs})
-            item = Characteristic(id=request["id"], feature=request["features"][0], operation=operation, value=value,
+            item = Characteristic(id=request["id"], feature=subject, operation=operation, value=value,
                                   faces=tuple(faces), quantity=quantity, axis=axis,
                                   tolerance=tolerance, presentation=request.get("presentation", "auto"),
                                   reference=bool(request.get("reference")), requested=True, details=details)
@@ -1208,6 +1203,11 @@ class Measurer:
                 # a chain dimension locates the second plane from the first, in place of its datum location
                 self.result.characteristics = [c for c in self.result.characteristics if not (
                     c.feature == features[1].id and c.operation == "location" and not c.requested)]
+            if centres is not None and not item.reference:
+                # it locates its centres along its axis, in place of their frame locations
+                self.result.characteristics = [c for c in self.result.characteristics if not (
+                    c.feature == subject and c.operation == "axis_location" and c.axis == axis and not c.requested
+                    and any(fg.norm(fg.sub(c.details["axis_point"], p)) < EPS for p in measured_at["centres"]))]
             self.result.characteristics.append(item)
 
     def _spherical(self, feature: ResolvedFeature) -> bool:
@@ -1328,58 +1328,56 @@ class Measurer:
         if operation == "angle" and len(features) == 2:
             a, b = (self._plane_of(f) for f in features)
             return math.degrees(math.acos(max(-1.0, min(1.0, abs(fg.dot(a.normal, b.normal)))))), faces, None
-        if operation == "distance" and len(features) == 2 and sum(
-                feature.kind == "plane_face" for feature in features) == 1 and sum(
-                feature.kind in ("bore", "shaft") for feature in features) == 1:
-            return self._measure_datum_axis(features, frame)
         existing = [c for c in self.result.characteristics if c.feature == features[0].id and c.operation == operation]
         if len(features) == 1 and existing:
             return existing[0].value, list(existing[0].faces), existing[0].axis
         raise IntentError("invalid_drawing_intent", f"operation {operation} on {len(features)} features is not measurable")
 
-    def _measure_datum_axis(self, features: Sequence[ResolvedFeature], frame: DatumFrame,
-                            instance_index: int | None = None) -> tuple[float, list[int], str, dict[str, Any]]:
-        """Measure grouped cylindrical centres from one parallel datum plane."""
-        datum = next(feature for feature in features if feature.kind == "plane_face")
-        target = next(feature for feature in features if feature.kind in ("bore", "shaft"))
+    @staticmethod
+    def _plane_to_centres(request: Mapping[str, Any], features: Sequence[ResolvedFeature]
+                          ) -> tuple[ResolvedFeature, ResolvedFeature] | None:
+        """(plane, located feature) of a distance from a plane_face to bore or shaft centres; None otherwise."""
+        if request["operation"] != "distance" or len(features) != 2:
+            return None
+        planes = [f for f in features if f.kind == "plane_face"]
+        located = [f for f in features if f.kind in ("bore", "shaft")]
+        return (planes[0], located[0]) if len(planes) == 1 and len(located) == 1 else None
+
+    def _measure_centres(self, datum: ResolvedFeature, located: ResolvedFeature, frame: DatumFrame,
+                         number: int | None) -> tuple[float, list[int], str, dict[str, Any]]:
+        """The distance from a plane to the centres of a bore or shaft whose axes are parallel to it (ISO 129-1).
+
+        Centres at one distance share the dimension; ``number`` picks one such group, nearest the plane first,
+        and is required when the centres lie at several distances."""
         plane = self._plane_of(datum)
         axis = frame.axis_of(plane.normal)
         if axis is None:
-            raise IntentError("dimension_coverage_incomplete", f"datum {datum.id} is not normal to a frame axis")
-        direction = fg.unit(plane.normal)
-        instances = cylinder_instances([self.faces[i] for i in target.faces])
+            raise IntentError("dimension_coverage_incomplete", f"{datum.id} is not normal to a frame axis")
+        instances = cylinder_instances(self.own(located))
         if not instances:
-            raise IntentError("measurement_failed", f"{target.id} has no cylindrical axis")
-        located: list[tuple[float, Instance]] = []
-        for instance in instances:
-            if not fg.perpendicular(instance.axis_dir, plane.normal):
-                raise IntentError("measurement_failed", f"{target.id} axis is not parallel to datum plane {datum.id}")
-            signed_distance = fg.dot(fg.sub(instance.axis_point, plane.point), direction)
-            located.append((abs(signed_distance), instance))
-        located.sort(key=lambda row: (round(row[0], 6), frame.coords(row[1].axis_point)))
+            raise IntentError("measurement_failed", f"{located.id} has no cylinder axis")
+        if any(not fg.perpendicular(inst.axis_dir, plane.normal) for inst in instances):
+            raise IntentError("measurement_failed", f"the axes of {located.id} are not parallel to {datum.id}")
+        normal = fg.unit(plane.normal)
         groups: list[list[tuple[float, Instance]]] = []
-        for entry in located:
-            if not groups or abs(entry[0] - groups[-1][0][0]) > EPS:
-                groups.append([entry])
+        for distance, inst in sorted(((abs(fg.dot(fg.sub(inst.axis_point, plane.point), normal)), inst)
+                                      for inst in instances), key=lambda item: item[0]):
+            if groups and distance - groups[-1][0][0] < EPS:
+                groups[-1].append((distance, inst))
             else:
-                groups[-1].append(entry)
-        if instance_index is None:
-            if len(groups) != 1:
-                raise IntentError("invalid_drawing_intent", f"{target.id} has {len(groups)} locations from {datum.id}; "
-                                  "dimension requests need instance")
-            instance_index = 0
-        else:
-            instance_index -= 1
-        if instance_index < 0 or instance_index >= len(groups):
-            raise IntentError("invalid_drawing_intent", f"instance {instance_index + 1} is outside the {len(groups)} "
-                              f"locations of {target.id} from {datum.id}")
-        group = groups[instance_index]
-        anchor = group[0][1]
-        quantity = sum(len(cylinder_instances([self.faces[i] for i in item.faces])) for _, item in group)
-        return group[0][0], [i for _, item in group for i in item.faces], axis[0], {
-            "axis_point": anchor.axis_point, "axis_dir": anchor.axis_dir, "axis_dimension": True,
-            "datum_feature": datum.id, "target_feature": target.id, "instance": instance_index,
-            "group_quantity": quantity, "group_count": len(groups)}
+                groups.append([(distance, inst)])
+        if number is None and len(groups) > 1:
+            raise IntentError("invalid_drawing_intent", f"the centres of {located.id} lie at {len(groups)} distances "
+                              f"from {datum.id}; set instance (1 is the nearest)")
+        if (number or 1) > len(groups):
+            raise IntentError("invalid_drawing_intent", f"instance {number}: the centres of {located.id} lie at "
+                              f"{len(groups)} distances from {datum.id}")
+        group = groups[(number or 1) - 1]
+        distance, anchor = group[0]
+        return distance, [i for _, inst in group for i in inst.faces], axis[0], {
+            "axis_dimension": True, "datum_feature": datum.id, "target_feature": located.id,
+            "axis_point": anchor.axis_point, "axis_dir": anchor.axis_dir,
+            "centres": [inst.axis_point for _, inst in group]}
 
     def _plane_of(self, feature: ResolvedFeature) -> Face:
         planes = [self.faces[i] for i in feature.faces if self.faces[i].support_type == "plane"]

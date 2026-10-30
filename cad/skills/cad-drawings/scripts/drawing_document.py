@@ -23,6 +23,7 @@ import json
 import re
 import shutil
 import uuid
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
@@ -58,6 +59,7 @@ FRAME_CLEARANCE = 1.0     # between the frame or title block and anything placed
 TITLE_BLOCK_WIDTH = 180.0
 ROW_HEIGHT = 9.0
 LABEL_SIZE, VALUE_SIZE, NUMBER_SIZE, MIN_TEXT_SIZE = 1.8, 3.5, 5.0, 1.8
+WRAPPED_TITLE_FIELDS = ("general_tolerance",)   # free text a policy label sets; identity fields stay on one line
 TABLE_TEXT_SIZE, TABLE_ROW, TABLE_PAD = 2.5, 6.0, 1.5
 NOTE_SIZE, NOTE_HEADING_SIZE, NOTE_LINE = 2.5, 3.5, 4.0
 CELL_PAD = 1.2
@@ -473,23 +475,48 @@ def _title_values(spec: SheetSpec, metadata: SheetMetadata) -> dict[str, str]:
             "standards": " · ".join(metadata.standards)}
 
 
-def _title_block(spec: SheetSpec, metadata: SheetMetadata) -> ET.Element:
+def _title_lines(name: str, value: str, cell: Box) -> list[tuple[str, float, float]]:
+    """``value`` in its title cell as (text, baseline, size) rows under the label: one line, reduced to fit down to
+    the minimum lettering; a free-text field longer than that wraps at the minimum lettering, upward from the
+    cell's bottom at the notes' line spacing, while its top line clears the label."""
+    room = cell.x1 - cell.x0 - 2 * CELL_PAD
+    where = f"title block {name}"
+    if name not in WRAPPED_TITLE_FIELDS or text_width(value, MIN_TEXT_SIZE) <= room:
+        size = _fitted_size(value, NUMBER_SIZE if name == "drawing_number" else VALUE_SIZE, room, where)
+        return [(value, cell.y1 - 0.8 - TEXT_DESCENT * size, size)]
+    size, pitch = MIN_TEXT_SIZE, MIN_TEXT_SIZE * NOTE_LINE / NOTE_SIZE
+    try:
+        lines = _wrap(value, size, room)
+    except CompositionError as exc:
+        raise CompositionError("layout_check_failed", f"{where} {value!r} has a word wider than the "
+                                                      f"{room:.1f} mm cell") from exc
+    first = cell.y1 - 0.8 - TEXT_DESCENT * size - pitch * (len(lines) - 1)
+    if first - TEXT_ASCENT * size < cell.y0 + 0.5 + (TEXT_ASCENT + TEXT_DESCENT) * LABEL_SIZE:
+        raise CompositionError("layout_check_failed", f"{where} {value!r} needs {len(lines)} lines at the "
+                                                      f"{MIN_TEXT_SIZE} mm minimum lettering; they do not fit "
+                                                      f"under the cell's label")
+    return [(line, first + index * pitch, size) for index, line in enumerate(lines)]
+
+
+def _title_block(spec: SheetSpec, metadata: SheetMetadata) -> tuple[ET.Element, dict[str, tuple[str, ...]]]:
+    """The title block group, and the text lines each filled field prints."""
     group = _element("g", {"id": "cad-title-block"})
     block = spec.regions.title_block
     group.append(_rect(block, FRAME_WIDTH))
     cells = _title_cells(block)
     values = _title_values(spec, metadata)
     labels = LABELS[spec.regime]
+    printed = {}
     for name, cell in cells.items():
         group.append(_rect(cell, THIN_WIDTH))
         if labels[name]:
             group.append(_text(labels[name], cell.x0 + CELL_PAD, cell.y0 + 0.5 + TEXT_ASCENT * LABEL_SIZE, LABEL_SIZE))
         if values[name]:
-            preferred = NUMBER_SIZE if name == "drawing_number" else VALUE_SIZE
-            size = _fitted_size(values[name], preferred, cell.x1 - cell.x0 - 2 * CELL_PAD, f"title block {name}")
-            group.append(_text(values[name], cell.x0 + CELL_PAD, cell.y1 - 0.8 - TEXT_DESCENT * size, size,
-                               bold=name == "drawing_number"))
-    return group
+            rows = _title_lines(name, values[name], cell)
+            printed[name] = tuple(text for text, _, _ in rows)
+            group.extend(_text(text, cell.x0 + CELL_PAD, baseline, size, bold=name == "drawing_number")
+                         for text, baseline, size in rows)
+    return group, printed
 
 
 def _projection_symbol(projection: str, cell: Box) -> ET.Element:
@@ -557,6 +584,14 @@ def _markup(annotation: SvgAnnotation) -> ET.Element:
     fragment.set("id", annotation.id)
     fragment.set("class", annotation.kind)
     return fragment
+
+
+def printed_lines(annotations: Iterable[SvgAnnotation], notes: Iterable[SvgNote]) -> dict[str, tuple[str, ...]]:
+    """The text each annotation's ``<text>`` elements and each note put on the sheet, by id."""
+    lines = {annotation.id: tuple("".join(element.itertext()) for element in _markup(annotation).iter(f"{{{SVG_NS}}}text"))
+             for annotation in annotations}
+    lines.update((note.id, (note.text,)) for note in notes)
+    return lines
 
 
 def _table_group(table: SvgTable, box: Box) -> ET.Element:
@@ -635,7 +670,7 @@ def compose_page(spec: SheetSpec, metadata: SheetMetadata, views: Sequence[ViewG
     root.append(_element("rect", {"id": "paper-background", "x": 0, "y": 0, "width": f"{spec.width_mm:g}",
                                   "height": f"{spec.height_mm:g}", "fill": "#fff"}))
     root.append(_frame(spec))
-    title_block = _title_block(spec, metadata)
+    title_block, title_text = _title_block(spec, metadata)
     for table in tables:
         title_block.append(_table_group(table, layout.tables[table.id]))
     root.append(title_block)
@@ -650,9 +685,8 @@ def compose_page(spec: SheetSpec, metadata: SheetMetadata, views: Sequence[ViewG
     root.append(content)
 
     ET.register_namespace("", SVG_NS)
-    values = _title_values(spec, metadata)
-    required = tuple(values[name] for name in ("drawing_number", "revision", "title", "sheet", "material",
-                                               "general_tolerance") if values[name])
+    required = tuple(line for name in ("drawing_number", "revision", "title", "sheet", "material", "general_tolerance")
+                     for line in title_text.get(name, ()))
     regions = SheetRegions(frame=spec.regions.frame, title_block=layout.title_region,
                            symbol_cell=spec.regions.symbol_cell)
     provenance = {**{a.id: dict(a.provenance) for a in annotations}, **{n.id: dict(n.provenance) for n in notes}}

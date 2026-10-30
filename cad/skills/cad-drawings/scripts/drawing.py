@@ -614,8 +614,10 @@ def compose_and_publish(context: drawing_contract.DrawingContext, part: drawing_
         lines = sheet.centre_lines(view, binding.features, faces)
         if lines is not None:
             annotations[view.plan.sheet].append(lines)
+    printed = drawing_document.printed_lines([a for page in annotations.values() for a in page], notes)
     report = completeness.evaluate(part.pn, record, context.interfaces, binding, measured, presentation, part.step_sha256,
-                                   sections, recognition=recognition, faces=faces)
+                                   sections, recognition=recognition, faces=faces,
+                                   text=completeness.SheetText(regime, printed))
     if procurement:
         report = replace(report, status="fail", findings=(*report.findings, *procurement))
     pages = []

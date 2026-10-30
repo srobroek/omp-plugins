@@ -216,6 +216,7 @@ class DrawingRecordAdditions(unittest.TestCase):
             "section without plane": (lambda d: d["views"][2].pop("through"), "drawing/views/2"),
             "orthographic without direction": (lambda d: d["views"][0].pop("normal_to"), "drawing/views/0"),
             "dimension carrying a value": (lambda d: d["dimensions"][0].update(value=12.5), "drawing/dimensions/0"),
+            "zeroth centre distance": (lambda d: d["dimensions"][1].update(instance=0), "drawing/dimensions/1"),
             "undeclared datum": (lambda d: d["views"][0].update(normal_to="D"), "datum D is not declared"),
             "undeclared datum in a frame": (lambda d: d["dimensions"][0].update(datum_frame=["A", "E"]), "datum E is not declared"),
             "machining policy on FDM": (lambda d: d.update(tolerance_policy="machining"),
