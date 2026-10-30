@@ -104,6 +104,21 @@ class ValidateProject(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(report, {"ok": True, "findings": []})
 
+    def test_product_license_accepts_spdx_identifiers_and_rejects_malformed_values(self) -> None:
+        path = self.hw / "product.yaml"
+        product = yaml.safe_load(path.read_text(encoding="utf-8"))
+        product["license"] = {"hardware": "CERN-OHL-S-2.0", "documentation": "GPL-2.0+"}
+        path.write_text(yaml.safe_dump(product, sort_keys=False), encoding="utf-8")
+        result, report = self.validate()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(report, {"ok": True, "findings": []})
+
+        product["license"]["hardware"] = "CC BY 4.0"
+        path.write_text(yaml.safe_dump(product, sort_keys=False), encoding="utf-8")
+        result, report = self.validate()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("license", json.dumps(report["findings"]))
+
     def test_product_rejects_nonpositive_build_volume_axis(self) -> None:
         path = self.hw / "product.yaml"
         path.write_text(path.read_text(encoding="utf-8").replace("x_mm: 256", "x_mm: 0"), encoding="utf-8")

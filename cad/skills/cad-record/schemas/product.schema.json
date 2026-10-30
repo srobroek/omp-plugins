@@ -11,6 +11,14 @@
     "units": {"const": "mm"},
     "regime": {"type": "string", "enum": ["iso", "asme"]},
     "general_tolerance": {"oneOf": [{"type": "number", "exclusiveMinimum": 0}, {"type": "string", "minLength": 1}]},
+    "license": {
+      "description": "Explicit SPDX license identifiers approved for the product's hardware and documentation; omitted means not recorded",
+      "type": "object", "additionalProperties": false, "minProperties": 1,
+      "properties": {
+        "hardware": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9.+-]*$"},
+        "documentation": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9.+-]*$"}
+      }
+    },
     "flow": {
       "type": "object", "additionalProperties": false,
       "required": ["stage", "recheck_from"],

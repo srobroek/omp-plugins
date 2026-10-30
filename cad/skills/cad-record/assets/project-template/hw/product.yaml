@@ -2,6 +2,8 @@ id: example-product
 rigor: pro
 units: mm
 regime: iso
+# Optional; enter user-approved SPDX identifiers. Never infer from LICENSE.
+# license: {hardware: CERN-OHL-S-2.0, documentation: CC-BY-4.0}
 general_tolerance: "ISO 2768-m"
 flow:
   stage: ground

@@ -76,6 +76,22 @@ class BuildGuide(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         return (self.out / "index.md").read_text(encoding="utf-8")
 
+    def test_documented_docs_argument_is_supported(self) -> None:
+        hw = self.copy_lamp_example()
+        self.make_version(hw, "v1")
+        self.out = hw / "docs"
+        self.generate(hw)
+        for name in ("index.md", "okh.toml", "din-spec-3105-1-checklist.md"):
+            self.assertTrue((self.out / name).is_file(), name)
+
+    def test_missing_release_manifest_is_named_in_guide_and_din(self) -> None:
+        hw = self.copy_lamp_example()
+        self.make_version(hw, "v1")
+        guide = self.generate(hw)
+        self.assertIn("MISSING: no hw/releases/<REV>/manifest.json approves v1", guide)
+        din = (self.out / "din-spec-3105-1-checklist.md").read_text(encoding="utf-8")
+        self.assertIn("MISSING: no hw/releases/<REV>/manifest.json approves v1", din)
+
     def test_lamp_template_reuses_measured_notes_and_structured_tools(self) -> None:
         hw = self.copy_lamp_example()
         self.make_version(hw, "v1")
@@ -106,6 +122,45 @@ class BuildGuide(unittest.TestCase):
         self.assertEqual(guide.count("Arbor press or pin punch"), 3)
         self.assertIn("REQ-001", guide)
         self.assertIn("planned", guide)
+
+    def test_canonical_docs_output_generates_okh_and_din_from_record(self) -> None:
+        hw = self.copy_lamp_example()
+        self.make_version(hw, "v1")
+        self.out = hw / "docs"
+        product_path = hw / "product.yaml"
+        product = yaml.safe_load(product_path.read_text(encoding="utf-8"))
+        product["license"] = {"hardware": "CERN-OHL-S-2.0", "documentation": "CC-BY-4.0"}
+        product["manufacturing"] = {"processes": ["fdm", "purchased"]}
+        product_path.write_text(yaml.safe_dump(product, sort_keys=False), encoding="utf-8")
+        guide = self.generate(hw)
+        self.assertIn("External circlip pliers", guide)
+        self.assertIn("Press item 5 into item 2", guide)
+        self.assertIn("MISSING: no hw/releases/<REV>/manifest.json approves v1", guide)
+        self.assertTrue((self.out / "index.md").is_file())
+        okh = (self.out / "okh.toml").read_text(encoding="utf-8")
+        din = (self.out / "din-spec-3105-1-checklist.md").read_text(encoding="utf-8")
+        self.assertIn('name = "lamp-arm"', okh)
+        self.assertIn('version = "v1"', okh)
+        self.assertIn('license = "CC-BY-4.0"', okh)
+        self.assertIn('hardware_license = "CERN-OHL-S-2.0"', okh)
+        self.assertIn("planned processes: fdm, purchased", okh)
+        self.assertIn("HUMAN-OWNED: licensor", okh)
+        self.assertIn("HUMAN-OWNED: assess readiness level", okh)
+        self.assertIn("DR-004", din)
+        self.assertIn("processes: fdm, purchased", din)
+        self.assertIn("verification.csv", din)
+        self.assertIn("DR-004", din)
+
+    def test_missing_license_stays_human_owned_not_inferred_from_license_file(self) -> None:
+        hw = self.copy_lamp_example()
+        self.make_version(hw, "v1")
+        self.out = hw / "docs"
+        (hw / "LICENSE").write_text("CC0-1.0", encoding="utf-8")
+        self.generate(hw)
+        okh = (self.out / "okh.toml").read_text(encoding="utf-8")
+        self.assertIn("HUMAN-OWNED: set product.license.documentation", okh)
+        self.assertIn("HUMAN-OWNED: set product.license.hardware", okh)
+        self.assertNotIn('license = "CC0-1.0"', okh)
 
     def test_unmeasured_standoff_step_has_readable_gap_prompt(self) -> None:
         hw = self.copy_lamp_example()
@@ -176,10 +231,11 @@ class BuildGuide(unittest.TestCase):
                 "schema_version": 2, "product_id": "released", "rev": rev, "released_at": released_at,
                 "frozen": {"version": version}, "files": {"bom.csv": {"sha256": "0" * 64, "original": "hw/bom.csv"}},
             }), encoding="utf-8")
-        for version, link in (("v3", "[hw/releases/A/manifest.json]("), ("v4", "[hw/releases/B/manifest.json]("),
-                              ("v5", "not recorded |")):
+        for version, expected in (("v3", "hw/releases/A/manifest.json"),
+                                  ("v4", "hw/releases/B/manifest.json"),
+                                  ("v5", "MISSING: no hw/releases/<REV>/manifest.json approves v5")):
             self.out = self.root / ".cad-work" / f"docs-{version}"  # each guide needs a new output directory
-            self.assertIn(f"| Release manifest | {link}", self.generate(hw, version))
+            self.assertIn(expected, self.generate(hw, version))
 
     def test_buy_identity_open_fields_remain_visible(self) -> None:
         hw = self.copy_lamp_example()

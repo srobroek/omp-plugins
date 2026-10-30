@@ -213,7 +213,117 @@ def recorded_tools(operations: Sequence[Mapping[str, Any]]) -> list[tuple[str, s
             for name in operation.get(key, [])]
 
 
-def make_guide(hw: Path, version: str, out: Path) -> str:
+def record_link(label: str, source: Path, hw: Path, out: Path) -> str:
+    return markdown_link(label, source, out) if source.is_file() else f"MISSING: {label} ({LAYOUT.relative(hw, source)})"
+
+
+def evidence_links(evidence: str, hw: Path, out: Path) -> str:
+    """Link existing project-relative evidence files; keep other recorded text unchanged."""
+    pieces: list[str] = []
+    cursor = 0
+    for match in re.finditer(r"hw/[^\s,;()\"'<>]+", evidence or ""):
+        pieces.append(text((evidence or "")[cursor:match.start()]))
+        relative = match.group(0).rstrip(".").rstrip("/")
+        try:
+            source = LAYOUT.locate(hw, relative)
+        except LAYOUT.LayoutError:
+            source = None
+        pieces.append(markdown_link(match.group(0), source, out) if source is not None and source.is_file()
+                      else f"MISSING: {match.group(0)}")
+        cursor = match.end()
+    pieces.append(text((evidence or "")[cursor:]))
+    return "".join(pieces).strip() or "not recorded"
+
+
+def toml_string(value: Any) -> str:
+    return json.dumps(str(value), ensure_ascii=False)[1:-1]
+
+
+def okh_document(hw: Path, out: Path, product: Mapping[str, Any], version: str,
+                 release: Path | None, processes: Sequence[str]) -> str:
+    template = (SKILL / "assets" / "docs-templates" / "okh.toml").read_text(encoding="utf-8")
+    license_data = product.get("license") if isinstance(product.get("license"), Mapping) else {}
+    hardware_license = license_data.get("hardware")
+    documentation_license = license_data.get("documentation")
+    released_at = ""
+    if release is not None:
+        try:
+            released_at = str(json.loads(release.read_text(encoding="utf-8")).get("released_at") or "")
+        except (OSError, json.JSONDecodeError):
+            released_at = ""
+    values = {
+        "name": toml_string(product.get("id") or "not recorded"),
+        "version": toml_string(version),
+        "license": toml_string(documentation_license or
+                                "HUMAN-OWNED: set product.license.documentation (SPDX identifier)"),
+        "hardware_license": toml_string(hardware_license or
+                                         "HUMAN-OWNED: set product.license.hardware (SPDX identifier)"),
+        "release_date": toml_string(released_at or "not released"),
+        "bom_source": toml_string(record_link("hw/bom.csv", hw / "bom.csv", hw, out)),
+        "parts_to_make": toml_string("index.md#parts-to-make"),
+        "parts_to_buy": toml_string("index.md#parts-to-buy"),
+        "manufacturing_files": f"../versions/{version}/manufacturing/",
+        "manufacturing_processes": ", ".join(map(str, processes)) or "MISSING: product.manufacturing.processes",
+        "readme": toml_string("index.md"),
+        "assembly_steps": toml_string("index.md#assembly-steps"),
+        "tools_and_consumables": toml_string("index.md#tools-and-consumables"),
+        "validation_method": toml_string(record_link("hw/verification.csv", hw / "verification.csv", hw, out)),
+        "validation_description": toml_string("See index.md#checks-before-use for verification status and evidence."),
+    }
+    for key, value in values.items():
+        template = template.replace("{{" + key + "}}", value)
+    missing = []
+    if not hardware_license:
+        missing.append("product.license.hardware")
+    if not documentation_license:
+        missing.append("product.license.documentation")
+    release_value = (record_link(f"hw/releases/{release.parent.name}/manifest.json", release, hw, out)
+                     if release else f"MISSING: no hw/releases/<REV>/manifest.json approves {version}")
+    return template + "\n# Planned product processes: " + ", ".join(processes or ["MISSING: product.manufacturing.processes"]) + "\n" + \
+           "# Record-derived release manifest: " + release_value + "\n" + \
+           "# HUMAN-OWNED: licensor, author, design_owner, repository URL, software, tools, readiness level.\n" + \
+           ("# HUMAN-OWNED / MISSING: " + ", ".join(missing) + "; select approved SPDX identifiers.\n" if missing else "")
+
+def din_document(hw: Path, out: Path, version: str, release: Path | None, processes: Sequence[str],
+                 verification: Sequence[Mapping[str, str]], decisions: Sequence[Path],
+                 requirements: Mapping[str, Any], product: Mapping[str, Any]) -> str:
+    template = (SKILL / "assets" / "docs-templates" / "din-spec-3105-1-checklist.md").read_text(encoding="utf-8")
+    decision_links = ", ".join(markdown_link(path.stem, path, out) for path in decisions) or \
+                     "MISSING: hw/decisions/DR-###.md"
+    verification_evidence = record_link("hw/verification.csv", hw / "verification.csv", hw, out) + "; " + "; ".join(
+         f"{row.get('requirement_id')}: {row.get('result') or 'not recorded'} — " +
+         evidence_links(row.get("evidence", ""), hw, out)
+         for row in verification
+    )
+    requirements_ids = ", ".join(str(item.get("id")) for item in requirements.get("requirements", [])
+                                  if isinstance(item, Mapping)) or "MISSING: hw/requirements.yaml requirements"
+    release_link = (markdown_link(f"hw/releases/{release.parent.name}/manifest.json", release, out)
+                    if release else f"MISSING: no hw/releases/<REV>/manifest.json approves {version}")
+    records = {
+        "purpose_evidence": f"{record_link('product.yaml', hw / 'product.yaml', hw, out)}; "
+                            f"{record_link('requirements.yaml', hw / 'requirements.yaml', hw, out)} ({requirements_ids})",
+        "interface_evidence": f"{record_link('interfaces.yaml', hw / 'interfaces.yaml', hw, out)}; "
+                              f"{record_link('assembly.yaml', hw / 'assembly.yaml', hw, out)}",
+        "part_evidence": f"{record_link('assembly.yaml', hw / 'assembly.yaml', hw, out)}; "
+                         f"{record_link('bom.csv', hw / 'bom.csv', hw, out)}",
+        "manufacturing_evidence": f"processes: {', '.join(processes) if processes else 'MISSING: product.manufacturing.processes'}; "
+                                  f"{record_link('bom.csv', hw / 'bom.csv', hw, out)}",
+        "decision_evidence": decision_links,
+        "verification_evidence": verification_evidence,
+        "release_evidence": release_link,
+        "guide_evidence": "index.md",
+        "license_evidence": (f"HUMAN-OWNED / MISSING: product.license.documentation and product.license.hardware"
+                             if not isinstance(product.get("license"), Mapping) else
+                             f"documentation: {product['license'].get('documentation')}; hardware: "
+                             f"{product['license'].get('hardware')}"),
+        "change_evidence": f"{record_link('bom.csv', hw / 'bom.csv', hw, out)}; {release_link}; {decision_links}",
+    }
+    for key, value in records.items():
+        template = template.replace("{{" + key + "}}", value)
+    return template.replace("{{requirements_evidence}}", requirements_ids)
+
+
+def make_guide(hw: Path, version: str, out: Path) -> tuple[str, dict[str, str]]:
     hw = hw.resolve()
     version_dir = LAYOUT.version_dir(hw, version)
     version_manifest = version_dir / "manifest.json"
@@ -226,9 +336,14 @@ def make_guide(hw: Path, version: str, out: Path) -> str:
 
     product = read_yaml(hw / "product.yaml", optional=True)
     assembly = read_yaml(hw / "assembly.yaml", optional=True)
+    requirements = read_yaml(hw / "requirements.yaml", optional=True)
     interfaces = read_yaml(hw / "interfaces.yaml", optional=True).get("interfaces", [])
     bom_rows = read_csv(hw / "bom.csv", optional=True)
     verification = read_csv(hw / "verification.csv", optional=True)
+    decision_paths = sorted((hw / "decisions").glob("DR-[0-9][0-9][0-9].md"))
+    manufacturing = product.get("manufacturing") if isinstance(product.get("manufacturing"), Mapping) else {}
+    processes = manufacturing.get("processes", [])
+    processes = processes if isinstance(processes, list) else []
     product_id = product.get("id")
     part_records = {path.parent.name: record for path in sorted((hw / "parts").glob("*/part.yaml"))
                     if isinstance((record := read_yaml(path, optional=True)), dict)}
@@ -258,8 +373,9 @@ def make_guide(hw: Path, version: str, out: Path) -> str:
         revision = next(iter(revisions)) if len(revisions) == 1 else None
     overview = [("Product", product_id), ("Revision", revision), ("Version", version)]
     manifest_path = release_manifest(hw, str(product_id or ""), version)
-    overview.append(("Release manifest", markdown_link(
-        f"hw/releases/{manifest_path.parent.name}/manifest.json", manifest_path, out) if manifest_path else None))
+    overview.append(("Release manifest", record_link(
+        f"hw/releases/{manifest_path.parent.name}/manifest.json", manifest_path, hw, out) if manifest_path else
+        f"MISSING: no hw/releases/<REV>/manifest.json approves {version}"))
 
     make_rows: list[tuple[Any, ...]] = []
     buy_rows: list[tuple[Any, ...]] = []
@@ -331,31 +447,62 @@ def make_guide(hw: Path, version: str, out: Path) -> str:
             ("Step", "Items", "Tool or consumable"), tool_rows or [(None, None, None)]),
         "## Assembly steps\n\n" + ("\n".join(steps) if steps else "not recorded"),
         "## Checks before use\n\n" + table(("Requirement", "Method", "Criteria", "Status", "Evidence"),
-            [(row.get("requirement_id"), row.get("method"), row.get("criteria"), row.get("result"), row.get("evidence"))
-             for row in verification] or [(None,) * 5]),
+            [(row.get("requirement_id"), row.get("method"), row.get("criteria"), row.get("result"),
+              evidence_links(row.get("evidence", ""), hw, out)) for row in verification] or
+             [("MISSING: hw/verification.csv rows", None, None, None, None)]),
+        "## Design decisions\n\n" + (", ".join(markdown_link(path.stem, path, out) for path in decision_paths)
+                                          if decision_paths else "MISSING: hw/decisions/DR-###.md"),
+        "## Manufacturing processes\n\n" + (", ".join(map(text, processes)) if processes else
+                                                 "MISSING: product.yaml manufacturing.processes"),
+        "## Reuse terms\n\n" + table(("Field", "Value"), [
+            ("Hardware license", product.get("license", {}).get("hardware") or
+             "HUMAN-OWNED / MISSING: product.license.hardware"),
+            ("Documentation license", product.get("license", {}).get("documentation") or
+             "HUMAN-OWNED / MISSING: product.license.documentation"),
+            ("Licensor", "HUMAN-OWNED / MISSING: product.licensor"),
+            ("Author", "HUMAN-OWNED / MISSING: product.author"),
+            ("Design owner", "HUMAN-OWNED / MISSING: product.design_owner"),
+        ]),
     ]
+    if not any(row.get("tools") or row.get("consumables") for row in operations):
+        sections[3] = "## Tools and consumables\n\n" + table(
+            ("Step", "Items", "Tool or consumable"),
+            [("MISSING: assembly.yaml drawing.operations[].tools / consumables", None, None)])
+    generated = {
+        "okh.toml": okh_document(hw, out, product, version, manifest_path, processes),
+        "din-spec-3105-1-checklist.md": din_document(
+            hw, out, version, manifest_path, processes, verification, decision_paths, requirements, product),
+    }
     bom_path = hw / "bom.csv"
-    return (f"# {text(product_id)} build guide\n\n"
-            f"<parts src=\"{html.escape(relative_link(bom_path, out), quote=True)}\" />\n\n"
-            + "\n\n".join(sections) + "\n")
+    guide = (f"# {text(product_id)} build guide\n\n"
+             f"<parts src=\"{html.escape(relative_link(bom_path, out), quote=True)}\" />\n\n"
+             + "\n\n".join(sections) + "\n")
+    return guide, generated
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("hw", type=Path, help="hardware design record directory (hw/)")
     parser.add_argument("--version", required=True, help="built version label, such as v3")
-    parser.add_argument("--out", required=True, type=Path, help="new output directory under .cad-work/ beside hw/")
+    parser.add_argument("--out", required=True, type=Path,
+                        help="project hw/docs/ record directory or a new .cad-work/ scratch directory")
     args = parser.parse_args(argv)
     if not re.fullmatch(r"v[1-9][0-9]*", args.version):
         parser.error("--version must be vN")
-    scratch = (args.hw / ".." / ".cad-work").resolve()
+    hw = args.hw.resolve()
+    scratch = (hw / ".." / ".cad-work").resolve()
+    docs = (hw / "docs").resolve()
     out = args.out.resolve()
-    if out == scratch or scratch not in out.parents or (out.exists() and any(out.iterdir())):
-        parser.error("--out must be a new directory under .cad-work/ beside hw/")
+    canonical_docs = out == docs
+    scratch_output = out != scratch and scratch in out.parents
+    if not (canonical_docs or scratch_output) or (out.exists() and any(out.iterdir()) and not canonical_docs):
+        parser.error("--out must be hw/docs/ or a new directory under .cad-work/ beside hw/")
     try:
-        content = make_guide(args.hw, args.version, out)
+        content, generated = make_guide(args.hw, args.version, out)
         out.mkdir(parents=True, exist_ok=True)
         (out / "index.md").write_text(content, encoding="utf-8")
+        for name, document in generated.items():
+            (out / name).write_text(document, encoding="utf-8")
     except (GuideError, OSError, ValueError, KeyError) as exc:
         print(f"build_guide.py: {exc}", file=sys.stderr)
         return 2
