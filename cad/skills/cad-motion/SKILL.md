@@ -58,14 +58,19 @@ Verify coupled motion with `pose.py` and `sweep.py`.
    With scratch geometry (`--step` or `--parts-dir`), pass `--out .cad-work/<unit>/posed.step`.
 2. Sweep: `uv run --script skill://cad-flow/scripts/run.py cad-motion/scripts/sweep.py --hw hw --version vN
    [--case ID] [--replace] [--steps 19] [--grid 3] [--min-clearance MM] [--pair-clearance REF:REF=MM]
-   [--include-pair REF:REF] [--end-effector REF] [--jobs 1|N|auto] [--cache DIR | --no-cache]`
+   [--include-pair REF:REF] [--end-effector REF] [--jobs 1|N|auto] [--cache DIR | --no-cache]
+   [--exact | --mesh-band 2 [--spot-check]]`
    → immutable `hw/motion/vN/<case>/` with `worst.step`, `worst.step.json`, and `result.json`; also reports
    collisions, clearances, `reach_envelope`, and `timings_s`. With scratch geometry, `--worst-step` must be a
    new path under `.cad-work/`.
    `--jobs 1`, the default, measures in this process on OCCT's thread pool. `--jobs N` measures
    pairs in N worker processes (forkserver; spawn on macOS), each about 110 MB; `auto` is the CPU
    count, at most 8. Workers pay off for many small parts and on a busy host. The result is the
-   same either way.
+   same either way. Workers die with the sweep, mid-measurement too. Stop a sweep by its process
+   group (Ctrl-C, or `kill -TERM -- -PGID` with PGID from `ps -o pgid= -p PID`), and before a long
+   sweep check that no earlier one still runs: `pgrep -fl multiprocessing`.
+   Fast mode is the default; see [Fast sweeps](#fast-sweeps). `--exact` measures every request that
+   could set a pair's minimum.
    Measurements persist in the pair cache, `$XDG_CACHE_HOME/cad-motion/pairs.sqlite` (else
    `~/.cache/cad-motion`; `--cache DIR` moves it), the one cad-model `check` uses. It is keyed by
    both parts' geometry, the exact placement, the measuring code, OCP version and platform, so a
@@ -99,8 +104,46 @@ Exit codes for all scripts:
 
 - 0: pass.
 - 1: a check failed. `sweep.py` reports joint-limit, collision, clearance and pair-requirement
-  findings, `pose.py` joint-limit findings, and `freecad_assembly.py` violations and residuals.
+  findings, suspect measurements and spot-check failures, `pose.py` joint-limit findings, and
+  `freecad_assembly.py` violations and residuals.
 - 2: a usage or infrastructure error, or a sweep stopped by `--time-limit`.
+
+## Fast sweeps
+
+A sweep measures a pair-pose with pose.py's `interference`, the one rule; fast mode only decides
+which pair-poses need it (pair_measure.py, mesh_bound.py).
+
+- Repeats: a revolute angle and a slider-crank angle are reduced exactly to (-180, 180] before
+  their sine and cosine, so a crank at q and q + 360 places its 360 degree train with the very same
+  bits, and a piston at -theta from TDC as at +theta. The exact measurement key then measures each
+  once, so a 720 degree four-stroke sweep measures its crank train over one turn. The key stays
+  exact: a reused value is the one a fresh measurement gives. A gear at a non-integer ratio does not
+  repeat within the sweep and gets no reuse; nothing is rounded to make it repeat.
+- Clearing: a request whose own lower bound exceeds 1e-6 mm and every threshold of its pair by
+  more than `--mesh-band` (default 2 mm) is not measured (`cleared_box`, `cleared_mesh` in
+  `timings_s`). The bound is the posed box gap, else the mesh bound: each part tessellated once
+  (0.02 mm linear, 0.2 rad angular deflection) into a python-fcl BVH, the BVH distance minus each
+  part's deviation, 2 x the linear deflection plus its largest tolerance. BRepMesh holds its edge
+  midpoints within the deflection, and a triangle's gap to a second-order surface is at most 4/3 of
+  its largest midpoint gap; tests/fixtures/mesh_probe.py samples every fixture face and finds the
+  gap below half the deflection. The bound is kept only where no vertex of one part can lie inside
+  a solid of the other (one vertex per shell classified), so a pin in a block's void keeps it and
+  a buried pin does not. What is cleared depends on each request alone, so `--jobs` and a cold or
+  warm cache report the same JSON.
+- Reporting: every measured value is exact. A pair whose minimum may lie at a cleared request is a
+  bounded row: `method` "mesh" or "box", `clearance_mm` the proved lower bound, `bound_mm`
+  [lower, upper] (upper null when only the box gap is known). Collisions, findings, verdicts,
+  `pair_clearance` rows within the band, the worst case whenever its margin is within the band, and
+  every `method: "exact"` row equal `--exact`'s; bounded rows do not, by design.
+- Suspects: a measurement outside its own bounds (the kernel or a bound is wrong; BRepExtrema has
+  read 0 mm for parts 8 mm apart) goes to `suspect_measurements` with two re-measurements 0.01 mm
+  either way and fails the sweep until dispositioned; it is never dropped and never trusted silently.
+  `--exact` runs no such check.
+- `--spot-check` measures, per pair with a mesh-cleared request, the one of the smallest bound
+  exactly: inside its bounds, without overlap, or the sweep fails (`spot_check`).
+- Without python-fcl (no wheel for the platform), the box gap alone clears and `broad_phase.mesh`
+  says why; `--exact` never imports numpy or python-fcl. cad-model `check` stays exact: it reports
+  every pair's distance.
 
 ## Motion render
 

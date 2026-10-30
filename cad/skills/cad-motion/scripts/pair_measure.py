@@ -19,16 +19,32 @@ minus the farthest any corner of b's box moves between the two placements (a rig
 displacement is affine in the point, so its maximum over the box is at a corner, and distance is
 1-Lipschitz). The group minimum only decreases, so a skip stays valid in any measuring order.
 Requests are measured best first: each group's smallest box gap first, the groups in turn, so a
-group's minimum is usually its first measurement.
+group's minimum is usually its first measurement. With more than one worker, the groups of the
+costliest definitions (face-count product) start first, so they do not trail the run.
+
+Fast mode (`band`, with `prune`; sweep's default, `--exact` turns it off) answers a grouped request
+`Cleared`, unmeasured, when its own lower bound exceeds OVERLAP_GATE_MM and each of its thresholds
+by more than the band: the box gap, or the conservative mesh bound of `mesh_bound.py` where the
+gap does not suffice. That bound and its pair, an upper bound, depend on the request alone, so
+what is cleared, and every value a reduction takes from it, is the same in any measuring order.
+Every request is classified before anything else answers it, a measurement from the cache or from
+another request's included, so a cold and a warm cache agree too. Every measured value is still
+the exact one; a cleared request reads as (inf, 0) and carries its (lower, upper) bounds for a
+reduction that reports them. Each measurement is also checked against its own bounds: outside
+them by more than SLACK_MM, the kernel or a bound is wrong, so it is a `Suspect`, still answering
+its requests, re-measured at b moved REEVALUATE_MM both ways; the caller must report it.
 
 With a `PairCache`, measurements persist across runs and tools in SQLite, keyed by content: the
 two definitions' BRep bytes, the placement's bits and a salt naming the measuring code, kernel and
 platform (`measurement_salt`). A hit is the value the measurement returns, so the cache is on by
-default; an edit to a part, the rule or the kernel only makes old entries unreachable.
+default; an edit to a part, the rule or the kernel only makes old entries unreachable. It is
+written every CACHE_BATCH measurements, so a stopped run resumes from what it measured.
 
-`measure` returns one outcome per request, in request order: `(distance, volume)`, `Pruned`, a
-`Failure` (the kernel raised; its message), or None when the deadline stopped the run first.
-Stdlib only; OCP is imported when a shape is touched.
+Workers die with the measuring process (`die_with`), inside a measurement too.
+
+`measure` returns one outcome per request, in request order: `(distance, volume)`, `Pruned`,
+`Cleared`, a `Failure` (the kernel raised; its message), or None when the deadline stopped the run
+first. Stdlib only; OCP is imported when a shape is touched, numpy and python-fcl by `mesh_bound.py`.
 """
 
 from __future__ import annotations
@@ -71,6 +87,7 @@ pose = sys.modules.get("cad_motion_pose") or _load("cad_motion_pose", Path(__fil
 
 SLACK_MM = 1e-6  # under every lower bound: 10x the kernel's confusion tolerance, for rounding in the bounds
 MOTION_WINDOW = 6  # a known distance bounds the requests this many places either side in its group
+REEVALUATE_MM = 0.01  # how far a suspect's re-evaluations move b, both ways: half the default deflection
 # Bump when what a measurement returns changes in a way the salt's sources and versions do not show.
 MEASUREMENT_VERSION = 1
 CACHE_MAX_BYTES = 256 * 2**20  # past this the oldest entries go, down to CACHE_TRIM_TO of it
@@ -107,12 +124,40 @@ class Pruned:
     witness: int
 
 
-Outcome = tuple[float, float] | Pruned | Failure
+@dataclass(frozen=True)
+class Cleared:
+    """Fast mode: a request whose own lower bound on its distance, `lower` (`by`: "box", the box
+    gap, or "mesh", the mesh bound), exceeds OVERLAP_GATE_MM and each of its thresholds by more
+    than the band: it has no overlap and no threshold is near, so it is not measured. `upper` bounds
+    the distance from above (inf when only the box gap is known)."""
+
+    lower: float
+    upper: float
+    by: str
 
 
-def reading(outcome: tuple[float, float] | Pruned) -> tuple[float, float]:
-    """(distance, volume) as a reduction reads it: a pruned request is infinitely far, without overlap."""
-    return (math.inf, 0.0) if isinstance(outcome, Pruned) else outcome
+@dataclass
+class Suspect:
+    """Fast mode: a measurement outside the interval its own bounds prove, [`lower`, `upper`]: the
+    kernel's (distance, volume), the requests it answered (it still answers them), and its
+    re-evaluations, (shift mm, outcome) with b moved that far along +-(1, 1, 1)/sqrt(3), each
+    within the shift of the true distance where the kernel holds."""
+
+    requests: tuple[int, ...]
+    distance: float
+    volume: float
+    lower: float
+    upper: float
+    reevaluated: list[tuple[float, tuple[float, float] | Failure]]
+
+
+Outcome = tuple[float, float] | Pruned | Cleared | Failure
+
+
+def reading(outcome: tuple[float, float] | Pruned | Cleared) -> tuple[float, float]:
+    """(distance, volume) as a reduction reads it: a pruned or cleared request is infinitely far,
+    without overlap."""
+    return (math.inf, 0.0) if isinstance(outcome, (Pruned, Cleared)) else outcome
 
 
 class PairMeasurer:
@@ -120,15 +165,23 @@ class PairMeasurer:
     `jobs` > 1, in that many worker processes (`start_method`: forkserver, spawn on macOS and
     Windows; never fork). With `threads`, a measurement in this process searches on OCCT's thread
     pool; workers never do, as `jobs` of them already fill the cores. With `cache`, a request is
-    first looked up there, and this process alone writes each new measurement to it."""
+    first looked up there, and this process alone writes each new measurement to it.
+
+    With `band` (mm, fast mode; None: exact) a pruned `measure` clears every grouped request whose
+    own lower bound exceeds its gate and thresholds by more than `band`, and checks each
+    measurement against its own bounds (`suspects`). `mesh` (mesh_bound.MeshBounds, or None: the
+    box gap alone) supplies the mesh bounds."""
 
     def __init__(self, shapes: Mapping[str, Any], jobs: int = 1, start_method: str | None = None,
-                 threads: bool = True, cache: PairCache | None = None) -> None:
+                 threads: bool = True, cache: PairCache | None = None, band: float | None = None,
+                 mesh: Any = None) -> None:
         self.shapes = dict(shapes)
         self.jobs = jobs
         self.start_method = start_method or _default_start_method()
         self.threads = threads
         self.cache = cache
+        self.band = band
+        self.mesh = mesh
         self.identities: dict[str, bytes] = {}  # definition key -> sha256 of its BRep bytes
         self.faces: dict[str, int] = {}  # definition key -> face count
         # The corners of each definition's bounding box, enlarged by its shape tolerances: the box
@@ -140,11 +193,15 @@ class PairMeasurer:
         self.reused = 0  # requests answered by a measurement taken for an earlier request
         self.pruned = 0  # requests the broad phase answered without a measurement
         self.disk_hits = 0  # measurements read from the cache
+        self.cleared = {"box": 0, "mesh": 0}  # fast mode: requests cleared, by what
+        self.reevaluations = 0  # fast mode: kernel measurements of suspects' moved placements
+        self.suspects: list[Suspect] = []  # fast mode: the last `measure` call's
 
     def measure(self, requests: Sequence[Request], deadline: float = math.inf, stop_on_failure: bool = False,
                 prune: bool = False) -> list[Outcome | None]:
         """One outcome per request, in request order; None for the requests the deadline left
         unanswered, and for those still open after a failure when `stop_on_failure`."""
+        self.suspects = []
         run = _Run(self, requests, prune)
         executor = (_InProcess(self.shapes, self.threads) if self.jobs <= 1
                     else _Workers(self.shapes, self.jobs, self.start_method))
@@ -211,6 +268,15 @@ class _Run:
         self.queues: dict[Hashable, list[tuple[float, int]]] = defaultdict(list)  # open requests per group
         self.order: list[Hashable] = []
         self.turn = 0
+        # Fast mode (the measurer's `band`, with prune): a request whose own lower bound clears its cap
+        # is answered Cleared, and every request is classified so before anything else answers it.
+        self.band = measurer.band if prune else None
+        self.bound: dict[int, tuple[float, float, str]] = {}  # unit -> its own (lower, upper, "box" | "mesh")
+        self.near: set[int] = set()  # requests fast mode found within their cap
+        self.ahead = 0  # the next request fast mode classifies while the workers measure
+        self.extra: deque[tuple[int, Task]] = deque()  # suspects' re-evaluations waiting for a worker
+        self.extra_of: dict[int, tuple[Suspect, float]] = {}  # task id beyond the units -> (suspect, shift)
+        self.next_id = len(self.unit_request)
 
     # -- answers -------------------------------------------------------------------------------
 
@@ -226,7 +292,8 @@ class _Run:
         return self.gaps[unit]
 
     def lower(self, unit: int) -> float:
-        return max(self.gap(unit), self.motion.get(unit, -math.inf))
+        own = self.bound[unit][0] if unit in self.bound else self.gap(unit)
+        return max(own, self.motion.get(unit, -math.inf))
 
     def settle(self, index: int, outcome: Outcome) -> None:
         self.outcomes[index] = outcome
@@ -243,9 +310,62 @@ class _Run:
             return False
         return self.lower(self.unit_of[index]) - SLACK_MM > max(floor[0], pose.OVERLAP_GATE_MM, *request.thresholds)
 
+    def cap(self, index: int) -> float:
+        """Fast mode: the distance beyond which a request is cleared, its gate or largest threshold
+        plus the band."""
+        return max((pose.OVERLAP_GATE_MM, *self.requests[index].thresholds)) + self.band
+
+    def own_bound(self, unit: int) -> tuple[float, float, str]:
+        """The unit's own (lower, upper) bounds on its distance and what proved the lower: the box
+        gap, raised by the mesh bound where the gap leaves a grouped request of the unit within its
+        cap. Both depend on the unit alone, never on what was measured first, so a fast run clears
+        the same requests in any order."""
+        if unit not in self.bound:
+            best = (self.gap(unit), math.inf, "box")
+            mesh = self.measurer.mesh
+            if mesh is not None and any(best[0] - SLACK_MM <= self.cap(index) for index in self.own[unit]
+                                        if self.requests[index].group is not None):
+                request = self.requests[self.unit_request[unit]]
+                lower, upper = mesh.interval(request.a, request.b, request.placement)
+                best = (lower, upper, "mesh") if lower > best[0] else (best[0], upper, "box")
+            self.bound[unit] = best
+        return self.bound[unit]
+
+    def clear(self, index: int) -> bool:
+        """Fast mode: answer the open request `index` Cleared when its unit's own lower bound
+        exceeds its cap by SLACK_MM; whether it did."""
+        if self.band is None or self.requests[index].group is None or index in self.near:
+            return False
+        lower, upper, by = self.own_bound(self.unit_of[index])
+        if lower - SLACK_MM > self.cap(index):
+            self.measurer.cleared[by] += 1
+            self.settle(index, Cleared(lower, upper, by))
+            return True
+        self.near.add(index)
+        return False
+
+    def check(self, unit: int, outcome: tuple[float, float]) -> None:
+        """Fast mode: a measurement outside its unit's own bounds by more than SLACK_MM is a
+        Suspect; queue its re-evaluations at b moved by +-REEVALUATE_MM."""
+        if unit not in self.bound:
+            return
+        lower, upper, _ = self.bound[unit]
+        if lower - SLACK_MM <= outcome[0] <= upper + SLACK_MM:
+            return
+        suspect = Suspect(tuple(self.own[unit]), outcome[0], outcome[1], lower, upper, [])
+        self.measurer.suspects.append(suspect)
+        request = self.requests[self.unit_request[unit]]
+        for shift in (REEVALUATE_MM, -REEVALUATE_MM):
+            step = shift / math.sqrt(3.0)
+            trans = tuple(value + step for value in request.placement.trans)
+            self.extra_of[self.next_id] = (suspect, shift)
+            self.extra.append((self.next_id, (request.a, request.b, (request.placement.rot, trans), 0.0)))
+            self.next_id += 1
+
     def prune_group(self, group: Hashable) -> None:
         for index in self.members[group]:
-            if self.outcomes[index] is None and self.unit_of[index] not in self.inflight and self.prunable(index):
+            if self.outcomes[index] is None and self.unit_of[index] not in self.inflight \
+                    and not self.clear(index) and self.prunable(index):
                 self.measurer.pruned += 1
                 self.settle(index, Pruned(self.floor[group][1]))
 
@@ -253,11 +373,13 @@ class _Run:
         """A unit's outcome is known: answer its open requests, bound their group neighbours."""
         self.known[unit] = outcome
         for index in self.own[unit]:
-            if self.outcomes[index] is None:
+            if self.outcomes[index] is None and not self.clear(index):
                 if unit in self.answering:
                     self.measurer.reused += 1
                 self.answering.add(unit)
                 self.settle(index, outcome)
+        if self.band is not None and isinstance(outcome, tuple):
+            self.check(unit, outcome)
         if self.prune and isinstance(outcome, tuple):
             for index in self.own[unit]:
                 group = self.requests[index].group
@@ -296,6 +418,8 @@ class _Run:
                 unit = self.unit_of[index]
                 if self.outcomes[index] is not None or unit in self.inflight:
                     continue
+                if self.clear(index):
+                    continue
                 if self.prune and self.prunable(index):
                     self.measurer.pruned += 1
                     self.settle(index, Pruned(self.floor[self.requests[index].group][1]))
@@ -319,8 +443,16 @@ class _Run:
             if self.outcomes[index] is None:
                 self.queue(index)
         self.order = list(self.queues)
+        if self.prune and self.measurer.jobs > 1:  # the costliest groups start first, shortening the tail
+            self.order.sort(key=lambda group: -self.measurer.work(self.requests[self.queues[group][0][1]]))
         while True:
             while len(self.inflight) < executor.capacity and time.monotonic() <= deadline:
+                if self.extra:
+                    task_id, task = self.extra.popleft()
+                    self.inflight.add(task_id)
+                    self.measurer.reevaluations += 1
+                    executor.submit(task_id, task)
+                    continue
                 unit = self.next_unit()
                 if unit is None:
                     break
@@ -331,8 +463,14 @@ class _Run:
                                        self.gap(unit)))
             if not self.inflight:
                 return
+            if self.band is not None:
+                self.classify_ahead(executor)
             unit, outcome = executor.next()
             self.inflight.discard(unit)
+            if unit in self.extra_of:
+                suspect, shift = self.extra_of.pop(unit)
+                suspect.reevaluated.append((shift, outcome))
+                continue
             if cache is not None and isinstance(outcome, tuple):
                 cache.store(keys[unit], outcome)
             self.learn(unit, outcome)
@@ -343,6 +481,15 @@ class _Run:
                     if group in self.floor:
                         self.prune_group(group)
             self.touched.clear()
+
+    def classify_ahead(self, executor: _InProcess | _Workers) -> None:
+        """Fast mode, while the workers measure: classify open requests in request order, the
+        parent's share of the work, until a measurement is ready."""
+        while self.ahead < len(self.requests) and not executor.ready():
+            index = self.ahead
+            self.ahead += 1
+            if self.outcomes[index] is None and self.unit_of[index] not in self.inflight:
+                self.clear(index)
 
 
 Task = tuple[str, str, Any, float]  # (a, b, b's placement rows, box gap)
@@ -377,6 +524,9 @@ class _InProcess:
     def next(self) -> tuple[int, tuple[float, float] | Failure]:
         return self.done.popleft()
 
+    def ready(self) -> bool:
+        return bool(self.done)
+
     def close(self) -> None:
         pass
 
@@ -390,19 +540,73 @@ if "cad_motion_pair_measure" not in sys.modules:
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
-sys.modules["cad_motion_pair_measure"]._start_worker(blobs)
+sys.modules["cad_motion_pair_measure"]._start_worker(blobs, parent)
 """
 _WORKER_SHAPES: dict[str, Any] = {}
+# The watchdog of a worker where the kernel offers no parent-death signal: kqueue reports the exit
+# of the measuring process or of the worker, whichever is first; the first kills the worker.
+_WATCHDOG = """
+import os, select, signal, sys
+parent, worker = int(sys.argv[1]), int(sys.argv[2])
+queue = select.kqueue()
+try:
+    for pid in (worker, parent):
+        queue.control([select.kevent(pid, select.KQ_FILTER_PROC, select.KQ_EV_ADD | select.KQ_EV_ONESHOT,
+                                     select.KQ_NOTE_EXIT)], 0)
+    ended = queue.control(None, 1)[0].ident
+except ProcessLookupError:
+    ended = parent
+if ended == parent:
+    try:
+        os.kill(worker, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+"""
 
 
-def _start_worker(blobs: Mapping[str, bytes]) -> None:
+def _start_worker(blobs: Mapping[str, bytes], parent: int) -> None:
     from OCP.BinTools import BinTools
     from OCP.TopoDS import TopoDS_Shape
 
+    die_with(parent)
     for key, blob in blobs.items():
         shape = TopoDS_Shape()
         BinTools.Read_s(shape, io.BytesIO(blob))
         _WORKER_SHAPES[key] = shape
+
+
+def die_with(parent: int) -> None:
+    """End this process when process `parent` ends, even inside a measurement, so a stopped or
+    killed sweep leaves no worker measuring on. On Linux the kernel sends SIGTERM when this
+    process's parent exits (prctl PR_SET_PDEATHSIG): `parent` itself, or the forkserver that
+    forked it, which exits with `parent`; a parent already gone ends it at once. On macOS and the
+    BSDs a watchdog process (`_WATCHDOG`) waits on kqueue for either exit and kills this process
+    with SIGKILL. Not a thread: an OCCT call may hold the interpreter lock for its whole run.
+    Elsewhere (Windows) nothing is armed."""
+    if sys.platform.startswith("linux"):
+        import ctypes
+        import signal
+
+        libc = ctypes.CDLL(None, use_errno=True)
+        if libc.prctl(1, signal.SIGTERM, 0, 0, 0) != 0:  # 1: PR_SET_PDEATHSIG
+            raise OSError(ctypes.get_errno(), "prctl(PR_SET_PDEATHSIG) failed")
+        if not _alive(parent):
+            os._exit(1)
+    elif hasattr(__import__("select"), "kqueue"):
+        import subprocess
+
+        subprocess.Popen([sys.executable, "-c", _WATCHDOG, str(parent), str(os.getpid())],
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:  # another user's process now holds the id
+        return True
+    return True
 
 
 def _work(task: Task) -> tuple[float, float] | str:
@@ -424,7 +628,8 @@ class _Workers:
             blobs = {key: shape_bytes(shape) for key, shape in self.shapes.items()}
             self.pool = concurrent.futures.ProcessPoolExecutor(
                 self.jobs, mp_context=multiprocessing.get_context(self.start_method), initializer=exec,
-                initargs=(_WORKER_START, {"path": str(Path(__file__).resolve()), "blobs": blobs}))
+                initargs=(_WORKER_START, {"path": str(Path(__file__).resolve()), "blobs": blobs,
+                                          "parent": os.getpid()}))
         self.pending[self.pool.submit(_work, task)] = unit
 
     def next(self) -> tuple[int, tuple[float, float] | Failure]:
@@ -435,6 +640,10 @@ class _Workers:
             return unit, _outcome(future.result())
         except concurrent.futures.process.BrokenProcessPool as error:
             raise pose.MotionError(f"a pair measuring worker process died: {error}") from error
+
+    def ready(self) -> bool:
+        """Whether a measurement is done, so `next` returns without waiting."""
+        return any(future.done() for future in self.pending)
 
     def close(self) -> None:
         if self.pool is not None:

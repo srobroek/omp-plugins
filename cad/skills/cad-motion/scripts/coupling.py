@@ -6,7 +6,8 @@ record through `parse`, and pose.py's `Chain.complete` derives every dependent c
 
 Record (hw/assembly.yaml). An independent movable joint authors `nominal`; a dependent one authors
 `coupling` instead, and no `nominal`. Every movable joint keeps `min` and `max`; the limits apply to
-derived coordinates too. Coordinates are unwrapped: a 720 degree crank is never reduced to 0..360.
+derived coordinates too. Coordinates are unwrapped: a 720 degree crank is never reduced to 0..360;
+only the argument of a trigonometric function is, exactly, by `canonical_degrees`.
 
     joints:
       - {id: J-031, type: revolute, ..., coupling: {type: linear, driver: J-011, ratio: 0.5, offset: 0}}
@@ -63,6 +64,19 @@ class CouplingError(ValueError):
         self.problems = list(problems)
 
 
+def canonical_degrees(angle: float) -> float:
+    """`angle` reduced to (-180, 180] exactly: one representative per rotation, -0.0 read as 0.0.
+
+    IEEE remainder is exact, so angles a whole number of turns apart, each exactly representable,
+    reduce to the very same double, and every trigonometric function of them returns the same bits:
+    a crank at q and q + 360 places its 360 degree periodic train identically, which an exact
+    measurement key then finds. As cosine is even and sine odd in every libm we use, a slider-crank
+    at -theta also displaces its piston by the bits it does at theta.
+    """
+    reduced = math.remainder(angle, 360.0) + 0.0
+    return 180.0 if reduced == -180.0 else reduced
+
+
 @dataclass(frozen=True)
 class Profile:
     """A periodic, piecewise-linear table: output at (input mod period)."""
@@ -107,7 +121,7 @@ class SliderCrank:
         return _cross(self.crank_axis, self.bank_axis)
 
     def theta(self, q: float) -> float:
-        return math.radians(q + self.phase)
+        return math.radians(canonical_degrees(q + self.phase))
 
     def _h(self, theta: float) -> float:
         return math.sqrt(self.length ** 2 - (self.radius * math.sin(theta)) ** 2)
