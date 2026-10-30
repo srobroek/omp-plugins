@@ -162,7 +162,9 @@ def main(argv: list[str] | None = None) -> int:
 
                 cache_dir = None if args.no_cache else (args.cache or load_pair_measure().default_cache_dir(args.hw.resolve()))
                 build.version_dir(args.hw, args.label)  # no run record in a folder that holds no such version
-                with lifecycle.claim_run(args.hw, "static"):
+                selection = (f"changed-pairs since {args.since_version or 'previous'}" if args.changed_only
+                             else "named-pairs" if args.pair else "all-pairs")
+                with lifecycle.claim_run(args.hw, "static", scope=f"{args.label} {selection}"):
                     code, result = check(args.hw, args.label, args.pair, args.allow_interference,
                                          dict(args.expect_solids), cache_dir, args.jobs, exact=args.exact,
                                          changed_only=args.changed_only, since=args.since_version)

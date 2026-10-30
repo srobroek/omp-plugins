@@ -181,10 +181,10 @@ class RunRecordTests(Case):
         path.write_text(json.dumps({**record, **fields}), encoding="utf-8")
         return path
 
-    def holder(self, kind: str) -> subprocess.Popen:
-        """Another process holding a `kind` claim on self.hw."""
-        code = LOAD + f"guard = lifecycle.claim_run({str(self.hw)!r}, {kind!r})\nprint('claimed', flush=True)\n" \
-                      "import time; time.sleep(600)\n"
+    def holder(self, kind: str, scope: str = "") -> subprocess.Popen:
+        """Another process holding a `kind` claim on self.hw for `scope`."""
+        code = LOAD + f"guard = lifecycle.claim_run({str(self.hw)!r}, {kind!r}, scope={scope!r})\n" \
+                      "print('claimed', flush=True)\nimport time; time.sleep(600)\n"
         process = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, text=True)
         self.addCleanup(lambda: (process.kill(), process.wait(), process.stdout.close()))
         self.assertEqual(process.stdout.readline().strip(), "claimed")
@@ -215,18 +215,22 @@ class RunRecordTests(Case):
         self.assert_gone(child, grandchild)
         self.assertFalse(guard.path.exists())
 
-    def test_a_live_prior_run_refuses_its_kind_and_allows_another(self) -> None:
-        holder = self.holder("static")
+    def test_a_live_run_refuses_its_own_identity_and_allows_every_other(self) -> None:
+        holder = self.holder("static", "v3 all-pairs")
         with self.assertRaises(lifecycle.RunRefused) as raised:
-            lifecycle.claim_run(self.hw, "static")
+            lifecycle.claim_run(self.hw, "static", scope="v3 all-pairs")
         [stray] = raised.exception.strays
-        self.assertEqual((stray.state, stray.kind, stray.pid), ("running", "static", holder.pid))
-        self.assertIn(f"kill -TERM {holder.pid}", str(raised.exception))
-        with lifecycle.claim_run(self.hw, "fea") as other:
-            self.assertEqual([s.pid for s in other.concurrent], [holder.pid])
+        self.assertEqual((stray.state, stray.kind, stray.scope, stray.pid), ("running", "static", "v3 all-pairs", holder.pid))
+        self.assertIn(f"a static run of v3 all-pairs still runs as process {holder.pid}; stop it with `kill -TERM {holder.pid}`",
+                      str(raised.exception))
+        for kind, scope in (("static", "v4 all-pairs"), ("static", "v3 changed-pairs since previous"), ("fea", "v3 all-pairs")):
+            with self.subTest(kind=kind, scope=scope), lifecycle.claim_run(self.hw, kind, scope=scope) as other:
+                self.assertEqual([s.pid for s in other.concurrent], [holder.pid])
+        listed = lifecycle.strays(self.hw)
+        self.assertEqual([(s.state, s.scope) for s in listed], [("running", "v3 all-pairs")])
         holder.kill()
         holder.wait()
-        with lifecycle.claim_run(self.hw, "static") as guard:  # the killed holder's record is stale
+        with lifecycle.claim_run(self.hw, "static", scope="v3 all-pairs") as guard:  # the killed holder's record is stale
             self.assertEqual(list(lifecycle.runs_dir(self.hw).glob("*.json")), [guard.path])
         self.assertEqual(list(lifecycle.runs_dir(self.hw).glob("*.json")), [])
 

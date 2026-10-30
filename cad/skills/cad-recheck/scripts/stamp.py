@@ -141,11 +141,21 @@ def load_checks(path: Path) -> Any:
         raise RuntimeError(f"cannot read checks JSON {path}: {error}") from error
 
 
+def require_complete(checks: Any, path: Path) -> None:
+    """Refuse a partial check result, such as cad-model `check --changed-only` (`scope.complete: false`)."""
+    scope = checks.get("scope") if isinstance(checks, dict) else None
+    if isinstance(scope, dict) and scope.get("complete") is False:
+        raise RuntimeError(f"{path} is a partial check ({scope.get('kind', 'partial')} scope, complete: false); "
+                           "run the full check (cad_model.py check vN without --changed-only, --since-version or --pair) "
+                           "and stamp that result")
+
+
 def record(stage: str, checks_path: Path, passed: bool, root: Path) -> dict[str, Any]:
     if stage not in validate.stages():
         raise RuntimeError(f"unknown stage {stage!r}; expected one of: {', '.join(validate.stages())}")
     require_clean_layout(root, staged_product(root, stage))
     checks = load_checks(checks_path)
+    require_complete(checks, checks_path)
     return {
         "tree_hash": staged_tree_hash(root),
         "stage": stage,

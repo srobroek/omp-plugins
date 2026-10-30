@@ -920,16 +920,23 @@ class CheckPairCacheTests(unittest.TestCase):
         self.assertEqual((proc.returncode, result), (2, {}))
         self.assertIn("v9", proc.stderr)
 
-    def test_a_check_refuses_while_another_check_runs(self) -> None:
+    def test_a_check_refuses_while_the_same_check_runs_and_runs_beside_another(self) -> None:
         code = (f"import importlib.util, sys, time\nspec = importlib.util.spec_from_file_location('l', {str(LIFECYCLE_SCRIPT)!r})\n"
                 "module = importlib.util.module_from_spec(spec)\nsys.modules['l'] = module\nspec.loader.exec_module(module)\n"
-                f"module.claim_run({str(self.hw)!r}, 'static')\nprint('claimed', flush=True)\ntime.sleep(600)\n")
+                f"module.claim_run({str(self.hw)!r}, 'static', scope='v1 all-pairs')\nprint('claimed', flush=True)\n"
+                "time.sleep(600)\n")
         holder = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, text=True)
         self.addCleanup(lambda: (holder.kill(), holder.wait(), holder.stdout.close()))
         self.assertEqual(holder.stdout.readline().strip(), "claimed")
         proc, result, _ = cli("check", "v1", "--hw", str(self.hw), "--no-cache")
         self.assertEqual((proc.returncode, result), (2, {}))
-        self.assertIn(f"a static run still runs as process {holder.pid}; stop it with `kill -TERM {holder.pid}`", proc.stderr)
+        self.assertIn(f"a static run of v1 all-pairs still runs as process {holder.pid}; stop it with "
+                      f"`kill -TERM {holder.pid}`", proc.stderr)
+        for args in (("v2",), ("v1", "--changed-only")):  # another version, another selection: run side by side
+            with self.subTest(args=args):
+                proc, result, _ = cli("check", *args, "--hw", str(self.hw), "--no-cache")
+                self.assertIn(proc.returncode, (0, 1), proc.stderr[-2000:])
+                self.assertEqual(result["label"], args[0])
 
     def test_killing_a_check_outright_leaves_no_worker_running(self) -> None:
         check = subprocess.Popen(["uv", "run", "--quiet", "--script", str(CLI), "check", "v1", "--hw", str(self.hw),
