@@ -570,7 +570,7 @@ async function saveScreenshot() {
   try {
     const capture = {
       scene: state.file,
-      scene_sha256: await (await fetch(`/scenes/${encodeURIComponent(state.file)}`, { cache: "no-store" }))
+      scene_sha256: await fetch(`/scenes/${encodeURIComponent(state.file)}`, { cache: "no-store" })
         .then((response) => response.arrayBuffer())
         .then((bytes) => crypto.subtle.digest("SHA-256", bytes))
         .then((digest) => Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("")),
