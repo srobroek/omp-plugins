@@ -23,7 +23,8 @@ TRIGGER
    `safe_intersect`). Add `drawing_features(params, shape)` for a part that needs a production
    drawing. Add `build_manufacture(params)`, declared in part.yaml `manufacture`, for a part made in
    another state than it is installed in, such as a strap printed flat. LOAD references/contract.md
-   when writing or reviewing a model.py.
+   when writing or reviewing a model.py. For a cosmetic round that may fail (`StdFail_NotDone`),
+   use the [Fillet fallback](references/fillets.md) helper.
 2. Build: `uv run --script skill://cad-flow/scripts/run.py cad-model/scripts/cad_model.py run hw --label vN [--kernel auto]`
    → `hw/versions/vN/` and `hw/versions/latest.json`; JSON summary on stdout. `auto` runs each
    part in its declared kernel's own uv environment; `cadquery` or `build123d` additionally
