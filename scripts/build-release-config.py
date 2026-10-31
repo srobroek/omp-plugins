@@ -64,6 +64,7 @@ def build() -> tuple[str, str]:
                 {"type": "json", "path": "package.json", "jsonpath": "$.version"},
             ],
         }
+        | ({"bump-minor-pre-major": True} if name == "cad" else {})
         for name in versions
     }
     config = json.dumps({**BASE, "packages": packages}, indent=2) + "\n"
