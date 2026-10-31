@@ -1,32 +1,42 @@
 #!/usr/bin/env -S uv run --script
 # /// script
+# requires-python = ">=3.11"
 # dependencies = ["jsonschema>=4.23", "pyyaml>=6.0"]
 # ///
 """Seal a release package of the frozen version: byte copies and a v2 manifest under hw/releases/<REV>/.
 
     uv run --script release.py HW --rev A --version v3 --decision DR-007
-
+    uv run --script release.py HW --rev A --version v3 --decision DR-007 --prune
+    uv run --script release.py HW --rev A --version v3 --decision DR-007 --prune --yes DIGEST
 The frozen version (product.yaml flow.frozen) defines what a release holds; release.py copies and
 never builds. It refuses the release when any of these fails, and then writes nothing outside
 .cad-work/:
 
 - the frozen anchor, the approving decision, and a revision that is not yet used;
 - validate.py on the current record, and the current record against the frozen snapshot;
+- a build_guide.py okh.toml in hw/docs/ that describes another release;
 - the manufacturing outputs of every custom-made part;
 - the drawings, the analysis cases and the verification evidence, each a sealed bundle of that version;
 - bom.csv quantities against the frozen assembly.
 
 It stages the copies in .cad-work/release-<REV>/, writes and checks the manifest, then claims
-hw/releases/<REV>/ and renames the stage onto it. Prints JSON: exit 0 released, 1 refused, 2 usage
-or infrastructure error.
+hw/releases/<REV>/ and renames the stage onto it.
+
+--prune, once the package is sealed, prints the plan of superseded versions to remove (prune.py) with
+its digest and changes nothing; when hw/releases/<REV>/ already verifies and holds this version and
+decision, it skips sealing. --prune --yes DIGEST applies that plan when a fresh plan has the same
+digest, or finishes an interrupted prune that DIGEST started.
+
+Prints JSON, its `status` last: exit 0 released (a plan printed or applied), 1 refused, prune_refused
+or prune_incomplete, 2 usage or infrastructure error.
 """
 
 from __future__ import annotations
 
 import argparse
 import hashlib
-import importlib.util
 import json
+import importlib.util
 import os
 import posixpath
 import re
@@ -53,6 +63,8 @@ def _load_module(name: str, path: Path) -> Any:
 
 validate = _load_module("cad_record_validate", Path(__file__).resolve().parent / "validate.py")
 layout = validate.layout
+prune = _load_module("cad_record_prune", Path(__file__).resolve().parent / "prune.py")
+generated_docs = _load_module("cad_record_generated_docs", Path(__file__).resolve().parent / "generated_docs.py")
 
 MANIFEST = layout.MANIFEST
 SCHEMA_VERSION = 2
@@ -82,6 +94,8 @@ class Release:
     bundles: list[dict[str, str]] = field(default_factory=list)
     checks: dict[str, str] = field(default_factory=dict)
     considered: set[str] = field(default_factory=set)  # bundle paths already selected or refused
+    # the release time, fixed once: the manifest records it and a generated okh.toml must name its date
+    released_at: str = ""
 
     def refuse(self, path: str, code: str, message: str) -> None:
         self.findings.append(validate.finding(path, message, code=f"release.{code}"))
@@ -290,12 +304,34 @@ def check_bom(release: Release, rows: list[dict[str, str]], quantities: dict[str
     release.checks["bom"] = "pass"
 
 
-def assemble(hw: Path, rev: str, version: str, decision: str) -> tuple[Release, dict[str, Any] | None]:
-    """Every check and the copy list, without writing anything. LayoutError for a malformed argument."""
+def check_docs(release: Release) -> None:
+    """A build_guide.py okh.toml in hw/docs/ describes this release, since the package copies it: the
+    frozen version, this revision and the release date. A hand-written okh.toml is the author's."""
+    rel = "hw/docs/okh.toml"
+    try:
+        fields = generated_docs.okh_release(release.hw / "docs" / "okh.toml")
+    except ValueError as error:
+        release.refuse(rel, "docs", f"{rel} cannot be read: {error}")
+        return
+    expected = {"version": release.version, "release": release.rev, "release_date": release.released_at[:10]}
+    if fields is not None and fields != expected:
+        release.refuse(rel, "docs", f"{rel} describes release {fields['release']!r} of {fields['version']!r} dated "
+                                    f"{fields['release_date']!r}, not release {release.rev} of {release.version} "
+                                    f"dated {expected['release_date']}; regenerate it with build_guide.py hw --version "
+                                    f"{release.version} --rev {release.rev} --date {expected['release_date']} "
+                                    "--out hw/docs")
+    release.checks["docs"] = "pass"
+
+
+def assemble(hw: Path, rev: str, version: str, decision: str,
+             now: datetime | None = None) -> tuple[Release, dict[str, Any] | None]:
+    """Every check and the copy list, without writing anything, for a release at `now` (the current UTC
+    time when None). LayoutError for a malformed argument."""
     target_rel = layout.load().path("release.package", {"REV": rev})
     layout.version_dir(hw, version)
     decision_path = layout.resolve(hw, "record.decision", DR=decision)
-    release = Release(hw, rev, version, decision, target_rel)
+    moment = datetime.now(timezone.utc) if now is None else now.astimezone(timezone.utc)
+    release = Release(hw, rev, version, decision, target_rel, released_at=moment.strftime("%Y-%m-%dT%H:%M:%SZ"))
     if os.path.lexists(layout.locate(hw, target_rel)):
         release.refuse(target_rel, "exists", f"{target_rel} exists; a used revision is never overwritten")
     if not decision_path.is_file():
@@ -309,6 +345,7 @@ def assemble(hw: Path, rev: str, version: str, decision: str) -> tuple[Release, 
     elif frozen.get("version") != version:
         release.refuse("hw/product.yaml", "frozen", f"flow.frozen names {frozen.get('version')}, not {version}")
     release.findings.extend(validate.blocking(validate.validate_project(hw)))
+    check_docs(release)
     try:
         _, folder, record = layout.built_version(hw, version)
     except layout.LayoutError as error:
@@ -403,7 +440,7 @@ def stage(release: Release, facts: dict[str, Any]) -> Path:
         files[package] = {"sha256": copied, "original": item.original}
     manifest = {
         "schema_version": SCHEMA_VERSION, "product_id": facts["product_id"], "rev": release.rev,
-        "released_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "released_at": release.released_at,
         "frozen": facts["frozen"], "approval": release.decision, "files": files,
         "manufacturing": release.manufacturing, "bundles": release.bundles, "checks": release.checks,
     }
@@ -415,24 +452,46 @@ def stage(release: Release, facts: dict[str, Any]) -> Path:
     return staged
 
 
-def run(hw: Path, rev: str, version: str, decision: str) -> tuple[int, dict[str, Any]]:
+def run(hw: Path, rev: str, version: str, decision: str, now: datetime | None = None) -> tuple[int, dict[str, Any]]:
     hw = hw.resolve()
-    release, facts = assemble(hw, rev, version, decision)
+    release, facts = assemble(hw, rev, version, decision, now)
     report: dict[str, Any] = {"rev": rev, "version": version, "package": release.target_rel}
     if release.findings or facts is None:
-        return 1, {"status": "refused", **report, "findings": release.findings}
+        return 1, {**report, "findings": release.findings, "status": "refused"}
     staged = stage(release, facts)
     report["stage"] = layout.relative(hw, staged)
     if release.findings:
-        return 1, {"status": "refused", **report, "findings": release.findings}
+        return 1, {**report, "findings": release.findings, "status": "refused"}
     target = layout.locate(hw, release.target_rel)
     try:
         layout.claim(staged, target, release.target_rel)
     except layout.PublishConflict as error:
         release.refuse(release.target_rel, "exists", f"{error}; a used revision is never overwritten")
-        return 1, {"status": "refused", **report, "findings": release.findings}
-    return 0, {"status": "released", **report, "stage": None, "manifest_sha256": sha256(target / MANIFEST),
-               "files": len(release.copies), "manufacturing": release.manufacturing, "bundles": release.bundles}
+        return 1, {**report, "findings": release.findings, "status": "refused"}
+    return 0, {**report, "stage": None, "manifest_sha256": sha256(target / MANIFEST), "files": len(release.copies),
+               "manufacturing": release.manufacturing, "bundles": release.bundles, "status": "released"}
+
+
+def sealed(hw: Path, rev: str, version: str, decision: str) -> tuple[int, dict[str, Any]]:
+    """The existing hw/releases/<REV>/ when it verifies and holds `version` approved by `decision`, so a
+    --prune rerun skips sealing; refused otherwise, since a used revision is never overwritten."""
+    hw = hw.resolve()
+    target_rel = layout.load().path("release.package", {"REV": rev})
+    package = layout.locate(hw, target_rel)
+    report: dict[str, Any] = {"rev": rev, "version": version, "package": target_rel}
+    problems = layout.verify(package) if package.is_dir() and not package.is_symlink() else ["it is not a directory"]
+    manifest = _json(package / MANIFEST) if not problems else None
+    frozen = manifest.get("frozen") if isinstance(manifest, dict) else None
+    if not problems and (not isinstance(frozen, dict) or frozen.get("version") != version
+                         or manifest.get("approval") != decision):
+        problems = [f"it holds {frozen.get('version') if isinstance(frozen, dict) else None} "
+                    f"approved by {manifest.get('approval') if isinstance(manifest, dict) else None}"]
+    if problems:
+        finding = validate.finding(target_rel, f"{target_rel} exists but is not the sealed release of {version} approved "
+                                               f"by {decision}: {'; '.join(problems)}; a used revision is never overwritten",
+                                   code="release.exists")
+        return 1, {**report, "findings": [finding], "status": "refused"}
+    return 0, {**report, "already_sealed": True, "manifest_sha256": sha256(package / MANIFEST), "status": "released"}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -441,15 +500,35 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--rev", required=True, help="the release revision letter, A to Y without I, O, Q, S, X")
     parser.add_argument("--version", required=True, help="the frozen version, as product.yaml flow.frozen names it")
     parser.add_argument("--decision", required=True, help="DR-### approving this release, in hw/decisions/")
+    parser.add_argument("--prune", action="store_true",
+                        help="once REV is sealed (now, or already), print the plan of superseded versions and its digest")
+    parser.add_argument("--yes", metavar="DIGEST",
+                        help="apply the --prune plan with this digest; refused when a fresh plan differs")
     args = parser.parse_args(argv)
+    if args.yes is not None and not args.prune:
+        parser.error("--yes DIGEST requires --prune")
+    if args.yes is not None and not re.fullmatch(r"[0-9a-f]{64}", args.yes):
+        parser.error("--yes takes the 64-character digest that --prune printed")
     if not args.hw.is_dir():
-        print(json.dumps({"status": "error", "message": f"{args.hw} is not a directory"}))
+        print(json.dumps({"message": f"{args.hw} is not a directory", "status": "error"}))
         return 2
     try:
-        code, report = run(args.hw, args.rev, args.version, args.decision)
+        target = layout.locate(args.hw.resolve(), layout.load().path("release.package", {"REV": args.rev}))
+        if args.prune and os.path.lexists(target):
+            code, report = sealed(args.hw, args.rev, args.version, args.decision)
+        else:
+            code, report = run(args.hw, args.rev, args.version, args.decision)
     except layout.LayoutError as error:
-        print(json.dumps({"status": "error", "message": str(error)}))
+        print(json.dumps({"message": str(error), "status": "error"}))
         return 2
+    if code == 0 and args.prune:
+        try:
+            pruning = prune.after_release(args.hw, args.rev, args.version, args.yes)
+        except layout.LayoutError as error:
+            pruning = {"message": str(error), "status": "refused"}
+        code = 0 if pruning["status"] in ("plan", "pruned") else 1
+        status = "released" if code == 0 else f"prune_{pruning['status']}"
+        report = {**{key: value for key, value in report.items() if key != "status"}, "pruning": pruning, "status": status}
     print(json.dumps(report, indent=2))
     return code
 
@@ -458,5 +537,5 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except Exception as error:  # noqa: BLE001 - one JSON report for any infrastructure failure
-        print(json.dumps({"status": "error", "message": f"infrastructure error: {error}"}))
+        print(json.dumps({"message": f"infrastructure error: {error}", "status": "error"}))
         raise SystemExit(2)

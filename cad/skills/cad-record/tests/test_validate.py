@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import csv
+import importlib.util
 import json
 import shutil
 import subprocess
@@ -103,6 +104,39 @@ class ValidateProject(unittest.TestCase):
         result, report = self.validate()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(report, {"ok": True, "findings": []})
+
+    def test_product_license_accepts_spdx_expressions_and_rejects_malformed_values(self) -> None:
+        path = self.hw / "product.yaml"
+        product = yaml.safe_load(path.read_text(encoding="utf-8"))
+        product["license"] = {"hardware": "CERN-OHL-S-2.0", "documentation": "(CC-BY-4.0 OR MIT) AND GPL-2.0+"}
+        path.write_text(yaml.safe_dump(product, sort_keys=False), encoding="utf-8")
+        result, report = self.validate()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(report, {"ok": True, "findings": []})
+
+        product["license"]["hardware"] = "CC BY 4.0"
+        path.write_text(yaml.safe_dump(product, sort_keys=False), encoding="utf-8")
+        result, report = self.validate()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("license/hardware 'CC BY 4.0' is not an SPDX license expression: 'BY' follows a complete "
+                      "expression", json.dumps(report["findings"]))
+
+    def test_spdx_expression_shape(self) -> None:
+        spec = importlib.util.spec_from_file_location("cad_record_validate_spdx", VALIDATOR)
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        for expression in ("CERN-OHL-S-2.0", "GPL-2.0+", "GPL-2.0-or-later WITH Classpath-exception-2.0",
+                           "(MIT OR Apache-2.0) AND CC-BY-4.0", "LicenseRef-acme-hardware",
+                           "DocumentRef-spdx-tool-1.2:LicenseRef-MIT-Style-2", "MIT WITH AdditionRef-x",
+                           "CERN-OHL-S"):  # shape only: no SPDX license list is bundled
+            with self.subTest(expression=expression):
+                self.assertIsNone(module.spdx_expression_problem(expression))
+        for expression in ("", "CC BY 4.0", "MIT AND", "(MIT", "MIT)", "MIT and Apache-2.0", "LicenseRef-x+",
+                           "(MIT) WITH Classpath-exception-2.0", "MIT WITH", "MIT WITH LicenseRef-x", "AND MIT",
+                           "MIT/X11"):
+            with self.subTest(expression=expression):
+                self.assertIsNotNone(module.spdx_expression_problem(expression))
 
     def test_product_rejects_nonpositive_build_volume_axis(self) -> None:
         path = self.hw / "product.yaml"
