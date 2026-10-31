@@ -194,7 +194,7 @@
      "meaning": "the pair cache's shared-memory index; disposable with the cache"},
     {"id": "cache.part_objects", "path": "hw/.cad/parts/{SHA}", "kind": "generated", "role": "data",
      "writer": "cad-model cad_model.py run (cadmodel/store.py)", "stage": "layout", "mutability": "scratch",
-     "meaning": "one part output (definition or state STEP, manufacturing STEP, STL or manufacturing.json) stored once, read-only, under the sha256 of its bytes; each version holds a hard link to it where the filesystem allows, else a copy, so readers read the version's own path; git-ignored, never evidence; cad_model.py store gc removes it once no manifest references it"},
+     "meaning": "one part output is stored read-only under the sha256 of its bytes. Outputs include definition or state STEP, manufacturing STEP, STL, and manufacturing.json. Each version holds a hard link where the filesystem allows, or a copy otherwise, so readers use the version's own path. The output is git-ignored and is not evidence. cad_model.py store gc removes it once no manifest references it"},
     {"id": "cache.part_records", "path": "hw/.cad/builds/{SHA}.json", "kind": "generated", "role": "data",
      "writer": "cad-model cad_model.py run (cadmodel/store.py)", "stage": "layout", "mutability": "scratch",
      "meaning": "what one part build or manufacturing make produced, keyed by the sha256 of its inputs: the stored objects and the runner or check facts; run reuses it only while every object still hashes to its name; git-ignored; store gc drops it once no manifest references its outputs"},

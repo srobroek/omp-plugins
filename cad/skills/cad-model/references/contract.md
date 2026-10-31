@@ -39,7 +39,7 @@ time; runner context is not persisted as a design parameter.
 
 Text geometry MUST use a path to a font file. Set `REQUIRES_OSIFONT = True` to use FreeCAD TechDraw Osifont.
 The runner asks cad-flow preflight for its FreeCAD command. It checks the bundled font's SHA-256 before the build.
-Then it passes `font_path` to the private copy of `build(params)`. That path is execution context, not a design parameter.
+The runner passes `font_path` to the private copy of `build(params)`. It treats that path as execution context, not a design parameter.
 
 Pass `font_path` to build123d or `fontPath` to CadQuery. Do not select a font by family name alone.
 The source parser refuses `text()` or `Text()` calls without an explicit font-file path.

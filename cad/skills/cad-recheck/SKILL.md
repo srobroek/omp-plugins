@@ -21,7 +21,7 @@ TRIGGER
 
 The installer refuses to replace a different repository-local `core.hooksPath` or ignore non-sample hooks in `.git/hooks/`. Integrate the CAD hook with existing hooks, or explicitly pass `--force` to replace or ignore them. Commit the generated `.githooks/` directory so the hook and its stamp verifier are available to other checkouts.
 
-When `core.hooksPath` is set outside the repository (system or global scope, such as Git Defender), the installer exits 3 and changes nothing, even with `--force`. A repository-local hooks path would stop those managed hooks from running. In that case no hook enforces the stamp, so verify it yourself before each commit of `hw/` changes. Stage the changes, then run this command from the project repository:
+When the system or global git config sets `core.hooksPath` (Git Defender does), the installer exits 3 and changes nothing, even with `--force`. A repository-local hooks path would stop those managed hooks from running. In that case, verify the stamp yourself before each commit of `hw/` changes. Stage the changes. Then run this command from the project repository:
 
 ```
 uv run --script skill://cad-recheck/scripts/stamp.py --verify
