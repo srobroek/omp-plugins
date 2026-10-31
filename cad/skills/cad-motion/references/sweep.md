@@ -12,10 +12,10 @@ which pair-poses need it (pair_measure.py, mesh_bound.py).
   request the gap between its two boxes less sqrt(3) x both mesh deviations, a lower bound that no
   BRep is posed for (`posed_boxes`, `planned_requests` in `timings_s`).
 - Repeats: a revolute angle and a slider-crank angle are reduced to (-180, 180] and snapped to
-  1e-9 degree before their sine and cosine, so a crank at q and q + 360 places its 360 degree train
-  with the very same bits, and a piston at -theta from TDC as at +theta. Each distinct key is
-  evaluated once: a constant relative pose and a periodic repeat need no special case. A reused
-  exact reading is the one a fresh measurement gives; a hit on the rounded relative transform alone
+  1e-9 degree before their sine and cosine. A crank at q and q + 360 places its 360 degree train
+  with the same bits, and a piston at -theta from TDC places as at +theta. Each distinct key is
+  evaluated once, so a constant relative pose and a periodic repeat need no special case. A reused
+  exact reading is the one a fresh measurement gives. A hit on the rounded relative transform alone
   is only a bound, inflated by how far the body can move within the rounding (`cache-bound`).
 - Clearing: a request whose own lower bound exceeds 1e-6 mm and its pair's clearing threshold (the
   greatest requirement plus its margin) by more than `--mesh-band` (default 2 mm) is not measured

@@ -9,7 +9,7 @@ from L2 PARTS onward.
 |---|---|---|
 | F0 massing | Envelopes and joint frames only | Boxes, cylinders, concept primitives; L0 CONCEPT and L1 LAYOUT |
 | F1 functional | Real interfaces | Pin bores at the `cad-fits` class, bosses, mating faces, process wall thickness, ISO 273 fastener clearance, counterbores sized to ISO 4762 heads (dk + 1 mm, k + 0.5 mm) |
-| F2 form | Product form language | Tapered, lofted, or swept links instead of boxes; one exterior fillet radius family per part; bore-entry chamfers; ribs or pockets for stiffness and mass; cable channel; base ballast cavity; revolved shade |
+| F2 form | Product form language | Tapered, lofted, or swept links, one exterior fillet radius family per part, bore-entry chamfers, ribs or pockets for stiffness and mass, a cable channel, a base ballast cavity, a revolved shade |
 | F3 detail | Cosmetic and finishing detail | Engraved or embossed text, knurl or grip flutes, split lines, purchased parts as bought (real heads, sockets, retaining-ring grooves), warehouse fasteners in the assembly |
 
 A level includes everything below it. Record the level a part reached in its commit-batch
