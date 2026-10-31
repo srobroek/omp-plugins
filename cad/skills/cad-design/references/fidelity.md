@@ -63,18 +63,39 @@ note; a part whose interfaces change drops back to F1 until the new interface is
 | Pin bores | Use H7 for declared 5 H7/p6 press-fit holders and the declared `cad-fits` class for running bores; 0.5 mm 45-degree entry chamfers |
 | Exterior edges | 1-1.5 mm fillets on silhouettes; break remaining edges 0.2-0.5 mm by drawing note, not in the model |
 | Channels | Ball-end cut: full-radius floor and spherical ends |
+
 ## F2 process wall check
 
-`form_check.py --fidelity F2` samples a 4×4 interior UV grid on each trimmed face of
-each solid STEP part, classifies samples inside the solid, then casts inward normals.
-An exit is a wall only when its nearest support is another face, the face normals are
-within 20° of antiparallel, and the ray crosses from inside to outside. Samples closer
-than the per-process minimum to a face UV edge are skipped. The shortest sampled chord
-is `min_wall` with thickness and part-local location. FDM default: 1.2 mm for a 0.4 mm
-nozzle; `hw/product.yaml` `manufacturing.min_wall_mm` overrides per process. The kernel
-intersection/classification tolerance is 1e-7 mm with a 1e-5 mm origin offset. That is
-local kernel precision, not a certified global minimum: narrow features between UV grid
-samples can be missed; curved walls are reported as straight-ray chords.
+`form_check.py --fidelity F2` measures each made part's minimum wall against its
+process minimum: FDM 1.2 mm (three 0.4 mm perimeters) unless `hw/product.yaml`
+`manufacturing.min_wall_mm` sets `fdm` or `cnc`, each above 0 mm. An invalid override
+stops the check with exit 2. Purchased parts, `make_buy: buy` parts, and a process with
+no minimum (CNC without an override) are not scanned; their `min_wall` is
+`{"required_mm": null}`.
+
+- Samples: each face gets a uniform UV grid, at most half the minimum apart in both
+  directions where the surface stretches most, and at most 4096 per face
+  (`capped_faces` counts the faces sampled coarser). The grid spans the face's full UV
+  range, so a bore's seam does not decide where samples land. Samples within four B-rep
+  tolerances (at least 0.1 µm) of a trim boundary are skipped; a seam is no boundary.
+- Chord: each sample casts a ray along its inward normal to the first exit. The exit
+  counts only when an exit face's normal is within 20° of antiparallel, so two faces
+  meeting at an acute edge never read as a wall.
+- Persistence: a chord below the minimum counts only when the wall continues at least
+  its own thickness. Along both UV directions, on either side, the face's own sample a
+  chord length away (or a parallel ray where that point leaves the face) must also be
+  below the minimum. Relief, such as the lands between engraved letters, is counted in
+  `shallow` instead.
+- Report: `thickness_mm` and `location_mm` (the sample point), `faces`,
+  `faces_sampled`, `samples`, `measured`, `shallow`, `capped_faces`, `spacing_mm` and
+  `seconds`. A ray stops at the running minimum, so `measured` also counts samples that
+  bound the wall at or above it. A part with no measured wall is a
+  `min_wall_unmeasured` finding, never a pass.
+
+Limits: the minimum is sampled, not certified. A curved wall reads slightly thick (a
+0.8 mm web beside a Ø10 bore reads 0.81 mm), a thin region smaller than a capped face's
+spacing can be missed, and a taper whose faces are more than 20° from antiparallel is
+not measured. The kernel tolerance is 1e-7 mm and rays start 1e-5 mm inside the face.
 
 `block_like` applies only to `form_class: solid` in `part.yaml`; absent means `solid`.
 Frame, plate, skeleton, and shell are exempt. Solid parts retain the existing OBB tests:

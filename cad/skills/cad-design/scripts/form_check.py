@@ -12,12 +12,17 @@ Parts: one STEP per part in DIR, named `<PN>.step` (cad-motion `--parts-dir`
 rules). Process comes from hw/parts/<PN>/part.yaml (`fdm`, `cnc`, `purchased`); a bought part
 (`make_buy: buy`, such as a pin made to drawing) is checked in its bought form, as `purchased`.
 Joints: hw/assembly.yaml. When DIR holds build_reference.py's `build.json`, its
-in-memory facts per part feed the two kernel checks below. `product.yaml` can override
-minimum wall through `manufacturing.min_wall_mm`.
+in-memory facts per part feed the two kernel checks below. `product.yaml`
+`manufacturing.min_wall_mm` overrides the minimum wall per process (`fdm`, `cnc`; each
+above 0 mm); an invalid override is an error (exit 2), never a silent default.
 
 Per part (stdout JSON `parts`):
     form_class             part.yaml value (solid when absent)
-    min_wall               F2 shortest sampled inward ray, with location
+    min_wall               F2+: {required_mm} alone when the process has no minimum
+                           (purchased, or cnc without an override); else the scan:
+                           thickness_mm and location_mm (null when no wall was
+                           measured), faces, faces_sampled, samples, measured,
+                           shallow, capped_faces, spacing_mm and seconds (see minimum_wall)
     valid                  BRepCheck_Analyzer verdict on the STEP read-back
     solids, volume_mm3, area_mm2
     kernel_valid           BRepCheck verdict on the in-memory shape (build.json)
@@ -43,7 +48,10 @@ Checks (each failure is one `findings` entry):
                             (concave), purchased parts a shank (convex)
     block_like              F2+, made solid parts only: (axis_planar_fraction >= 0.80 or
                             blend_faces + freeform_faces == 0), with both OBB exemptions
-    min_wall                F2+, made parts: sampled minimum below FDM 1.2 mm or override
+    min_wall                F2+, a process with a minimum (fdm 1.2 mm, or the override):
+                            the shortest sampled wall is below it
+    min_wall_unmeasured     F2+, the same parts: no sample reached an opposing face, so
+                            the scan proves nothing
     fdm_exterior_radius     F2+, fdm parts: min_convex_radius < --fdm-min-radius
     cnc_internal_radius     F2+, cnc parts: min_concave_radius < --cnc-tool-radius
 
@@ -58,7 +66,9 @@ import importlib.util
 import json
 import math
 import sys
+import time
 import traceback
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -72,10 +82,22 @@ BLOCK_MAX_THICKNESS_FRACTION = 0.10
 BLEND_MAX_RADIUS = 10.0
 BLEND_MAX_SPAN = math.radians(120.0)  # a fillet turns through its edge angle; a lug end turns 180 degrees
 AXIS_TOL = 1e-4  # sine of the allowed angle between a cylinder axis and a joint axis
-MIN_WALL_BY_PROCESS = {"fdm": 1.2}
-WALL_SAMPLE_SUBDIVISIONS = 4
+MIN_WALL_BY_PROCESS = {"fdm": 1.2}  # built-in minimum wall, mm: a 0.4 mm FDM nozzle's three perimeters
+MIN_WALL_PROCESSES = ("fdm", "cnc")  # the keys product.yaml manufacturing.min_wall_mm may set
+WALL_SPACING_FRACTION = 0.5  # sample spacing along each UV direction, as a fraction of the minimum wall
+WALL_FACE_SAMPLE_CAP = 4096  # samples per face; a larger face is sampled coarser and counted in capped_faces
+WALL_METRIC_PROBES = 8  # first-derivative probes per UV direction that size a face's sample grid
+WALL_EDGE_SKIP_TOLERANCES = 4.0  # samples this many B-rep tolerances from a trim boundary are skipped
+WALL_EDGE_SKIP_MIN_MM = 1e-4
+WALL_OPPOSING_DOT = -0.94  # an exit normal within 20 degrees of antiparallel to the sample normal
+WALL_SAME_EXIT_MM = 1e-6  # hits this close along a ray are one exit, through an edge or a vertex
+WALL_PROBE_REACH = 3.0  # in minimum walls: no persistence probe strays farther from its sample, per axis
 WALL_RAY_OFFSET_MM = 1e-5
 WALL_CLASSIFY_TOL_MM = 1e-7
+
+
+class RecordError(Exception):
+    """A design-record value form_check reads is invalid."""
 
 
 def load_pose() -> Any:
@@ -119,6 +141,8 @@ def faces_of(shape: Any) -> list[Any]:
         faces.append(cast(explorer.Current()))
         explorer.Next()
     return faces
+
+
 def solids_of(shape: Any) -> list[Any]:
     from OCP.TopAbs import TopAbs_SOLID
     from OCP.TopExp import TopExp_Explorer
@@ -133,92 +157,266 @@ def solids_of(shape: Any) -> list[Any]:
     return solids
 
 
-def minimum_wall(shape: Any, minimum_mm: float) -> dict[str, Any] | None:
-    """Minimum chord between opposing faces sampled on a 4×4 UV grid.
+def unit_normal(surface: Any, u: float, v: float, reversed_: bool) -> tuple[Any, Any]:
+    """The point and outward (material-leaving) unit normal at (u, v); None where the normal is undefined."""
+    from OCP.gp import gp_Pnt, gp_Vec
 
-    Samples within one required wall thickness of trim boundaries are skipped. Ray
-    exits must cross from inside to outside and have distinct supporting faces with
-    normals within 20° of antiparallel. The grid is not a certified global minimum.
+    point, du, dv = gp_Pnt(), gp_Vec(), gp_Vec()
+    surface.D1(u, v, point, du, dv)
+    normal = du.Crossed(dv)
+    magnitude = normal.Magnitude()
+    if magnitude <= 1e-9 * du.Magnitude() * dv.Magnitude():  # a pole, an apex or a degenerate patch
+        return point, None
+    normal.Divide(magnitude)
+    if reversed_:
+        normal.Reverse()
+    return point, normal
+
+
+class FaceSamples:
+    """Wall samples on one trimmed face: the cell centres of a UV grid no coarser than `spacing`.
+
+    The fastest parametric speed over a WALL_METRIC_PROBES² probe grid sizes each UV
+    direction, so the grid is no coarser than `spacing` where the surface stretches
+    most; WALL_FACE_SAMPLE_CAP bounds the samples per face (`capped`). The grid spans
+    the face's full UV range, so a periodic seam does not decide where samples land, and
+    a seam is no trim boundary. A point within WALL_EDGE_SKIP_TOLERANCES of the face's
+    B-rep tolerance (its edges and vertices included) from a trim boundary is no sample.
     """
-    from OCP.BRepAdaptor import BRepAdaptor_Surface
-    from OCP.BRepClass import BRepClass_FaceClassifier
-    from OCP.BRepClass3d import BRepClass3d_SolidClassifier
-    from OCP.BRepIntCurveSurface import BRepIntCurveSurface_Inter
-    from OCP.BRepLProp import BRepLProp_SLProps
-    from OCP.BRepTools import BRepTools
-    from OCP.gp import gp_Dir, gp_Lin, gp_Pnt, gp_Vec
-    from OCP.TopAbs import TopAbs_IN, TopAbs_OUT, TopAbs_REVERSED
-    from OCP.TopoDS import TopoDS
 
-    cast = getattr(TopoDS, "Face_s", None) or TopoDS.Face
-    best: tuple[float, tuple[float, float, float]] | None = None
-    intersector = BRepIntCurveSurface_Inter()
-    for solid in solids_of(shape):
-        classifier = BRepClass3d_SolidClassifier(solid)
-        for face in faces_of(solid):
-            surface = BRepAdaptor_Surface(face, True)
-            umin, umax, vmin, vmax = BRepTools.UVBounds_s(face)
-            if not all(math.isfinite(value) for value in (umin, umax, vmin, vmax)):
-                continue
-            for ui in range(1, WALL_SAMPLE_SUBDIVISIONS + 1):
-                u = umin + (umax - umin) * ui / (WALL_SAMPLE_SUBDIVISIONS + 1)
-                for vi in range(1, WALL_SAMPLE_SUBDIVISIONS + 1):
-                    v = vmin + (vmax - vmin) * vi / (WALL_SAMPLE_SUBDIVISIONS + 1)
-                    point, du, dv = gp_Pnt(), gp_Vec(), gp_Vec()
-                    surface.D1(u, v, point, du, dv)
-                    trim = BRepClass_FaceClassifier()
-                    trim.Perform(face, point, WALL_CLASSIFY_TOL_MM)
-                    if trim.State() != TopAbs_IN:
-                        continue
-                    edge_margin = min((u - umin) * du.Magnitude(), (umax - u) * du.Magnitude(),
-                                     (v - vmin) * dv.Magnitude(), (vmax - v) * dv.Magnitude())
-                    if edge_margin < minimum_mm:
-                        continue
-                    props = BRepLProp_SLProps(surface, u, v, 1, WALL_CLASSIFY_TOL_MM)
-                    if not props.IsNormalDefined():
-                        continue
-                    normal = gp_Vec(props.Normal().XYZ())
-                    if face.Orientation() == TopAbs_REVERSED:
-                        normal.Reverse()
-                    normal.Normalize()
-                    inward = gp_Dir(-normal.X(), -normal.Y(), -normal.Z())
-                    origin = gp_Pnt(point.X() - WALL_RAY_OFFSET_MM * normal.X(),
-                                    point.Y() - WALL_RAY_OFFSET_MM * normal.Y(),
-                                    point.Z() - WALL_RAY_OFFSET_MM * normal.Z())
-                    classifier.Perform(origin, WALL_CLASSIFY_TOL_MM)
-                    if classifier.State() != TopAbs_IN:
-                        continue
-                    intersector.Init(solid, gp_Lin(origin, inward), WALL_CLASSIFY_TOL_MM)
-                    while intersector.More():
-                        thickness = intersector.W() - WALL_RAY_OFFSET_MM
-                        exit_face = cast(intersector.Face())
-                        if thickness > WALL_RAY_OFFSET_MM and not exit_face.IsSame(face):
-                            hit = intersector.Pnt()
-                            u_hit, v_hit = intersector.U(), intersector.V()
-                            exit_surface = BRepAdaptor_Surface(exit_face, True)
-                            _, du_hit, dv_hit = gp_Pnt(), gp_Vec(), gp_Vec()
-                            exit_surface.D1(u_hit, v_hit, gp_Pnt(), du_hit, dv_hit)
-                            exit_props = BRepLProp_SLProps(exit_surface, u_hit, v_hit, 1, WALL_CLASSIFY_TOL_MM)
-                            if exit_props.IsNormalDefined():
-                                exit_normal = gp_Vec(exit_props.Normal().XYZ())
-                                if exit_face.Orientation() == TopAbs_REVERSED:
-                                    exit_normal.Reverse()
-                                exit_normal.Normalize()
-                                before = gp_Pnt(hit.X() - 1e-4 * inward.X(), hit.Y() - 1e-4 * inward.Y(),
-                                                hit.Z() - 1e-4 * inward.Z())
-                                after = gp_Pnt(hit.X() + 1e-4 * inward.X(), hit.Y() + 1e-4 * inward.Y(),
-                                               hit.Z() + 1e-4 * inward.Z())
-                                classifier.Perform(before, WALL_CLASSIFY_TOL_MM)
-                                inside_before = classifier.State() == TopAbs_IN
-                                classifier.Perform(after, WALL_CLASSIFY_TOL_MM)
-                                outside_after = classifier.State() == TopAbs_OUT
-                                if (normal.Dot(exit_normal) <= -0.94 and inside_before and outside_after
-                                        and (best is None or thickness < best[0])):
-                                    best = (thickness, (point.X(), point.Y(), point.Z()))
-                        intersector.Next()
-    if best is None:
+    def __init__(self, face: Any, bounds: tuple[float, float, float, float], spacing: float) -> None:
+        from OCP.BRep import BRep_Tool
+        from OCP.BRepAdaptor import BRepAdaptor_Surface
+        from OCP.IntTools import IntTools_FClass2d
+        from OCP.TopAbs import TopAbs_EDGE, TopAbs_REVERSED, TopAbs_VERTEX
+
+        self.surface = BRepAdaptor_Surface(face, True)
+        self.reversed = face.Orientation() == TopAbs_REVERSED
+        self.bounds = bounds
+        tolerance = max(BRep_Tool.Tolerance_s(face), BRep_Tool.MaxTolerance_s(face, TopAbs_EDGE),
+                        BRep_Tool.MaxTolerance_s(face, TopAbs_VERTEX))
+        skip = max(WALL_EDGE_SKIP_TOLERANCES * tolerance, WALL_EDGE_SKIP_MIN_MM)
+        # Points within `skip` of a trim boundary classify ON.
+        self.trim = IntTools_FClass2d(face, min(self.surface.UResolution(skip), self.surface.VResolution(skip)))
+        self.nu, self.nv, self.capped = self._cells(spacing)
+
+    def _cells(self, spacing: float) -> tuple[int, int, bool]:
+        from OCP.gp import gp_Pnt, gp_Vec
+
+        umin, umax, vmin, vmax = self.bounds
+        point, du, dv = gp_Pnt(), gp_Vec(), gp_Vec()
+        speed_u = speed_v = 0.0
+        for i in range(WALL_METRIC_PROBES):
+            for j in range(WALL_METRIC_PROBES):
+                self.surface.D1(umin + (umax - umin) * (i + 0.5) / WALL_METRIC_PROBES,
+                                vmin + (vmax - vmin) * (j + 0.5) / WALL_METRIC_PROBES, point, du, dv)
+                speed_u, speed_v = max(speed_u, du.Magnitude()), max(speed_v, dv.Magnitude())
+        nu = max(1, math.ceil(speed_u * (umax - umin) / spacing))
+        nv = max(1, math.ceil(speed_v * (vmax - vmin) / spacing))
+        if nu * nv <= WALL_FACE_SAMPLE_CAP:
+            return nu, nv, False
+        scale = math.sqrt(WALL_FACE_SAMPLE_CAP / (nu * nv))
+        nu, nv = max(1, int(nu * scale)), max(1, int(nv * scale))
+        return min(nu, WALL_FACE_SAMPLE_CAP // nv), nv, True
+
+    def at(self, u: float, v: float) -> tuple[Any, Any] | None:
+        """The point and outward unit normal at (u, v); None outside the trimmed face or without a normal."""
+        from OCP.gp import gp_Pnt2d
+        from OCP.TopAbs import TopAbs_IN
+
+        if self.trim.Perform(gp_Pnt2d(u, v)) != TopAbs_IN:
+            return None
+        point, normal = unit_normal(self.surface, u, v, self.reversed)
+        return None if normal is None else (point, normal)
+
+    def grid(self) -> Iterator[tuple[float, float, Any, Any]]:
+        """(u, v, point, outward unit normal) at every cell centre inside the trimmed face."""
+        umin, umax, vmin, vmax = self.bounds
+        for i in range(self.nu):
+            u = umin + (umax - umin) * (i + 0.5) / self.nu
+            for j in range(self.nv):
+                v = vmin + (vmax - vmin) * (j + 0.5) / self.nv
+                sample = self.at(u, v)
+                if sample is not None:
+                    yield u, v, sample[0], sample[1]
+
+
+class SolidRays:
+    """Rays through one solid, each tested only against the faces near the face it samples.
+
+    focus() loads the faces whose bounding boxes come within a radius of one face, once
+    per face, so a ray's cost follows the faces near it rather than the whole solid.
+    """
+
+    def __init__(self, solid: Any) -> None:
+        from OCP.Bnd import Bnd_Box
+        from OCP.BRepBndLib import BRepBndLib
+
+        self.faces = faces_of(solid)
+        self.boxes = []
+        whole = Bnd_Box()
+        for face in self.faces:
+            box = Bnd_Box()
+            BRepBndLib.Add_s(face, box, False)  # from the geometry: a mesh's box can miss the surface between nodes
+            self.boxes.append(box)
+            whole.Add(box)
+        self.reach = math.sqrt(whole.SquareExtent())  # no chord through the solid is longer
+        self.intersector: Any = None
+
+    def focus(self, index: int, radius: float) -> None:
+        """Load the faces whose bounding boxes come within `radius` of face `index` for the rays that follow."""
+        from OCP.BRep import BRep_Builder
+        from OCP.Bnd import Bnd_Box
+        from OCP.IntCurvesFace import IntCurvesFace_ShapeIntersector
+        from OCP.TopoDS import TopoDS_Compound
+
+        near = Bnd_Box()
+        near.Add(self.boxes[index])
+        near.Enlarge(radius)
+        compound, builder = TopoDS_Compound(), BRep_Builder()
+        builder.MakeCompound(compound)
+        for face, box in zip(self.faces, self.boxes):
+            if not near.IsOut(box):
+                builder.Add(compound, face)
+        self.intersector = IntCurvesFace_ShapeIntersector()
+        self.intersector.Load(compound, WALL_CLASSIFY_TOL_MM)
+
+    def crossings(self, start: Any, direction: Any, limit: float, count: int) -> list[tuple[float, list[Any]]]:
+        """The first `count` boundary crossings of a ray within `limit`: (ray parameter, outward normals there).
+
+        Hits within WALL_SAME_EXIT_MM of each other are one crossing, through an edge or a vertex.
+        """
+        from OCP.BRepAdaptor import BRepAdaptor_Surface
+        from OCP.gp import gp_Dir, gp_Lin
+        from OCP.TopAbs import TopAbs_REVERSED
+
+        hits = self.intersector
+        hits.Perform(gp_Lin(start, gp_Dir(direction)), 0.0, limit)
+        hits.SortResult()
+        found: list[tuple[float, list[Any]]] = []
+        for index in range(1, hits.NbPnt() + 1):
+            w = hits.WParameter(index)
+            if not found or w > found[-1][0] + WALL_SAME_EXIT_MM:
+                if len(found) == count:
+                    break
+                found.append((w, []))
+            face = hits.Face(index)
+            _, normal = unit_normal(BRepAdaptor_Surface(face, False), hits.UParameter(index), hits.VParameter(index),
+                                    face.Orientation() == TopAbs_REVERSED)
+            if normal is not None:
+                found[-1][1].append(normal)
+        return found
+
+    def chord(self, point: Any, normal: Any, limit: float) -> float | None:
+        """The length of the inward ray from a surface point to its first exit within `limit`.
+
+        math.inf when the ray stays in the solid that far; None when no face it leaves
+        through there opposes `normal` (an acute edge wedge, or a side face).
+        """
+        found = self.crossings(point.Translated(normal.Multiplied(-WALL_RAY_OFFSET_MM)), normal.Reversed(), limit, 1)
+        if not found:
+            return math.inf
+        exit_w, exits = found[0]
+        if any(normal.Dot(exit_normal) <= WALL_OPPOSING_DOT for exit_normal in exits):
+            return exit_w + WALL_RAY_OFFSET_MM  # the ray starts the offset inside the face
         return None
-    return {"thickness_mm": round(best[0], 6), "location_mm": [round(value, 6) for value in best[1]]}
+
+    def persists(self, samples: FaceSamples, u: float, v: float, point: Any, normal: Any, length: float,
+                 required_mm: float) -> bool:
+        """Whether a chord below the minimum belongs to a wall, not to relief such as the lands of engraved text.
+
+        A wall continues at least as far as it is thin. Along the face's U and V
+        directions, on at least one side, one chord length away, there must be another
+        chord below the minimum: from the face's own sample there, or, where that point
+        leaves the face, from a ray parallel to this chord (thin_wall_at), so a wall also
+        continues across face boundaries and parametric poles.
+        """
+        from OCP.gp import gp_Pnt, gp_Vec
+
+        du, dv = gp_Vec(), gp_Vec()
+        samples.surface.D1(u, v, gp_Pnt(), du, dv)
+        for derivative, along_u in ((du, True), (dv, False)):
+            step, tangent = length / derivative.Magnitude(), derivative.Normalized()
+            for side in (1.0, -1.0):
+                probe = samples.at(u + side * step, v) if along_u else samples.at(u, v + side * step)
+                if probe is None:
+                    foot = point.Translated(tangent.Multiplied(side * length))
+                    thin = self.thin_wall_at(foot, normal, length, required_mm)
+                else:
+                    chord = self.chord(probe[0], probe[1], required_mm)
+                    thin = chord is not None and chord < required_mm
+                if thin:
+                    break
+            else:
+                return False
+        return True
+
+    def thin_wall_at(self, foot: Any, normal: Any, length: float, required_mm: float) -> bool:
+        """Whether a ray along -normal through `foot` enters the solid within one chord length of `foot`,
+        then leaves through an opposing face less than `required_mm` later."""
+        found = self.crossings(foot.Translated(normal.Multiplied(length)), normal.Reversed(),
+                               2.0 * length + required_mm, 2)
+        if len(found) < 2 or found[0][0] > 2.0 * length:
+            return False
+        (enter_w, entries), (exit_w, exits) = found
+        return exit_w - enter_w < required_mm and any(
+            normal.Dot(entry) > 0.0 and entry.Dot(exit_normal) <= WALL_OPPOSING_DOT
+            for entry in entries for exit_normal in exits)
+
+
+def minimum_wall(shape: Any, required_mm: float) -> dict[str, Any]:
+    """The shortest sampled wall, with the coverage that bounds it.
+
+    Each face gets a UV grid of samples (FaceSamples) no coarser than
+    WALL_SPACING_FRACTION of `required_mm`, up to WALL_FACE_SAMPLE_CAP per face;
+    `capped_faces` counts the faces sampled coarser. Each sample casts a ray along its
+    inward normal (SolidRays.chord). Its first exit must oppose the sample, so two faces
+    meeting at an acute edge never read as a thin wall. A ray needs to reach only the
+    running minimum: a sample with no shorter chord bounds the wall there at or above it.
+    A shorter chord below `required_mm` must also persist (SolidRays.persists) to become
+    the minimum; `shallow` counts the ones that did not. At or above `required_mm` the
+    shortest opposing chord is the minimum as found. `measured` counts the samples that
+    measured or bounded a wall; zero means the scan measured no wall at all.
+    """
+    from OCP.BRepTools import BRepTools
+
+    started = time.perf_counter()
+    spacing = WALL_SPACING_FRACTION * required_mm
+    best: tuple[float, Any] | None = None
+    faces = faces_sampled = samples = measured = shallow = capped_faces = 0
+    for solid in solids_of(shape):
+        rays = SolidRays(solid)
+        for index, face in enumerate(rays.faces):
+            faces += 1
+            bounds = BRepTools.UVBounds_s(face)
+            if not all(math.isfinite(value) for value in bounds):
+                continue
+            face_samples = FaceSamples(face, bounds, spacing)
+            capped_faces += face_samples.capped
+            # The running minimum only shrinks, so this face's rays and probes stay within the radius.
+            rays.focus(index, max(rays.reach if best is None else best[0], WALL_PROBE_REACH * required_mm))
+            placed = 0
+            for u, v, point, normal in face_samples.grid():
+                placed += 1
+                length = rays.chord(point, normal, rays.reach if best is None else min(rays.reach, best[0]))
+                if length is None or (length == math.inf and best is None):
+                    continue  # no opposing exit, or a ray that never left the solid
+                if best is not None and length >= best[0]:
+                    measured += 1  # bounded by the running minimum
+                    continue
+                if length < required_mm and not rays.persists(face_samples, u, v, point, normal, length, required_mm):
+                    shallow += 1
+                    continue
+                measured += 1
+                best = (length, point)
+            samples += placed
+            faces_sampled += placed > 0
+    return {"required_mm": required_mm,
+            "thickness_mm": None if best is None else round(best[0], 6),
+            "location_mm": None if best is None else [round(value, 6) + 0.0 for value in _xyz(best[1])],  # no -0.0
+            "faces": faces, "faces_sampled": faces_sampled, "samples": samples, "measured": measured,
+            "shallow": shallow, "capped_faces": capped_faces, "spacing_mm": round(spacing, 6),
+            "seconds": round(time.perf_counter() - started, 3)}
 
 
 def count_solids(shape: Any) -> int:
@@ -231,6 +429,8 @@ def count_solids(shape: Any) -> int:
         count += 1
         explorer.Next()
     return count
+
+
 def part_form_class(hw: Path, pn: str) -> str:
     """Read the form-class contract through one accessor; absent defaults to solid."""
     import yaml
@@ -242,20 +442,30 @@ def part_form_class(hw: Path, pn: str) -> str:
 
 
 def minimum_wall_thresholds(hw: Path) -> dict[str, float]:
-    """Built-in minima with product.yaml manufacturing.min_wall_mm overrides."""
+    """Built-in minima with product.yaml manufacturing.min_wall_mm overrides; an invalid override is a RecordError.
+
+    The override contract is cad-record's product schema: a non-empty mapping whose keys
+    are MIN_WALL_PROCESSES, each a number above 0 mm.
+    """
     import yaml
 
     path = hw / "product.yaml"
     product = yaml.safe_load(path.read_text(encoding="utf-8")) if path.is_file() else None
     manufacturing = product.get("manufacturing") if isinstance(product, dict) else None
-    overrides = manufacturing.get("min_wall_mm") if isinstance(manufacturing, dict) else None
     thresholds = dict(MIN_WALL_BY_PROCESS)
-    if not isinstance(overrides, dict):
+    if not isinstance(manufacturing, dict) or "min_wall_mm" not in manufacturing:
         return thresholds
-    for key, value in overrides.items():
-        process = key.strip().lower() if isinstance(key, str) else None
-        if process in {"fdm", "cnc"} and isinstance(value, (int, float)) and math.isfinite(value) and value > 0:
-            thresholds[process] = float(value)
+    overrides = manufacturing["min_wall_mm"]
+    if not isinstance(overrides, dict) or not overrides:
+        raise RecordError(f"{path}: manufacturing.min_wall_mm must map {' and/or '.join(MIN_WALL_PROCESSES)} "
+                          f"to a minimum wall in mm, got {overrides!r}")
+    for process, value in overrides.items():
+        if process not in MIN_WALL_PROCESSES:
+            raise RecordError(f"{path}: manufacturing.min_wall_mm.{process}: no minimum wall for this process; "
+                              f"allowed: {', '.join(MIN_WALL_PROCESSES)}")
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
+            raise RecordError(f"{path}: manufacturing.min_wall_mm.{process} must be a number above 0 mm, got {value!r}")
+        thresholds[process] = float(value)
     return thresholds
 
 
@@ -408,11 +618,11 @@ def check(args: argparse.Namespace, pose: Any) -> dict[str, Any]:
     from cadmodel.check import READBACK_REL
 
     level = FIDELITY.index(args.fidelity)
+    wall_thresholds = minimum_wall_thresholds(args.hw)  # an invalid override stops the check before any part loads
     loaded = pose.load_definitions(args.hw, args.parts_dir)
     assembly = pose.load_assembly(args.hw)
     process = processes(args.hw)
     facts = kernel_facts(args.parts_dir)
-    wall_thresholds = minimum_wall_thresholds(args.hw)
     form_classes = {pn: part_form_class(args.hw, pn) for pn in loaded}
     findings: list[dict[str, Any]] = []
     parts: dict[str, Any] = {}
@@ -443,15 +653,19 @@ def check(args: argparse.Namespace, pose: Any) -> dict[str, Any]:
                                  "max": READBACK_REL, "kernel_volume_mm3": kernel_v, "step_volume_mm3": volume})
         if level < 2:
             continue
+        required_wall = wall_thresholds.get(row["process"])  # none for purchased parts or a process without a minimum
+        row["min_wall"] = {"required_mm": None}
+        if required_wall is not None:
+            wall = row["min_wall"] = minimum_wall(part.shape, required_wall)
+            if wall["thickness_mm"] is None:
+                findings.append({"check": "min_wall_unmeasured", "part": pn, "min_mm": required_wall,
+                                 "faces": wall["faces"], "faces_sampled": wall["faces_sampled"],
+                                 "samples": wall["samples"]})
+            elif wall["thickness_mm"] < required_wall:
+                findings.append({"check": "min_wall", "part": pn, "thickness_mm": wall["thickness_mm"],
+                                 "location_mm": wall["location_mm"], "min_mm": required_wall})
         if row["process"] == "purchased":
-            row["min_wall"] = None
             continue
-        required_wall = wall_thresholds.get(row["process"])
-        wall = minimum_wall(part.shape, required_wall or 0.0)
-        row["min_wall"] = wall
-        if wall is not None and required_wall is not None and wall["thickness_mm"] < required_wall:
-            findings.append({"check": "min_wall", "part": pn, "thickness_mm": wall["thickness_mm"],
-                             "location_mm": wall["location_mm"], "min_mm": required_wall})
         has_blocky_faces = (row["axis_planar_fraction"] >= BLOCK_PLANAR_FRACTION
                             or row["blend_faces"] + row["freeform_faces"] == 0)
         if (form_classes[pn] == "solid" and has_blocky_faces
@@ -503,7 +717,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         with pose.stdout_to_stderr():
             report = check(args, pose)
-    except pose.MotionError as error:
+    except (pose.MotionError, RecordError) as error:
         print(json.dumps({"status": "error", "error": str(error)}))
         return 2
     except Exception as error:

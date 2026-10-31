@@ -38,7 +38,9 @@ default when absent). Frame, plate, skeleton, and shell are exempt. Solid parts 
 the two OBB exemptions: either at least 80% of face area is planar and normal to a
 principal axis or there are no recognized blend/freeform faces; solid material fills
 at least 20% of its OBB and shortest OBB extent exceeds 10% of the second-shortest.
-At F2, form_check.py checks process wall thickness; the FDM default is 1.2 mm (0.4 mm nozzle).
+At F2, form_check.py checks each made part's minimum wall: FDM 1.2 mm (0.4 mm nozzle)
+unless `product.yaml` `manufacturing.min_wall_mm` sets `fdm` or `cnc`. `min_wall` and
+`min_wall_unmeasured` (no wall measured) are findings; an invalid override exits 2.
 MUST Put every joint bore on its `assembly.yaml` origin and axis (form_check tolerance 0.05 mm).
 MUST Size bores from `skill://cad-fits` output and counterbores from ISO 4762 head sizes, never from memory.
 DEFAULT Model CadQuery fastener heads natively; `cq_warehouse` is not on PyPI. bd_warehouse 0.4.0 serves build123d.
