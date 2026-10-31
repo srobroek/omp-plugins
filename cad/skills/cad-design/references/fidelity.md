@@ -64,6 +64,51 @@ note; a part whose interfaces change drops back to F1 until the new interface is
 | Exterior edges | 1-1.5 mm fillets on silhouettes; break remaining edges 0.2-0.5 mm by drawing note, not in the model |
 | Channels | Ball-end cut: full-radius floor and spherical ends |
 
+## F2 process wall check
+
+`form_check.py --fidelity F2` measures each made part's minimum wall against its
+process minimum: FDM 1.2 mm (three 0.4 mm perimeters) unless `hw/product.yaml`
+`manufacturing.min_wall_mm` sets `fdm` or `cnc`, each above 0 mm. An invalid override
+stops the check with exit 2. Purchased parts, `make_buy: buy` parts, and a process with
+no minimum (CNC without an override) are not scanned; their `min_wall` is
+`{"required_mm": null}`.
+
+- Samples: each face gets a uniform UV grid, at most half the minimum apart in both
+  directions where the surface stretches most, and at most 4096 per face
+  (`capped_faces` counts the faces sampled coarser). The grid spans the face's full UV
+  range, so a bore's seam does not decide where samples land. Samples within four B-rep
+  tolerances (at least 0.1 µm) of a trim boundary are skipped; a seam is no boundary.
+- Chord: each sample casts a ray along its inward normal to the first exit. The exit
+  counts only when an exit face's normal is within 20° of antiparallel, so two faces
+  meeting at an acute edge never read as a wall. `tapered` counts the samples whose exit
+  did not, so a part whose thinnest region is a taper shows low coverage.
+- Persistence: a chord below the minimum counts only when the wall continues at least
+  its own thickness. Along both UV directions, on either side, the face's own sample a
+  chord length away must leave through the same exit face, at any thickness up to twice
+  the minimum, or through another opposing face below the minimum. So a bore web
+  thinnest at one spot still counts. Where that point leaves the face, a ray parallel to
+  the chord stands in. Relief, such as the lands between engraved letters, ends at its
+  own edge and is counted in `shallow`, with the thinnest such chord in
+  `shallow_thickness_mm` and `shallow_location_mm`.
+- Report: `thickness_mm` and `location_mm` (the sample point), `faces`,
+  `faces_sampled`, `samples`, `measured`, `tapered`, `shallow`, `capped_faces`,
+  `spacing_mm` and `seconds`. A ray stops at the running minimum, so `measured` also
+  counts samples that bound the wall at or above it, and `tapered` and `shallow` count
+  only exits shorter than it. A part with no measured wall is a `min_wall_unmeasured`
+  finding, never a pass.
+
+Limits: the minimum is sampled, not certified. A curved wall reads slightly thick (a
+0.8 mm web beside a Ø10 bore reads 0.81 mm), a thin region smaller than a capped face's
+spacing can be missed, and a taper whose faces are more than 20° from antiparallel is
+not measured; its samples show in `tapered`. Measuring a taper by the shortest distance
+to the face it exits through would also read every acute edge and chamfered edge as a
+thin wall. The kernel tolerance is 1e-7 mm and rays start 1e-5 mm inside the face.
+
+`block_like` applies only to `form_class: solid` in `part.yaml`; absent means `solid`.
+Frame, plate, skeleton, and shell are exempt. Solid parts retain the existing OBB tests:
+the face-area rule, minimum 0.20 OBB fill, and shortest OBB extent above 0.10 of the
+second-shortest extent.
+
 ## Self-check: block-like parts
 
 `scripts/form_check.py` flags `block_like` from F2 when either face condition is met
