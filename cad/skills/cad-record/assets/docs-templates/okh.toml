@@ -1,42 +1,43 @@
 schema = "OKH-LOSH-v1.0"
 
 [okhv]
-name = ""
-repo = ""
-version = ""
-license = ""
-licensor = ""
-author = ""
-design_owner = ""
-release_date = ""
-documentation_language = "en"
-hardware_license = ""
-software = ""
-tool = ""
+name = "{{name}}"
+repo = "HUMAN-OWNED: set project repository URL"
+version = "{{version}}"
+license = "{{license}}"
+licensor = "HUMAN-OWNED: set product licensor"
+author = "HUMAN-OWNED: set product author"
+design_owner = "HUMAN-OWNED: set product design owner"
+release = "{{release}}"
+release_date = "{{release_date}}"
+documentation_language = "HUMAN-OWNED: choose documentation language"
+hardware_license = "{{hardware_license}}"
+software = "HUMAN-OWNED: list software and versions"
+tool = "HUMAN-OWNED: list tools and settings"
 
 [technology_readiness_level]
-value = ""
+value = "HUMAN-OWNED: assess readiness level"
 
 [documentation]
-readme = "README.md"
+readme = "index.md"
 
 [bom]
 complete = true
-source = "hw/bom.csv"
-parts_to_make = "docs/index.md#parts-to-make"
-parts_to_buy = "docs/index.md#parts-to-buy"
+source = "{{bom_source}}"
+parts_to_make = "{{parts_to_make}}"
+parts_to_buy = "{{parts_to_buy}}"
 
 [manufacturing_files]
-files = ["hw/versions/vN/parts/"]
+files = ["{{manufacturing_files}}"]
+# planned processes: {{manufacturing_processes}}
 
 [operating_instructions]
-readme = "docs/index.md"
-assembly_steps = "docs/index.md#assembly-steps"
-tools_and_consumables = "docs/index.md#tools-and-consumables"
-
+readme = "index.md"
+assembly_steps = "{{assembly_steps}}"
+tools_and_consumables = "{{tools_and_consumables}}"
 [quality_management]
-quality_system = ""
+quality_system = "HUMAN-OWNED: state applicable quality system"
 
 [validation]
-validation_method = "hw/verification.csv"
-validation_description = "See docs/index.md#checks-before-use for the generated check list."
+validation_method = "{{validation_method}}"
+validation_description = "{{validation_description}}"

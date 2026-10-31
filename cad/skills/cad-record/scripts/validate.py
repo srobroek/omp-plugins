@@ -186,6 +186,92 @@ def check_product_drawing(product: dict[str, Any], path: str, findings: list[dic
                                       f"{product['regime']} regime"))
 
 
+SPDX_ID = re.compile(r"[A-Za-z0-9.-]+")  # SPDX idstring
+SPDX_REF = re.compile(r"(?:DocumentRef-[A-Za-z0-9.-]+:)?(LicenseRef|AdditionRef)-[A-Za-z0-9.-]+")
+SPDX_OPERATORS = ("AND", "OR", "WITH")
+
+
+def _spdx_term(token: str, *, exception: bool) -> bool:
+    """A license identifier, with an optional `+`, or a LicenseRef-; for `exception`, an exception
+    identifier or an AdditionRef-."""
+    if "Ref-" in token:
+        reference = SPDX_REF.fullmatch(token)
+        return reference is not None and reference.group(1) == ("AdditionRef" if exception else "LicenseRef")
+    return SPDX_ID.fullmatch(token if exception else token.removesuffix("+")) is not None
+
+
+def spdx_expression_problem(expression: str) -> str | None:
+    """Why `expression` is not shaped like an SPDX license expression (SPDX 2.3 Annex D), or None.
+
+    Shape only: identifiers, `LicenseRef-`/`DocumentRef-` references, `+`, `WITH` an exception, `AND`
+    binding tighter than `OR`, and balanced parentheses; operators are case-sensitive. No SPDX license
+    list is bundled, so it cannot tell a listed identifier (CERN-OHL-S-2.0) from an unlisted one
+    (CERN-OHL-S)."""
+    tokens = re.findall(r"\(|\)|[^\s()]+", expression)
+    position = 0
+
+    def peek() -> str | None:
+        return tokens[position] if position < len(tokens) else None
+
+    def take() -> str:
+        nonlocal position
+        position += 1
+        return tokens[position - 1]
+
+    def simple() -> str | None:
+        token = peek()
+        if token is None:
+            return "it ends where a license identifier is expected"
+        if token in SPDX_OPERATORS or token in "()":
+            return f"{token!r} stands where a license identifier is expected"
+        take()
+        if not _spdx_term(token, exception=False):
+            return f"{token!r} is not a license identifier or LicenseRef-"
+        if peek() == "WITH":
+            take()
+            exception = peek()
+            if exception is None or exception in SPDX_OPERATORS or not _spdx_term(exception, exception=True):
+                return f"WITH needs an exception identifier, got {exception!r}"
+            take()
+        return None
+
+    def term() -> str | None:
+        if peek() != "(":
+            return simple()
+        take()
+        problem = disjunction()
+        if problem is None and peek() != ")":
+            problem = f"an opening parenthesis is not closed (got {peek()!r})"
+        if problem is None:
+            take()
+        return problem
+
+    def chain(operand: Any, operator: str) -> str | None:
+        problem = operand()
+        while problem is None and peek() == operator:
+            take()
+            problem = operand()
+        return problem
+
+    def disjunction() -> str | None:
+        return chain(lambda: chain(term, "AND"), "OR")
+
+    if not tokens:
+        return "it is empty"
+    problem = disjunction()
+    if problem is None and peek() is not None:
+        problem = f"{peek()!r} follows a complete expression; join terms with AND, OR or WITH (upper case)"
+    return problem
+
+
+def check_product_license(product: dict[str, Any], path: str, findings: list[dict[str, str]]) -> None:
+    """product.yaml license.hardware and license.documentation are shaped like SPDX expressions."""
+    for key, value in sorted((product.get("license") or {}).items()):
+        problem = spdx_expression_problem(value)
+        if problem is not None:
+            findings.append(finding(path, f"license/{key} {value!r} is not an SPDX license expression: {problem}"))
+
+
 def check_part_drawing(part: dict[str, Any], path: str, product_drawing: dict[str, Any] | None,
                        findings: list[dict[str, str]]) -> None:
     """Cross-references inside part.yaml `drawing` and to product.yaml's tolerance policies."""
@@ -702,6 +788,7 @@ def validate_project(project_dir: Path) -> list[dict[str, str]]:
     product_drawing = None
     if valid.get("product.yaml"):
         check_product_drawing(documents["product.yaml"], str(hw / "product.yaml"), findings)
+        check_product_license(documents["product.yaml"], str(hw / "product.yaml"), findings)
         product_drawing = documents["product.yaml"].get("drawing")
     concept_handoff = hw / "concept" / "handoff.json"
     if concept_handoff.is_file():

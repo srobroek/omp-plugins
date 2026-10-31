@@ -8,19 +8,24 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
+from unittest import mock
 
 import yaml
 
 SKILL = Path(__file__).resolve().parents[1]
 SCRIPTS = SKILL / "scripts"
 RELEASE = SCRIPTS / "release.py"
+BUILD_GUIDE = SCRIPTS / "build_guide.py"
 LAMP = SKILL.parent.parent / "examples" / "lamp-arm" / "hw"
 
 
@@ -36,6 +41,7 @@ def load(name: str, path: Path) -> Any:
 layout = load("cad_record_layout", SCRIPTS / "layout.py")
 validate = load("cad_record_validate", SCRIPTS / "validate.py")
 release = load("cad_record_release", RELEASE)
+prune = load("cad_record_prune", SCRIPTS / "prune.py")
 
 
 def sha(path: Path) -> str:
@@ -71,12 +77,13 @@ def edit_csv(path: Path, change: Callable[[list[dict[str, str]]], None]) -> None
     path.write_text(out.getvalue(), encoding="utf-8")
 
 
-def publish(hw: Path, kind: str, subject: str, files: dict[str, str], status: str = "pass") -> Path:
+def publish(hw: Path, kind: str, subject: str, files: dict[str, str], status: str = "pass", version: str = "v1",
+            recipe: dict[str, Any] | None = None) -> Path:
     staged = layout.staging(hw, f"bundle.{kind}")
     for name, text in files.items():
         write(staged / name, text)
-    return layout.publish(hw, f"bundle.{kind}", {"V": "v1", "S": subject}, staged, recipe={"subject": subject},
-                          producer="test", status=status).path
+    return layout.publish(hw, f"bundle.{kind}", {"V": version, "S": subject}, staged,
+                          recipe=recipe or {"subject": subject}, producer="test", status=status).path
 
 
 DRAWING = {"sheet-1.svg": "svg\n", "sheet-1.pdf": "pdf\n", "sheet-1.png": "png\n", "coverage.json": "{}\n",
@@ -84,11 +91,11 @@ DRAWING = {"sheet-1.svg": "svg\n", "sheet-1.pdf": "pdf\n", "sheet-1.png": "png\n
 
 
 def build_version(hw: Path, omit: tuple[tuple[str, str], ...] = (), failed: dict[str, str] | None = None,
-                  attach: tuple[str, ...] = ()) -> None:
-    """hw/versions/v1 as cad-model run seals it: record snapshot, installed STEP per modelled part and
-    the manufacturing outputs of every custom-made part. `omit` leaves (PN, file) out; `failed` marks
-    a part's named manufacturing check failed; `attach` lists its `--attach REF=PARENT_REF` options."""
-    folder = hw / "versions" / "v1"
+                  attach: tuple[str, ...] = (), label: str = "v1") -> None:
+    """hw/versions/<label> as cad-model run seals it: record snapshot, installed STEP per modelled part
+    and the manufacturing outputs of every custom-made part. `omit` leaves (PN, file) out; `failed`
+    marks a part's named manufacturing check failed; `attach` lists its `--attach REF=PARENT_REF` options."""
+    folder = hw / "versions" / label
     for name in ["product.yaml", "interfaces.yaml", "assembly.yaml"] + [
             p.relative_to(hw).as_posix() for p in sorted((hw / "parts").glob("*/part.yaml"))]:
         target = folder / "record" / name
@@ -117,17 +124,19 @@ def build_version(hw: Path, omit: tuple[tuple[str, str], ...] = (), failed: dict
         made[pn] = {"PN": pn, "process": record["process"], "path": f"manufacturing/{pn}", "files": files,
                     **{key: row[key] for key in ("status", "complete", "blocking_failures")}}
     inventory = {p.relative_to(folder).as_posix(): sha(p) for p in sorted(folder.rglob("*")) if p.is_file()}
-    manifest = {"schema_version": 3, "label": "v1", "product_id": "lamp-arm", "attach": list(attach), "parts": parts,
+    manifest = {"schema_version": 3, "label": label, "product_id": "lamp-arm", "attach": list(attach), "parts": parts,
                 "record": {k: v for k, v in inventory.items() if k.startswith("record/")}, "manufacturing": made,
                 "files": inventory}
     write(folder / "manifest.json", json.dumps(manifest, indent=2))
-    write(hw / "versions" / "latest.json", json.dumps({"label": "v1", "manifest": "versions/v1/manifest.json"}))
+    write(hw / "versions" / "latest.json", json.dumps({"label": label, "manifest": f"versions/{label}/manifest.json"}))
 
 
 def frozen_lamp(hw: Path, *, before_build: Callable[[Path], None] | None = None, omit: tuple[tuple[str, str], ...] = (),
-                failed: dict[str, str] | None = None, skip_bundles: tuple[str, ...] = (), attach: tuple[str, ...] = ()) -> None:
+                failed: dict[str, str] | None = None, skip_bundles: tuple[str, ...] = (), attach: tuple[str, ...] = (),
+                label: str = "v1", older: tuple[str, ...] = ()) -> None:
     """The lamp example, reconciled for release (released revisions, verification passed with
-    evidence), built as v1, frozen at it, every required bundle published, and DR-005 approving it."""
+    evidence), built as `label`, frozen at it, every required bundle published, and DR-005 approving it.
+    Each `older` version is built first, with a check and a render bundle of its own."""
     shutil.copytree(LAMP, hw)
     for part in sorted((hw / "parts").glob("*/part.yaml")):
         edit_yaml(part, lambda data: data.update(rev="A"))
@@ -136,21 +145,25 @@ def frozen_lamp(hw: Path, *, before_build: Callable[[Path], None] | None = None,
     write(hw / "docs" / "inspection.md", "# Inspection record\n")
     if before_build:
         before_build(hw)
-    build_version(hw, omit, failed, attach)
+    for old in older:
+        build_version(hw, label=old)
+        publish(hw, "checks", "static", {"result.json": f'{{"status": "pass", "label": "{old}"}}\n'}, version=old)
+        publish(hw, "renders", "iso", {"iso.png": f"{old} render\n"}, version=old)
+    build_version(hw, omit, failed, attach, label)
     edit_yaml(hw / "product.yaml", lambda data: data["flow"].update(
-        stage="release", frozen={"version": "v1", "manifest_sha256": sha(hw / "versions" / "v1" / "manifest.json"),
+        stage="release", frozen={"version": label, "manifest_sha256": sha(hw / "versions" / label / "manifest.json"),
                                  "decision": "DR-004"}))
-    write(hw / "decisions" / "DR-005.md", "# DR-005 Release A\n\nApproved: release v1 as revision A.\n")
-    evidence = {"REQ-002": "sweep hw/motion/v1/elbow-sweep", "REQ-004": "hw/analysis/v1/arm-load/results.json"}
+    write(hw / "decisions" / "DR-005.md", f"# DR-005 Release A\n\nApproved: release {label} as revision A.\n")
+    evidence = {"REQ-002": f"sweep hw/motion/{label}/elbow-sweep", "REQ-004": f"hw/analysis/{label}/arm-load/results.json"}
     edit_csv(hw / "verification.csv", lambda rows: [row.update(result="pass", evidence=evidence.get(
         row["requirement_id"], "hw/docs/inspection.md")) for row in rows])
-    for part in sorted((hw / "versions" / "v1" / "record" / "parts").glob("*/part.yaml")):
+    for part in sorted((hw / "versions" / label / "record" / "parts").glob("*/part.yaml")):
         pn = part.parent.name
         if "drawing" in yaml.safe_load(part.read_text(encoding="utf-8")) and pn not in skip_bundles:
-            publish(hw, "drawings", pn, DRAWING)
-    publish(hw, "drawings", "assembly", DRAWING)
-    publish(hw, "analysis", "arm-load", {"results.json": '{"status": "pass"}\n'})
-    publish(hw, "motion", "elbow-sweep", {"result.json": '{"status": "pass"}\n', "worst.step": "worst\n"})
+            publish(hw, "drawings", pn, DRAWING, version=label)
+    publish(hw, "drawings", "assembly", DRAWING, version=label)
+    publish(hw, "analysis", "arm-load", {"results.json": '{"status": "pass"}\n'}, version=label)
+    publish(hw, "motion", "elbow-sweep", {"result.json": '{"status": "pass"}\n', "worst.step": "worst\n"}, version=label)
 
 
 class ReleaseCase(unittest.TestCase):
@@ -166,8 +179,9 @@ class ReleaseCase(unittest.TestCase):
         frozen_lamp(hw, **options)
         return hw
 
-    def release(self, hw: Path, rev: str = "A", version: str = "v1", decision: str = "DR-005") -> tuple[int, dict[str, Any]]:
-        return release.run(hw, rev, version, decision)
+    def release(self, hw: Path, rev: str = "A", version: str = "v1", decision: str = "DR-005",
+                now: datetime | None = None) -> tuple[int, dict[str, Any]]:
+        return release.run(hw, rev, version, decision, now)
 
 
 class Release(ReleaseCase):
@@ -268,6 +282,204 @@ class Release(ReleaseCase):
         self.assertEqual(validate.blocking(validate.validate_project(hw)), [], "release A holds its own copy")
         (hw / "releases" / "A" / "docs" / "notes.md").unlink()
         self.assertIn("releases/A/docs/notes.md", json.dumps(validate.blocking(validate.validate_project(hw))))
+
+
+# what pruning after release A of v3 removes from Pruning.released(), in order: each version's bundle
+# roots in layout bundle-kind order, then the version itself
+SUPERSEDED = ["hw/checks/v1", "hw/renders/v1", "hw/versions/v1", "hw/checks/v2", "hw/renders/v2", "hw/versions/v2"]
+
+
+class Pruning(ReleaseCase):
+    """--prune after release A of v3: v1 and v2 are superseded, v4 was built after v3 but latest.json names v3."""
+
+    def released(self, *, seal: bool = True) -> Path:
+        hw = self.project(label="v3", older=("v1", "v2"))
+        build_version(hw, label="v4")
+        write(hw / "versions" / "latest.json", json.dumps({"label": "v3", "manifest": "versions/v3/manifest.json"}))
+        if seal:
+            code, report = self.release(hw, version="v3")
+            self.assertEqual(code, 0, report.get("findings"))
+        return hw
+
+    def cli(self, hw: Path, *extra: str, decision: str = "DR-005") -> tuple[int, dict[str, Any]]:
+        result = subprocess.run([sys.executable, str(RELEASE), str(hw), "--rev", "A", "--version", "v3",
+                                 "--decision", decision, "--prune", *extra], capture_output=True, text=True,
+                                timeout=300, check=False)
+        return result.returncode, json.loads(result.stdout)
+
+    def journal(self, hw: Path, digest: str) -> Path:
+        return hw.parent / ".cad-work" / f"prune-A-{digest[:16]}" / "journal.json"
+
+    def assertGone(self, hw: Path, paths: list[str], gone: bool = True) -> None:
+        for rel in paths:
+            self.assertEqual(os.path.lexists(layout.locate(hw, rel)), not gone, rel)
+
+    def test_plan_then_yes_through_the_cli_removes_only_superseded_versions(self) -> None:
+        hw = self.released(seal=False)
+        code, report = self.cli(hw)  # seals A, then plans
+        self.assertEqual((code, report["status"], report["pruning"]["status"]), (0, "released", "plan"), report)
+        plan = report["pruning"]["plan"]
+        self.assertEqual((plan["prune"], plan["remove"]), (["v1", "v2"], SUPERSEDED))
+        self.assertEqual(plan["keep"]["v4"], ["not older than the released v3"], "a newer build stays without latest.json")
+        self.assertIn("released as A", plan["keep"]["v3"])
+        before = tree(hw)
+        code, again = self.cli(hw)  # A is sealed: the documented rerun plans without sealing again
+        self.assertEqual((code, again["already_sealed"], again["pruning"]["plan"]["digest"]), (0, True, plan["digest"]))
+        self.assertEqual(tree(hw), before, "a plan changes nothing")
+        code, report = self.cli(hw, "--yes", plan["digest"])
+        self.assertEqual((code, report["status"], report["pruning"]["status"]), (0, "released", "pruned"), report)
+        self.assertEqual(list(report)[-1], "status")
+        self.assertEqual(report["pruning"]["removed"], SUPERSEDED)
+        self.assertEqual(report["pruning"]["store_gc"]["status"], "pass")
+        self.assertGone(hw, SUPERSEDED)
+        self.assertEqual(layout.versions(hw), ["v3", "v4"])
+        self.assertEqual(layout.verify(hw / "releases" / "A"), [])
+        self.assertEqual(list((hw.parent / ".cad-work").glob("prune-*")), [])
+        self.assertEqual(validate.blocking(validate.validate_project(hw)), [], "no surviving reference broke")
+
+    def test_yes_refuses_a_digest_that_a_fresh_plan_no_longer_has(self) -> None:
+        hw = self.released()
+        digest = prune.plan(hw, "A", "v3")["digest"]
+        write(hw / "decisions" / "DR-006.md", "# DR-006 Cost-down baseline\n\nKeep v2 as the baseline.\n")
+        before = tree(hw)
+        code, report = self.cli(hw, "--yes", digest)
+        self.assertEqual((code, report["status"], report["pruning"]["status"]), (1, "prune_refused", "refused"))
+        self.assertEqual(report["pruning"]["plan"]["prune"], ["v1"])
+        self.assertEqual(report["pruning"]["plan"]["keep"]["v2"], ["named by DR-006"])
+        self.assertEqual(tree(hw), before)
+        result = subprocess.run([sys.executable, str(RELEASE), str(hw), "--rev", "A", "--version", "v3", "--decision",
+                                 "DR-005", "--prune", "--yes", "latest"], capture_output=True, text=True, timeout=60)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("64-character digest", result.stderr)
+
+    def test_an_existing_package_of_another_approval_is_refused_not_pruned_against(self) -> None:
+        hw = self.released()
+        before = tree(hw)
+        code, report = self.cli(hw, decision="DR-004")
+        self.assertEqual((code, report["status"], report["findings"][0]["code"]), (1, "refused", "release.exists"))
+        self.assertNotIn("pruning", report)
+        self.assertEqual(tree(hw), before)
+
+    def test_gc_failure_is_prune_incomplete_and_a_rerun_finishes(self) -> None:
+        hw = self.released()
+        digest = prune.plan(hw, "A", "v3")["digest"]
+        staging = hw / "versions" / ".v5.partial-1"  # a cad-model run in progress: store gc refuses
+        staging.mkdir()
+        code, report = self.cli(hw, "--yes", digest)
+        self.assertEqual((code, report["status"], report["pruning"]["status"]), (1, "prune_incomplete", "incomplete"))
+        self.assertIn("store gc failed", report["pruning"]["message"])
+        self.assertEqual(report["pruning"]["removed"], SUPERSEDED)
+        self.assertGone(hw, SUPERSEDED)
+        self.assertEqual(json.loads(self.journal(hw, digest).read_text(encoding="utf-8"))["phase"], "gc")
+        staging.rmdir()
+        code, report = self.cli(hw)  # a plan request names the pending prune instead of planning another
+        self.assertEqual((code, report["pruning"]["status"], report["pruning"]["digest"]), (1, "incomplete", digest))
+        code, report = self.cli(hw, "--yes", digest)
+        self.assertEqual((code, report["status"], report["pruning"]["status"]), (0, "released", "pruned"), report)
+        self.assertFalse(self.journal(hw, digest).parent.exists())
+
+    def interrupt_after(self, count: int, hw: Path, digest: str) -> dict[str, Any]:
+        rename, moved = os.rename, []
+
+        def interrupted(source: Any, target: Any) -> None:
+            if len(moved) == count:
+                raise OSError("interrupted")
+            moved.append(layout.relative(hw.resolve(), Path(source)))
+            rename(source, target)
+
+        with mock.patch.object(prune.os, "rename", interrupted):
+            result = prune.after_release(hw, "A", "v3", digest)
+        self.assertEqual(moved, SUPERSEDED[:count])
+        return result
+
+    def test_an_interrupted_prune_moves_whole_folders_and_a_rerun_finishes(self) -> None:
+        hw = self.released()
+        digest = prune.plan(hw, "A", "v3")["digest"]
+        result = self.interrupt_after(2, hw, digest)
+        self.assertEqual((result["status"], result["digest"]), ("incomplete", digest))
+        self.assertEqual(layout.verify(hw / "versions" / "v1"), [], "v1 is untouched, never half deleted")
+        self.assertGone(hw, SUPERSEDED[:2])
+        self.assertGone(hw, SUPERSEDED[2:], gone=False)
+        result = prune.after_release(hw, "A", "v3", digest)
+        self.assertEqual((result["status"], result["removed"]), ("pruned", SUPERSEDED))
+        self.assertGone(hw, SUPERSEDED)
+        self.assertFalse(self.journal(hw, digest).parent.exists())
+
+    def test_an_interrupted_prune_moves_back_a_version_that_became_a_milestone(self) -> None:
+        hw = self.released()
+        digest = prune.plan(hw, "A", "v3")["digest"]
+        self.interrupt_after(3, hw, digest)  # every v1 folder has left hw/
+        self.assertGone(hw, SUPERSEDED[:3])
+        write(hw / "decisions" / "DR-006.md", "# DR-006 Gate\n\nThe PARTS gate approved v1.\n")
+        result = prune.after_release(hw, "A", "v3", digest)
+        self.assertEqual((result["status"], sorted(result["restored"])), ("refused", sorted(SUPERSEDED[:3])))
+        self.assertEqual(result["plan"]["keep"]["v1"], ["named by DR-006"])
+        self.assertGone(hw, SUPERSEDED, gone=False)
+        for folder in ("versions/v1", "checks/v1/static", "renders/v1/iso"):
+            self.assertEqual(layout.verify(hw / folder), [], folder)
+        self.assertFalse(self.journal(hw, digest).parent.exists())
+
+    def test_a_real_kept_manifest_that_references_a_superseded_version_keeps_it(self) -> None:
+        hw = self.released()
+        # a changed-only sweep of v3 names its baseline label in its recipe, as sweep.py records it
+        publish(hw, "motion", "elbow-changed", {"result.json": '{"status": "pass"}\n'}, version="v3",
+                recipe={"subject": "elbow-changed", "options": {"changed_only": {"baseline": "v2"}}})
+        # a v3 check that reuses a v1 result names that bundle's manifest by its sha256
+        reused = sha(hw / "checks" / "v1" / "static" / "manifest.json")
+        publish(hw, "checks", "recheck", {"result.json": '{"status": "pass"}\n'}, version="v3",
+                recipe={"subject": "recheck", "reused": {"manifest_sha256": reused}})
+        plan = prune.plan(hw, "A", "v3")
+        self.assertEqual(plan["prune"], [])
+        self.assertEqual(plan["keep"]["v2"], ["referenced by hw/motion/v3/elbow-changed/manifest.json"])
+        self.assertEqual(plan["keep"]["v1"], ["referenced by hw/checks/v3/recheck/manifest.json"])
+
+    def test_a_symlinked_bundle_root_is_refused_in_the_plan(self) -> None:
+        hw = self.released()
+        elsewhere = self.root / "renders-v2"
+        shutil.move(hw / "renders" / "v2", elsewhere)
+        (hw / "renders" / "v2").symlink_to(elsewhere, target_is_directory=True)
+        plan = prune.plan(hw, "A", "v3")
+        self.assertEqual(plan["prune"], ["v1"])
+        self.assertEqual(plan["keep"]["v2"], ["refused: hw/renders/v2 is a symbolic link; resolve it by hand to prune v2"])
+
+    def test_plan_keeps_frozen_change_baseline_and_decision_milestones(self) -> None:
+        hw = self.released(seal=False)
+        write(hw / "decisions" / "DR-006.md", "# DR-006 Gate\n\nThe PARTS gate approved v1.\n")
+        edit_yaml(hw / "product.yaml", lambda data: data["flow"].update(
+            change={"decision": "DR-006", "baseline_version": "v2", "affected_parts": ["LMP-0001"]}))
+        plan = prune.plan(hw, "A", "v3")
+        self.assertEqual(plan["prune"], [])
+        self.assertEqual(plan["keep"]["v1"], ["named by DR-006"])
+        self.assertEqual(plan["keep"]["v2"], ["baseline of product.yaml flow.change"])
+        for reason in ("frozen in product.yaml flow.frozen", "named by DR-005", "latest: versions/latest.json names it"):
+            self.assertIn(reason, plan["keep"]["v3"])
+
+
+class Documents(ReleaseCase):
+    def guide(self, hw: Path, *extra: str) -> None:
+        result = subprocess.run([sys.executable, str(BUILD_GUIDE), str(hw), "--version", "v1", "--out", str(hw / "docs"),
+                                 *extra], capture_output=True, text=True, timeout=300, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_the_package_okh_toml_describes_its_release(self) -> None:
+        sealing = datetime(2026, 11, 2, 23, 59, 59, tzinfo=timezone.utc)  # a fixed clock: no UTC-midnight race
+        hw = self.project()
+        self.guide(hw)
+        code, report = self.release(hw, now=sealing)
+        self.assertEqual(code, 1)
+        self.assertIn("release.docs", [item.get("code") for item in report["findings"]])
+        self.assertFalse((hw / "releases").exists())
+        self.guide(hw, "--rev", "A", "--date", "2026-11-02")
+        code, report = self.release(hw, now=sealing + timedelta(seconds=2))  # the next UTC day
+        self.assertEqual(code, 1)
+        self.assertIn("dated 2026-11-03", json.dumps(report["findings"]))
+        code, report = self.release(hw, now=sealing)
+        self.assertEqual(code, 0, report.get("findings"))
+        okh = tomllib.loads((hw / "releases" / "A" / "docs" / "okh.toml").read_text(encoding="utf-8"))["okhv"]
+        manifest = json.loads((hw / "releases" / "A" / "manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["released_at"], "2026-11-02T23:59:59Z")
+        self.assertEqual({key: okh[key] for key in ("version", "release", "release_date")},
+                         {"version": "v1", "release": "A", "release_date": "2026-11-02"})
 
 
 class Refusal(ReleaseCase):
