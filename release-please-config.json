@@ -141,7 +141,8 @@
           "path": "package.json",
           "jsonpath": "$.version"
         }
-      ]
+      ],
+      "bump-minor-pre-major": true
     },
     "chezmoi": {
       "release-type": "simple",
