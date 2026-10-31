@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/srobroek/omp-plugins/compare/cad--v0.4.0...cad--v0.4.1) (2026-10-31)
+
+
+### Documentation
+
+* **cad:** tighten skill prose flagged by slopvac ([b476fb9](https://github.com/srobroek/omp-plugins/commit/b476fb9b9b16d915887533f9fda5641d32b290fe))
+
 ## [0.4.0](https://github.com/srobroek/omp-plugins/compare/cad--v0.3.0...cad--v0.4.0) (2026-10-31)
 
 
