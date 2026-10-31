@@ -95,7 +95,7 @@ class Release:
     checks: dict[str, str] = field(default_factory=dict)
     considered: set[str] = field(default_factory=set)  # bundle paths already selected or refused
     # the release time, fixed once: the manifest records it and a generated okh.toml must name its date
-    released_at: str = field(default_factory=lambda: datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+    released_at: str = ""
 
     def refuse(self, path: str, code: str, message: str) -> None:
         self.findings.append(validate.finding(path, message, code=f"release.{code}"))
@@ -323,12 +323,15 @@ def check_docs(release: Release) -> None:
     release.checks["docs"] = "pass"
 
 
-def assemble(hw: Path, rev: str, version: str, decision: str) -> tuple[Release, dict[str, Any] | None]:
-    """Every check and the copy list, without writing anything. LayoutError for a malformed argument."""
+def assemble(hw: Path, rev: str, version: str, decision: str,
+             now: datetime | None = None) -> tuple[Release, dict[str, Any] | None]:
+    """Every check and the copy list, without writing anything, for a release at `now` (the current UTC
+    time when None). LayoutError for a malformed argument."""
     target_rel = layout.load().path("release.package", {"REV": rev})
     layout.version_dir(hw, version)
     decision_path = layout.resolve(hw, "record.decision", DR=decision)
-    release = Release(hw, rev, version, decision, target_rel)
+    moment = datetime.now(timezone.utc) if now is None else now.astimezone(timezone.utc)
+    release = Release(hw, rev, version, decision, target_rel, released_at=moment.strftime("%Y-%m-%dT%H:%M:%SZ"))
     if os.path.lexists(layout.locate(hw, target_rel)):
         release.refuse(target_rel, "exists", f"{target_rel} exists; a used revision is never overwritten")
     if not decision_path.is_file():
@@ -449,9 +452,9 @@ def stage(release: Release, facts: dict[str, Any]) -> Path:
     return staged
 
 
-def run(hw: Path, rev: str, version: str, decision: str) -> tuple[int, dict[str, Any]]:
+def run(hw: Path, rev: str, version: str, decision: str, now: datetime | None = None) -> tuple[int, dict[str, Any]]:
     hw = hw.resolve()
-    release, facts = assemble(hw, rev, version, decision)
+    release, facts = assemble(hw, rev, version, decision, now)
     report: dict[str, Any] = {"rev": rev, "version": version, "package": release.target_rel}
     if release.findings or facts is None:
         return 1, {**report, "findings": release.findings, "status": "refused"}

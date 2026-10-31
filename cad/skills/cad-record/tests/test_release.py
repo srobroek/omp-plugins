@@ -15,7 +15,7 @@ import sys
 import tempfile
 import tomllib
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 from unittest import mock
@@ -179,8 +179,9 @@ class ReleaseCase(unittest.TestCase):
         frozen_lamp(hw, **options)
         return hw
 
-    def release(self, hw: Path, rev: str = "A", version: str = "v1", decision: str = "DR-005") -> tuple[int, dict[str, Any]]:
-        return release.run(hw, rev, version, decision)
+    def release(self, hw: Path, rev: str = "A", version: str = "v1", decision: str = "DR-005",
+                now: datetime | None = None) -> tuple[int, dict[str, Any]]:
+        return release.run(hw, rev, version, decision, now)
 
 
 class Release(ReleaseCase):
@@ -461,20 +462,24 @@ class Documents(ReleaseCase):
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_the_package_okh_toml_describes_its_release(self) -> None:
+        sealing = datetime(2026, 11, 2, 23, 59, 59, tzinfo=timezone.utc)  # a fixed clock: no UTC-midnight race
         hw = self.project()
         self.guide(hw)
-        code, report = self.release(hw)
+        code, report = self.release(hw, now=sealing)
         self.assertEqual(code, 1)
         self.assertIn("release.docs", [item.get("code") for item in report["findings"]])
         self.assertFalse((hw / "releases").exists())
-        # the UTC date release.py stamps; run the guide and the release the same UTC day
-        self.guide(hw, "--rev", "A", "--date", datetime.now(timezone.utc).strftime("%Y-%m-%d"))
-        code, report = self.release(hw)
+        self.guide(hw, "--rev", "A", "--date", "2026-11-02")
+        code, report = self.release(hw, now=sealing + timedelta(seconds=2))  # the next UTC day
+        self.assertEqual(code, 1)
+        self.assertIn("dated 2026-11-03", json.dumps(report["findings"]))
+        code, report = self.release(hw, now=sealing)
         self.assertEqual(code, 0, report.get("findings"))
         okh = tomllib.loads((hw / "releases" / "A" / "docs" / "okh.toml").read_text(encoding="utf-8"))["okhv"]
         manifest = json.loads((hw / "releases" / "A" / "manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["released_at"], "2026-11-02T23:59:59Z")
         self.assertEqual({key: okh[key] for key in ("version", "release", "release_date")},
-                         {"version": "v1", "release": "A", "release_date": manifest["released_at"][:10]})
+                         {"version": "v1", "release": "A", "release_date": "2026-11-02"})
 
 
 class Refusal(ReleaseCase):
