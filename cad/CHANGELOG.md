@@ -1,5 +1,37 @@
 # Changelog
 
+## [0.4.0](https://github.com/srobroek/omp-plugins/compare/cad--v0.3.0...cad--v0.4.0) (2026-10-31)
+
+
+### ⚠ BREAKING CHANGES
+
+* **cad:** check minimum walls per process and limit block_like to solid parts
+* **cad:** the pair cache moves to hw/.cad/pairs-v2.sqlite; a sweep whose between-sample check leaves an interval unproved now reports status "incomplete" and exits 2 (use --no-continuous for a sampled-only run); sweep run records live under hw/.cad/runs/; timings_s counters are renamed (kernel_evaluations, exact_hits, ...).
+* **cad:** catch missing retention and see-through FDM parts at L2
+
+### Features
+
+* **cad:** build only changed parts, store part outputs once, and keep results out of git unless approved ([0d8c248](https://github.com/srobroek/omp-plugins/commit/0d8c248fbb465e42757285d6d8056fb6f50371b5))
+* **cad:** catch missing retention and see-through FDM parts at L2 ([d761ee9](https://github.com/srobroek/omp-plugins/commit/d761ee995e9038987aef8db91e026f950cc35d1e))
+* **cad:** check minimum walls per process and limit block_like to solid parts ([dc89664](https://github.com/srobroek/omp-plugins/commit/dc89664da1d29f54f3edb8c6e62815dca552adbc))
+* **cad:** check requirement window visibility and reuse unchanged views in renders ([94dbb08](https://github.com/srobroek/omp-plugins/commit/94dbb088769ecca152b5cf6d1a06660505a6fc8c))
+* **cad:** check versions fail-fast and close each built stage with provisional and human gates ([6923317](https://github.com/srobroek/omp-plugins/commit/6923317beabc47eb019f229d81a2fe2466881e33))
+* **cad:** prune versions after release and generate record docs ([e229d40](https://github.com/srobroek/omp-plugins/commit/e229d40af636a76b27d7974164dd5339d05f4676))
+* **cad:** sweep v2 with between-sample proofs, subsystem runs and merges ([98102a0](https://github.com/srobroek/omp-plugins/commit/98102a0c14ac65ec3e3d952830424d13e8498edc))
+* **cad:** tolerate cosmetic fillet failures and smoke FreeCAD runs ([358cdb2](https://github.com/srobroek/omp-plugins/commit/358cdb2589f9c2c99d602204db5b0e3a921118ca))
+
+
+### Bug Fixes
+
+* **cad:** diagnose CalculiX crashes and timeouts, and allow per-case FEA time limits ([a2b4fb0](https://github.com/srobroek/omp-plugins/commit/a2b4fb0805335e347fb4dfa87da7cd12bf4a7bc3))
+* **cad:** dimension hole centres from datum planes and print feature tolerances on drawings ([b3dbfe7](https://github.com/srobroek/omp-plugins/commit/b3dbfe71d2f38dc5b46336641643d21476519a45))
+* **cad:** repair tool defects found by the Claude Code E2E run ([beea91e](https://github.com/srobroek/omp-plugins/commit/beea91e5283d15d184a22f4a11ce237c743fc93e))
+
+
+### Documentation
+
+* **cad:** state that visibility fractions apply to each target ([4e9488e](https://github.com/srobroek/omp-plugins/commit/4e9488e0c735adf7d2138c0748fcef6738214e08))
+
 ## [0.3.0](https://github.com/srobroek/omp-plugins/compare/cad--v0.2.0...cad--v0.3.0) (2026-10-30)
 
 
