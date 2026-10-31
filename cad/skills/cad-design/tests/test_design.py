@@ -226,12 +226,13 @@ class BlockShapeTests(unittest.TestCase):
 PLATE_08 = "cq.Workplane().box(10, 10, 0.8)"
 BORED_BLOCK = "cq.Workplane().box(20, 20, 10).faces('>Z').workplane().center({}, {}).hole(10)"
 FILLETED_SHELL = "cq.Workplane().box(30, 20, 15).edges('|Z or <Z').fillet(4).faces('>Z').shell(-{})"
+# A Ø10 bore `web` mm from one side of a 20 mm block, toward +X (the bore's seam), -X, +Y and -Y. The web is
+# thinnest at one spot and thickens away from it, by about s²/2r: 1.15 mm is under 1.2 mm only within ±0.64 mm.
+WEBS = {f"TST-04{base + i:02d}": (web, direction) for web, base in ((0.8, 1), (1.1, 31), (1.15, 35))
+        for i, direction in enumerate(((1, 0), (-1, 0), (0, 1), (0, -1)))}
 WALL_PARTS = {
-    # A Ø10 bore 0.8 mm from each side of a 20 mm block; the bore's seam faces +X.
-    "TST-0401": (FDM_MADE, BORED_BLOCK.format(4.2, 0)),
-    "TST-0402": (FDM_MADE, BORED_BLOCK.format(-4.2, 0)),
-    "TST-0403": (FDM_MADE, BORED_BLOCK.format(0, 4.2)),
-    "TST-0404": (FDM_MADE, BORED_BLOCK.format(0, -4.2)),
+    **{pn: (FDM_MADE, BORED_BLOCK.format(round(dx * (5 - web), 6), round(dy * (5 - web), 6)))
+       for pn, (web, (dx, dy)) in WEBS.items()},
     # A 0.8 mm rib 2.5 mm tall on a 3 mm plate.
     "TST-0405": (FDM_MADE, "cq.Workplane().box(20, 20, 3).faces('>Z').workplane().rect(15, 0.8).extrude(2.5)"),
     # A lug whose Ø6.4 bore leaves a 0.8 mm ring in its R4 end.
@@ -295,11 +296,10 @@ class WallScanTests(unittest.TestCase):
         self.assertAlmostEqual(self.wall(pn)["thickness_mm"], thickness, places=6, msg=pn)
 
     def test_bore_webs_are_found_whichever_way_the_seam_faces(self) -> None:
-        for pn, web in (("TST-0401", (9.6, 0.0)), ("TST-0402", (-9.6, 0.0)), ("TST-0403", (0.0, 9.6)),
-                        ("TST-0404", (0.0, -9.6))):
-            with self.subTest(part=pn):
-                location = self.assert_thin(pn, 0.8)
-                self.assertLess(math.dist(location[:2], web), 1.0)
+        for pn, (web, (dx, dy)) in WEBS.items():
+            with self.subTest(part=pn, web=web):
+                location = self.assert_thin(pn, web)
+                self.assertLess(math.dist(location[:2], (dx * (10 - web / 2), dy * (10 - web / 2))), 1.0)
 
     def test_narrow_faces_of_rib_lug_ring_floor_and_boss_are_sampled(self) -> None:
         x, y, z = self.assert_thin("TST-0405", 0.8)
@@ -320,15 +320,19 @@ class WallScanTests(unittest.TestCase):
         self.assertEqual([f for f in self.report["findings"] if f["part"] == "TST-0410"], [])
 
     def test_acute_edge_wedge_and_relief_are_not_walls(self) -> None:
+        wedge, relief = self.wall("TST-0416"), self.wall("TST-0417")
         self.assert_passes("TST-0416", 10.0)  # every tip chord is rejected, so the end caps set the minimum
-        self.assertLess(self.wall("TST-0416")["measured"], self.wall("TST-0416")["samples"])
+        self.assertGreater(wedge["tapered"], 0)
         self.assert_passes("TST-0417", 3.4)  # the 1.0 mm land is 0.6 mm tall
-        self.assertGreater(self.wall("TST-0417")["shallow"], 0)
+        self.assertGreater(relief["shallow"], 0)
+        self.assertAlmostEqual(relief["shallow_thickness_mm"], 1.0, places=6)
+        self.assertTrue(1.4 - 1e-6 <= relief["shallow_location_mm"][2] <= 2.0 + 1e-6, relief["shallow_location_mm"])
 
     def test_part_without_a_measured_wall_is_a_finding(self) -> None:
         wall = self.wall("TST-0411")
         self.assertEqual((wall["thickness_mm"], wall["measured"], wall["faces_sampled"]), (None, 0, 2))
         self.assertGreater(wall["samples"], 0)
+        self.assertEqual(wall["tapered"], wall["samples"])  # the coverage shows why: every exit is a taper
         self.assertEqual(self.wall_findings("TST-0411"), [{"check": "min_wall_unmeasured", "part": "TST-0411",
                                                             "min_mm": 1.2, "faces": 2, "faces_sampled": 2,
                                                             "samples": wall["samples"]}])
@@ -353,7 +357,9 @@ class WallScanTests(unittest.TestCase):
             with self.subTest(part=pn):
                 self.assertEqual(wall["spacing_mm"], 0.6)
                 self.assertTrue(0 < wall["faces_sampled"] <= wall["faces"], wall)
-                self.assertTrue(0 <= wall["measured"] + wall["shallow"] <= wall["samples"], wall)
+                self.assertTrue(0 <= wall["measured"] + wall["shallow"] + wall["tapered"] <= wall["samples"], wall)
+                self.assertEqual(wall["shallow_thickness_mm"] is None, wall["shallow"] == 0, wall)
+                self.assertEqual(wall["shallow_location_mm"] is None, wall["shallow"] == 0, wall)
                 self.assertGreaterEqual(wall["seconds"], 0.0)
 
 

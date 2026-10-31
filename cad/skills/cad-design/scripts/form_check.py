@@ -21,8 +21,9 @@ Per part (stdout JSON `parts`):
     min_wall               F2+: {required_mm} alone when the process has no minimum
                            (purchased, or cnc without an override); else the scan:
                            thickness_mm and location_mm (null when no wall was
-                           measured), faces, faces_sampled, samples, measured,
-                           shallow, capped_faces, spacing_mm and seconds (see minimum_wall)
+                           measured), faces, faces_sampled, samples, measured, tapered,
+                           shallow with shallow_thickness_mm and shallow_location_mm,
+                           capped_faces, spacing_mm and seconds (see minimum_wall)
     valid                  BRepCheck_Analyzer verdict on the STEP read-back
     solids, volume_mm3, area_mm2
     kernel_valid           BRepCheck verdict on the in-memory shape (build.json)
@@ -91,7 +92,8 @@ WALL_EDGE_SKIP_TOLERANCES = 4.0  # samples this many B-rep tolerances from a tri
 WALL_EDGE_SKIP_MIN_MM = 1e-4
 WALL_OPPOSING_DOT = -0.94  # an exit normal within 20 degrees of antiparallel to the sample normal
 WALL_SAME_EXIT_MM = 1e-6  # hits this close along a ray are one exit, through an edge or a vertex
-WALL_PROBE_REACH = 3.0  # in minimum walls: no persistence probe strays farther from its sample, per axis
+WALL_PERSIST_REACH = 2.0  # in minimum walls: how thick a neighbour through the same exit face may be
+WALL_PROBE_REACH = 3.0  # in minimum walls, per axis: no persistence probe strays farther from its sample
 WALL_RAY_OFFSET_MM = 1e-5
 WALL_CLASSIFY_TOL_MM = 1e-7
 
@@ -281,8 +283,8 @@ class SolidRays:
         self.intersector = IntCurvesFace_ShapeIntersector()
         self.intersector.Load(compound, WALL_CLASSIFY_TOL_MM)
 
-    def crossings(self, start: Any, direction: Any, limit: float, count: int) -> list[tuple[float, list[Any]]]:
-        """The first `count` boundary crossings of a ray within `limit`: (ray parameter, outward normals there).
+    def crossings(self, start: Any, direction: Any, limit: float, count: int) -> list[tuple[float, list[tuple[Any, Any]]]]:
+        """The first `count` boundary crossings of a ray within `limit`: (ray parameter, [(face, outward normal)]).
 
         Hits within WALL_SAME_EXIT_MM of each other are one crossing, through an edge or a vertex.
         """
@@ -293,7 +295,7 @@ class SolidRays:
         hits = self.intersector
         hits.Perform(gp_Lin(start, gp_Dir(direction)), 0.0, limit)
         hits.SortResult()
-        found: list[tuple[float, list[Any]]] = []
+        found: list[tuple[float, list[tuple[Any, Any]]]] = []
         for index in range(1, hits.NbPnt() + 1):
             w = hits.WParameter(index)
             if not found or w > found[-1][0] + WALL_SAME_EXIT_MM:
@@ -304,32 +306,35 @@ class SolidRays:
             _, normal = unit_normal(BRepAdaptor_Surface(face, False), hits.UParameter(index), hits.VParameter(index),
                                     face.Orientation() == TopAbs_REVERSED)
             if normal is not None:
-                found[-1][1].append(normal)
+                found[-1][1].append((face, normal))
         return found
 
-    def chord(self, point: Any, normal: Any, limit: float) -> float | None:
-        """The length of the inward ray from a surface point to its first exit within `limit`.
+    def chord(self, point: Any, normal: Any, limit: float) -> tuple[float | None, list[Any]]:
+        """The length of the inward ray from a surface point to its first exit within `limit`, and the exit faces.
 
-        math.inf when the ray stays in the solid that far; None when no face it leaves
-        through there opposes `normal` (an acute edge wedge, or a side face).
+        (math.inf, []) when the ray stays in the solid that far. (None, []) when no face
+        it leaves through there opposes `normal`: a taper, an acute edge wedge or a side
+        face. Otherwise the exit faces listed are the ones that oppose `normal`.
         """
         found = self.crossings(point.Translated(normal.Multiplied(-WALL_RAY_OFFSET_MM)), normal.Reversed(), limit, 1)
         if not found:
-            return math.inf
+            return math.inf, []
         exit_w, exits = found[0]
-        if any(normal.Dot(exit_normal) <= WALL_OPPOSING_DOT for exit_normal in exits):
-            return exit_w + WALL_RAY_OFFSET_MM  # the ray starts the offset inside the face
-        return None
+        opposing = [face for face, exit_normal in exits if normal.Dot(exit_normal) <= WALL_OPPOSING_DOT]
+        return (exit_w + WALL_RAY_OFFSET_MM, opposing) if opposing else (None, [])  # the ray starts inside the face
 
     def persists(self, samples: FaceSamples, u: float, v: float, point: Any, normal: Any, length: float,
-                 required_mm: float) -> bool:
+                 exits: list[Any], required_mm: float) -> bool:
         """Whether a chord below the minimum belongs to a wall, not to relief such as the lands of engraved text.
 
         A wall continues at least as far as it is thin. Along the face's U and V
-        directions, on at least one side, one chord length away, there must be another
-        chord below the minimum: from the face's own sample there, or, where that point
-        leaves the face, from a ray parallel to this chord (thin_wall_at), so a wall also
-        continues across face boundaries and parametric poles.
+        directions, on at least one side, one chord length away, the wall must go on: the
+        face's own sample there leaves the solid through one of `exits`, at any thickness
+        up to WALL_PERSIST_REACH minimum walls, or through another opposing face below the
+        minimum. So a web thinnest at one spot, thickening away from it, still counts.
+        Where that point leaves the face, a ray parallel to this chord stands in
+        (thin_wall_at), so a wall also continues across face boundaries and parametric
+        poles; relief ends there, at its own edge.
         """
         from OCP.gp import gp_Pnt, gp_Vec
 
@@ -341,27 +346,36 @@ class SolidRays:
                 probe = samples.at(u + side * step, v) if along_u else samples.at(u, v + side * step)
                 if probe is None:
                     foot = point.Translated(tangent.Multiplied(side * length))
-                    thin = self.thin_wall_at(foot, normal, length, required_mm)
+                    goes_on = self.thin_wall_at(foot, normal, length, exits, required_mm)
                 else:
-                    chord = self.chord(probe[0], probe[1], required_mm)
-                    thin = chord is not None and chord < required_mm
-                if thin:
+                    found = self.crossings(probe[0].Translated(probe[1].Multiplied(-WALL_RAY_OFFSET_MM)),
+                                           probe[1].Reversed(), WALL_PERSIST_REACH * required_mm, 1)
+                    goes_on = bool(found) and self.continues(found[0], probe[1], exits, required_mm)
+                if goes_on:
                     break
             else:
                 return False
         return True
 
-    def thin_wall_at(self, foot: Any, normal: Any, length: float, required_mm: float) -> bool:
+    @staticmethod
+    def continues(crossing: tuple[float, list[tuple[Any, Any]]], normal: Any, exits: list[Any],
+                  required_mm: float, entry_w: float = -WALL_RAY_OFFSET_MM) -> bool:
+        """Whether an exit crossing goes on with a wall: through one of `exits` at any thickness, or through
+        another face opposing `normal` less than `required_mm` after `entry_w`."""
+        exit_w, faces = crossing
+        return any(face.IsSame(exit_face) for face, _ in faces for exit_face in exits) or (
+            exit_w - entry_w < required_mm and any(normal.Dot(exit_normal) <= WALL_OPPOSING_DOT for _, exit_normal in faces))
+
+    def thin_wall_at(self, foot: Any, normal: Any, length: float, exits: list[Any], required_mm: float) -> bool:
         """Whether a ray along -normal through `foot` enters the solid within one chord length of `foot`,
-        then leaves through an opposing face less than `required_mm` later."""
+        then leaves through one of `exits` or through an opposing face less than `required_mm` later."""
         found = self.crossings(foot.Translated(normal.Multiplied(length)), normal.Reversed(),
                                2.0 * length + required_mm, 2)
         if len(found) < 2 or found[0][0] > 2.0 * length:
             return False
-        (enter_w, entries), (exit_w, exits) = found
-        return exit_w - enter_w < required_mm and any(
-            normal.Dot(entry) > 0.0 and entry.Dot(exit_normal) <= WALL_OPPOSING_DOT
-            for entry in entries for exit_normal in exits)
+        enter_w, entries = found[0]
+        return any(normal.Dot(entry) > 0.0 and self.continues(found[1], entry, exits, required_mm, enter_w)
+                   for _, entry in entries)
 
 
 def minimum_wall(shape: Any, required_mm: float) -> dict[str, Any]:
@@ -371,19 +385,22 @@ def minimum_wall(shape: Any, required_mm: float) -> dict[str, Any]:
     WALL_SPACING_FRACTION of `required_mm`, up to WALL_FACE_SAMPLE_CAP per face;
     `capped_faces` counts the faces sampled coarser. Each sample casts a ray along its
     inward normal (SolidRays.chord). Its first exit must oppose the sample, so two faces
-    meeting at an acute edge never read as a thin wall. A ray needs to reach only the
-    running minimum: a sample with no shorter chord bounds the wall there at or above it.
-    A shorter chord below `required_mm` must also persist (SolidRays.persists) to become
-    the minimum; `shallow` counts the ones that did not. At or above `required_mm` the
-    shortest opposing chord is the minimum as found. `measured` counts the samples that
-    measured or bounded a wall; zero means the scan measured no wall at all.
+    meeting at an acute edge never read as a thin wall; `tapered` counts the samples
+    whose exit did not. A ray needs to reach only the running minimum: a sample with no
+    shorter chord bounds the wall there at or above it, so `tapered` and `shallow` count
+    only exits shorter than the running minimum. A shorter chord below `required_mm`
+    must also persist (SolidRays.persists) to become the minimum; `shallow` counts the
+    ones that did not, with the thinnest of them. At or above `required_mm` the shortest
+    opposing chord is the minimum as found. `measured` counts the samples that measured
+    or bounded a wall; zero means the scan measured no wall at all.
     """
     from OCP.BRepTools import BRepTools
 
     started = time.perf_counter()
     spacing = WALL_SPACING_FRACTION * required_mm
     best: tuple[float, Any] | None = None
-    faces = faces_sampled = samples = measured = shallow = capped_faces = 0
+    thinnest_shallow: tuple[float, Any] | None = None
+    faces = faces_sampled = samples = measured = shallow = tapered = capped_faces = 0
     for solid in solids_of(shape):
         rays = SolidRays(solid)
         for index, face in enumerate(rays.faces):
@@ -398,14 +415,20 @@ def minimum_wall(shape: Any, required_mm: float) -> dict[str, Any]:
             placed = 0
             for u, v, point, normal in face_samples.grid():
                 placed += 1
-                length = rays.chord(point, normal, rays.reach if best is None else min(rays.reach, best[0]))
-                if length is None or (length == math.inf and best is None):
-                    continue  # no opposing exit, or a ray that never left the solid
+                length, exits = rays.chord(point, normal, rays.reach if best is None else min(rays.reach, best[0]))
+                if length is None:
+                    tapered += 1
+                    continue
+                if length == math.inf and best is None:
+                    continue  # a ray that never left the solid
                 if best is not None and length >= best[0]:
                     measured += 1  # bounded by the running minimum
                     continue
-                if length < required_mm and not rays.persists(face_samples, u, v, point, normal, length, required_mm):
+                if length < required_mm and not rays.persists(face_samples, u, v, point, normal, length, exits,
+                                                              required_mm):
                     shallow += 1
+                    if thinnest_shallow is None or length < thinnest_shallow[0]:
+                        thinnest_shallow = (length, point)
                     continue
                 measured += 1
                 best = (length, point)
@@ -413,10 +436,17 @@ def minimum_wall(shape: Any, required_mm: float) -> dict[str, Any]:
             faces_sampled += placed > 0
     return {"required_mm": required_mm,
             "thickness_mm": None if best is None else round(best[0], 6),
-            "location_mm": None if best is None else [round(value, 6) + 0.0 for value in _xyz(best[1])],  # no -0.0
+            "location_mm": None if best is None else rounded_xyz(best[1]),
             "faces": faces, "faces_sampled": faces_sampled, "samples": samples, "measured": measured,
-            "shallow": shallow, "capped_faces": capped_faces, "spacing_mm": round(spacing, 6),
+            "tapered": tapered, "shallow": shallow,
+            "shallow_thickness_mm": None if thinnest_shallow is None else round(thinnest_shallow[0], 6),
+            "shallow_location_mm": None if thinnest_shallow is None else rounded_xyz(thinnest_shallow[1]),
+            "capped_faces": capped_faces, "spacing_mm": round(spacing, 6),
             "seconds": round(time.perf_counter() - started, 3)}
+
+
+def rounded_xyz(point: Any) -> list[float]:
+    return [round(value, 6) + 0.0 for value in _xyz(point)]  # + 0.0 turns -0.0 into 0.0
 
 
 def count_solids(shape: Any) -> int:
