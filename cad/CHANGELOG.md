@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.1](https://github.com/srobroek/omp-plugins/compare/cad--v0.4.0...cad--v0.4.1) (2026-11-02)
+
+
+### Bug Fixes
+
+* **cad:** restore the concept viewer controls ([f5fce7d](https://github.com/srobroek/omp-plugins/commit/f5fce7d42d326ba336c50a42a013e82598ba7f27))
+
+
+### Documentation
+
+* **cad:** tighten skill prose flagged by slopvac ([b476fb9](https://github.com/srobroek/omp-plugins/commit/b476fb9b9b16d915887533f9fda5641d32b290fe))
+
 ## [0.4.0](https://github.com/srobroek/omp-plugins/compare/cad--v0.3.0...cad--v0.4.0) (2026-10-31)
 
 
