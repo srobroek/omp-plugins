@@ -597,6 +597,14 @@ async function saveScreenshot() {
     ui.shot.disabled = false;
   }
 }
+
+// --- wiring -----------------------------------------------------------------
+
+ui.fit.addEventListener("click", fitView);
+// saveScreenshot reports a failure in the status line, then rethrows for window.cadConcept.save callers.
+ui.shot.addEventListener("click", () => saveScreenshot().catch(() => {}));
+ui.partLabels.addEventListener("change", requestRender);
+ui.groupLabels.addEventListener("change", requestRender);
 ui.select.addEventListener("change", () => {
   state.file = ui.select.value;
   state.framed = false;

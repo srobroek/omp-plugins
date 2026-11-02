@@ -11,8 +11,10 @@ import base64
 import hashlib
 import importlib.util
 import json
+import os
 import shutil
 import signal
+import struct
 import subprocess
 import sys
 import tempfile
@@ -21,6 +23,7 @@ import threading
 import unittest
 import urllib.error
 import urllib.request
+import zlib
 from pathlib import Path
 
 
@@ -55,6 +58,9 @@ def load(name: str, path: Path):
 
 concept = load("cad_concept", CONCEPT_PY)
 serve = load("cad_concept_serve", SERVE_PY)
+scriptenv = load("cadmodel_scriptenv", SKILL.parent / "cad-model" / "scripts" / "cadmodel" / "scriptenv.py")
+RENDER_PY = SKILL.parent / "cad-render" / "scripts" / "render.py"
+PRESS_SAVE = Path(__file__).resolve().parent / "fixtures" / "press_save.py"
 
 
 def example() -> dict:
@@ -545,6 +551,99 @@ class ServerUsage(unittest.TestCase):
                                     capture_output=True, text=True, timeout=10)
         self.assertEqual(result.returncode, 2)
         self.assertIn("--allow-remote", result.stderr)
+
+
+def chromium_installed() -> bool:
+    roots = [os.environ.get("PLAYWRIGHT_BROWSERS_PATH"), Path.home() / "Library" / "Caches" / "ms-playwright",
+             Path.home() / ".cache" / "ms-playwright"]
+    return any(root and Path(root).is_dir() and any(Path(root).glob("chromium*")) for root in roots)
+
+
+def png_size(data: bytes) -> tuple[int, int]:
+    """Width and height of a well-formed PNG: verify chunk CRCs and complete image data."""
+    if not data.startswith(serve.PNG_MAGIC):
+        raise ValueError("no PNG signature")
+    chunks, pos = [], len(serve.PNG_MAGIC)
+    while pos < len(data):
+        length, kind = struct.unpack_from(">I4s", data, pos)
+        body = data[pos + 8:pos + 8 + length]
+        (crc,) = struct.unpack_from(">I", data, pos + 8 + length)
+        if zlib.crc32(kind + body) != crc:
+            raise ValueError(f"{kind!r} chunk CRC mismatch")
+        chunks.append((kind, body))
+        pos += 12 + length
+    if not chunks or chunks[0][0] != b"IHDR" or chunks[-1][0] != b"IEND":
+        raise ValueError("PNG must start with IHDR and end with IEND")
+    width, height, depth, color, _, _, interlace = struct.unpack(">IIBBBBB", chunks[0][1])
+    channels = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}[color]
+    pixels = zlib.decompress(b"".join(body for kind, body in chunks if kind == b"IDAT"))
+    if interlace or len(pixels) != height * (1 + (width * channels * depth + 7) // 8):
+        raise ValueError("image data does not fill the IHDR size")
+    return width, height
+
+
+def three_vendor_cache_ready() -> tuple[bool, str]:
+    """Try filling the SRI-pinned three.js cache once; don't fail tests on offline hosts."""
+    cache = serve.default_cache_dir()
+    vendor = serve.VendorCache(cache, serve.vendor_integrity(serve.VIEWER_DIR / "index.html"))
+    try:
+        for module in vendor.integrity:
+            vendor.get(module)
+    except (OSError, LookupError) as error:
+        return False, f"pinned three.js vendor cache unavailable and network fetch failed: {error}"
+    return True, ""
+
+
+@unittest.skipUnless(shutil.which("uv") and chromium_installed(), "needs uv and Playwright Chromium")
+class ViewerSaveInBrowser(unittest.TestCase):
+    """serve.py with the pinned three.js cache, Save pressed in headless Chromium."""
+
+    def test_save_button_publishes_the_selected_variant_as_a_content_bound_bundle(self) -> None:
+        ready, reason = three_vendor_cache_ready()
+        if not ready:
+            self.skipTest(reason)
+        with tempfile.TemporaryDirectory(prefix="cad-concept-save-") as tmp:
+            project = project_for_scene(Path(tmp), EXAMPLE)
+            scene_dir = project / "hw" / "concept"
+            proc = subprocess.Popen(
+                [sys.executable, str(SERVE_PY), "--scene-dir", str(scene_dir), "--project-root", str(project),
+                 "--port", "0", "--idle-timeout", "0"],
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+            assert proc.stdout
+            try:
+                url = json.loads(proc.stdout.readline())["url"]
+                driver = subprocess.run(scriptenv.python_command(RENDER_PY, str(PRESS_SAVE), url, "square-base"),
+                                        capture_output=True, text=True, timeout=600)
+            finally:
+                proc.terminate()
+                proc.wait(timeout=5)
+                proc.stdout.close()
+            self.assertEqual(driver.returncode, 0, driver.stdout[-3000:] + driver.stderr[-3000:])
+            report = json.loads(driver.stdout)
+            self.assertTrue(report["result"].startswith("Saved "), report)
+            self.assertEqual(report["errors"], [])
+
+            saved = Path(report["result"].removeprefix("Saved "))
+            manifest = json.loads((saved.parent / "manifest.json").read_text(encoding="utf-8"))
+            capture = manifest["recipe"]["capture"]
+            scene_sha = hashlib.sha256((scene_dir / "lamp-arm.scene.json").read_bytes()).hexdigest()
+            capture_sha = hashlib.sha256(serve.layout.canonical_json(capture)).hexdigest()
+            self.assertEqual(saved.resolve(),
+                             (scene_dir / "screenshots" / scene_sha / capture_sha / "preview.png").resolve())
+            self.assertEqual((capture["scene"], capture["scene_sha256"], capture["variant"]),
+                             ("lamp-arm.scene.json", scene_sha, "square-base"))
+            self.assertEqual((manifest["layout"], manifest["recipe"]["scene_sha256"],
+                              manifest["recipe"]["capture_sha256"]), ("concept.screenshot", scene_sha, capture_sha))
+            png = saved.read_bytes()
+            self.assertEqual(manifest["files"]["preview.png"], hashlib.sha256(png).hexdigest())
+            dpr = report["device_pixel_ratio"]
+            width, height = (side * dpr for side in report["stage"])
+            self.assertEqual(png_size(png), (width, height))
+            self.assertEqual(capture["viewport"], {"width": width, "height": height, "device_pixel_ratio": dpr})
+            validator = SKILL.parent / "cad-record" / "scripts" / "validate.py"
+            checked = subprocess.run([sys.executable, str(validator), str(project)],
+                                     capture_output=True, text=True, timeout=60)
+            self.assertEqual(json.loads(checked.stdout), {"ok": True, "findings": []}, checked.stderr)
 
 
 if __name__ == "__main__":
