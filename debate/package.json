@@ -1,7 +1,0 @@
-{
-  "name": "@srobroek/debate",
-  "version": "0.5.0",
-  "description": "Stress-test a decision from both sides before committing.",
-  "private": true,
-  "omp": {}
-}

@@ -1,8 +1,0 @@
-id: desk-lamp
-rigor: pro
-units: mm
-regime: iso
-general_tolerance: ISO 2768-m
-flow:
-  stage: parts
-  recheck_from: layout
