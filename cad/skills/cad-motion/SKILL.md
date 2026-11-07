@@ -96,6 +96,7 @@ Verify coupled motion with `pose.py` and `sweep.py`.
 3. FreeCAD: `uv run --script skill://cad-flow/scripts/run.py cad-motion/scripts/freecad_assembly.py --hw hw --version vN [--case ID] [--replace] [--report-part REF]`
    publishes `result.json` and its retained FreeCAD job files under `hw/motion/vN/<case>/evidence/`; its JSON summary includes
    `frames`, start/mid/end `placements`, `limit_check`, `violations`, and `residuals`.
+
 4. Record each result as a `verification.csv` row: `requirement_id` from requirements.yaml,
    `result` pass|fail from the exit code, `evidence` = bundle path, inputs, pose, and key numbers.
 5. Hand `hw/motion/vN/<case>/worst.step` and its sibling `worst.step.json` to the FEA case
