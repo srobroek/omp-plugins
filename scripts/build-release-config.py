@@ -63,6 +63,7 @@ def build() -> tuple[str, str]:
                 {"type": "json", "path": ".omp-plugin/plugin.json", "jsonpath": "$.version"},
                 {"type": "json", "path": "package.json", "jsonpath": "$.version"},
             ],
+            **({"bump-minor-pre-major": True} if name == "cad" else {}),
         }
         for name in versions
     }

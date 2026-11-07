@@ -130,6 +130,7 @@
       "release-type": "simple",
       "component": "chezmoi",
       "changelog-path": "CHANGELOG.md",
+      "bump-minor-pre-major": true,
       "extra-files": [
         {
           "type": "json",

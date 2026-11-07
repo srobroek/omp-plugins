@@ -6,9 +6,19 @@ An OMP marketplace catalog for the Oh My Pi coding agent.
 | --- | --- |
 | Status | Published: `omp plugin marketplace add srobroek/omp-plugins` |
 | OMP catalog path | `.omp-plugin/marketplace.json` |
-| Claude Code catalog path | `.claude-plugin/marketplace.json` |
-| License | Apache-2.0 |
-
+- Python 3.11 or later.
+- [uv](https://docs.astral.sh/uv/).
+- FreeCAD 1.1.4 with `freecadcmd` and TechDraw templates. Install the official release from [FreeCAD 1.1.4](https://github.com/FreeCAD/FreeCAD/releases/tag/1.1.4).
+  - macOS: use the arm64 or x86_64 DMG. Place FreeCAD.app in `/Applications`.
+  - Linux x86_64 or aarch64: download the matching Python 3.11 AppImage and `-SHA256.txt`. Verify the checksum, extract the AppImage, and put `freecadcmd` on `PATH`.
+  - See [`cad-drawings/SKILL.md`](skills/cad-drawings/SKILL.md#install-freecad) for commands. If FreeCAD is not on `PATH` or in the macOS app bundle, set `FREECADCMD`.
+- Chromium. Preflight and setup install it through Playwright.
+- Claude Code, Codex CLI, OpenCode, or Kiro CLI. The installer copies native skills and agent profiles to each harness's project paths. Claude Code also supports plugin marketplace installation.
+PUT 82.=82:
+The `cad-flow` skill maintains the `hw/` design record. Each L1-L4 batch builds an immutable version, runs checks, and renders the result. The lead dispatches independent stage units to harness subagents in a batch, then integrates their results.
+The lead records user-approved gates as dated decisions in `hw/decisions/`. Gates require explicit user approval. Agent verdicts and successful checks are not approval. The workflow has no ledger.
+PUT 112.=112:
+| `cad-design` | F0-F3 fidelity and form checks |
 OMP reads the `.omp-plugin/` catalog and falls back to `.claude-plugin/`. A repository that ships both
 therefore serves OMP and Claude Code from one source.
 
@@ -99,6 +109,12 @@ After cloning or creating a worktree, run:
 ```
 
 The installer preserves the previous hooks path and all existing hooks. The tracked `pre-commit` wrapper runs agnix against the staged index before each commit, and `scripts/check-agentic-metadata.ts` when Markdown is staged. Git does not install tracked hooks automatically when you clone.
+
+## Plugins
+
+| Plugin | Purpose |
+|---|---|
+| [`cad`](cad/README.md) | Mechanical CAD from rapid concept through verified STEP AP242 release; FDM/CNC design only |
 
 ## Generated files
 
