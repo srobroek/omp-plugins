@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.5](https://github.com/srobroek/omp-plugins/compare/delivery--v1.4.4...delivery--v1.4.5) (2026-11-09)
+
+
+### Bug Fixes
+
+* **delivery:** accept a symlinked home above the receipt root ([867577a](https://github.com/srobroek/omp-plugins/commit/867577ab781f27bab693321a8179786d3efc75d4))
+
 ## [1.4.4](https://github.com/srobroek/omp-plugins/compare/delivery--v1.4.3...delivery--v1.4.4) (2026-10-30)
 
 
