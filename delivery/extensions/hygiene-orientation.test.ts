@@ -405,6 +405,20 @@ describe("delivery hygiene orientation", () => {
 		expect(receipts?.description).toContain("1 valid landing receipt(s)");
 	});
 
+	test("a symlinked agent root is the host's layout, not an untrusted receipt path", () => {
+		const cwd = repo();
+		const real = temp();
+		const agent = join(temp(), ".omp");
+		symlinkSync(real, agent);
+		const key = repoKey(cwd);
+		if (!key) throw new Error("missing repo key");
+		mkdirSync(receiptDirectory({ PI_CODING_AGENT_DIR: real }, key), { recursive: true });
+		const result = withAgentDir(agent, () => scanHygiene(cwd));
+		expect(result.receipts.ids).toEqual([]);
+		expect(result.receipts.directory).toBe(join(realpathSync(real), "receipts", key));
+		expect(result.findings.find(f => f.kind === "receipts")).toBeUndefined();
+	});
+
 	test("a symlink standing in for <agentRoot>/receipts is refused, not traversed", () => {
 		const cwd = repo();
 		const agent = temp();

@@ -1,5 +1,5 @@
 import { lstatSync, realpathSync, type Stats } from "node:fs";
-import { dirname, isAbsolute, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import type { TSchema } from "@oh-my-pi/pi-ai";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
@@ -25,9 +25,10 @@ import {
 	closeoutCommands,
 	type LandingReceipt,
 	listReceipts,
+	provenReceiptDirectory,
+	type ReceiptDirectoryProof,
 	type ReceiptPr,
 	readReceipt,
-	receiptDirectory,
 	repoKey,
 	validateReceipt,
 	writeReceipt,
@@ -425,37 +426,30 @@ function verifyObservation(receipt: LandingReceipt, observed: PullRequestObserva
 	}
 	return null;
 }
-type ReceiptDirectoryState = "safe" | "absent" | "unsafe";
 
-function receiptDirectoryState(directory: string): ReceiptDirectoryState {
-	const chain: string[] = [];
-	let current = resolve(directory);
-	for (;;) {
-		chain.push(current);
-		const parent = dirname(current);
-		if (parent === current) break;
-		current = parent;
-	}
-	chain.reverse();
-	for (const path of chain) {
-		let stat: Stats;
-		try {
-			stat = lstatSync(path);
-		} catch (error) {
-			return (error as NodeJS.ErrnoException).code === "ENOENT" ? "absent" : "unsafe";
-		}
-		if (stat.isSymbolicLink() || !stat.isDirectory()) return "unsafe";
-	}
-	return "safe";
+/** Refusal for a receipt directory that {@link provenReceiptDirectory} could not trust. */
+function untrustedDirectory(proof: Exclude<ReceiptDirectoryProof, { ok: true }>): CleanupFailure {
+	return refuse("receipt.directory", `${proof.at} (${proof.reason})`, "an existing non-symlink directory at and below the agent receipt root");
 }
 
+/**
+ * The canonical path of a caller-named receipt in the proven receipt `directory`.
+ *
+ * The named path may reach that directory through an alias above the receipt root,
+ * such as a symlinked home directory, so its parent is compared by realpath. The
+ * receipt file itself is then lstat'd at its canonical path and refused if it is a
+ * symlink; the directories at and below the receipt root were proved by the caller.
+ */
 function canonicalReceiptPath(raw: string, cwd: string, directory: string): string | CleanupFailure {
-	const target = resolve(cwd, raw);
-	if (dirname(target) !== directory) return refuse("receipt.path", target, `a direct entry under ${show(directory)}`);
-	const directoryState = receiptDirectoryState(directory);
-	if (directoryState !== "safe") {
-		return refuse("receipt.directory", `${directory} (${directoryState})`, "an existing path with only non-symlink directory parents");
+	const supplied = resolve(cwd, raw);
+	let parent: string | null;
+	try {
+		parent = realpathSync(dirname(supplied));
+	} catch {
+		parent = null;
 	}
+	if (parent !== directory) return refuse("receipt.path", supplied, `a direct entry under ${show(directory)}`);
+	const target = join(directory, basename(supplied));
 	let stat: Stats;
 	try {
 		stat = lstatSync(target);
@@ -473,10 +467,12 @@ function resolveReceipt(params: DeliveryCleanupParams, cwd: string, env: NodeJS.
 	if (key === null) {
 		return { tag: "refused", failure: refuse("repo.key", null, "a repository key derived from the current Git common directory") };
 	}
-	const directory = resolve(receiptDirectory(env, key));
+	const proof = provenReceiptDirectory(env, key);
+	const directory = proof.directory;
 	let receipt: LandingReceipt | null = null;
 	let receiptPath: string | null = null;
 	if (params.receipt !== undefined) {
+		if (!proof.ok) return { tag: "refused", failure: untrustedDirectory(proof) };
 		const path = canonicalReceiptPath(params.receipt, cwd, directory);
 		if (typeof path !== "string") return { tag: "refused", failure: path };
 		const read = readReceipt(path);
@@ -484,17 +480,11 @@ function resolveReceipt(params: DeliveryCleanupParams, cwd: string, env: NodeJS.
 		receipt = read.receipt;
 		receiptPath = path;
 	} else {
-		const state = receiptDirectoryState(directory);
-		if (state === "unsafe") {
-			return {
-				tag: "refused",
-				failure: refuse("receipt.directory", `${directory} (unsafe)`, "an existing path with only non-symlink directory parents"),
-			};
-		}
-		const matches = state === "safe" ? listReceipts(directory, { pr: params.pr, branch: params.branch }) : [];
+		if (!proof.ok && proof.reason !== "absent") return { tag: "refused", failure: untrustedDirectory(proof) };
+		const matches = proof.ok ? listReceipts(directory, { pr: params.pr, branch: params.branch }) : [];
 		const selected = matches[0];
 		receipt = selected ?? null;
-		if (selected !== undefined) receiptPath = resolve(directory, `${selected.receiptId}.json`);
+		if (selected !== undefined) receiptPath = join(directory, `${selected.receiptId}.json`);
 	}
 	if (receipt === null) {
 		const selector = params.pr !== undefined
@@ -1034,7 +1024,8 @@ export async function cleanupDelivery(
 	if (!validation.ok) return { ok: false, reason: `continuation receipt: ${validation.reason}` };
 	let written: string;
 	try {
-		written = writeReceipt(continued, receiptDirectory(env, continued.repo.key));
+		// Beside the receipt it continues: the directory resolveReceipt proved.
+		written = writeReceipt(continued, dirname(resolution.path));
 	} catch (error) {
 		return refuse("continuation receipt write", error instanceof Error ? error.message : String(error), "one persisted validated receipt");
 	}
