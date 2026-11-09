@@ -1,12 +1,19 @@
 import type { Dir, Stats } from "node:fs";
 import { lstatSync, opendirSync, realpathSync } from "node:fs";
-import { dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { isAbsolute, join, resolve, sep } from "node:path";
 
 import type { TSchema } from "@oh-my-pi/pi-ai";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 
-import type { GitRunner } from "./landing-receipt";
-import { canonicalLedger, listReceipts, REPOSITORY_OBSERVATION_ARGS, receiptDirectory, repoKey } from "./landing-receipt";
+import type { GitRunner, ReceiptDirectoryProof } from "./landing-receipt";
+import {
+	canonicalLedger,
+	listReceipts,
+	provenReceiptDirectory,
+	REPOSITORY_OBSERVATION_ARGS,
+	receiptDirectory,
+	repoKey,
+} from "./landing-receipt";
 
 /**
  * Read-only hygiene inventory for one repository.
@@ -462,23 +469,6 @@ function publicationFindings(state: WorktreeState): HygieneFinding[] {
 	}
 }
 
-type PathProof = { ok: true } | { ok: false; reason: "absent" | "symlink" | "not-directory" | "unreadable"; at: string };
-
-/** `path` is a real directory, and is not a symlink standing in for one. */
-function provenDirectory(path: string): PathProof {
-	let stat: Stats;
-	try {
-		stat = lstatSync(path);
-	} catch (error) {
-		const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
-		const absent = code === "ENOENT" || code === "ENOTDIR";
-		return { ok: false, reason: absent ? "absent" : "unreadable", at: path };
-	}
-	if (stat.isSymbolicLink()) return { ok: false, reason: "symlink", at: path };
-	if (!stat.isDirectory()) return { ok: false, reason: "not-directory", at: path };
-	return { ok: true };
-}
-
 const PROOF_TEXT: Record<"symlink" | "not-directory" | "unreadable", string> = {
 	symlink: "a symlink",
 	"not-directory": "not a directory",
@@ -559,26 +549,20 @@ function untrustedState(description: string, directory: string | null, paths?: s
 function receiptState(scan: Scan): ReceiptState {
 	const key = repoKey(scan.root, receiptGit(scan));
 	if (!key) return untrustedState("Receipt state is unavailable because the canonical Git repository key could not be proved.", null);
-	let receipts: string;
-	let dir: string;
+	let composed: string;
+	let proof: ReceiptDirectoryProof;
 	try {
-		receipts = receiptDirectory(process.env);
-		dir = receiptDirectory(process.env, key);
+		composed = receiptDirectory(process.env, key);
+		proof = provenReceiptDirectory(process.env, key);
 	} catch {
 		return untrustedState("Receipt directory could not be resolved from a validated agent root.", null);
 	}
-	if (!isAbsolute(receipts) || !isAbsolute(dir)) return untrustedState("Receipt directory is not absolute; receipt state is untrusted.", null);
-	/*
-	 * Every component the receipt path is composed of, outermost first: the agent
-	 * root, `<agentRoot>/receipts`, and the repository-keyed directory under it.
-	 * Each is lstat'd in its own right, because lstat only refuses to follow the
-	 * final component — checking the leaf alone silently traverses a symlink
-	 * planted at `<agentRoot>/receipts` and reports whatever it points at as this
-	 * repository's reconciliation evidence.
-	 */
-	for (const component of [dirname(receipts), receipts, dir]) {
-		const proof = provenDirectory(component);
-		if (proof.ok) continue;
+	if (!isAbsolute(composed)) return untrustedState("Receipt directory is not absolute; receipt state is untrusted.", null);
+	// The receipt module proves the path: symlinks above the agent root are the
+	// host's layout, while one at `<agentRoot>/receipts` or the keyed directory
+	// would report whatever it points at as this repository's evidence.
+	const dir = proof.directory;
+	if (!proof.ok) {
 		if (proof.reason === "absent") return { finding: null, ids: [], directory: dir };
 		return untrustedState(`Receipt path component ${proof.at} is ${PROOF_TEXT[proof.reason]}; receipt state is untrusted.`, dir, [proof.at]);
 	}

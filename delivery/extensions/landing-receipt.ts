@@ -428,6 +428,53 @@ export function receiptDirectory(env: NodeJS.ProcessEnv = process.env, key?: str
 	return join(receipts, key);
 }
 
+/** Whether {@link provenReceiptDirectory} could trust the receipt directory, and where it is. */
+export type ReceiptDirectoryProof =
+	| { ok: true; directory: string }
+	| { ok: false; reason: "absent" | "symlink" | "not-directory" | "unreadable"; at: string; directory: string };
+
+/**
+ * The {@link receiptDirectory} a reader may trust, or why it may not.
+ *
+ * The agent root is canonicalized once with realpath. A symlink at or above it
+ * belongs to the host's layout, such as a home directory that is itself a symlink,
+ * not to the receipt store, and anyone able to plant one already owns the account.
+ * The receipt root, `<agentRoot>/receipts`, and the repository-keyed directory
+ * below it are then lstat'd on that canonical path, each in its own right: lstat
+ * declines to follow only the final component, and a symlink planted at either
+ * would report another directory's files as this repository's receipts.
+ *
+ * `directory` is canonical whenever the agent root resolves, so `absent` still
+ * names where receipts would live. A key that is not {@link REPO_KEY} throws, as
+ * {@link receiptDirectory} does.
+ */
+export function provenReceiptDirectory(env: NodeJS.ProcessEnv, key: string): ReceiptDirectoryProof {
+	const composed = resolve(receiptDirectory(env, key));
+	const agentRoot = dirname(dirname(composed));
+	const missing = (error: unknown): "absent" | "unreadable" => {
+		const code = (error as NodeJS.ErrnoException).code;
+		return code === "ENOENT" || code === "ENOTDIR" ? "absent" : "unreadable";
+	};
+	let root: string;
+	try {
+		root = realpathSync(agentRoot);
+	} catch (error) {
+		return { ok: false, reason: missing(error), at: agentRoot, directory: composed };
+	}
+	const directory = join(root, "receipts", key);
+	for (const at of [root, dirname(directory), directory]) {
+		let stat: Stats;
+		try {
+			stat = lstatSync(at);
+		} catch (error) {
+			return { ok: false, reason: missing(error), at, directory };
+		}
+		if (stat.isSymbolicLink()) return { ok: false, reason: "symlink", at, directory };
+		if (!stat.isDirectory()) return { ok: false, reason: "not-directory", at, directory };
+	}
+	return { ok: true, directory };
+}
+
 /**
  * `<epochMillis>-<first 12 of the merge oid>`, or `<epochMillis>-nomerge`.
  *
