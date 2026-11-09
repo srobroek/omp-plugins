@@ -47,7 +47,7 @@
       "name": "cad",
       "description": "Agent-assisted mechanical CAD from rapid concept through verified STEP AP242 release.",
       "source": "./cad",
-      "version": "0.4.0",
+      "version": "0.4.1",
       "category": "development"
     },
     {
@@ -68,7 +68,7 @@
       "name": "delivery",
       "description": "Delivery workflow guidance with pull-request review, landing, cleanup, and hygiene tools.",
       "source": "./delivery",
-      "version": "1.4.4",
+      "version": "1.4.5",
       "category": "devops"
     },
     {
