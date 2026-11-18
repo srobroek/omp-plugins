@@ -116,6 +116,27 @@
         "dependencies",
         "major"
       ]
+    },
+    {
+      "description": "@oh-my-pi/* minor and patch arrive as one group",
+      "groupName": "omp",
+      "matchPackageNames": [
+        "@oh-my-pi/**"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "patch"
+      ]
+    },
+    {
+      "description": "OMP majors are decided by a human (omp-major-issue.yml opens an issue)",
+      "matchPackageNames": [
+        "@oh-my-pi/**"
+      ],
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "enabled": false
     }
   ]
 }

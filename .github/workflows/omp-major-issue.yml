@@ -1,7 +1,7 @@
 name: omp-major-issue
 
-# .github/dependabot.yml ignores @oh-my-pi/* major updates on purpose (minor and
-# patch bumps arrive as the automerged `omp` group), so nothing would otherwise
+# .github/renovate.json5 disables @oh-my-pi/* major updates on purpose (minor and
+# patch bumps arrive as the `omp` group), so nothing would otherwise
 # notice that this checkout has fallen behind a new OMP major. This opens one
 # compatibility issue per major and hands the decision to a human.
 
@@ -76,7 +76,7 @@ jobs:
             printf '%s\n' \
               "The latest \`@oh-my-pi/pi-coding-agent\` release is $latest; this repository pins $current." \
               "" \
-              "Dependabot ignores @oh-my-pi/* major updates (see .github/dependabot.yml)" \
+              "Renovate skips @oh-my-pi/* major updates (see .github/renovate.json5)" \
               "because a new OMP major can change the extension SDK the plugins in this" \
               "repository compile against. Review compatibility, then move all five @oh-my-pi" \
               "pins in package.json together: the root manifest is the single authority for the" \
