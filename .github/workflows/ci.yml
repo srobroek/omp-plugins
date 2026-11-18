@@ -72,7 +72,7 @@ jobs:
           # Pinned: build-extensions.py --check byte-compares committed dist/
           # bundles against a fresh build, so the CI bun MUST match the bun that
           # built the committed bundles. Bump together with a dist rebuild
-          # (rebuild the bundles by hand on a dependency bump).
+          # (renovate-dist rebuilds automatically on Renovate branches).
           bun-version: "1.4.2"
 
       - name: Plugin inventory matches release metadata
@@ -184,6 +184,11 @@ jobs:
 
       # `uvx` is not preinstalled on GitHub runners.
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+
+      # The guard stands between a bundle built from pull-request code and a push
+      # made with a write token, so it gets the rejections it exists for.
+      - name: Renovate dist guard contracts
+        run: python3 scripts/test-renovate-contracts.py
 
       - name: Install Vale
         env:

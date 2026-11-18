@@ -6,6 +6,13 @@
     "config:recommended",
     "helpers:pinGitHubActionDigests"
   ],
+  // renovate-dist.yml pushes a bundle rebuild commit onto Renovate branches. Renovate
+  // treats a commit by any other author as a manual edit and stops updating the branch;
+  // this email (set in that workflow) is ignored, so rebases and version bumps continue
+  // and a rebase simply drops the commit for the workflow to recreate.
+  "gitIgnoredAuthors": [
+    "release-app[bot]@users.noreply.github.com"
+  ],
   "timezone": "Asia/Dubai",
   "schedule": [
     "before 6am on Monday"
