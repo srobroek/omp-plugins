@@ -40,6 +40,25 @@ replaces it.
 `bd dolt push` MUST print `Push complete.`. Prove it with
 `git ls-remote origin refs/dolt/data` returning non-empty output. `bd dolt push`
 can exit 0 and push nothing without a remote; exit status is not proof.
+# HOOKS
+`--skip-hooks` matters when a system hook manager supplies hook binaries: a plain `bd init`
+copies them into `.beads/hooks/`, commits them, and points `core.hooksPath` there. That
+bypasses the system hooks and bloats the repository. When a repository already has
+`core.hooksPath` set to `.beads/hooks`:
+
+1. Run `git config --local --unset core.hooksPath`.
+2. Delete `.beads/hooks/`.
+3. Add `.beads/hooks/` to `.gitignore`.
+
+# SYNC
+MUST keep `export.auto` at its default (off). NEVER commit `.beads/issues.jsonl`: JSONL is
+an export, not the ledger. Sync only through the Dolt remote with `bd dolt push` and
+`bd dolt pull`.
+# BACKUP
+For off-machine recovery, run `bd backup init <path>` once. Then run `bd backup sync`. The
+path is a local directory or a DoltHub URL. A backup is a Dolt-native copy of the whole
+database, with its branches and history. `bd export` is not a backup. It writes only
+issue records to JSONL, for migration. Restore with `bd backup restore`.
 # VERIFY
 Run `bd where`, `bd dolt status`, and `bd dolt remote list`. Run
 `bd hooks install --beads` only when the project owns its git-hook bundle and
