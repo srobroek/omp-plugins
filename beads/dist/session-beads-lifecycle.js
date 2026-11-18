@@ -2269,7 +2269,7 @@ function binaryHooksRepairAdvisory(cwd, git = runGit) {
         if (!statSync3(hookPath).isFile() || !fileHasMarker(backupPath, true))
           continue;
         if (!readFileSync2(backupPath).equals(readFileSync2(hookPath))) {
-          return "Beads appears to have modified a binary Git hook. Repair it manually with `git config --local --unset core.hooksPath` to restore the system/global hooks; optionally run `bd hooks uninstall` to remove the Beads-managed hooks. No repair was run automatically.";
+          return "Beads appears to have modified a binary Git hook. Repair it manually with `git config --local --unset core.hooksPath` to restore the system/global hooks; then delete the copied bundle with `rm -r .beads/hooks` and add `.beads/hooks/` to `.gitignore`. Optionally run `bd hooks uninstall` first to remove the Beads-managed hooks. No repair was run automatically.";
         }
       } catch {}
     }
