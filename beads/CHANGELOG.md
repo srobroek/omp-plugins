@@ -6,6 +6,18 @@
 
 - Require Beads `blocks` dependencies to encode true prerequisites so independent work remains parallelizable.
 
+## [4.1.10](https://github.com/srobroek/omp-plugins/compare/beads--v4.1.9...beads--v4.1.10) (2026-11-18)
+
+
+### Bug Fixes
+
+* **beads:** include delete and ignore steps in the binary-hook repair advisory ([abf63d0](https://github.com/srobroek/omp-plugins/commit/abf63d07470ab440647de2ab91aaef28cfda0f96))
+
+
+### Documentation
+
+* **beads:** add hooks, sync and backup guidance to beads-setup ([ebcb606](https://github.com/srobroek/omp-plugins/commit/ebcb6065d4d4a375680fc351c84246372f0cfaf7))
+
 ## [4.1.9](https://github.com/srobroek/omp-plugins/compare/beads--v4.1.8...beads--v4.1.9) (2026-10-30)
 
 
