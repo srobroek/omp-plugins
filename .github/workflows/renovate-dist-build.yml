@@ -1,4 +1,4 @@
-name: dependabot-dist-build
+name: renovate-dist-build
 
 # The unprivileged half of the generated-dist automation.
 #
@@ -8,10 +8,11 @@ name: dependabot-dist-build
 # third-party notices from the pull request head and uploads them as an artifact.
 #
 # It runs pull-request code — `bun install` executes dependency lifecycle scripts
-# and `bun build` evaluates plugin sources — so it holds no credentials: a
-# `pull_request` event on a Dependabot branch gets a read-only GITHUB_TOKEN and no
-# access to secrets, and `persist-credentials: false` keeps even that token out of
-# the checkout. dependabot-dist.yml publishes the artifact separately, from the
+# and `bun build` evaluates plugin sources — so it holds no credentials: the
+# workflow asks for `contents: read` only and references no secret (unlike a
+# Dependabot run, a Renovate `pull_request` run is not stripped of secrets by
+# GitHub, so the absence is this file's own discipline), and
+# `persist-credentials: false` keeps even the read token out of the checkout. renovate-dist.yml publishes the artifact separately, from the
 # default branch, and re-derives every judgement about it there.
 
 on:
@@ -22,15 +23,16 @@ permissions:
   contents: read
 
 concurrency:
-  group: dependabot-dist-build-${{ github.event.pull_request.number }}
+  group: renovate-dist-build-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
   build:
     if: >-
-      github.event.pull_request.user.login == 'dependabot[bot]' &&
+      github.actor == 'renovate[bot]' &&
+      github.event.pull_request.user.login == 'renovate[bot]' &&
       github.event.pull_request.head.repo.full_name == github.repository &&
-      startsWith(github.head_ref, 'dependabot/')
+      startsWith(github.head_ref, 'renovate/')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -51,16 +53,16 @@ jobs:
           # Pinned: build-extensions.py --check byte-compares committed dist/
           # bundles against a fresh build, so the CI bun MUST match the bun that
           # built the committed bundles. Bump together with a dist rebuild
-          # (dependabot-dist rebuilds automatically on Dependabot branches).
+          # (renovate-dist rebuilds automatically on Renovate branches).
           bun-version: "1.4.2"
 
       - name: Rebuild extension bundles
         run: |
           set -euo pipefail
-          # Every dependency-bearing plugin Dependabot covers: dep-update and
+          # Every dependency-bearing plugin Renovate covers: dep-update and
           # whats-new bundle smol-toml, so build-extensions.py needs their
           # node_modules too. --frozen-lockfile matches ci.yml, so the lockfile
-          # Dependabot wrote is the one that gets bundled.
+          # Renovate wrote is the one that gets bundled.
           while IFS= read -r pkg; do
             if python3 -c "import json,sys; sys.exit(0 if json.load(open('$pkg')).get('dependencies') else 1)"; then
               (cd "$(dirname "$pkg")" && bun install --frozen-lockfile --silent)
@@ -75,26 +77,27 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          # The pathspec is the first narrowing and scripts/dependabot-dist-guard.py
+          # The pathspec is the first narrowing and scripts/renovate-dist-guard.py
           # is the second: it re-checks every path against the same allowlist the
           # publish job applies, so a rebuild that touched anything else fails here
           # instead of arriving as an unexplained artifact entry.
           git add -- '*/dist/*.js'
           git diff --cached --name-only -- '*/dist/*.js' > "$RUNNER_TEMP/changed.txt"
-          python3 scripts/dependabot-dist-guard.py stage \
+          python3 scripts/renovate-dist-guard.py stage \
             --repo . \
             --changed "$RUNNER_TEMP/changed.txt" \
-            --out "$RUNNER_TEMP/dependabot-dist" \
+            --out "$RUNNER_TEMP/renovate-dist" \
             --repository "$GITHUB_REPOSITORY" \
             --head-ref "$HEAD_REF" \
-            --head-sha "$HEAD_SHA" \
-            --github-output "$GITHUB_OUTPUT"
+            --head-sha "$HEAD_SHA"
 
+      # Uploaded even when nothing changed (the artifact then carries only its
+      # metadata), so the publish job always finds an artifact and can end quietly
+      # instead of failing the download on every bump that needs no rebuild.
       - name: Upload the generated output
-        if: ${{ steps.stage.outputs.staged == 'true' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: dependabot-dist
-          path: ${{ runner.temp }}/dependabot-dist
+          name: renovate-dist
+          path: ${{ runner.temp }}/renovate-dist
           if-no-files-found: error
           retention-days: 1

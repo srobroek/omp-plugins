@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Gate the privileged half of the generated-dist automation.
 
-dependabot-dist-build.yml rebuilds the committed `dist/` bundles from the pull
+renovate-dist-build.yml rebuilds the committed `dist/` bundles from the pull
 request head. That build runs pull-request code, so it holds no credentials and
-its only product is an uploaded artifact. dependabot-dist.yml then publishes
+its only product is an uploaded artifact. renovate-dist.yml then publishes
 those bytes with the release App token. `workflow_run` resolves both that
 workflow file and the checkout it runs from on the default branch, so every line
 this script executes is trusted; the artifact and the branch it lands on are not.
@@ -11,10 +11,10 @@ this script executes is trusted; the artifact and the branch it lands on are not
 Four subcommands, in the order the publish job runs them:
 
 - `event-branch` prints the head branch out of the workflow_run event after
-  proving it is a Dependabot ref with a safe name, because the publish job
+  proving it is a Renovate ref with a safe name, because the publish job
   interpolates that value into an API path.
 - `verify-context` proves the run and the pull request agree on the exact
-  Dependabot actor, on this repository for both the run and the head, and on the
+  Renovate actor, on this repository for both the run and the head, and on the
   head ref and head commit. It runs before any token is minted.
 - `verify-artifact` reduces the downloaded artifact to the generated output this
   automation may publish: regular files under an existing plugin's `dist/`.
@@ -39,11 +39,11 @@ import sys
 from pathlib import Path
 
 # The pull request author that this automation exists for. A human push onto a
-# Dependabot branch deliberately falls outside it: the rebuild is skipped and the
+# Renovate branch deliberately falls outside it: the rebuild is skipped and the
 # bundle-drift gate stays red, which is the fail-closed direction for a job that
 # holds a write token.
-ACTOR = "dependabot[bot]"
-BRANCH_PREFIX = "dependabot/"
+ACTOR = "renovate[bot]"
+BRANCH_PREFIX = "renovate/"
 REF_CHARS = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._/-]*\Z")
 SHA = re.compile(r"\A[0-9a-f]{40}\Z")
 
@@ -53,7 +53,7 @@ SHA = re.compile(r"\A[0-9a-f]{40}\Z")
 # legitimately change here, and publishing one would let a compromised build
 # stage feed the next install.
 BUNDLE = re.compile(r"\A(?P<plugin>[a-z0-9][a-z0-9-]*)/dist/[A-Za-z0-9._-]+\.js\Z")
-METADATA = "dependabot-dist.json"
+METADATA = "renovate-dist.json"
 
 MAX_FILE_BYTES = 8 * 1024 * 1024
 MAX_TOTAL_BYTES = 32 * 1024 * 1024
@@ -111,7 +111,7 @@ def event_run(event_path: Path) -> dict:
 
 
 def verify_context(run: dict, pulls: object, repository: str, default_branch: str) -> tuple[str, str]:
-    """Prove the run and the pull request describe the same Dependabot head."""
+    """Prove the run and the pull request describe the same Renovate head."""
     reasons: list[str] = []
 
     if run.get("event") != "pull_request":
@@ -232,8 +232,6 @@ def verify_artifact(
         problem = classify(entry, trusted)
         if problem:
             reasons.append(problem)
-    if not payload:
-        reasons.append("artifact carries no generated output; the build stage uploads only on drift")
 
     if METADATA not in entries:
         reasons.append(f"artifact is missing {METADATA}")
@@ -383,6 +381,7 @@ def main(argv: list[str] | None = None) -> int:
     verify.add_argument("--head-ref", required=True)
     verify.add_argument("--head-sha", required=True)
     verify.add_argument("--manifest", type=Path, required=True)
+    verify.add_argument("--github-output", type=Path)
 
     write = sub.add_parser("apply", help="copy verified bytes into the head checkout")
     write.add_argument("--artifact", type=Path, required=True)
@@ -397,7 +396,6 @@ def main(argv: list[str] | None = None) -> int:
     build.add_argument("--repository", required=True)
     build.add_argument("--head-ref", required=True)
     build.add_argument("--head-sha", required=True)
-    build.add_argument("--github-output", type=Path)
 
     args = parser.parse_args(argv)
     try:
@@ -415,12 +413,15 @@ def main(argv: list[str] | None = None) -> int:
             if args.github_output:
                 with args.github_output.open("a", encoding="utf-8") as handle:
                     handle.write(f"head-ref={ref}\nhead-sha={sha}\n")
-            print(f"OK dependabot context: {ACTOR} on {args.repository} {ref} at {sha}")
+            print(f"OK renovate context: {ACTOR} on {args.repository} {ref} at {sha}")
         elif args.command == "verify-artifact":
             payload = verify_artifact(
                 args.artifact, args.trusted, args.repository, args.head_ref, args.head_sha
             )
             args.manifest.write_text("".join(f"{path}\n" for path in payload), encoding="utf-8")
+            if args.github_output:
+                with args.github_output.open("a", encoding="utf-8") as handle:
+                    handle.write(f"publish={'true' if payload else 'false'}\n")
             print(f"OK generated output: {len(payload)} file(s)")
             for path in payload:
                 print(f"  {path}")
@@ -431,9 +432,6 @@ def main(argv: list[str] | None = None) -> int:
             staged = stage(
                 args.repo, args.changed, args.out, args.repository, args.head_ref, args.head_sha
             )
-            if args.github_output:
-                with args.github_output.open("a", encoding="utf-8") as handle:
-                    handle.write(f"staged={'true' if staged else 'false'}\n")
             print(f"OK staged {len(staged)} generated file(s)")
             for path in staged:
                 print(f"  {path}")

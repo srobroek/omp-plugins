@@ -72,7 +72,7 @@ jobs:
           # Pinned: build-extensions.py --check byte-compares committed dist/
           # bundles against a fresh build, so the CI bun MUST match the bun that
           # built the committed bundles. Bump together with a dist rebuild
-          # (dependabot-dist rebuilds automatically on Dependabot branches).
+          # (renovate-dist rebuilds automatically on Renovate branches).
           bun-version: "1.4.2"
 
       - name: Plugin inventory matches release metadata
@@ -185,21 +185,10 @@ jobs:
       # `uvx` is not preinstalled on GitHub runners.
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
 
-      # The Dependabot policy is a cross-file contract: the group name that
-      # dependabot-automerge.yml merges on, its wait for this workflow and the
-      # loader smoke step above, the semver-qualified ignore spelling that
-      # actually suppresses OMP majors, one entry per lockfile, the manifest
-      # being the only place an OMP version is written, and the split that keeps the
-      # dist rebuild's write token away from pull-request code. Nothing else fails
-      # when those drift.
-      - name: Dependabot policy contract
-        run: uvx --from pyyaml==6.0.3 python scripts/check-dependabot-config.py
-
-      # A validator that reads a file and finds nothing wrong looks exactly like a
-      # validator that stopped looking, so every contract above gets a mutation, and
-      # the dist guard gets the rejections it exists for.
-      - name: Dependabot policy and dist guard contracts
-        run: uvx --from pyyaml==6.0.3 python scripts/test-dependabot-contracts.py
+      # The guard stands between a bundle built from pull-request code and a push
+      # made with a write token, so it gets the rejections it exists for.
+      - name: Renovate dist guard contracts
+        run: python3 scripts/test-renovate-contracts.py
 
       - name: Install Vale
         env:

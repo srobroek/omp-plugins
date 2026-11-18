@@ -1,14 +1,7 @@
 #!/usr/bin/env python3
-"""Dependabot policy contracts: uvx --from pyyaml==6.0.3 python scripts/test-dependabot-contracts.py.
+"""Renovate dist guard contracts: python3 scripts/test-renovate-contracts.py.
 
-Two suites, both about checks that have no other way to fail:
-
-`PolicyMutations` mutates one fact at a time in a copy of this repository and
-asserts scripts/check-dependabot-config.py names it. A validator that reads a file
-and finds nothing wrong is indistinguishable from a validator that never looked, so
-each contract it claims to hold gets a mutation that breaks it.
-
-`DistGuardFixtures` drives scripts/dependabot-dist-guard.py, the only thing standing
+`DistGuardFixtures` drives scripts/renovate-dist-guard.py, the only thing standing
 between an artifact built from pull-request code and a push made with a write token.
 It has to reject a wrong actor, a head that moved, a fork, a path outside the
 generated output, a symlink and a hard link, and it has to re-check the allowlist
@@ -26,40 +19,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import yaml
-
 REPO = Path(__file__).resolve().parent.parent
-VALIDATOR = "check-dependabot-config.py"
-GUARD = REPO / "scripts/dependabot-dist-guard.py"
-
-# Enough of the repository for the validator to reach every contract: the policy,
-# every workflow it cross-checks, the manifests it reads pins and dependency names
-# from, and a lockfile per watched directory. Lockfile contents are never read, only
-# their presence, so a placeholder stands in for a 3000-line resolution.
-COPIED = (
-    f"scripts/{VALIDATOR}",
-    "scripts/check-plugin-loading.ts",
-    "package.json",
-    ".github/dependabot.yml",
-    ".github/workflows/ci.yml",
-    ".github/workflows/dependabot-automerge.yml",
-    ".github/workflows/dependabot-dist-build.yml",
-    ".github/workflows/dependabot-dist.yml",
-    ".github/workflows/omp-major-issue.yml",
-    ".github/workflows/release-please.yml",
-    "dep-update/package.json",
-    "whats-new/package.json",
-)
-LOCKED = (".", "dep-update", "whats-new")
-
-DIST = ".github/workflows/dependabot-dist.yml"
-BUILD = ".github/workflows/dependabot-dist-build.yml"
-MAJOR = ".github/workflows/omp-major-issue.yml"
-AUTOMERGE = ".github/workflows/dependabot-automerge.yml"
+GUARD = REPO / "scripts/renovate-dist-guard.py"
 
 SHA_A = "a" * 40
 SHA_B = "b" * 40
-BRANCH = "dependabot/bun/whats-new/smol-toml-1.4.2"
+BRANCH = "renovate/smol-toml-1.x"
 
 
 def run(*args: str, cwd: Path) -> subprocess.CompletedProcess[str]:
@@ -75,7 +40,7 @@ def run(*args: str, cwd: Path) -> subprocess.CompletedProcess[str]:
 
 class DistGuardFixtures(unittest.TestCase):
     def setUp(self) -> None:
-        temporary = tempfile.TemporaryDirectory(prefix="omp-dependabot-guard-")
+        temporary = tempfile.TemporaryDirectory(prefix="omp-renovate-guard-")
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
         self.trusted = self.root / "trusted"
@@ -98,13 +63,13 @@ class DistGuardFixtures(unittest.TestCase):
             "head_sha": SHA_A,
             "repository": {"full_name": "srobroek/omp-plugins"},
             "head_repository": {"full_name": "srobroek/omp-plugins"},
-            "actor": {"login": "dependabot[bot]"},
-            "triggering_actor": {"login": "dependabot[bot]"},
+            "actor": {"login": "renovate[bot]"},
+            "triggering_actor": {"login": "renovate[bot]"},
         }
         base_run.update(run or {})
         base_pull = {
             "state": "open",
-            "user": {"login": "dependabot[bot]"},
+            "user": {"login": "renovate[bot]"},
             "base": {"ref": "main"},
             "head": {
                 "ref": BRANCH,
@@ -133,7 +98,7 @@ class DistGuardFixtures(unittest.TestCase):
         self.assertEqual(result.returncode, 1, result.stdout)
         self.assertIn(fragment, result.stderr)
 
-    def test_a_matching_dependabot_context_is_accepted_and_exported(self) -> None:
+    def test_a_matching_renovate_context_is_accepted_and_exported(self) -> None:
         self.write_context()
         output = self.root / "github-output"
         output.touch()
@@ -164,16 +129,16 @@ class DistGuardFixtures(unittest.TestCase):
 
     def test_a_pull_request_on_another_branch_is_rejected(self) -> None:
         self.write_context(
-            pull={"head": {"ref": "dependabot/bun/other", "sha": SHA_A, "repo": {"full_name": "srobroek/omp-plugins"}}}
+            pull={"head": {"ref": "renovate/other", "sha": SHA_A, "repo": {"full_name": "srobroek/omp-plugins"}}}
         )
         self.assert_context_rejected("does not match the run's")
 
-    def test_a_branch_outside_the_dependabot_namespace_is_rejected(self) -> None:
+    def test_a_branch_outside_the_renovate_namespace_is_rejected(self) -> None:
         self.write_context(run={"head_branch": "feature/evil"}, pull={"head": {"ref": "feature/evil", "sha": SHA_A, "repo": {"full_name": "srobroek/omp-plugins"}}})
-        self.assert_context_rejected("is not a 'dependabot/' branch")
+        self.assert_context_rejected("is not a 'renovate/' branch")
 
     def test_a_branch_with_traversal_is_rejected(self) -> None:
-        traversal = "dependabot/../../refs/heads/main"
+        traversal = "renovate/../../refs/heads/main"
         self.write_context(run={"head_branch": traversal}, pull={"head": {"ref": traversal, "sha": SHA_A, "repo": {"full_name": "srobroek/omp-plugins"}}})
         self.assert_context_rejected("is not a valid git ref name")
 
@@ -200,7 +165,7 @@ class DistGuardFixtures(unittest.TestCase):
         self.assertEqual(good.returncode, 0, good.stderr)
         self.assertEqual(good.stdout.strip(), BRANCH)
         self.event.write_text(
-            json.dumps({"workflow_run": {"head_branch": "dependabot/x;$(id)"}}), encoding="utf-8"
+            json.dumps({"workflow_run": {"head_branch": "renovate/x;$(id)"}}), encoding="utf-8"
         )
         bad = run(str(GUARD), "event-branch", "--event", str(self.event), cwd=self.root)
         self.assertEqual(bad.returncode, 1, bad.stdout)
@@ -220,7 +185,7 @@ class DistGuardFixtures(unittest.TestCase):
             "files": sorted(files),
         }
         payload.update(metadata or {})
-        (self.artifact / "dependabot-dist.json").write_text(json.dumps(payload), encoding="utf-8")
+        (self.artifact / "renovate-dist.json").write_text(json.dumps(payload), encoding="utf-8")
 
     def verify_artifact(self) -> subprocess.CompletedProcess[str]:
         return run(
@@ -310,12 +275,27 @@ class DistGuardFixtures(unittest.TestCase):
 
     def test_an_artifact_without_metadata_is_rejected(self) -> None:
         self.stage_artifact({"whats-new/dist/version-gap-tool.js": "// bundle\n"})
-        (self.artifact / "dependabot-dist.json").unlink()
-        self.assert_artifact_rejected("missing dependabot-dist.json")
+        (self.artifact / "renovate-dist.json").unlink()
+        self.assert_artifact_rejected("missing renovate-dist.json")
 
-    def test_an_artifact_with_no_payload_is_rejected(self) -> None:
+    def test_an_artifact_with_no_payload_is_accepted_and_not_published(self) -> None:
         self.stage_artifact({})
-        self.assert_artifact_rejected("carries no generated output")
+        output = self.root / "github-output"
+        output.touch()
+        result = run(
+            str(GUARD), "verify-artifact",
+            "--artifact", str(self.artifact),
+            "--trusted", str(self.trusted),
+            "--repository", "srobroek/omp-plugins",
+            "--head-ref", BRANCH,
+            "--head-sha", SHA_A,
+            "--manifest", str(self.root / "manifest.txt"),
+            "--github-output", str(output),
+            cwd=self.root,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(output.read_text(encoding="utf-8"), "publish=false\n")
+        self.assertEqual((self.root / "manifest.txt").read_text(encoding="utf-8"), "")
 
     # --- apply -------------------------------------------------------------
 
@@ -331,7 +311,7 @@ class DistGuardFixtures(unittest.TestCase):
         )
 
     def prepare_target(self) -> None:
-        self.target = self.root / "_dependabot-head"
+        self.target = self.root / "_renovate-head"
         (self.target / "whats-new/dist").mkdir(parents=True)
         (self.target / "whats-new/dist/version-gap-tool.js").write_text("// old\n", encoding="utf-8")
 

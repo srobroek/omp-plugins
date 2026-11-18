@@ -1,17 +1,17 @@
-name: dependabot-dist
+name: renovate-dist
 
 # The privileged half of the generated-dist automation.
 #
-# dependabot-dist-build.yml rebuilds the committed dist/ bundles from the pull
+# renovate-dist-build.yml rebuilds the committed dist/ bundles from the pull
 # request head with no credentials and uploads them. This job publishes those
 # bytes with the release App token so CI re-runs on the branch.
 #
 # `workflow_run` is the trust boundary. GitHub resolves this workflow file, and
 # the checkout it runs from, on the default branch — never from the pull request —
 # so every line below is reviewed logic. Nothing from the artifact or from the
-# Dependabot branch is sourced, imported, installed or executed: the job downloads
+# Renovate branch is sourced, imported, installed or executed: the job downloads
 # the artifact into a scratch directory, proves the run and the pull request agree
-# on the exact Dependabot actor, this repository, the head ref and the head commit,
+# on the exact Renovate actor, this repository, the head ref and the head commit,
 # reduces the artifact to an allowlist of generated output paths, and then copies
 # those bytes into a checkout of the verified commit and pushes.
 #
@@ -21,7 +21,7 @@ name: dependabot-dist
 
 on:
   workflow_run:
-    workflows: [dependabot-dist-build]
+    workflows: [renovate-dist-build]
     types: [completed]
 
 # No write scope: the push uses the release App token, minted only after every
@@ -33,7 +33,7 @@ permissions:
 # Serialized per branch. Two runs pushing rebuilt bundles onto the same branch
 # would race on the same ref, and cancelling a run mid-push is worse than queueing.
 concurrency:
-  group: dependabot-dist-${{ github.event.workflow_run.head_branch }}
+  group: renovate-dist-${{ github.event.workflow_run.head_branch }}
   cancel-in-progress: false
 
 jobs:
@@ -43,7 +43,7 @@ jobs:
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.repository.full_name == github.repository &&
       github.event.workflow_run.head_repository.full_name == github.repository &&
-      github.event.workflow_run.actor.login == 'dependabot[bot]'
+      github.event.workflow_run.actor.login == 'renovate[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -58,7 +58,7 @@ jobs:
         with:
           python-version: "3.14"
 
-      - name: Verify the Dependabot context
+      - name: Verify the Renovate context
         id: context
         env:
           GH_TOKEN: ${{ github.token }}
@@ -67,12 +67,12 @@ jobs:
           set -euo pipefail
           # The branch comes out of the event payload, but it is about to be
           # interpolated into an API path, so the guard proves it is a
-          # `dependabot/` ref with a safe name before it is used as data.
-          branch="$(python3 scripts/dependabot-dist-guard.py event-branch --event "$GITHUB_EVENT_PATH")"
+          # `renovate/` ref with a safe name before it is used as data.
+          branch="$(python3 scripts/renovate-dist-guard.py event-branch --event "$GITHUB_EVENT_PATH")"
           gh api --method GET "repos/$GITHUB_REPOSITORY/pulls" \
             -f state=open -f "head=${GITHUB_REPOSITORY%%/*}:$branch" \
             > "$RUNNER_TEMP/pulls.json"
-          python3 scripts/dependabot-dist-guard.py verify-context \
+          python3 scripts/renovate-dist-guard.py verify-context \
             --event "$GITHUB_EVENT_PATH" \
             --pulls "$RUNNER_TEMP/pulls.json" \
             --repository "$GITHUB_REPOSITORY" \
@@ -83,33 +83,39 @@ jobs:
       # untrusted input and must not land where a later step reads code from.
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: dependabot-dist
+          name: renovate-dist
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ github.token }}
-          path: ${{ runner.temp }}/dependabot-dist
+          path: ${{ runner.temp }}/renovate-dist
 
       - name: Verify the generated output
+        id: artifact
         env:
           HEAD_REF: ${{ steps.context.outputs.head-ref }}
           HEAD_SHA: ${{ steps.context.outputs.head-sha }}
         run: |
           set -euo pipefail
-          python3 scripts/dependabot-dist-guard.py verify-artifact \
-            --artifact "$RUNNER_TEMP/dependabot-dist" \
+          python3 scripts/renovate-dist-guard.py verify-artifact \
+            --artifact "$RUNNER_TEMP/renovate-dist" \
             --trusted . \
             --repository "$GITHUB_REPOSITORY" \
             --head-ref "$HEAD_REF" \
             --head-sha "$HEAD_SHA" \
-            --manifest "$RUNNER_TEMP/dependabot-dist-manifest.txt"
+            --manifest "$RUNNER_TEMP/renovate-dist-manifest.txt" \
+            --github-output "$GITHUB_OUTPUT"
 
       # Only now, with the actor, the repository, the head and every artifact path
       # already proven, does a write credential enter the job.
       - name: Mint release-app token
+        if: ${{ steps.artifact.outputs.publish == 'true' }}
         id: app-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          # Only the branch push needs a write scope; the rest of the
+          # installation's permissions stay out of the token.
+          permission-contents: write
 
       # By commit id, not by branch name: the tree this job writes onto is exactly
       # the commit the artifact was built from, and a branch that moved meanwhile
@@ -117,35 +123,40 @@ jobs:
       #
       # The leading underscore keeps this directory out of the plugin namespace the
       # allowlist recognises, so no artifact path can name it.
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - if: ${{ steps.artifact.outputs.publish == 'true' }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ github.repository }}
           ref: ${{ steps.context.outputs.head-sha }}
           token: ${{ steps.app-token.outputs.token }}
-          path: _dependabot-head
+          path: _renovate-head
 
       - name: Apply the generated output and push
+        if: ${{ steps.artifact.outputs.publish == 'true' }}
         env:
           HEAD_REF: ${{ steps.context.outputs.head-ref }}
           HEAD_SHA: ${{ steps.context.outputs.head-sha }}
         run: |
           set -euo pipefail
-          # Bytes only. Nothing in _dependabot-head/ is installed, imported or
+          # Bytes only. Nothing in _renovate-head/ is installed, imported or
           # run, and the allowlist is re-checked here against the default-branch
           # checkout rather than trusted from the previous step.
-          python3 scripts/dependabot-dist-guard.py apply \
-            --artifact "$RUNNER_TEMP/dependabot-dist" \
-            --manifest "$RUNNER_TEMP/dependabot-dist-manifest.txt" \
-            --target _dependabot-head \
+          python3 scripts/renovate-dist-guard.py apply \
+            --artifact "$RUNNER_TEMP/renovate-dist" \
+            --manifest "$RUNNER_TEMP/renovate-dist-manifest.txt" \
+            --target _renovate-head \
             --trusted .
-          git -C _dependabot-head add --pathspec-from-file="$RUNNER_TEMP/dependabot-dist-manifest.txt"
-          if git -C _dependabot-head diff --cached --quiet; then
+          git -C _renovate-head add --pathspec-from-file="$RUNNER_TEMP/renovate-dist-manifest.txt"
+          if git -C _renovate-head diff --cached --quiet; then
             echo "The published bytes already match the branch; nothing to push."
             exit 0
           fi
-          git -C _dependabot-head config user.name "release-app[bot]"
-          git -C _dependabot-head config user.email "release-app[bot]@users.noreply.github.com"
-          git -C _dependabot-head commit -m "chore: rebuild extension bundles for dependency bump"
-          git -C _dependabot-head push \
+          git -C _renovate-head config user.name "release-app[bot]"
+          # This email is what .github/renovate.json5 `gitIgnoredAuthors` names:
+          # Renovate ignores commits by it, so the bundle commit does not make it
+          # treat the branch as hand-edited and stop updating it.
+          git -C _renovate-head config user.email "release-app[bot]@users.noreply.github.com"
+          git -C _renovate-head commit -m "chore: rebuild extension bundles for dependency bump"
+          git -C _renovate-head push \
             --force-with-lease="refs/heads/$HEAD_REF:$HEAD_SHA" \
             origin "HEAD:refs/heads/$HEAD_REF"
