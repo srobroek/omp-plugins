@@ -88,6 +88,8 @@ function putBinaryHook(path: string): void {
 			const advisory = binaryHooksRepairAdvisory(root);
 			expect(advisory).toContain("git config --local --unset core.hooksPath");
 			expect(advisory).toContain("bd hooks uninstall");
+			expect(advisory).toContain("rm -r .beads/hooks");
+			expect(advisory).toContain("add `.beads/hooks/` to `.gitignore`");
 			git(root, "config", "--local", "core.hooksPath", join(root, "elsewhere"));
 			expect(binaryHooksRepairAdvisory(root)).toBeUndefined();
 		} finally { rmSync(root, { recursive: true, force: true }); }
