@@ -1,5 +1,7 @@
 # omp-plugins
 
+> **Frozen as of 2026-11-20.** This repository is archived and read-only. The OpenCode plugins live in [`srobroek/opencode-plugins`](https://github.com/srobroek/opencode-plugins). The OMP rebuild is on hold. Existing clones and marketplace installs keep working.
+
 An OMP marketplace catalog for the Oh My Pi coding agent.
 
 | Field | Value |
